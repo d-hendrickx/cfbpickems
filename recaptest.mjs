@@ -464,6 +464,10 @@ for (const [over, label] of [
   [{ status: 'live' },          '[9c] a NON-final earlier week\'s results never enter the chart line'],
   [{ season: '2025' },          '[9d] a PRIOR-SEASON week\'s results never enter the chart line'],
   [{ showInHistory: false },    '[9e] a hidden (showInHistory:false) week\'s results never enter the chart line'],
+  // SB-04 (2026-10-01) — the fourth thing the Standings page never counts. The recap card's
+  // "Standings after…" line is SCRIBE-bylined, and it counted a finalized DEMO week of the same
+  // season: the chart line named a leader no Standings page ever showed.
+  [{ dataSourceMode: 'demo' },  '[9i] a DEMO week\'s results never enter the chart line (SB-04 — SCRIBE\'s standings are the Standings page\'s, which never counts a demo week)'],
 ]) {
   seed({ weeks: [LIVE_PART1, ghost(over)], players: LIVE_PLAYERS,
          results: [...LIVE_RESULTS, ...KEVIN_HEAVY('wGhost')],

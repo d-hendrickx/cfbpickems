@@ -2106,6 +2106,70 @@ console.log('\n[6b] DI-327 T-29 — bindBottomBounce() BOUNDED-ELEMENT test (fix
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+console.log('\n[6d] SB-05 (2026-09-30) — bindBottomBounce() AXIS LOCK: a horizontal drag (the control-center swipe) never lifts the page…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  // Drew (Munera iOS): "when I swipe open the control center I can still
+  // scroll up and down on the page underneath and it makes it look choppy."
+  // One of the movers: bindBottomBounce(window, .page-wrapper) decided
+  // eligibility at touchstart and then lifted the page on every upward finger
+  // movement — including the thumb's drift during the drawer's own swipe, with
+  // the page at its bottom (ccscrolltest.mjs [B-8] measured ~18px in the real
+  // app). Driven through the REAL binder AND the REAL drawer binder on ONE
+  // fake window, so "the drawer claimed it" and "the bounce yielded" are
+  // proven to be the same decision, not two tunings that happen to agree.
+  const savedDocument = globalThis.document;
+  const savedWindow = globalThis.window;
+  const handlers = {};
+  const fakeWin = {
+    scrollY: 0, innerHeight: 844, innerWidth: 390,
+    addEventListener(type, fn) { (handlers[type] ||= []).push(fn); },
+    removeEventListener(type, fn) { handlers[type] = (handlers[type] || []).filter(h => h !== fn); },
+  };
+  const fire = (type, ev) => (handlers[type] || []).forEach(fn => fn(ev));
+  // A document that fits the viewport — the window is "at its bottom" on every touch.
+  globalThis.document = { getElementById: () => null, querySelector: () => null, body: { dataset: { tab: 'leaderboard' } }, documentElement: { scrollHeight: 844 } };
+  globalThis.window = fakeWin;
+  const writes = [];
+  const target = { style: {}, addEventListener() {}, removeEventListener() {} };
+  Object.defineProperty(target.style, 'transform', { set(v) { writes.push(v); }, get() { return writes[writes.length - 1] || ''; } });
+  const liftOf = () => Math.max(0, ...writes.map(w => { const m = /translateY\(-([\d.]+)px\)/.exec(w || ''); return m ? +m[1] : 0; }));
+  bindBottomBounce(() => fakeWin, target);
+  const ccEvents = [];
+  const ccState = { phase: 'closed', dragProgress: 0 };
+  const unbindCC = CC.bindControlCenterEdgeSwipe((ev) => ccEvents.push(ev.type), () => ccState, { getWidthPx: () => 331 });
+  /** touchstart at (x0,y0), `steps` moves to (x0+dx, y0+dy), touchend. */
+  function gesture(x0, y0, dx, dy, steps = 12, withX = true) {
+    writes.length = 0; ccEvents.length = 0;
+    const pt = (x, y) => (withX ? { clientX: x, clientY: y } : { clientY: y });
+    fire('touchstart', { touches: [pt(x0, y0)], target: null });
+    for (let i = 1; i <= steps; i++) fire('touchmove', { touches: [pt(x0 + dx * i / steps, y0 + dy * i / steps)] });
+    const lift = liftOf();
+    fire('touchend', {});
+    return { lift, claimed: ccEvents.includes('drag-start'), spring: writes.length };
+  }
+  let g = gesture(20, 600, 180, -150);                     // Drew's gesture: right, drifting up
+  assert(g.claimed, '6d-0: fixture — the REAL drawer binder claims this drag (drag-start dispatched)');
+  assert(g.lift === 0 && g.spring === 0,
+    `6d-1: THE BUG — the same drag writes NO lift to the page and no spring-back (largest lift ${g.lift}px, ${g.spring} transform writes; before SB-05: ~18.6px, 13 writes)`);
+  g = gesture(20, 600, 60, -55);                            // barely-horizontal diagonal
+  assert(g.claimed && g.lift === 0, `6d-2: a barely-horizontal diagonal (60 → 55) — drawer claims, bounce yields (lift ${g.lift}px)`);
+  g = gesture(200, 600, -160, -120);                        // right-to-left, drifting up
+  assert(g.lift === 0, `6d-3: a right-to-left horizontal drag (week-swipe shape) does not lift the page either (lift ${g.lift}px)`);
+  g = gesture(200, 600, 5, -140);                           // plain vertical pull up at the bottom
+  assert(!g.claimed && g.lift > 5, `6d-4: control — a plain VERTICAL drag up at the bottom still gets the T-29 rubber band (lift ${g.lift.toFixed(1)}px), and the drawer does not claim it`);
+  g = gesture(200, 600, 55, -60);                           // barely-vertical diagonal
+  assert(!g.claimed && g.lift > 5, `6d-5: a barely-vertical diagonal (55 → 60) — drawer does not claim, bounce keeps it (lift ${g.lift.toFixed(1)}px): the two decisions are exact complements`);
+  g = gesture(200, 600, 3, -7, 4);                          // inside the dead zone
+  assert(g.lift === 0 && !g.claimed, `6d-6: inside the ${AXIS_DEAD_ZONE_PX}px dead zone nothing is shown yet — the same "before the lock, nothing is shown" rule as pull-to-refresh (lift ${g.lift}px)`);
+  g = gesture(200, 600, 0, -140, 12, false);                // legacy touch shape with no clientX
+  assert(g.lift > 5, `6d-7: a touch point with no clientX reads as vertical (dx 0) — every older fixture's shape keeps bouncing (lift ${g.lift.toFixed(1)}px)`);
+  unbindCC();
+  globalThis.document = savedDocument;
+  globalThis.window = savedWindow;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
 console.log('\n[6c] DI-399(b-ii) — bindBottomPullToRefresh() (UN-359, 2026-09-28) — Chat\'s mirrored bottom-edge pull-to-refresh…');
 // ═════════════════════════════════════════════════════════════════════════
 {
@@ -3139,8 +3203,29 @@ console.log('\n[13] PILL TAB BAR — CSS PINS (coordinator CSS pass, DI-397 pill
   assert(/--nav-pill-gap:\s*8px/.test(rootBody), '12a-2: --nav-pill-gap is 8px (the bottom offset)');
   assert(/--nav-pill-inset:\s*12px/.test(rootBody), '12a-3: --nav-pill-inset is 12px (the side inset)');
   assert(/--nav-pill-radius:\s*24px/.test(rootBody), '12a-4: --nav-pill-radius is 24px (half the height — a true pill)');
-  assert(/--nav-bar-clearance:\s*calc\(var\(--nav-pill-h\)\s*\+\s*var\(--nav-pill-gap\)\s*\+\s*env\(safe-area-inset-bottom,\s*0px\)\)/.test(rootBody),
-    '12a-5: --nav-bar-clearance = pill height + bottom gap + the safe-area inset, computed once');
+  // RE-DERIVED (Home wiring, 2026-10-01; DESIGN_NEEDS_HOME Amendment 3 + 3.1, Drew: 56 pt disc, "I don't want pages to leave more room at the bottom"): the clearance is the pill's height plus
+  // its OWN bottom offset (--nav-pill-bottom = the shipped gap + safe-area inset, floored so the disc's collar keeps 8px from the screen edge). It carries NO disc term: the disc does not
+  // grow the room pages leave (DQ-2). On any device with a bottom inset >= 8 it is value for value the shipped 48 + 8 + inset (a numeric proof follows, 12a-8).
+  assert(/--nav-bar-clearance:\s*calc\(var\(--nav-pill-h\)\s*\+\s*var\(--nav-pill-bottom\)\)/.test(rootBody),
+    '12a-5: --nav-bar-clearance = pill height + --nav-pill-bottom (the pill\'s own bottom offset), computed once, with NO disc term');
+  assert(/--nav-disc-d:\s*56px/.test(rootBody) && /--nav-disc-cut:\s*3px/.test(rootBody) && /--nav-disc-ring:\s*4px/.test(rootBody),
+    '12a-6: the Home disc is ONE size token, --nav-disc-d:56px (Drew, Amendment 3.1), with a 3px cut-out and a 4px collar ring');
+  assert(/--nav-disc-overhang:\s*calc\(\(var\(--nav-disc-d\)\s*-\s*var\(--nav-pill-h\)\)\s*\/\s*2\)/.test(rootBody) && /--nav-disc-reach:\s*calc\(var\(--nav-disc-overhang\)\s*\+\s*var\(--nav-disc-ring\)\)/.test(rootBody),
+    '12a-7: the overhang is (disc - pill) / 2 (equal above and below, by construction) and the reach is overhang + ring: both derived from the one size token');
+  assert(/--nav-pill-bottom:\s*max\(calc\(var\(--nav-pill-gap\)\s*\+\s*env\(safe-area-inset-bottom,\s*0px\)\),\s*calc\(var\(--nav-disc-reach\)\s*\+\s*8px\)\)/.test(rootBody),
+    '12a-7b: --nav-pill-bottom = max(shipped gap + safe-area inset, reach + 8px): the floor keeps the collar 8px from the screen edge where there is no inset');
+  {
+    // 12a-8 numeric proof of Drew's ruling, from the SAME formulas: with a Face ID inset (34) the clearance is the shipped 90, at 21 (landscape) the shipped 77, and only at inset 0 does the
+    // floor lift the pill (8 -> 16), in which case the clearance follows it so the pill never covers the chat composer or the submit bar.
+    const D = 56, H = 48, GAP = 8, RING = 4, reach = (D - H) / 2 + RING;
+    const bottom = (inset) => Math.max(GAP + inset, reach + 8);
+    const clearance = (inset) => H + bottom(inset);
+    const shipped = (inset) => H + GAP + inset;
+    assert(reach === 8 && [34, 21, 8].every((i) => clearance(i) === shipped(i)),
+      '12a-8: at every bottom inset >= 8 (Face ID portrait 34, landscape 21) the clearance equals the shipped 48 + 8 + inset: pages leave NO more room at the bottom (Drew, 2026-10-01)');
+    assert(bottom(0) === 16 && clearance(0) === 64 && (bottom(0) - reach) >= 8,
+      '12a-8b: with no inset the floor lifts the pill 8 -> 16 so the collar keeps 8px from the screen edge, and the clearance follows the pill (64), the one deviation, recorded');
+  }
 
   // [13b] MUTATION-PROVEN completeness grep (per the reviewer's own
   // instruction — not just "present," proven to actually discriminate): the
@@ -3157,9 +3242,11 @@ console.log('\n[13] PILL TAB BAR — CSS PINS (coordinator CSS pass, DI-397 pill
   // assumed (CONVENTIONS #21 discipline: one token, every consumer, no drift).
   const consumerChecks = [
     [/\.main-content\{[^}]*padding:[^;}]*calc\(var\(--nav-bar-clearance\)\s*\+\s*20px\)/, '.main-content padding (shorthand, bottom value)'],
-    [/\.submit-bar\{[^}]*bottom:\s*calc\(var\(--nav-bar-clearance\)\s*\+\s*8px\)/, '.submit-bar bottom'],
-    [/#auth-banner-stack\{[^}]*bottom:\s*var\(--nav-bar-clearance\)/, '#auth-banner-stack bottom'],
-    [/\.update-available-banner\{[^}]*bottom:\s*var\(--nav-bar-clearance\)/, '.update-available-banner bottom'],
+    // RE-DERIVED (Home wiring, 2026-10-01): a FIXED bar gets the disc-specific nudge Amendment 3.1 allows (page padding does NOT change): + the collar's reach, so the bar's bottom border never touches the collar.
+    [/\.submit-bar\{[^}]*bottom:\s*calc\(var\(--nav-bar-clearance\)\s*\+\s*8px\s*\+\s*var\(--nav-disc-reach\)\)/, '.submit-bar bottom (+ the disc collar\'s reach)'],
+    // RE-DERIVED (Home wiring review N2, 2026-10-02): the two fixed banners clear the Home disc's collar (reach + 8px), a fixed-bar nudge like the submit bar's; page padding is unchanged.
+    [/#auth-banner-stack\{[^}]*bottom:\s*calc\(var\(--nav-bar-clearance\)\s*\+\s*var\(--nav-disc-reach\)\s*\+\s*8px\)/, '#auth-banner-stack bottom (+ the disc collar\'s reach + 8px)'],
+    [/\.update-available-banner\{[^}]*bottom:\s*calc\(var\(--nav-bar-clearance\)\s*\+\s*var\(--nav-disc-reach\)\s*\+\s*8px\)/, '.update-available-banner bottom (+ the disc collar\'s reach + 8px)'],
     [/#page-chat\.active\{[^}]*height:\s*calc\(100dvh - var\(--nav-bar-clearance\)\)/, '#page-chat.active height (100dvh)'],
     [/@supports not \(height:100dvh\)\{#page-chat\.active\{height:calc\(100vh - var\(--nav-bar-clearance\)\)\}\}/, '#page-chat.active height (100vh fallback)'],
     // DI-442 (2026-09-29): `.chat-jump-latest` is NOT a consumer any more, on purpose.
@@ -3179,8 +3266,15 @@ console.log('\n[13] PILL TAB BAR — CSS PINS (coordinator CSS pass, DI-397 pill
   const jumpRule = (css.match(/#page-chat \.chat-jump-latest\{[^}]*\}/) || [''])[0];
   assert(jumpRule !== '' && !/--nav-bar-clearance/.test(jumpRule),
     '12c-jump-b: the ↓ latest rule reads no --nav-bar-clearance (a second subtraction of the clearance #page-chat already took)');
-  assert(/#page-chat\.active\{--chat-nav-gap:8px;[^}]*padding-bottom:var\(--chat-nav-gap\)/.test(css),
-    '12c-gap: #page-chat.active declares --chat-nav-gap:8px and uses it as its padding-bottom (the lift off the tab bar / keyboard)');
+  // RE-DERIVED (Home wiring, 2026-10-02, Drew M-11 Q2 "lift"): keyboard DOWN the lift is 8px + the Home disc collar's reach (the composer clears the collar by 8px); keyboard UP it is 8px again.
+  const chatGapRe = /#page-chat\.active\{--chat-nav-gap:calc\(8px \+ var\(--nav-disc-reach\)\);[^}]*padding-bottom:var\(--chat-nav-gap\)/;
+  assert(chatGapRe.test(css),
+    '12c-gap: #page-chat.active declares --chat-nav-gap:calc(8px + var(--nav-disc-reach)) and uses it as its padding-bottom (the lift off the tab bar and the disc\'s collar, keyboard down)');
+  assert(!chatGapRe.test(css.replace('--chat-nav-gap:calc(8px + var(--nav-disc-reach));', '--chat-nav-gap:8px;')),
+    '12c-gap-m: MUTATION — the bare 8px lift (the composer 0px from the collar) turns 12c-gap RED');
+  const kbGapRe = /body\[data-keyboard-up\] #page-chat\.active\{--nav-bar-clearance:0px;--chat-nav-gap:8px\}/;
+  assert(kbGapRe.test(css) && !kbGapRe.test(css.replace(';--chat-nav-gap:8px}', '}')),
+    '12c-gap-kb: with the keyboard up the gap is 8px again (the nav is hidden, there is no collar above the keyboard); MUTATION — dropping that override (a 16px gap above the keyboard) turns it RED');
 
   // [13d] the keyboard-up reset zeroes the COMPOUND token directly, as a
   // <length> (0px), not a unitless 0 — the exact defect class (a bare `0`
@@ -3188,7 +3282,7 @@ console.log('\n[13] PILL TAB BAR — CSS PINS (coordinator CSS pass, DI-397 pill
   // calc() goes invalid at computed-value time) the 2026-09-27 coordinator
   // fix closed under the OLD token name; this must never regress under the
   // new one either.
-  assert(/body\[data-keyboard-up\] #page-chat\.active\{--nav-bar-clearance:0px\}/.test(css),
+  assert(/body\[data-keyboard-up\] #page-chat\.active\{--nav-bar-clearance:0px;--chat-nav-gap:8px\}/.test(css),
     '12d: body[data-keyboard-up] #page-chat.active zeroes --nav-bar-clearance (0px, a <length>, not unitless 0)');
 
   // [13e] the pill itself — inset OUTSIDE the box (position, not padding),
@@ -3198,11 +3292,13 @@ console.log('\n[13] PILL TAB BAR — CSS PINS (coordinator CSS pass, DI-397 pill
   const pillBody = pillMatch ? pillMatch[1] : '';
   assert(/left:\s*var\(--nav-pill-inset\)/.test(pillBody) && /right:\s*var\(--nav-pill-inset\)/.test(pillBody),
     '12e-1: .bottom-nav is inset var(--nav-pill-inset) from BOTH edges — a floating pill, not full-bleed');
-  assert(/bottom:\s*calc\(var\(--nav-pill-gap\)\s*\+\s*env\(safe-area-inset-bottom,\s*0px\)\)/.test(pillBody),
-    '12e-2: .bottom-nav\'s bottom offset lives in its POSITION (gap + safe-area), not padded into its own box height');
+  assert(/bottom:\s*var\(--nav-pill-bottom\)/.test(pillBody) && !/bottom:\s*calc\(var\(--nav-pill-gap\)/.test(pillBody),
+    '12e-2: .bottom-nav\'s bottom offset lives in its POSITION (var(--nav-pill-bottom) = gap + safe-area, floored for the disc), not padded into its own box height');
   assert(/height:\s*var\(--nav-pill-h\)/.test(pillBody), '12e-3: .bottom-nav height is var(--nav-pill-h) — content-only, no more padding-plus-height double count');
   assert(/border-radius:\s*var\(--nav-pill-radius\)/.test(pillBody), '12e-4: .bottom-nav border-radius is var(--nav-pill-radius) — a true capsule');
-  assert(/border:\s*1px solid var\(--border\)/.test(pillBody), '12e-5: .bottom-nav carries a hairline border from tokens (var(--border)), not a hardcoded color');
+  // RE-DERIVED (SP-52 DI-454, 2026-10-01): the hairline reads the chrome token with --border as its fallback — var(--chrome-tab-border, var(--border)) — because Ink Light's
+  // bar is black and the Dark surfaces' bar is a lifted brown; every other look has no --chrome-tab-border and falls back to the ordinary --border (R2). Still from tokens, never a literal.
+  assert(/border:\s*1px solid var\(--chrome-tab-border,\s*var\(--border\)\)/.test(pillBody), '12e-5: .bottom-nav carries a hairline border from tokens (var(--chrome-tab-border, var(--border))), not a hardcoded color');
 
   // [13f] the material — a resolvable, SCANNABLE solid base (contrastscan.mjs
   // can only assert on a rule with a resolvable background; an rgba()
@@ -3211,8 +3307,10 @@ console.log('\n[13] PILL TAB BAR — CSS PINS (coordinator CSS pass, DI-397 pill
   // @supports feature query, never baked into the base — this is what makes
   // "contrastscan stays green... material fallback included" true by
   // construction, rather than an untested claim.
-  assert(/background:\s*var\(--bg-card\)/.test(pillBody),
-    '12f-1: .bottom-nav base background is var(--bg-card) — solid, resolvable, and the exact pairing that already cleared this selector\'s contrast check before this DI');
+  // RE-DERIVED (SP-52 DI-454): the solid base is var(--chrome-tab-bg) — still a SOLID, RESOLVABLE token (contrastscan.mjs can read it), per look: white on Munera/Paper/Graphite Light,
+  // Ink on Ink Light, #2B2520 on the Dark surfaces, #1C1C1E on Graphite Dark. It equals --bg-card on every look that had a white bar, so the Munera pairing is unchanged.
+  assert(/background:\s*var\(--chrome-tab-bg\)/.test(pillBody),
+    '12f-1: .bottom-nav base background is var(--chrome-tab-bg) — solid, resolvable, per look (it was var(--bg-card); equal on Munera Light)');
   const supportsMatch = rawCss.match(/@supports\s*\(\(backdrop-filter:blur\(1px\)\)\s*or\s*\(-webkit-backdrop-filter:blur\(1px\)\)\)\{[\s\S]*?\n\}/);
   assert(!!supportsMatch, '12f-2: found the positive @supports(backdrop-filter) enhancement block');
   const supportsBody = supportsMatch ? supportsMatch[0] : '';
@@ -3235,12 +3333,25 @@ console.log('\n[13] PILL TAB BAR — CSS PINS (coordinator CSS pass, DI-397 pill
   const rootMatch2 = css.match(/:root\s*\{([^}]*)\}/);
   assert(!!rootMatch2 && /--nav-material:\s*rgba\(255,255,255,\.72\)/.test(rootMatch2[1]),
     '12i-1: :root --nav-material is the light rgba(255,255,255,.72) glass');
-  const mediaDarkMatch = css.match(/@media \(prefers-color-scheme:\s*dark\)\s*\{\s*body\.theme-neutral:not\(\[data-color-scheme="light"\]\)\s*\{([^}]*)\}/);
-  const manualDarkMatch = css.match(/body\.theme-neutral\[data-color-scheme="dark"\]\s*\{([^}]*)\}/);
-  assert(!!mediaDarkMatch && /--nav-material:\s*rgba\(31,27,23,\.72\)/.test(mediaDarkMatch[1]),
-    '12i-2: the prefers-color-scheme:dark block sets --nav-material to rgba(31,27,23,.72) (--bg-card\'s own dark hex at the same .72 alpha)');
-  assert(!!manualDarkMatch && /--nav-material:\s*rgba\(31,27,23,\.72\)/.test(manualDarkMatch[1]),
-    '12i-3: the manual [data-color-scheme="dark"] override carries the BYTE-IDENTICAL value — the two dark blocks cannot drift apart');
+  // RE-DERIVED (SP-52 DI-448 Table 1, 2026-10-01). The Dark glass is now the LIFTED tab-bar colour at the same .72 alpha — rgba(43,37,32,.72) (--chrome-tab-bg #2B2520; it was
+  // --bg-card's old dark hex rgba(31,27,23,.72)) — and it is declared ONCE per trigger in the shared Dark-surface Block A (an enumerated selector list), not in a one-theme block.
+  // Read through the REAL cascade (themeresolve.mjs) so every look and BOTH triggers are checked, plus the two per-look alphas the DI sets (J3: Paper Dark .92 and Ink Light .88,
+  // the translucent bar composites over light cards there) and Graphite Dark's own #1C1C1E glass.
+  const TR = await import('./themeresolve.mjs');
+  const navSheet = TR.parseSheet(rawCss);
+  const navMat = (key, side, trig) => TR.resolveSide(navSheet, key, side, trig).get('--nav-material');
+  const blockA = (manual) => navSheet.rules.find((r) => (manual ? (r.media === null && r.selectorText.includes('[data-color-scheme="dark"]')) : (r.media === 'dark' && r.selectorText.includes(':not([data-color-scheme="light"])')))
+    && (r.selectorText.match(/body\.theme-/g) || []).length === 8);
+  const aMedia = blockA(false), aManual = blockA(true);
+  assert(!!aMedia && aMedia.decls.some((d) => d.prop === '--nav-material' && d.value === 'rgba(43,37,32,.72)'),
+    '12i-2: the prefers-color-scheme:dark Block A sets --nav-material to rgba(43,37,32,.72) (--chrome-tab-bg\'s own dark hex at the same .72 alpha)');
+  assert(!!aManual && aManual.decls.some((d) => d.prop === '--nav-material' && d.value === 'rgba(43,37,32,.72)') && aMedia.decls.map((d) => d.prop + ':' + d.value).join(';') === aManual.decls.map((d) => d.prop + ':' + d.value).join(';'),
+    '12i-3: the manual [data-color-scheme="dark"] Block A carries the BYTE-IDENTICAL value (and declaration set) — the two dark blocks cannot drift apart');
+  assert(['neutral', 'ink', 'aggie', 'sooner', 'trojan', 'irish', 'boilermaker', 'razorback'].every((k) => navMat(k, 'D', 'system') === 'rgba(43,37,32,.72)' && navMat(k, 'D', 'pinned') === 'rgba(43,37,32,.72)'),
+    '12i-4: every Munera-surface look resolves the Dark glass to rgba(43,37,32,.72) under BOTH triggers');
+  assert(navMat('paper', 'D', 'system') === 'rgba(43,37,32,.92)' && navMat('paper', 'D', 'pinned') === 'rgba(43,37,32,.92)' && navMat('ink', 'L', 'system') === 'rgba(20,17,14,.88)'
+    && navMat('graphite', 'D', 'system') === 'rgba(28,28,30,.72)' && navMat('graphite', 'L', 'system') === 'rgba(255,255,255,.72)' && navMat('neutral', 'L', 'system') === 'rgba(255,255,255,.72)',
+    '12i-5: Paper Dark (.92) and Ink Light (.88) carry the more opaque glass the DI sets (J3); Graphite Dark its own #1C1C1E glass; Munera Light is the unchanged white .72');
 
   // [13j] Reviewer BLOCK (round 2, 2026-09-27) — a system "reduce
   // transparency" preference drops the glass material back to the same
@@ -3248,8 +3359,9 @@ console.log('\n[13] PILL TAB BAR — CSS PINS (coordinator CSS pass, DI-397 pill
   // no-backdrop-filter fallback — one fallback shape, not two.
   const reduceTranspMatch = css.match(/@media \(prefers-reduced-transparency:reduce\)\{\s*\.bottom-nav\{([^}]*)\}/);
   assert(!!reduceTranspMatch, '12j-1: found @media(prefers-reduced-transparency:reduce){.bottom-nav{...}}');
-  assert(!!reduceTranspMatch && /background:\s*var\(--bg-card\)/.test(reduceTranspMatch[1]) && /backdrop-filter:\s*none/.test(reduceTranspMatch[1]) && /-webkit-backdrop-filter:\s*none/.test(reduceTranspMatch[1]),
-    `12j-2: prefers-reduced-transparency:reduce sets background:var(--bg-card);backdrop-filter:none;-webkit-backdrop-filter:none (got "${reduceTranspMatch?.[1]}")`);
+  // RE-DERIVED (SP-52 DI-454): the solid fallback is var(--chrome-tab-bg) — the SAME token the base rule reads (one fallback shape, now per look).
+  assert(!!reduceTranspMatch && /background:\s*var\(--chrome-tab-bg\)/.test(reduceTranspMatch[1]) && /backdrop-filter:\s*none/.test(reduceTranspMatch[1]) && /-webkit-backdrop-filter:\s*none/.test(reduceTranspMatch[1]),
+    `12j-2: prefers-reduced-transparency:reduce sets background:var(--chrome-tab-bg);backdrop-filter:none;-webkit-backdrop-filter:none (got "${reduceTranspMatch?.[1]}")`);
 
   // [13g] hide/show — the SAME binary slide (T-24, 240ms), but the translate
   // distance now clears the pill's OWN bottom offset too. MUTATION-PROVEN:
@@ -3257,15 +3369,21 @@ console.log('\n[13] PILL TAB BAR — CSS PINS (coordinator CSS pass, DI-397 pill
   // brief named as the exact bug (a --nav-pill-gap-tall sliver left on
   // screen) must turn this red, not silently keep matching a loose pattern.
   const hiddenMatch = css.match(/\.bottom-nav\.nav-hidden\{([^}]*)\}/);
-  const fullOffsetTransform = /transform:\s*translateY\(calc\(100%\s*\+\s*var\(--nav-pill-gap\)\s*\+\s*env\(safe-area-inset-bottom,\s*0px\)\)\)/;
+  // RE-DERIVED (Home wiring, 2026-10-01): the distance is the pill's height + its bottom offset + the DISC COLLAR's reach, because the disc overhangs the pill's top edge and a distance that
+  // stops at the pill leaves the collar's top 8px on screen: DI-397's own sliver bug a third time.
+  const fullOffsetTransform = /transform:\s*translateY\(calc\(100%\s*\+\s*var\(--nav-pill-bottom\)\s*\+\s*var\(--nav-disc-reach\)\)\)/;
   assert(!!hiddenMatch && fullOffsetTransform.test(hiddenMatch[1]),
-    '12g-1: .bottom-nav.nav-hidden translates the FULL offset (100% + gap + safe-area) — fully off-screen, no sliver left showing');
+    '12g-1: .bottom-nav.nav-hidden translates the FULL offset (100% + --nav-pill-bottom + --nav-disc-reach) — fully off-screen, no pill and no collar sliver left showing');
   const mutatedHidden = '.bottom-nav.nav-hidden{transform:translateY(100%);transition:transform 240ms ease-in}';
   assert(!fullOffsetTransform.test(mutatedHidden),
     '12g-2 mutation proof: the SAME regex correctly goes RED against the old bare translateY(100%) — the exact sliver-leaving bug this DI closes, not a pattern loose enough to still match it');
+  const mutatedShipped = '.bottom-nav.nav-hidden{transform:translateY(calc(100% + var(--nav-pill-gap) + env(safe-area-inset-bottom,0px)));transition:transform 240ms ease-in}';
+  const mutatedNoReach = '.bottom-nav.nav-hidden{transform:translateY(calc(100% + var(--nav-pill-bottom)));transition:transform 240ms ease-in}';
+  assert(!fullOffsetTransform.test(mutatedShipped) && !fullOffsetTransform.test(mutatedNoReach),
+    '12g-2b mutation proof: the regex ALSO goes RED against the shipped (gap + safe-area) distance and against a distance that drops the disc reach: the collar sliver cannot return unseen');
   const kbHiddenMatch = css.match(/body\[data-keyboard-up\] \.bottom-nav\{([^}]*)\}/);
   assert(!!kbHiddenMatch && fullOffsetTransform.test(kbHiddenMatch[1]),
-    '12g-3: the keyboard-up hide uses the SAME full-offset transform, not the old bare 100%');
+    '12g-3: the keyboard-up hide uses the SAME full-offset transform (pill offset + disc reach), not the old bare 100%');
 
   // [13k] Reviewer BLOCK (round 2, 2026-09-27) — .nav-unread's clip fix.
   // .bottom-nav no longer declares its own overflow at all (border-radius
@@ -3292,8 +3410,11 @@ console.log('\n[13] PILL TAB BAR — CSS PINS (coordinator CSS pass, DI-397 pill
   assert(!!activeDotMatch, '12l-1: found .nav-item.active::after{...} — the active-tab dot');
   assert(!!activeDotMatch && /width:\s*4px/.test(activeDotMatch[1]) && /height:\s*4px/.test(activeDotMatch[1]) && /border-radius:\s*50%/.test(activeDotMatch[1]),
     `12l-2: the dot is 4x4px, fully rounded (got "${activeDotMatch?.[1]}")`);
-  assert(!!activeDotMatch && /background:\s*var\(--maroon-text\)/.test(activeDotMatch[1]),
-    '12l-3: the dot reads var(--maroon-text) — the SAME token the colour cue already uses, not a new one-off value');
+  // RE-DERIVED (SP-52 DI-454): the colour cue and the dot read ONE token, --chrome-tab-icon-selected (the selected-tab colour per look: crimson on white, gold on Ink Light, a lifted
+  // red on the Dark surfaces, near-white on Graphite Dark). The assertion's intent — dot and colour are the SAME token, never a one-off — is kept and now checked against the colour rule.
+  const activeColourMatch = css.match(/\.nav-item\.active,\.nav-item:active\{([^}]*)\}/);
+  assert(!!activeDotMatch && /background:\s*var\(--chrome-tab-icon-selected\)/.test(activeDotMatch[1]) && !!activeColourMatch && /color:\s*var\(--chrome-tab-icon-selected\)/.test(activeColourMatch[1]),
+    '12l-3: the dot reads var(--chrome-tab-icon-selected) — the SAME token the colour cue (.nav-item.active) reads, not a new one-off value');
   // The selector as WRITTEN in the file must be exactly `.nav-item.active::after`
   // — not a comma-joined rule that also matches `.nav-item:active` (the
   // regression this mutation proof targets).
@@ -3311,5 +3432,168 @@ console.log('\n[13] PILL TAB BAR — CSS PINS (coordinator CSS pass, DI-397 pill
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════
+console.log('\n[14] SP-57 (2026-10-01, DI-476) — the section drag is a third owner of the one-touch claim model: constants, the repaint-deferral door, releaseTouchAndFlush, the pull-to-refresh and bounce claim checks, and the layout bar\'s gesture suspension…');
+// ══════════════════════════════════════════════════════════════════
+{
+  const { SECTION_LONG_PRESS_MS, LONG_PRESS_MS, SECTION_DRAG_TOUCH_OWNER, DRAWER_TOUCH_OWNER, deferRenderWhileWeekSwiping,
+    releaseTouchAndFlush, claimTouch, releaseTouch, touchClaimedBy, clearStaleTouchClaim, _deferredRenderCount } = NG;
+  const savedDoc14 = globalThis.document, savedWin14 = globalThis.window;
+  const flushAll = () => { releaseTouch('week-swipe'); releaseTouch(DRAWER_TOUCH_OWNER); releaseTouch(SECTION_DRAG_TOUCH_OWNER); releaseTouch('column-reorder'); };
+
+  // 14a — constants (AT5, the export half): the section hold is Drew's 500, pinned APART from the 350 group.
+  assert(SECTION_LONG_PRESS_MS === 500 && LONG_PRESS_MS === 350 && SECTION_LONG_PRESS_MS !== LONG_PRESS_MS && SECTION_DRAG_TOUCH_OWNER === 'section-drag',
+    '14a: SECTION_LONG_PRESS_MS is 500 ("the 500s"), the exported LONG_PRESS_MS copy is the 350 pill / column / chat hold, the two differ, and the claim name is "section-drag"');
+  {
+    const { readFileSync } = await import('node:fs');
+    const lp = (text) => [...text.matchAll(/const LONG_PRESS_MS = (\d+);/g)].map((m) => Number(m[1]));
+    const appLp = lp(readFileSync(new URL('./js/app.js', import.meta.url), 'utf8'));
+    const chatLp = lp(readFileSync(new URL('./js/chat-ui.js', import.meta.url), 'utf8'));
+    assert(appLp.length === 1 && chatLp.length === 1 && appLp[0] === LONG_PRESS_MS && chatLp[0] === LONG_PRESS_MS,
+      `14a-2: AT5 — the THREE copies of the 350 group agree (app.js ${JSON.stringify(appLp)}, chat-ui.js ${JSON.stringify(chatLp)}, nav-gestures.js ${LONG_PRESS_MS}); the pill path was not edited`);
+    const sd = readFileSync(new URL('./js/section-drag.js', import.meta.url), 'utf8');
+    assert(/export const SECTION_LONG_PRESS_MS = NG\.SECTION_LONG_PRESS_MS;/.test(sd) && /export const SECTION_DRAG_TOUCH_OWNER = NG\.SECTION_DRAG_TOUCH_OWNER;/.test(sd),
+      '14a-3: js/section-drag.js re-exports both from nav-gestures.js — one source, so the engine and the deferral set can never name different owners');
+  }
+
+  // 14b — the deferral door honours the section drag, and ONLY the three recognisers that follow the finger across a page.
+  {
+    flushAll();
+    let painted = 0;
+    const paint = () => { painted++; };
+    assert(deferRenderWhileWeekSwiping('leaderboard', paint) === false && _deferredRenderCount() === 0, '14b-0: with no claim held a repaint runs now (returns false, nothing parked) — eptest / layouttest / grouptest call renderLeaderboard() directly');
+    claimTouch(SECTION_DRAG_TOUCH_OWNER);
+    assert(deferRenderWhileWeekSwiping('leaderboard', paint) === true && deferRenderWhileWeekSwiping('leaderboard', paint) === true && _deferredRenderCount() === 1,
+      '14b: while "section-drag" owns the touch a repaint PARKS (and a burst of ticks collapses to one, latest wins, per page key) — the lifted section is never replaced under the finger');
+    releaseTouchAndFlush(SECTION_DRAG_TOUCH_OWNER);
+    assert(painted === 1 && _deferredRenderCount() === 0 && touchClaimedBy() === null,
+      `14c: releaseTouchAndFlush("section-drag") releases the claim AND runs the parked repaint immediately, exactly once (painted ${painted})`);
+    // The pill path is unchanged: 'column-reorder' still does NOT park (C4 / UN-D6: its path is byte-for-byte what it was).
+    claimTouch('column-reorder');
+    assert(deferRenderWhileWeekSwiping('dashboard', paint) === false && _deferredRenderCount() === 0,
+      '14d: a pill drag ("column-reorder") still does NOT park a repaint — the deferral set gained exactly one owner, not "every claim"');
+    releaseTouch('column-reorder');
+    claimTouch('week-swipe');
+    assert(deferRenderWhileWeekSwiping('dashboard', paint) === true, '14e: the week swipe (SB-15 / RG-TBD-A1) still parks — unchanged');
+    releaseTouchAndFlush('week-swipe'); painted = 0;
+    claimTouch(DRAWER_TOUCH_OWNER);
+    assert(deferRenderWhileWeekSwiping('dashboard', paint) === true, '14f: the control-center drag (SB-15) still parks — unchanged');
+    releaseTouchAndFlush(DRAWER_TOUCH_OWNER);
+    assert(touchClaimedBy() === null, '14f-2: …and its release still hands the touch back');
+  }
+
+  // 14g — the LOAD-BEARING owner guard on releaseTouchAndFlush: the drawer's settle() calls it on EVERY touchend, including the
+  // one that begins the section drag's 260 ms settle while section-drag still owns the touch. Unguarded it would run the section
+  // drag's parked repaint mid-settle and replace the nodes it is animating.
+  {
+    flushAll();
+    let painted = 0;
+    claimTouch(SECTION_DRAG_TOUCH_OWNER);
+    deferRenderWhileWeekSwiping('dashboard', () => { painted++; });
+    releaseTouchAndFlush(DRAWER_TOUCH_OWNER);       // the drawer's settle() on a touchend that is not its own
+    assert(painted === 0 && touchClaimedBy() === SECTION_DRAG_TOUCH_OWNER && _deferredRenderCount() === 1,
+      '14g: THE OWNER GUARD — the drawer releasing "its" touch while section-drag owns it releases nothing and flushes nothing (a mid-settle repaint would replace the animating nodes)');
+    releaseTouchAndFlush(SECTION_DRAG_TOUCH_OWNER);
+    assert(painted === 1 && touchClaimedBy() === null, '14g-2: …and the rightful owner\'s own release then flushes once');
+    // A stale section-drag claim (its touchend never arrived) never strands a parked repaint, same as the week swipe's.
+    claimTouch(SECTION_DRAG_TOUCH_OWNER);
+    painted = 0;
+    deferRenderWhileWeekSwiping('dashboard', () => { painted++; });
+    clearStaleTouchClaim({ touches: [{}] });
+    assert(touchClaimedBy() === null, '14h: a fresh one-finger touch clears a stale "section-drag" claim, like every other owner (a stale claim would silence every other recognizer for good)');
+    await new Promise(r => setTimeout(r, 5));
+    assert(painted === 1, `14h-2: …and the repaint parked under it is not stranded — it runs once that touch has been dealt with (painted ${painted})`);
+    flushAll();
+  }
+
+  // 14i — pull-to-refresh, the reducer: a 'claimed' event ends it for the rest of the touch.
+  {
+    const phases = _pullToRefreshStateMachine([
+      { type: 'touchstart', scrollTop: 0 }, { type: 'touchmove', dy: 40 }, { type: 'claimed' }, { type: 'touchmove', dy: 200 }, { type: 'touchend' },
+    ]);
+    assert(phases[2] === 'idle' && !phases.includes('armed') && !phases.includes('refreshing'),
+      `14i: the reducer's 'claimed' event returns to idle and the touch is ineligible from then on — a 200 px pull afterwards never arms and its touchend never refreshes (${phases.join(' > ')})`);
+    const control = _pullToRefreshStateMachine([{ type: 'touchstart', scrollTop: 0 }, { type: 'touchmove', dy: 200 }, { type: 'touchend' }]);
+    assert(control.includes('armed') && control[control.length - 1] === 'refreshing', '14i-2: anti-vacuity — the same pull WITHOUT the claim arms and refreshes');
+  }
+
+  // 14j — pull-to-refresh, the BINDER (AT6): a lifted section dragged down at the top of the page never refreshes; the pill path is unchanged.
+  {
+    const makeWin = () => {
+      const handlers = {};
+      return { scrollY: 0, innerHeight: 844,
+        addEventListener(t, fn) { (handlers[t] ||= []).push(fn); }, removeEventListener(t, fn) { handlers[t] = (handlers[t] || []).filter(h => h !== fn); },
+        _fire(t, ev) { (handlers[t] || []).slice().forEach(fn => fn(ev)); } };
+    };
+    globalThis.document = { getElementById: () => null, querySelector: () => null, body: { dataset: {} }, documentElement: { scrollHeight: 2000 } };
+    async function pull(owner, claimAt) {
+      flushAll();
+      const win = makeWin(); globalThis.window = win;
+      let refreshed = 0;
+      bindPullToRefresh(() => win, async () => { refreshed++; }, { onFail: () => {} });
+      win._fire('touchstart', { touches: [{ clientX: 100, clientY: 100 }] });
+      if (owner && claimAt === 'before') claimTouch(owner);
+      win._fire('touchmove', { touches: [{ clientX: 100, clientY: 100 + 30 }] });
+      if (owner && claimAt === 'mid') claimTouch(owner);
+      win._fire('touchmove', { touches: [{ clientX: 100, clientY: 100 + PULL_TO_REFRESH_ARM_PX + 60 }] });
+      win._fire('touchend', {});
+      await new Promise(r => setTimeout(r, 0));
+      flushAll();
+      return refreshed;
+    }
+    assert(await pull(null) === 1, '14j-0: anti-vacuity — a 124 px pull at scroll-top with NO claim refreshes');
+    assert(await pull(SECTION_DRAG_TOUCH_OWNER, 'before') === 0, '14j: AT6 — a touch claimed by "section-drag" (the held title at the top of the page) dragged down past 64 px does NOT refresh');
+    assert(await pull(SECTION_DRAG_TOUCH_OWNER, 'mid') === 0, '14j-2: …and the same when the claim lands mid-pull (the hold fires after the finger has already moved a little, with the pull already pulling)');
+    assert(await pull('column-reorder', 'before') === 1,
+      '14j-3: C4 — the pill path is byte-for-byte unchanged: a pill drag ("column-reorder") at the top of the page can still arm a refresh. A recorded, deferred gap (one token: `!== null`), not an accident of this change');
+  }
+
+  // 14k — the web bottom rubber band, the BINDER (AT6).
+  {
+    const makeWin = () => {
+      const handlers = {};
+      return { scrollY: 1156, innerHeight: 844,
+        addEventListener(t, fn) { (handlers[t] ||= []).push(fn); }, removeEventListener(t, fn) { handlers[t] = (handlers[t] || []).filter(h => h !== fn); },
+        _fire(t, ev) { (handlers[t] || []).slice().forEach(fn => fn(ev)); } };
+    };
+    globalThis.document = { getElementById: () => null, querySelector: () => null, body: { dataset: {} }, documentElement: { scrollHeight: 2000 } };
+    function pushUp(owner) {
+      flushAll();
+      const win = makeWin(); globalThis.window = win;
+      const writes = [];
+      const target = { style: {}, addEventListener() {}, removeEventListener() {} };
+      Object.defineProperty(target.style, 'transform', { set(v) { writes.push(v); }, get() { return writes[writes.length - 1] || ''; } });
+      bindBottomBounce(() => win, target, {});
+      win._fire('touchstart', { touches: [{ clientX: 100, clientY: 600 }] });
+      if (owner) claimTouch(owner);
+      win._fire('touchmove', { touches: [{ clientX: 100, clientY: 480 }] });
+      const lift = Math.max(0, ...writes.map(w => { const m = /translateY\(-([\d.]+)px\)/.exec(w || ''); return m ? +m[1] : 0; }));
+      win._fire('touchend', {});
+      flushAll();
+      return lift;
+    }
+    assert(pushUp(null) > 5, '14k-0: anti-vacuity — an upward drag at the page bottom with no claim lifts the page (the T-29 rubber band)');
+    assert(pushUp(SECTION_DRAG_TOUCH_OWNER) === 0, '14k: AT6 — a lifted section dragged up at the page bottom does NOT rubber-band the page under it');
+    assert(pushUp('column-reorder') > 5, '14k-2: C4 — the pill path\'s bounce is unchanged (a pill drag at the bottom still bounces); the new check is scoped to "section-drag" only');
+  }
+  globalThis.document = savedDoc14; globalThis.window = savedWin14;
+
+  // 14l — gesturesSuspended() and the layout bar: edit mode suspends every OTHER gesture; the section drag itself asks with ignoreLayoutBar.
+  {
+    const docWith = (...ids) => ({ getElementById: (id) => (ids.includes(id) ? {} : null), querySelector: () => null });
+    globalThis.document = docWith('layout-edit-bar');
+    assert(gesturesSuspended() === true, '14l: #layout-edit-bar on the page → gesturesSuspended() is TRUE — the week swipe, pull-to-refresh, nav hide and bounce are all off while a page is being rearranged');
+    assert(gesturesSuspended({ ignoreLayoutBar: true }) === false, '14l-2: …and the section drag\'s own question, gesturesSuspended({ ignoreLayoutBar: true }), is FALSE — it must not be frozen by the very mode it enables (the drawer\'s own binder skips this check for the same reason)');
+    globalThis.document = docWith('layout-edit-bar', 'site-gate-overlay');
+    assert(gesturesSuspended({ ignoreLayoutBar: true }) === true, '14l-3: an overlay (the sign-in gate) still suspends the section drag even with the bar ignored');
+    globalThis.document = { getElementById: (id) => (id === 'layout-edit-bar' ? {} : null), querySelector: (sel) => (sel === '#control-center[data-open="true"]' ? {} : null) };
+    assert(gesturesSuspended({ ignoreLayoutBar: true }) === true, '14l-4: …and so does the open control center — the drawer covers the page and owns its touch, so a section hold can never start under it');
+    globalThis.document = docWith();
+    assert(gesturesSuspended() === false && gesturesSuspended({ ignoreLayoutBar: true }) === false, '14l-5: with nothing up neither question is TRUE (no stuck suspension)');
+    globalThis.document = savedDoc14;
+    assert(gesturesSuspended({ ignoreLayoutBar: true }) === false, '14l-6: no `document` at all → false, no throw (Node / test environment)');
+  }
+}
+
 console.log(`\n[nav-gestures] ${pass} passed, ${fail} failed\n`);
 if (fail > 0) process.exit(1);

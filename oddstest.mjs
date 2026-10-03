@@ -162,6 +162,10 @@ function competitor(id, homeAway, location, abbreviation, mascot) {
   };
 }
 
+/** A fixture label (E01…E20) as an ESPN-shaped digit event id, and back. */
+const espnIdOf = label => '40190000' + String(label).slice(1).padStart(2, '0');
+const labelOf = eventId => 'E' + String(eventId).slice(-2);
+
 /**
  * Build one ESPN event.
  * `favoredSide` is ESPN's ground truth: 'home' | 'away' | null.
@@ -186,12 +190,16 @@ function event({ id, home, away, details, favoredSide, magnitude, noOdds, noFlag
                       team: { abbreviation: away.ab } },
     }),
   }];
+  // SB-24 (2026-10-01) — ESPN event ids are DIGITS, and the parser now drops
+  // anything else (to null). The fixture keeps its readable E01…E20 labels as
+  // lookup keys and sends ESPN an id of the real shape: E01 → '4019000001'.
+  const eventId = espnIdOf(id);
   return {
-    id, date: ISO,
+    id: eventId, date: ISO,
     name: `${away.loc} at ${home.loc}`, shortName: `${away.ab} @ ${home.ab}`,
     status: { type: { name: 'STATUS_SCHEDULED', detail: '3:00 PM ET', completed: false } },
     competitions: [{
-      id, date: ISO,
+      id: eventId, date: ISO,
       competitors: [homeC, awayC],
       venue: { fullName: 'Test Stadium', address: { city: 'Testville', state: 'CA' } },
       ...(odds ? { odds } : {}),
@@ -208,7 +216,7 @@ async function runSlate(events) {
   try {
     const res = await fetchByDateRange({ startDate: DATE, endDate: DATE });
     const byId = {};
-    for (const g of res.games) byId[g.espnEventId] = g;
+    for (const g of res.games) byId[labelOf(g.espnEventId)] = g;
     return { res, byId };
   } finally { globalThis.fetch = saved; }
 }
@@ -419,7 +427,9 @@ console.log('\n[5] Pick / PK / EVEN / absent odds → spread null, favorite null
 // ═════════════════════════════════════════════════════════════════════════════
 console.log('\n[6] Invariant: sign(spread) agrees with ESPN\'s own favorite flag…');
 {
-  for (const ev of EVENTS) {
+  for (const event of EVENTS) {
+    // SB-24 — the fixture's readable label (E01…), from its digit event id.
+    const ev = { ...event, id: labelOf(event.id) };
     const odds = ev.competitions[0].odds?.[0];
     if (!odds) continue;
     const g = byId[ev.id];

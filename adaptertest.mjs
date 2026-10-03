@@ -511,11 +511,65 @@ function makeClient(st, session, opts = {}) {
 
   const flags = { weekTransition: false };
 
+  /**
+   * SB-01 / RG-265 — TEACH THE FAKE: THE SERVER'S ROW CAP, AND THE READ VERBS THAT PAGE AROUND IT.
+   *
+   * Hosted PostgREST applies a "Max rows" limit to EVERY read (Supabase's default is 1,000) and
+   * truncates SILENTLY: HTTP 200, a partial array, no error. The fake used to return every matching
+   * row, so a hydrate that never paged looked complete here and could not be caught. Now:
+   *   • `maxRows` (default 1,000, the hosted default) caps every select, with or without `.limit()`;
+   *     the effective limit is `min(limit, maxRows)`, exactly as PostgREST computes it.
+   *   • `.order(col)` sorts, `.gt(col, v)` filters, `.limit(n)` / `.range(a, b)` page — and the sort
+   *     and the `gt` use ONE comparator, which is the property Postgres gives `ORDER BY id` and
+   *     `id > $1` under the same collation, and the one keyset paging depends on.
+   *   • `select(cols, { count: 'exact' })` answers `count` = every row the filters and the policy
+   *     admit, BEFORE the limit — computed in the same call as the page, as PostgREST computes it in
+   *     the same statement. Without the option `count` is `null`, as supabase-js reports it.
+   *   • `dropCount` models a proxy that strips Content-Range (so `count` is `null` even when asked
+   *     for); `ignoreGt` models a server that ignores the keyset filter and hands back the first
+   *     page again — the shape a paging loop must refuse rather than spin on.
+   * With no `.order()` the fake returns rows in store order, which is what a heap scan does most
+   * of the time and all the unordered hydrate ever had.
+   */
+  const MAX_ROWS = typeof opts.maxRows === 'number' ? opts.maxRows : 1000;   // Infinity = an uncapped server
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+  /**
+   * SB-01 pass 2 (security S-C1) — THE GATEWAY'S URL LIMIT, and the URL the SDK would really send.
+   *
+   * supabase-js appends every filter with `url.searchParams.append(col, 'gt.' + value)` (form-
+   * urlencoding) and `.range()` sets `offset`/`limit`; the URL below is built the same way, so its
+   * length is the length the gateway judges. Past `maxUrl` (default 16,384 — Cloudflare's limit)
+   * the request never reaches PostgREST: it is answered 414 with an HTML body, which the SDK hands
+   * back as `{ message: <the HTML> }` with no code (its non-JSON error branch). Also modelled:
+   *   • `beforeSelect(b)` — runs as a select is served, so a test can move the table BETWEEN two
+   *     pages of one read (a concurrent insert/delete) deterministically;
+   *   • `capFor(table, n)` — a per-request cap (the n-th select of that table), for a server whose
+   *     Max rows changes mid-read;
+   *   • `inflateCount` — tables whose count claims one row more than exists (a read that can never
+   *     be proven complete);
+   *   • `gatewayHtml` — tables whose every select is answered by the gateway's 414 page.
+   */
+  const MAX_URL = typeof opts.maxUrl === 'number' ? opts.maxUrl : 16384;
+  const perTableSelects = new Map();
+  const GATEWAY_414 = '<html><head><title>414 Request-URI Too Large</title></head><body><center><h1>414 Request-URI Too Large</h1></center><hr><center>cloudflare</center></body></html>';
+  function requestUrl(b) {
+    const u = new URL(`https://proj.supabase.test/rest/v1/${b._table}`);
+    u.searchParams.set('select', String(b._cols).replace(/\s/g, ''));
+    for (const [c, v] of b._eq) u.searchParams.append(c, `eq.${v}`);
+    for (const [c, v] of b._gt) u.searchParams.append(c, `gt.${v}`);
+    if (b._order) u.searchParams.set('order', `${b._order.col}.${b._order.ascending ? 'asc' : 'desc'}`);
+    if (b._ranged) u.searchParams.set('offset', String(b._offset));
+    if (b._limit !== null) u.searchParams.set('limit', String(b._limit));
+    return u.toString();
+  }
+
   function builder(table) {
     const b = {
-      _table: table, _eq: [], _in: [], _op: 'select', _cols: '*', _payload: null, _returning: false, _retCols: '*',
-      select(cols) {
-        if (b._op === 'select') b._cols = cols || '*';
+      _table: table, _eq: [], _in: [], _gt: [], _op: 'select', _cols: '*', _payload: null, _returning: false, _retCols: '*',
+      _order: null, _limit: null, _offset: 0, _ranged: false, _count: null,
+      select(cols, selOpts) {
+        if (b._op === 'select') { b._cols = cols || '*'; b._count = (selOpts && selOpts.count) || null; }
         // REVIEWER N3 — `RETURNING` IS A PROJECTION, and the fake used to ignore it.
         // PostgREST returns the columns the request ASKED FOR, and on `league_members` the adapter
         // asks for SELECT_COLS — which omits email/phone/phone_verified, because 0007's SELECT
@@ -530,6 +584,10 @@ function makeClient(st, session, opts = {}) {
       upsert(rows) { b._op = 'insert'; b._payload = Array.isArray(rows) ? rows : [rows]; return b; },
       eq(col, val) { b._eq.push([col, val]); return b; },
       in(col, vals) { b._in.push([col, vals]); return b; },
+      gt(col, val) { b._gt.push([col, val]); return b; },
+      order(col, o) { b._order = { col, ascending: !(o && o.ascending === false) }; return b; },
+      limit(n) { b._limit = n; return b; },
+      range(from, to) { b._ranged = true; b._offset = from; b._limit = to - from + 1; return b; },
       then(resolve, reject) {
         // REVIEWER N2 — A WRITE WHOSE RESPONSE IS SLOW ENOUGH FOR A HYDRATE TO LAND BEHIND IT.
         // The whole of `run(b)` is deferred, not just its return: the store must not move until the
@@ -545,7 +603,8 @@ function makeClient(st, session, opts = {}) {
   }
 
   function matches(r, b) {
-    return b._eq.every(([c, v]) => r[c] === v) && b._in.every(([c, vs]) => vs.includes(r[c]));
+    return b._eq.every(([c, v]) => r[c] === v) && b._in.every(([c, vs]) => vs.includes(r[c]))
+      && (opts.ignoreGt || b._gt.every(([c, v]) => cmp(r[c], v) > 0));
   }
 
   /** The `RETURNING` list, applied. `'*'` is every column (the tables with no column grant);
@@ -592,7 +651,22 @@ function makeClient(st, session, opts = {}) {
     if (!pol) return refuse(`permission denied for table ${table}`);
 
     if (b._op === 'select') {
-      calls.selects.push({ table, cols: b._cols, eq: b._eq.slice() });
+      const url = requestUrl(b);
+      calls.selects.push({ table, cols: b._cols, eq: b._eq.slice(), gt: b._gt.slice(), order: b._order, limit: b._limit,
+        offset: b._ranged ? b._offset : null, count: b._count, urlLength: url.length });
+      // THE GATEWAY answers before PostgREST sees anything: an over-long URL, or a table the test
+      // has put behind a failing edge, is a 414 with an HTML body and no PostgREST code.
+      if (url.length > MAX_URL || (opts.gatewayHtml && opts.gatewayHtml.includes(table))) {
+        return { data: null, count: null, status: 414, statusText: 'URI Too Long', error: { message: GATEWAY_414 } };
+      }
+      const nth = (perTableSelects.get(table) || 0) + 1;
+      perTableSelects.set(table, nth);
+      if (opts.beforeSelect) opts.beforeSelect(b, nth);
+      // A RUNAWAY BREAKER, not a model of anything: a paging loop that fails to terminate against
+      // `ignoreGt` would otherwise spin on resolved promises and HANG the suite (microtasks starve
+      // every timer), which reads as "the harness broke" rather than as a red. Past this many
+      // requests the fake answers with an error the assertions can see was NOT the adapter's own.
+      if (calls.selects.length > 2000) return { data: null, error: { code: 'TEST_RUNAWAY', message: 'fake: runaway paging loop' } };
       // A PARTIAL READ — the transport artifact RG-12 defence (b) exists for:
       // a 200 that carries no rows for a table that has them. Modelled as an
       // override rather than by emptying the store, so `is_member()` and the
@@ -641,7 +715,22 @@ function makeClient(st, session, opts = {}) {
         if (bad.length) return refuse(`permission denied for column ${bad[0]}`);
       }
       const rows = st[table].filter((r) => matches(r, b) && pol(r));
-      return { data: rows.map((r) => ({ ...r })), error: null };
+      // SB-01 — order, then offset/limit under the server's cap (see MAX_ROWS above).
+      if (b._order) {
+        const { col, ascending } = b._order;
+        rows.sort((x, y) => (ascending ? 1 : -1) * cmp(x[col], y[col]));
+      }
+      const total = rows.length + (opts.inflateCount && opts.inflateCount.includes(table) ? 1 : 0);
+      const cap = opts.capFor ? opts.capFor(table, nth) : MAX_ROWS;
+      const limit = Math.min(b._limit === null ? Infinity : b._limit, cap);
+      const page = rows.slice(b._offset, b._offset + limit);
+      const counted = b._count === 'exact' && !opts.dropCount;
+      return {
+        data: page.map((r) => ({ ...r })),
+        error: null,
+        count: counted ? total : null,
+        status: counted && page.length < total ? 206 : 200,
+      };
     }
 
     if (b._op === 'insert') {
@@ -889,7 +978,9 @@ function makeFakeTimers() {
 }
 
 function initAdapter({ who = 'commissioner', leagueId = LEAGUE_A, rpcOverride = null, emptySelects = null,
-  failTables = null, timers = null, refreshSession = null, random = null } = {}) {
+  failTables = null, timers = null, refreshSession = null, random = null,
+  maxRows = undefined, dropCount = false, ignoreGt = false,
+  maxUrl = undefined, beforeSelect = null, capFor = null, inflateCount = null, gatewayHtml = null } = {}) {
   sb._resetForTest();
   store.clear();
   statuses.length = 0;
@@ -897,7 +988,7 @@ function initAdapter({ who = 'commissioner', leagueId = LEAGUE_A, rpcOverride = 
   detailSeen.length = 0;
   ST = makeStore();
   const session = SESSIONS[who];
-  CLIENT = makeClient(ST, session, { rpcOverride, emptySelects, failTables });
+  CLIENT = makeClient(ST, session, { rpcOverride, emptySelects, failTables, maxRows, dropCount, ignoreGt, maxUrl, beforeSelect, capFor, inflateCount, gatewayHtml });
   ACCOUNT = session.userId || '';
   ACTIVE_LEAGUE = leagueId;
   EPOCH = 7;
@@ -5156,6 +5247,561 @@ await section('\n[A-RETRY] a transient write failure is retried automatically, b
   await captureConsoleAsync(() => sb.flush());
   assert(t8.delays()[0] > 1000 && t8.delays()[0] <= 1400,
     `[A-RETRY8] the delay carries a bounded jitter term, so six phones do not re-send in lockstep (${JSON.stringify(t8.delays())})`);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// SB-01 / RG-265 — HYDRATE-ROW-CAP (architecture audit 2026-09-26; latent, not yet seen live).
+//
+// `_select()` issued ONE unordered, unranged, uncounted select per table. Hosted PostgREST caps
+// every read at "Max rows" (1,000 by default) and truncates SILENTLY — HTTP 200, a partial array —
+// and RG-12's guard fires only when a read is entirely EMPTY, so a short read was adopted as the
+// league. `picks` crosses 1,000 at ~6 players x 12 games x 14 weeks. The fake above now models
+// the cap; these assertions are the reproduction made permanent.
+//
+// The crux, asserted by (2): the server's cap is UNKNOWN to the client and may be SMALLER than the
+// page size it asks for, so "a page shorter than I asked for is the last page" is exactly the
+// silent-truncation rule again. Completeness has to be PROVEN — by the exact count that arrives
+// in the same statement as the first page, or by reading the key range until it is exhausted.
+// ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-PAGE] SB-01 / RG-265 — every hydrate read is PAGED and PROVEN complete; a server row cap never truncates a table silently…', async () => {
+  const KEYS = Object.keys(sb._routesForTest());
+  const canonOf = (v) => JSON.stringify(v === undefined ? null : v);
+  const snapshot = () => Object.fromEntries(KEYS.map((k) => [k, canonOf(sb.get(k))]));
+  const hasPageSeam = typeof sb._setHydratePageSizeForTest === 'function';
+  const hasKeySeam = typeof sb._hydratePageKeyForTest === 'function';
+  assert(hasPageSeam, '[A-PAGE] the hydrate page size is drivable from a test (_setHydratePageSizeForTest) — the page-size-below-cap and boundary cases need it');
+  assert(hasKeySeam, '[A-PAGE] the column each table is ordered and keyset-paged on is readable from a test (_hydratePageKeyForTest)');
+  const pageKey = (t) => (hasKeySeam ? sb._hydratePageKeyForTest(t) : null);
+  const PAST = (s) => new Date(NOW - s * 1000).toISOString();
+
+  /** Grows LEAGUE_A in place. Every added row is visible to the commissioner (final weeks; his own
+   *  notifications), so the expected count per table is simply what RLS admits. Rows are pushed in
+   *  REVERSE key order, so store order is not key order and nothing passes by accident of insertion. */
+  function grow(st, { extraMembers = [], weeks = 0, gamesPerWeek = 0, notes = 0 } = {}) {
+    const add = (table, rows) => st[table].push(...rows.reverse());
+    add('league_members', extraMembers.map((id) => row({ league_id: LEAGUE_A, id, user_id: `u-${id}`, role: 'player', display_name: id.toUpperCase(), initials: id.toUpperCase(), alma_mater: '', active: true, email: `${id}@example.com`, phone: '', phone_verified: false, notify_prefs: {}, preferences: {} })));
+    const members = [...new Set(st.league_members.filter((m) => m.league_id === LEAGUE_A && m.active).map((m) => m.id))];
+    const wk = [], gm = [], pk = [];
+    for (let w = 1; w <= weeks; w++) {
+      const wid = `wb${String(w).padStart(2, '0')}`;
+      wk.push(row({ league_id: LEAGUE_A, id: wid, sport: 'cfb', season: '2026', week_number: 100 + w, label: `Bulk ${w}`, status: 'final', picks_lock_at: PAST(90000), revealed_at: PAST(80000), locked_at: PAST(90000), locked_alma_maters: [], pending_finalization: false }));
+      for (let g = 1; g <= gamesPerWeek; g++) {
+        const gid = `g${wid}_${String(g).padStart(2, '0')}`;
+        gm.push(row({ league_id: LEAGUE_A, id: gid, week_id: wid, home_team: `H${g}`, away_team: `A${g}`, status: 'final', kickoff: PAST(86000), spread: -3, favorite: `H${g}`, multiplier: 1, home_score: 10, away_score: 7, last_updated: null, ats_winner: null }));
+        for (const m of members) {
+          pk.push(row({ league_id: LEAGUE_A, id: `pk_${gid}_${m}`, week_id: wid, game_id: gid, member_id: m, selected_team: `H${g}`, selected_at: PAST(87000), updated_at: PAST(87000), locked: true, result: 'win' }));
+        }
+      }
+    }
+    add('weeks', wk); add('games', gm); add('picks', pk);
+    const nt = [];
+    for (let i = 1; i <= notes; i++) {
+      const id = `nt_bulk_${String(i).padStart(3, '0')}`;
+      nt.push(row({ league_id: LEAGUE_A, id, member_id: 'p1', origin: 'client', event: 'PICKS_OPEN', actor: null, title: `Note ${i}`, body: 'bulk', destination: null, created_at: PAST(i), read_at: null, dedup_key: id, week_id: null, meta: null }));
+    }
+    add('notifications', nt);
+  }
+  /** What the commissioner's RLS admits from `picks` in LEAGUE_A — his own, plus every live/final week's. */
+  const visiblePicks = (st) => st.picks.filter((r) => r.league_id === LEAGUE_A && (r.member_id === 'p1'
+    || ['live', 'final'].includes((st.weeks.find((w) => w.league_id === LEAGUE_A && w.id === r.week_id) || {}).status))).length;
+
+  async function hydrateWith(clientOpts, growOpts, pageSize = null) {
+    initAdapter({ who: 'commissioner', ...clientOpts });
+    if (pageSize !== null && hasPageSeam) sb._setHydratePageSizeForTest(pageSize);
+    grow(ST, growOpts);
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+    return { state: sb.getState(), snap: snapshot(), selects: CLIENT._calls.selects.slice(), st: ST };
+  }
+  const diffKeys = (a, b) => KEYS.filter((k) => a.snap[k] !== b.snap[k]);
+
+  // ── (1) THE REPRODUCTION, at the hosted default: Max rows 1,000, a late-season picks table ─────
+  // 6 members x 12 games x 14 final weeks = 1,008 picks, plus the fixture's own three he can see.
+  {
+    const r = await hydrateWith({}, { extraMembers: ['p4', 'p5', 'p6'], weeks: 14, gamesPerWeek: 12 });
+    const want = visiblePicks(r.st);
+    const got = (sb.get('cfbp_picks') || []);
+    assert(want === 1011, `[A-PAGE](1) fixture: the league holds ${want} picks this commissioner may see — past the 1,000-row hosted cap`);
+    assert(r.state === 'ACTIVE' && got.length === want,
+      `[A-PAGE](1) at Supabase's default Max rows (1,000) EVERY one of the ${want} picks reaches the mirror (got ${got.length}, state ${r.state}) — the unpaged read kept 1,000 and adopted them as the league, with no error`);
+    assert(new Set(got.map((p) => p.pickId)).size === got.length,
+      '[A-PAGE](1) …and no pick is duplicated across a page boundary');
+    const pickReads = r.selects.filter((s) => s.table === 'picks').length;
+    assert(pickReads === 2,
+      `[A-PAGE](1) …in ceil(1011/1000) = 2 requests: a full first page proves the cap is at least the page size, so the short second page is the end and no empty third page is asked for (picks requests: ${pickReads})`);
+  }
+
+  // ── (2) THE CRUX: a server cap SMALLER than the page size is detected, never read as "the end" ───
+  const SMALL = { extraMembers: ['p4', 'p5', 'p6'], weeks: 4, gamesPerWeek: 4, notes: 12 };
+  const ref = await hydrateWith({ maxRows: Infinity }, SMALL);
+  assert(ref.state === 'ACTIVE' && JSON.parse(ref.snap.cfbp_picks).length === 99 && JSON.parse(ref.snap.cfbp_players).length === 6,
+    `[A-PAGE](2) fixture: the UNCAPPED reference read is complete (state ${ref.state}; 99 picks, 6 members, 7 league_kv rows, 13 own notifications)`);
+  const cap5 = await hydrateWith({ maxRows: 5 }, SMALL);
+  assert(cap5.state === 'ACTIVE' && diffKeys(cap5, ref).length === 0,
+    `[A-PAGE](2) server cap 5 under a page size of 1,000: every routed key is byte-identical to the uncapped read (state ${cap5.state}; keys that differ: ${JSON.stringify(diffKeys(cap5, ref))})`);
+
+  // ── (3) a page size SMALLER than the cap, and pages that end exactly on a table's last row ──────
+  // Page size 3: 99 picks and 6 members are exact multiples, so the last full page is followed by
+  // an empty one — the boundary where an off-by-one either drops the tail or never stops.
+  const p3cap5 = await hydrateWith({ maxRows: 5 }, SMALL, 3);
+  assert(p3cap5.state === 'ACTIVE' && diffKeys(p3cap5, ref).length === 0,
+    `[A-PAGE](3) page size 3 under a cap of 5: byte-identical to the uncapped read (state ${p3cap5.state}; differs: ${JSON.stringify(diffKeys(p3cap5, ref))})`);
+  const p7cap7 = await hydrateWith({ maxRows: 7 }, SMALL, 7);
+  assert(p7cap7.state === 'ACTIVE' && diffKeys(p7cap7, ref).length === 0,
+    `[A-PAGE](3) page size = cap = 7 = league_kv's exact row count: byte-identical (state ${p7cap7.state}; differs: ${JSON.stringify(diffKeys(p7cap7, ref))})`);
+  const kvReads = p7cap7.selects.filter((s) => s.table === 'league_kv').length;
+  assert(kvReads === 1,
+    `[A-PAGE](3) …and the table that fits exactly is ONE request: the count in the same statement proves page 1 complete (league_kv requests: ${kvReads})`);
+
+  // ── (3b) THE CRUX, BY REQUEST COUNT: when is a short page trusted as the end? ──────────────────
+  // The rule (pass 2): a page ends the read when it is shorter than it asked for AND shorter than
+  // the largest page this server has already returned — a cap at least that large cannot have
+  // shortened it. A page EQUAL to the largest one so far proves nothing (it may be the cap), and the
+  // read goes on.
+  //   • league_kv, 7 rows, page size 3, no cap: pages 3,3,1 — the 1 is short of both, 3 requests.
+  //   • league_kv, 7 rows, cap 5, page size 1,000: pages 5,2 — the 2 is short of the 5 the server
+  //     already returned, so it is the end: 2 requests.
+  //   • 10 own notifications, cap 5: pages 5,5,0 — the second 5 could be the cap again, so the read
+  //     asks once more and gets an empty page: 3 requests. A loop that ended on the first short page
+  //     would have stopped at 5 rows (that is (2)'s mutant).
+  {
+    const p3open = await hydrateWith({ maxRows: Infinity }, SMALL, 3);
+    const kv3 = p3open.selects.filter((s) => s.table === 'league_kv').length;
+    assert(p3open.state === 'ACTIVE' && diffKeys(p3open, ref).length === 0 && kv3 === 3,
+      `[A-PAGE](3b) page size 3, no cap: pages 3,3,1 — the short page ends the read (league_kv requests: ${kv3}, want 3; differs: ${JSON.stringify(diffKeys(p3open, ref))})`);
+    const kv5 = cap5.selects.filter((s) => s.table === 'league_kv');
+    assert(kv5.length === 2 && kv5[1].gt.length === 1,
+      `[A-PAGE](3b) cap 5 under page size 1,000: pages 5,2 — a page shorter than one the server already returned ends the read (league_kv requests: ${kv5.length}, want 2)`);
+    const ten = await hydrateWith({ maxRows: 5 }, { notes: 9 });
+    const ntReads = ten.selects.filter((s) => s.table === 'notifications').length;
+    const nts = (sb.get('cfbp_notifications') || []).length;
+    assert(ten.state === 'ACTIVE' && nts === 10 && ntReads === 3,
+      `[A-PAGE](3b) 10 rows under a cap of 5: pages 5,5,0 — a page EQUAL to the cap is never trusted as the end, so the read asks until a page proves it (notifications ${nts}/10 in ${ntReads} requests, want 3)`);
+  }
+
+  // ── (4) no count (a proxy that strips Content-Range): still complete, by reading to an empty page ─
+  const noCount = await hydrateWith({ maxRows: 5, dropCount: true }, SMALL);
+  assert(noCount.state === 'ACTIVE' && diffKeys(noCount, ref).length === 0,
+    `[A-PAGE](4) with the count withheld and a cap of 5, the read still completes — it reads the key range until it is exhausted, never trusts a short page (state ${noCount.state}; differs: ${JSON.stringify(diffKeys(noCount, ref))})`);
+
+  // ── (5) EVERY request — the continuation pages included — is league-scoped and key-ordered ──────
+  {
+    const unscoped = cap5.selects.filter((s) => !s.eq.some(([c, v]) => c === 'league_id' && v === LEAGUE_A));
+    assert(cap5.selects.length > sb._readTablesForTest().length && unscoped.length === 0,
+      `[A-PAGE](5) every one of the ${cap5.selects.length} paged requests carries .eq('league_id', <active league>) — DI-184d holds on the continuation pages too (unscoped: ${unscoped.length})`);
+    const unordered = cap5.selects.filter((s) => !s.order || s.order.col !== pageKey(s.table) || s.order.ascending !== true);
+    assert(unordered.length === 0,
+      `[A-PAGE](5) every request is ordered ASCENDING on its table's page key, so the keyset is exact (unordered: ${JSON.stringify(unordered.slice(0, 3).map((s) => [s.table, s.order]))})`);
+    const cont = cap5.selects.filter((s) => s.gt.length);
+    assert(cont.length > 0 && cont.every((s) => s.gt.length === 1 && s.gt[0][0] === pageKey(s.table)),
+      `[A-PAGE](5) a continuation page is a KEYSET read on the same column (.gt(pageKey, lastKey)), never an offset a concurrent insert or delete could shift (continuations: ${cont.length})`);
+    const lmCols = cap5.selects.filter((s) => s.table === 'league_members').map((s) => s.cols);
+    assert(lmCols.length > 1 && lmCols.every((c) => c === sb._selectColsForTest().league_members),
+      '[A-PAGE](5) league_members keeps its 0007 column list on EVERY page (select(*) is refused on a column-granted table)');
+  }
+
+  // ── (6) the common case costs NOTHING extra: one request per table, each carrying the count ─────
+  {
+    initAdapter({ who: 'commissioner' });
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+    const sel = CLIENT._calls.selects;
+    assert(sb.getState() === 'ACTIVE' && sel.length === sb._readTablesForTest().length,
+      `[A-PAGE](6) a league whose every table fits one page is read in exactly ${sb._readTablesForTest().length} requests, one per READ_TABLE — no extra round trip (got ${sel.length})`);
+    assert(sel.every((s) => s.count === 'exact'),
+      '[A-PAGE](6) …and each of them asks for the EXACT count, which is what proves that single page complete');
+  }
+
+  // ── (7) the page key IS the primary key, derived from the schema rather than restated ──────────
+  // From EVERY migration, in file order (a READ_TABLE need not be born in 0001: `competitions` is 0033's),
+  // comments blanked first exactly as schemaFromMigrations() does; the LAST `create table` of a name wins.
+  {
+    const dir = join(__dirname, 'supabase', 'migrations');
+    const sqls = readdirSync(dir).filter((f) => /^\d{4}_[^/]*\.sql$/.test(f)).sort()
+      .map((f) => readFileSync(join(dir, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, ''));
+    const drift = [];
+    for (const t of sb._readTablesForTest()) {
+      let body = '';
+      for (const sql of sqls) {
+        const c = new RegExp(`create table (?:if not exists )?public\\.${t}\\s*\\(([\\s\\S]*?)\\n\\);`, 'i').exec(sql);
+        if (c) body = c[1];
+      }
+      const m = body.match(/primary key \(league_id, (\w+)\)/);
+      if (!m || pageKey(t) !== m[1]) drift.push(`${t}: schema ${m ? m[1] : '?'} vs adapter ${pageKey(t)}`);
+      const cols = sb._selectColsForTest()[t];
+      if (cols && !cols.split(',').includes(pageKey(t))) drift.push(`${t}: SELECT_COLS lacks ${pageKey(t)}`);
+    }
+    assert(drift.length === 0,
+      `[A-PAGE](7) every READ_TABLE is paged on its PRIMARY KEY's non-league column (league_id is pinned by the eq), derived from every migration, and its select list carries that column (drift: ${JSON.stringify(drift)})`);
+  }
+
+  // ── (8) a server that IGNORES the keyset is refused LOUDLY — never a hang, never adopted ─────────
+  {
+    await hydrated({ who: 'commissioner' });
+    const before = snapshot();
+    const mark = detailSeen.length;
+    CLIENT = makeClient(ST, SESSIONS.commissioner, { maxRows: 5, ignoreGt: true });
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+    const evs = detailSeen.slice(mark).filter(([s, d]) => s === 'error' && d && 'banner' in d).map(([, d]) => d);
+    assert(sb.getState() === 'HELD',
+      `[A-PAGE](8) a server that answers every page with the FIRST page again leaves the device HELD, not ACTIVE on a truncated read (state ${sb.getState()})`);
+    assert(said(/HydratePagingError.*repeated a row/) && !said(/TEST_RUNAWAY|runaway/),
+      `[A-PAGE](8) …refused by the adapter's own NAMED paging check (the console carries it), not by the fake's runaway breaker — the loop terminates on its own`);
+    assert(evs.length > 0 && evs.every((d) => d.error === d.banner && !/select |repeated|HydratePaging/i.test(String(d.error))),
+      `[A-PAGE](8) …and the banner says the adapter's plain sentence, never the paging detail (${JSON.stringify(evs.map((d) => d.error))})`);
+    assert(KEYS.every((k) => snapshot()[k] === before[k]),
+      '[A-PAGE](8) …and the league this device already held is preserved untouched');
+  }
+
+  // ── (9) a count with NO rows (a body truncated to nothing) is a partial read, not an empty league ─
+  {
+    initAdapter({ who: 'commissioner', maxRows: 0 });
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+    assert(sb.getState() === 'HELD' && said(/HydratePagingError.*counted \d+ rows? but returned none/),
+      `[A-PAGE](9) a first page that returns zero rows while the same statement counts N is REFUSED on a first boot too, where RG-12's held-data guard cannot fire (state ${sb.getState()})`);
+    assert(said(/RG-12 \(b\)/),
+      '[A-PAGE](9) …classified as a PARTIAL READ (_fail\'s partial-read branch spoke: the server answered, and the answer was incomplete) — HELD, never OFFLINE-READONLY');
+  }
+
+  // ══ SB-01 PASS 2 ═════════════════════════════════════════════════════════════════════════════
+  // The `_fail()` emit (the one carrying `banner`), not `_setState('HELD')`'s own status emit beside it.
+  const lastErrorEv = () => { const e = detailSeen.filter(([s, d]) => s === 'error' && d && 'banner' in d).pop(); return e ? e[1] : null; };
+  const commentIds = () => (sb.get('cfbp_comments') || []).map((c) => c.commentId).sort();
+  const storeCommentIds = (st) => st.comments.filter((c) => c.league_id === LEAGUE_A).map((c) => c.id).sort();
+  const sameList = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+  const cmpId = (a, b) => (a < b ? -1 : a > b ? 1 : 0);   // the fake's order: one comparator for sort and gt
+
+  // ── (10) SECURITY S-C1 — A MEMBER-AUTHORED KEY NEVER GOES INTO A URL IT WOULD BREAK ────────────────
+  // A member can insert comments with any id (comments_insert checks the author, not the id). The
+  // attack: 999 short ids that sort first, then ONE 6 KB id of a repeated 3-byte character, so it
+  // lands 1,000th — the LAST row of page one. A keyset continuation would send `.gt(id, <6 KB>)`:
+  // ~18,000 characters percent-encoded, past the gateway's 16,384, so every device's hydrate gets a
+  // 414 and HOLDS — a league withheld from all six by one member, with recovery only by SQL. The
+  // fake here refuses any URL over 16,384 characters exactly as the gateway does.
+  const LONG_KEY = '0000999' + '€'.repeat(2000);
+  function plantLongKey(st) {
+    const rows = [];
+    for (let i = 0; i < 999; i++) {
+      rows.push(row({ league_id: LEAGUE_A, id: `0${String(i).padStart(6, '0')}`, week_id: 'w1', game_id: 'g1', author_id: 'p2', author_member_id: 'p2', author_kind: 'player', bot_event_key: null, body: '', created_at: PAST(60) }));
+    }
+    rows.push(row({ league_id: LEAGUE_A, id: LONG_KEY, week_id: 'w1', game_id: 'g1', author_id: 'p2', author_member_id: 'p2', author_kind: 'player', bot_event_key: null, body: '', created_at: PAST(60) }));
+    // REVIEWER N1 (SB-01 pass 3) — LEAGUE B's comments, sorting AFTER the anchor. The commissioner's
+    // account (u-drew) is a member of BOTH leagues, so RLS alone would hand these to a request that
+    // dropped `.eq('league_id', …)`: an unscoped offset page pulls them into league A's mirror, which
+    // is the cross-league read DI-184d forbids — and without them, RLS hid that mutant entirely.
+    for (const id of ['x_b1', 'x_b2', 'x_b3']) {
+      rows.push(row({ league_id: LEAGUE_B, id, week_id: 'x1', game_id: 'y1', author_id: 'q1', author_member_id: 'q1', author_kind: 'player', bot_event_key: null, body: 'league B', created_at: PAST(60) }));
+    }
+    st.comments.push(...rows.reverse());
+  }
+  /** DI-184d on EVERY request of a read, offset pages included. */
+  const unscopedOf = (sel) => sel.filter((s) => !s.eq.some(([c, v]) => c === 'league_id' && v === LEAGUE_A));
+  for (const phase of ['first hydrate', 're-hydrate of an ACTIVE device']) {
+    initAdapter({ who: 'commissioner' });                 // the default fake: 1,000-row cap, 16,384-char URLs
+    if (phase !== 'first hydrate') {
+      await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+      assert(sb.getState() === 'ACTIVE' && commentIds().length === 2, `[A-PAGE](10) fixture: the device is ACTIVE on the clean league before the rows are planted (${sb.getState()})`);
+    }
+    plantLongKey(ST);
+    const mark = CLIENT._calls.selects.length;
+    const errsBefore = detailSeen.filter(([s]) => s === 'error').length;
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+    const sel = CLIENT._calls.selects.slice(mark);
+    const want = storeCommentIds(ST);
+    const got = commentIds();
+    assert(sb.getState() === 'ACTIVE' && want.length === 1002 && sameList(got, want),
+      `[A-PAGE](10) ${phase}: a 6 KB member-authored id at the page boundary — the device ends ACTIVE with EVERY comment (state ${sb.getState()}; ${got.length}/${want.length}) — before pass 2 the keyset read put it in a URL, got a 414 and HELD the league`);
+    assert(got.includes(LONG_KEY) && got.includes('c1') && got.includes('c2'),
+      `[A-PAGE](10) ${phase}: …the planted row itself AND the rows that sort after it are all present`);
+    const longest = Math.max(...sel.map((s) => s.urlLength));
+    assert(longest < 2048,
+      `[A-PAGE](10) ${phase}: …and no request URL was long: the longest this hydrate sent was ${longest} characters (the key is never put into a URL past the bound)`);
+    const cont = sel.filter((s) => s.table === 'comments').slice(1);
+    assert(cont.length >= 1 && cont[0].gt.length === 0 && cont[0].offset === 999,
+      `[A-PAGE](10) ${phase}: …the page after the long key is read by OFFSET from that key's own position (offset 999, anchored on it), not by keyset (${JSON.stringify(cont.map((s) => ({ gt: s.gt.length, offset: s.offset })))})`);
+    assert(detailSeen.filter(([s]) => s === 'error').length === errsBefore,
+      `[A-PAGE](10) ${phase}: …and no error was raised at any point`);
+    assert(unscopedOf(sel).length === 0 && !got.some((id) => /^x_b/.test(id)),
+      `[A-PAGE](10) ${phase}: …every one of the ${sel.length} requests — the OFFSET page included — carries .eq('league_id', <league A>), and none of league B's comments (readable to this account through RLS) reached league A's mirror (unscoped: ${JSON.stringify(unscopedOf(sel).map((s) => [s.table, s.offset]))})`);
+  }
+
+  // ── (11) AN OFFSET PAGE IS ANCHORED: a shift before it is caught, even when the count still adds up ──
+  // Offset's weakness is that a delete BEFORE the offset slides every later row back one, and the
+  // row that slides into the gap is silently skipped. Worse, an insert past the end can put the
+  // total back where it was, so the count cannot see it. Here, as the offset page is served, one row
+  // already read is deleted and one row is inserted at the end: a blind offset would skip 'c1' and
+  // still collect exactly the counted number of rows. The page starts ONE row early, on the last key
+  // already read; that row must come back first, or the table is re-read from the top.
+  {
+    let fired = false;
+    initAdapter({ who: 'commissioner', beforeSelect: (b) => {
+      if (fired || b._table !== 'comments' || !b._ranged || !(b._offset > 0)) return;
+      fired = true;
+      ST.comments.splice(ST.comments.findIndex((c) => c.id === '0000000'), 1);
+      ST.comments.push(row({ league_id: LEAGUE_A, id: 'zz_new', week_id: 'w1', game_id: 'g1', author_id: 'p2', author_member_id: 'p2', author_kind: 'player', bot_event_key: null, body: '', created_at: PAST(1) }));
+    } });
+    plantLongKey(ST);
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+    const want = storeCommentIds(ST);
+    const got = commentIds();
+    const firstPages = CLIENT._calls.selects.filter((s) => s.table === 'comments' && s.count === 'exact').length;
+    assert(fired, '[A-PAGE](11) fixture: the table moved between two pages of one read (a delete before the offset, an insert after it)');
+    assert(sb.getState() === 'ACTIVE' && sameList(got, want) && got.includes('c1') && !got.includes('0000000'),
+      `[A-PAGE](11) the shift is caught by the anchor and the table is read again: every row the server now holds, 'c1' included (state ${sb.getState()}; ${got.length}/${want.length}; c1 ${got.includes('c1')})`);
+    assert(firstPages === 2 && said(/moved while it was being read/),
+      `[A-PAGE](11) …by a re-read of that table from the top, said in the console (comments first pages: ${firstPages}, want 2)`);
+    const sel11 = CLIENT._calls.selects;
+    assert(unscopedOf(sel11).length === 0 && !got.some((id) => /^x_b/.test(id)),
+      `[A-PAGE](11) …and every request of it, the anchored offset pages and the re-read included, carries .eq('league_id', <league A>) — no league-B row in the mirror (unscoped: ${JSON.stringify(unscopedOf(sel11).map((s) => [s.table, s.offset]))})`);
+  }
+
+  // ── (12) A SHORTFALL AGAINST THE COUNT: the read goes on to a PROOF, never restarts, never truncates ─
+  // Pass 3 (reviewer N2). A read that ends short of its own first-page count used to restart from the
+  // top — and a member deleting rows while it ran could spend all three reads and HOLD every device.
+  // Now a short page the count contradicts does not end the read: it CONTINUES by keyset from the last
+  // key until an EMPTY page (rule 3), which proves no row is left past the last key read. Keyset pages
+  // never miss a row that existed for the whole read, so a shortfall that survives an empty page can
+  // only be rows DELETED while the read ran: adopted, with a console warning. The count therefore
+  // never ENDS a read early — rule 1 needs rows >= count — it can only make a read go further.
+  // (a) Max rows drops from 1,000 to 5 between two pages of the picks read. The second page's 5 rows
+  //     are short of the 1,000 the server already returned, so on their own they would end the read at
+  //     1,005 of 1,011. The count contradicts that; the read CONTINUES by keyset to an empty page.
+  {
+    initAdapter({ who: 'commissioner', capFor: (t, n) => (t === 'picks' && n > 1 ? 5 : 1000) });
+    grow(ST, { extraMembers: ['p4', 'p5', 'p6'], weeks: 14, gamesPerWeek: 12 });
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+    const got = (sb.get('cfbp_picks') || []).length;
+    const pk = CLIENT._calls.selects.filter((s) => s.table === 'picks');
+    const firstPages = pk.filter((s) => s.count === 'exact').length;
+    assert(sb.getState() === 'ACTIVE' && got === visiblePicks(ST) && firstPages === 1 && pk[pk.length - 1].gt.length === 1,
+      `[A-PAGE](12) (a) a short page the count contradicts does not end the read: it CONTINUES by keyset to an empty page — ${got}/${visiblePicks(ST)} picks, state ${sb.getState()}, one read of the table (first pages ${firstPages}, want 1), ${pk.length} requests`);
+  }
+  // (b) A count that can never be met (it claims one row more than exists), under a cap of 5. The
+  //     read ends on an EMPTY keyset page — every real row is provably in hand — so it is ADOPTED with
+  //     a warning, not HELD; and the inflated count cannot truncate: it only kept the read going.
+  {
+    initAdapter({ who: 'commissioner' });
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+    const plain = snapshot();
+    initAdapter({ who: 'commissioner', inflateCount: ['league_kv'], maxRows: 5 });
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+    const inflated = snapshot();
+    const kv = CLIENT._calls.selects.filter((s) => s.table === 'league_kv');
+    const differ = KEYS.filter((k) => inflated[k] !== plain[k]);
+    assert(sb.getState() === 'ACTIVE' && differ.length === 0,
+      `[A-PAGE](12) (b) an inflated count under a cap of 5 ends ACTIVE with every key byte-identical to the uncapped, honest read — adopted after an empty page, never truncated (state ${sb.getState()}; differ: ${JSON.stringify(differ)})`);
+    assert(kv.length === 3 && kv.filter((s) => s.count === 'exact').length === 1 && kv[2].gt.length === 1,
+      `[A-PAGE](12) (b) …pages 5, 2, then an EMPTY keyset page: the 2 did not end it (the count said more), the empty page did — one read, no restart (league_kv requests: ${kv.length}, want 3)`);
+    assert(said(/league_kv: read 7 rows against its own first-page count of 8.*no row was left unread/),
+      '[A-PAGE](12) (b) …and the shortfall is SAID in the console, not swallowed');
+  }
+  // (c) SUSTAINED DELETIONS during a keyset read no longer HOLD the device. Every continuation page
+  //     of a 1,263-row picks read deletes one row already read and one not yet read. Before pass 3 each
+  //     of the three reads ended short, and the device went HELD; now the read goes on to its empty
+  //     page and is adopted: every row that existed for the whole read is present.
+  {
+    const deleted = new Set();
+    initAdapter({ who: 'commissioner', beforeSelect: (b) => {
+      if (b._table !== 'picks' || !b._gt.length) return;
+      const cur = b._gt[0][1];
+      const mine = ST.picks.filter((r) => r.league_id === LEAGUE_A && /^pk_gwb/.test(r.id)).sort((x, y) => cmpId(x.id, y.id));
+      const read = mine.find((r) => cmpId(r.id, cur) <= 0);
+      const unread = [...mine].reverse().find((r) => cmpId(r.id, cur) > 0);
+      for (const r of [read, unread]) if (r) { deleted.add(r.id); ST.picks.splice(ST.picks.indexOf(r), 1); }
+    } });
+    grow(ST, { extraMembers: ['p4', 'p5', 'p6'], weeks: 14, gamesPerWeek: 15 });
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+    const got = new Set((sb.get('cfbp_picks') || []).map((p) => p.pickId));
+    const survivors = ST.picks.filter((r) => r.league_id === LEAGUE_A && (r.member_id === 'p1'
+      || ['live', 'final'].includes((ST.weeks.find((w) => w.league_id === LEAGUE_A && w.id === r.week_id) || {}).status))).map((r) => r.id);
+    const missing = survivors.filter((id) => !got.has(id));
+    const strays = [...got].filter((id) => !survivors.includes(id) && !deleted.has(id));
+    const firstPages = CLIENT._calls.selects.filter((s) => s.table === 'picks' && s.count === 'exact').length;
+    assert(deleted.size >= 2, `[A-PAGE](12) (c) fixture: rows were deleted while the read ran (${deleted.size})`);
+    assert(sb.getState() === 'ACTIVE' && missing.length === 0 && strays.length === 0 && firstPages === 1,
+      `[A-PAGE](12) (c) sustained member deletions during a keyset read do NOT hold the device: ACTIVE, every surviving row present, nothing invented, one read of the table (state ${sb.getState()}; missing ${missing.length}; strays ${strays.length}; first pages ${firstPages})`);
+    assert(said(/picks: read \d+ rows against its own first-page count of \d+.*deleted while it ran/),
+      '[A-PAGE](12) (c) …the difference is named as deletions in the console');
+  }
+  // (d) THE ACCEPTED RESIDUAL, kept LOUD: churn AHEAD of an over-length key. On the offset path an
+  //     empty page cannot be asked for (the key cannot go in a URL), so a page whose anchor moved is
+  //     still read again from the top, three times at most. A member who plants the key AND keeps the
+  //     rows before it moving on every read spends that budget: HELD, a named error, the plain banner.
+  //     (Security accepted this on 8755e5f; the planned database length CHECK removes the key.)
+  {
+    initAdapter({ who: 'commissioner', beforeSelect: (b) => {
+      if (b._table !== 'comments') return;
+      if (b._ranged && b._offset > 0) {             // every offset page: a row appears ahead of the anchor
+        ST.comments.push(row({ league_id: LEAGUE_A, id: `0000000_${ST.comments.length}`, week_id: 'w1', game_id: 'g1', author_id: 'p2', author_member_id: 'p2', author_kind: 'player', bot_event_key: null, body: '', created_at: PAST(1) }));
+      } else if (b._count === 'exact') {            // every first page: one goes, so the long key is last again
+        const i = ST.comments.findIndex((c) => c.league_id === LEAGUE_A && /^0000000_/.test(c.id));
+        if (i >= 0) ST.comments.splice(i, 1);
+      }
+    } });
+    plantLongKey(ST);
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+    const reads = CLIENT._calls.selects.filter((s) => s.table === 'comments' && s.count === 'exact').length;
+    const ev = lastErrorEv();
+    assert(sb.getState() === 'HELD' && reads === 3 && said(/HydratePagingError.*comments.*could not be proven complete/) && ev && ev.error === ev.banner,
+      `[A-PAGE](12) (d) churn ahead of an over-length key, on every read: three anchored re-reads, then a NAMED error, HELD, the plain banner — loud, bounded, never adopted (state ${sb.getState()}; reads ${reads})`);
+  }
+  // (e) A shortfall found on the OFFSET path is re-read, not continued: the page after the cap drop
+  //     ends on a SECOND over-length key, where no empty keyset page can be asked for. One re-read
+  //     from the top, under the new cap, reads every row.
+  {
+    const LONG_2 = LONG_KEY + '€';
+    initAdapter({ who: 'commissioner', capFor: (t, n) => (t === 'comments' && n > 1 ? 2 : 1000) });
+    plantLongKey(ST);
+    ST.comments.push(row({ league_id: LEAGUE_A, id: LONG_2, week_id: 'w1', game_id: 'g1', author_id: 'p2', author_member_id: 'p2', author_kind: 'player', bot_event_key: null, body: '', created_at: PAST(60) }));
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+    const want = storeCommentIds(ST);
+    const got = commentIds();
+    const sel = CLIENT._calls.selects.filter((s) => s.table === 'comments');
+    assert(sb.getState() === 'ACTIVE' && sameList(got, want) && got.includes(LONG_2) && sel.filter((s) => s.count === 'exact').length === 2,
+      `[A-PAGE](12) (e) a shortfall on the offset path (the page ends on another over-length key) is read again from the top and completes: ${got.length}/${want.length}, state ${sb.getState()}, first pages ${sel.filter((s) => s.count === 'exact').length} (want 2)`);
+    assert(said(/over-length key/) && Math.max(...sel.map((s) => s.urlLength)) < 2048 && unscopedOf(sel).length === 0,
+      '[A-PAGE](12) (e) …said in the console; and still no long URL and no unscoped request');
+  }
+
+  // ── (13) NO TECHNICAL TEXT REACHES THE PLAYER: a gateway's HTML page, a paging refusal ────────────
+  // app.js renders `detail.error` / `getStatus().lastError` into the red banner and the retry toast
+  // verbatim. A 414 from the gateway arrives as `{ message: '<html>…' }`; before this pass that HTML
+  // WAS the banner. Interaction Principles, Error States: never expose technical messages.
+  {
+    initAdapter({ who: 'commissioner', gatewayHtml: ['weeks'] });
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+    const st = sb.getStatus();
+    const ev = lastErrorEv();
+    const shown = `${st.lastError} ${ev && ev.error}`;
+    assert(sb.getState() === 'HELD' && ev && st.lastError === ev.banner && ev.error === ev.banner,
+      `[A-PAGE](13) a gateway 414 HOLDS, and what the banner and the retry toast render is the adapter's plain sentence (${JSON.stringify(st.lastError)})`);
+    assert(!/[<>]|html|select weeks|414|Request-URI/i.test(shown),
+      `[A-PAGE](13) …no markup, no table name, no status code reaches the player (${JSON.stringify(shown)})`);
+    assert(said(/select weeks: HTTP 414/) && !said(/<html|<body|cloudflare/i),
+      '[A-PAGE](13) …the console keeps the technical detail (table and status), and the gateway\'s HTML body is not echoed anywhere');
+  }
+});
+
+
+// ════════════════════════════════════════════════════════════════════════
+await section('\n[A-SNAP] SP-54 / DI-465 (migration 0038) - weeks.locked_alma_by_player is SERVER-OWNED: restored when the column holds a value, absent when it is NULL, and NEVER written by the client...', async () => {
+  // lock_week() writes {memberId: school} into the new column and nothing else does. The projection restores it onto the week object as `lockedAlmaByPlayer`
+  // (read by js/tie-context.js) and DROPS it from every write, so a stale client object can never overwrite the server's snapshot. This is the offline half of that
+  // contract through the REAL planner and the REAL Realtime fold; rls.test.mjs S36.* is the live half (Drew runs it).
+  const weekOf = (id) => (sb.get('cfbp_weeks') || []).find((w) => w.weekId === id);
+  const handlerFor = (ch, table) => ch.channel._handlers.find((h) => h.cfg.table === table).cb;
+  const planOf = () => captureConsole(() => sb.planFlush()).plan;
+  const rowsPlan = () => planOf().filter((o) => o.key === 'cfbp_weeks');
+  const SERVER_MAP = { p1: 'Iowa State', p2: 'Kansas' };
+
+  // (1) a pre-migration week (the column is not on the row at all) restores with NO key: every existing week object round-trips byte-identical
+  await hydrated({ who: 'commissioner' });
+  assert(weekOf('w1') && !('lockedAlmaByPlayer' in weekOf('w1')) && !('locked_alma_by_player' in weekOf('w1')),
+    '[A-SNAP] (1) a week whose row has no locked_alma_by_player restores with NO lockedAlmaByPlayer key (and no raw column name leaks onto the object)');
+  assert(!sb._dirtyKeysForTest().includes('cfbp_weeks') && rowsPlan().length === 0,
+    '[A-SNAP] (1) ...and a hydrate over such rows leaves nothing dirty: the quiet-absent rule means no week is PATCHed on the first save after the deploy');
+
+  // (2) a locked row carrying the column restores the map; a NULL column restores no key
+  initAdapter({ who: 'commissioner' });
+  const w1row = ST.weeks.find((w) => w.id === 'w1');
+  w1row.status = 'locked'; w1row.locked_at = new Date(NOW - 60e3).toISOString(); w1row.locked_alma_by_player = { ...SERVER_MAP };
+  const w2row = ST.weeks.find((w) => w.id === 'w2');
+  w2row.locked_alma_by_player = null;
+  await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  assert(JSON.stringify(weekOf('w1').lockedAlmaByPlayer) === JSON.stringify(SERVER_MAP),
+    `[A-SNAP] (2) a locked row with the column restores lockedAlmaByPlayer onto the week object (got ${JSON.stringify(weekOf('w1').lockedAlmaByPlayer)})`);
+  assert(!('lockedAlmaByPlayer' in weekOf('w2')), '[A-SNAP] (2) a row whose column is NULL restores with NO key (never an explicit null)');
+  assert(!sb._dirtyKeysForTest().includes('cfbp_weeks') && rowsPlan().length === 0, '[A-SNAP] (2) ...and the hydrate left nothing owed to the server');
+
+  // (3) the client NEVER emits the column: an edit of the locked week, a client-set value, and a brand-new week with the field, through the real planner
+  sb.set('cfbp_weeks', sb.get('cfbp_weeks').map((w) => (w.weekId === 'w1' ? { ...w, blurb: 'edited after the lock', lockedAlmaByPlayer: { p1: 'CLIENT-SET' } } : { ...w })));
+  let plan = rowsPlan();
+  assert(plan.length === 1 && plan[0].op === 'patch' && plan[0].rowId === 'w1' && JSON.stringify(Object.keys(plan[0].changed)) === '["blurb"]',
+    `[A-SNAP] (3) a PATCH of the locked week carries ONLY the blurb: the client-set map is not in it (got ${JSON.stringify(plan.map((o) => [o.op, o.rowId, Object.keys(o.changed || {})]))})`);
+  assert(!/locked_alma_by_player/.test(JSON.stringify(plan)), '[A-SNAP] (3) ...and the column name appears nowhere in the planned writes');
+  const fresh = { ...sb.get('cfbp_weeks').find((w) => w.weekId === 'w2'), weekId: 'w_snap_new', weekNumber: 77, label: 'Snap', lockedAlmaByPlayer: { p1: 'INSERT-ME' } };
+  sb.set('cfbp_weeks', [...sb.get('cfbp_weeks'), fresh]);
+  const all = planOf();
+  const ins = all.filter((o) => o.key === 'cfbp_weeks' && o.op === 'insert').flatMap((o) => o.rows);
+  assert(ins.length === 1 && ins[0].id === 'w_snap_new' && !('locked_alma_by_player' in ins[0]), '[A-SNAP] (3) an INSERT of a new week whose object carries the field does not send the column (the row has no such key)');
+  assert(!/locked_alma_by_player|INSERT-ME|CLIENT-SET/.test(JSON.stringify(all)), '[A-SNAP] (3) ...no write of any kind (insert, patch, upsert, rpc) names the column or carries either client-set value');
+
+  // (4) the server's value always wins: a Realtime event, then a hydrate; and a NULL column deletes the key
+  await hydrated({ who: 'commissioner' });
+  const onWeeks = handlerFor(sb.subscribeRealtime(), 'weeks');
+  const srv = ST.weeks.find((w) => w.id === 'w1');
+  sb.set('cfbp_weeks', sb.get('cfbp_weeks').map((w) => (w.weekId === 'w1' ? { ...w, status: 'locked', lockedAlmaByPlayer: { A: 'client' }, blurb: 'my unsent blurb' } : { ...w })));
+  assert(JSON.stringify(weekOf('w1').lockedAlmaByPlayer) === '{"A":"client"}', '[A-SNAP] (4) fixture: the mirror holds a CLIENT-SET {A} (what a client lock path stamps before the server answers)');
+  srv.status = 'locked'; srv.locked_at = new Date(NOW - 30e3).toISOString(); srv.locked_alma_by_player = { B: 'server' };
+  captureConsole(() => onWeeks({ eventType: 'UPDATE', new: { ...srv } }));
+  assert(JSON.stringify(weekOf('w1').lockedAlmaByPlayer) === '{"B":"server"}', `[A-SNAP] (4) after the Realtime event the mirror holds the SERVER's {B}, not the client's {A} (got ${JSON.stringify(weekOf('w1').lockedAlmaByPlayer)})`);
+  assert(weekOf('w1').blurb === 'my unsent blurb' && sb._dirtyKeysForTest().includes('cfbp_weeks'), '[A-SNAP] (4) ...while the unsent blurb edit survived the fold (RG-252): the snapshot is not part of what this device owes');
+  assert(!/locked_alma_by_player/.test(JSON.stringify(planOf())), '[A-SNAP] (4) ...and the plan after the fold still never names the column');
+  srv.locked_alma_by_player = null;
+  captureConsole(() => onWeeks({ eventType: 'UPDATE', new: { ...srv } }));
+  assert(!('lockedAlmaByPlayer' in weekOf('w1')), '[A-SNAP] (4) a Realtime event whose column is NULL DELETES the key from the mirror (never an explicit null)');
+  // (the key must be CLEAN for a hydrate to take the server's rows: over a still-dirty key a hydrate keeps this device's unsent edit, hydrate()'s own rebase rule)
+  await captureConsoleAsync(() => sb.flush());
+  assert(!sb._dirtyKeysForTest().includes('cfbp_weeks') && ST.weeks.find((w) => w.id === 'w1').blurb === 'my unsent blurb', '[A-SNAP] (4) fixture: the unsent blurb reached the server and the key is clean');
+  srv.locked_alma_by_player = { C: 'after-hydrate' };
+  await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  assert(JSON.stringify(weekOf('w1').lockedAlmaByPlayer) === '{"C":"after-hydrate"}', `[A-SNAP] (4) a hydrate carrying the locked row holds the server's map again (got ${JSON.stringify(weekOf('w1').lockedAlmaByPlayer)}; dirty ${JSON.stringify(sb._dirtyKeysForTest())})`);
+  srv.locked_alma_by_player = null;
+  await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  assert(!('lockedAlmaByPlayer' in weekOf('w1')), '[A-SNAP] (4) ...and a hydrate over a NULL column deletes it');
+});
+
+
+// ════════════════════════════════════════════════════════════════════════
+await section('\n[A-RECALC] SP-54 / Q9 - in a shared league "Recalculate Finalized Weeks" cannot change a stored result: finalize_week() is the ONLY writer, it needs a live -> final transition, and it carries the tie-break descriptor...', async () => {
+  // The coordinator's question (SB-04 review, 2026-10-01): Q9 asks Drew to run Comm -> Data -> Recalculate before the deploy, but the adapter refuses
+  // saveAllWeeklyResults() outside a finalize. This is the offline proof of that refusal through the REAL planner, and of the one path that DOES write results.
+  const w2 = () => ST.weeks.find((w) => w.id === 'w2');
+  const mirrorW2 = () => sb.get('cfbp_weeks').find((w) => w.weekId === 'w2');
+  const setW2 = (patch) => sb.set('cfbp_weeks', sb.get('cfbp_weeks').map((w) => (w.weekId === 'w2' ? { ...w, ...patch } : { ...w })));
+  const TB = { v: 1, end: 'winner', stage: 'alma', vs: 'p2', src: 'snapshot', me: { team: 'Iowa', cov: 1, mis: 0, psh: 0, src: 'snapshot' }, other: { team: 'Nebraska', cov: 0, mis: 1, psh: 0, src: 'snapshot' } };
+  const legs = (plan) => plan.filter((o) => o.kind === 'finalize' || (o.kind === 'rpc' && (o.name === 'lock_week' || o.name === 'transition_week')));
+  const finalAtServer = async () => {
+    initAdapter({ who: 'commissioner' });
+    w2().status = 'final'; w2().finalized_at = new Date(NOW - 3600e3).toISOString();
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  };
+
+  // (1) a FINAL week; the recompute produces rows that are byte-identical (the "no changes" baseline Q9's R-2 wanted), and rows that CHANGED (the winner flipped, a descriptor added)
+  await finalAtServer();
+  assert(sb.getConfirmedWeekStatus('w2') === 'final' && sb.get('cfbp_results').some((r) => r.weekId === 'w2'), '[A-RECALC] (1) fixture: w2 is FINAL on the server and has a stored results row');
+  sb.set('cfbp_results', sb.get('cfbp_results').map((r) => ({ ...r })));
+  let r = captureConsole(() => sb.planFlush());
+  assert(!r.plan.some((o) => o.key === 'cfbp_results') && !legs(r.plan).length && r.refusals.length === 1 && r.refusals[0].code === 'results_outside_finalize',
+    `[A-RECALC] (1) even a recompute that changes NOTHING (byte-identical rows re-saved) is REFUSED as results_outside_finalize: the refusal does not look at the content, so the "no changes" baseline Q9's R-2 wanted cannot be taken in a shared league (refusals ${JSON.stringify(r.refusals.map((e) => e.code))})`);
+  sb.set('cfbp_results', sb.get('cfbp_results').map((row) => (row.weekId === 'w2' ? { ...row, isWinner: !row.isWinner, isLoser: !row.isLoser, tieBreak: TB } : { ...row })));
+  r = captureConsole(() => sb.planFlush());
+  assert(r.refusals.length === 1 && r.refusals[0].code === 'results_outside_finalize' && !r.plan.some((o) => o.key === 'cfbp_results') && !legs(r.plan).length,
+    `[A-RECALC] (1) a recompute that CHANGES the stored winner (with a tieBreak descriptor) is REFUSED as results_outside_finalize, and nothing is planned (refusals ${JSON.stringify(r.refusals.map((e) => e.code))})`);
+  const before = JSON.stringify(ST.results.filter((x) => x.week_id === 'w2'));
+  const b1 = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(JSON.stringify(ST.results.filter((x) => x.week_id === 'w2')) === before && !CLIENT._calls.rpc.some((c) => c.name === 'finalize_week'),
+    '[A-RECALC] (1) after the flush the server\'s stored rows are BYTE-IDENTICAL and finalize_week was never called: the recompute changed nothing the page reads');
+  assert(bannerSeen.length > b1 && /Nothing was saved/.test(bannerSeen[bannerSeen.length - 1]) && /no insert grant on results/.test(bannerSeen[bannerSeen.length - 1]),
+    `[A-RECALC] (1) ...and it was LOUD (loud-fail): the red banner a commissioner would see is "${bannerSeen[bannerSeen.length - 1]}"`);
+
+  // (2) the recourse the message names is real: final -> live is planned as a transition_week leg, and the next live -> final is ONE finalize op whose payload carries the descriptor
+  await finalAtServer();
+  setW2({ status: 'live' });
+  let p = captureConsole(() => sb.planFlush());
+  assert(!p.refusals.length && legs(p.plan).length === 1 && legs(p.plan)[0].name === 'transition_week' && legs(p.plan)[0].args.p_to === 'live',
+    `[A-RECALC] (2) moving a FINAL week back to LIVE is one transition_week(live) leg, nothing refused (legs ${JSON.stringify(legs(p.plan).map((o) => o.name || o.kind))}, refusals ${JSON.stringify(p.refusals.map((e) => e.code))})`);
+  await captureConsoleAsync(() => sb.flush());
+  assert(w2().status === 'live', `[A-RECALC] (2) the server's week is LIVE again (${w2().status})`);
+  setW2({ status: 'final' });
+  sb.set('cfbp_results', sb.get('cfbp_results').map((row) => (row.weekId === 'w2' ? { ...row, isWinner: true, tieBreak: TB } : { ...row })));
+  p = captureConsole(() => sb.planFlush());
+  const fin = p.plan.filter((o) => o.kind === 'finalize');
+  assert(!p.refusals.length && fin.length === 1, `[A-RECALC] (2) the re-finalize is exactly ONE finalize op and nothing is refused (refusals ${JSON.stringify(p.refusals.map((e) => e.code))})`);
+  await captureConsoleAsync(() => sb.flush());
+  const call = CLIENT._calls.rpc.filter((c) => c.name === 'finalize_week');
+  assert(call.length === 1 && call[0].args.p_results.some((x) => x.playerId === 'p1' && JSON.stringify(x.tieBreak) === JSON.stringify(TB)),
+    '[A-RECALC] (2) the finalize_week payload carries the tie-break descriptor on the result row (a key the typed columns do not name, so 0026\'s finalize_week stores it in results.extra: `v.value - {typed keys}`)');
+  assert(w2().status === 'final', '[A-RECALC] (2) and the week is FINAL on the server again');
 });
 
 _realLog(`\n${pass} passed, ${fail} failed, ${SKIPPED.length} skipped.`);

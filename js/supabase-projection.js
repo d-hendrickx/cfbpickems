@@ -620,6 +620,12 @@ const WEEK_COLS = [
   { legacy: 'lockedAt', column: 'locked_at', type: 'ts' },
   { legacy: 'finalizedAt', column: 'finalized_at', type: 'ts' },
   { legacy: 'lockedAlmaMaters', column: 'locked_alma_maters' },
+  // SP-54 / DI-465 (migration 0038) — the PER-PLAYER half of the lock-time alma mater snapshot: { memberId: school },
+  // written by lock_week() and READ-ONLY to the client (decorateRow below drops it from every write; the weeks block
+  // restores it only when the column is non-NULL). Untyped jsonb pass-through, the same convention as `lockedAlmaMaters`.
+  // WITHOUT this entry the field would be an unmodeled legacy field, fall into `extra`, and the typed column would sit
+  // NULL forever (the 0028 trap named at the competitionId entry below).
+  { legacy: 'lockedAlmaByPlayer', column: 'locked_alma_by_player' },
   // Multi-Sport DI-220 (migration 0033) — which competition this week belongs to. NULL/absent is the
   // league's DEFAULT competition and is resolved ONLY through competitionForWeek() (R1). Uuid string, no
   // coercion. Same absent/null discipline as tournamentOnlyGuest (see the weeks rowsKind below): an
@@ -1125,18 +1131,27 @@ function contactEntryFor(ctx, memberId) {
   const defaults = { ..._DEFAULT_WEEK, sport: 'cfb' };
   const r = rowsKind('weeks', WEEK_COLS, {
     defaults,
-    quietAbsentFields: ['competitionId'],
+    quietAbsentFields: ['competitionId', 'lockedAlmaByPlayer'],
     // Multi-Sport DI-220: a week object without `competitionId` never writes the column (a stale or
     // rebuilt object must not move a non-default competition's week back to the default), and a NULL
     // column restores as NO key — every pre-0033 week reads exactly as it did. A non-null column always
     // restores, over any `__absent` marker (F-10(b) precedence).
+    //
+    // SP-54 / DI-465: `locked_alma_by_player` is SERVER-OWNED. lock_week() writes it and nothing else does, so NO
+    // client write ever carries it (insert, patch or upsert): a stale client object can never overwrite the server's
+    // snapshot. It restores only when the column holds a value; a NULL column (a week locked before 0038, a non-alma
+    // sport, a week never locked) restores as NO key, so every existing week object round-trips byte-identical. The
+    // adapter's status-leg discard list needs no entry: the projection never emits the column in the first place.
     decorateRow(row, item) {
       if (!present(item, 'competitionId')) delete row.competition_id;
+      delete row.locked_alma_by_player;
       return row;
     },
     restoreRow(obj, row) {
       if (row && row.competition_id != null) obj.competitionId = row.competition_id;
       else delete obj.competitionId;
+      if (row && row.locked_alma_by_player != null) obj.lockedAlmaByPlayer = row.locked_alma_by_player;
+      else delete obj.lockedAlmaByPlayer;
       return obj;
     },
   });
@@ -1449,9 +1464,16 @@ export function messageToRow(ev, ctx) {
 /** Inverse of `messageToRow` — reconstructs the `rowToEvent()`-shaped object
  *  (ts back to epoch ms, since that is the wire shape `chat.js`/`ingest()`
  *  consume). `author_member_id`/`author_kind` are DERIVED columns and are
- *  never restored onto the event (they don't exist on the legacy shape). */
+ *  never restored onto the event (they don't exist on the legacy shape).
+ *
+ *  SB-20 (2026-10-01) — `league_id` IS restored, as `leagueId` (the same field
+ *  name chat.js's sendEvent() already stamps on a local send). chatTransport.js
+ *  has always SELECTED it (SB_MESSAGE_COLS) and this map dropped it, so nothing
+ *  downstream could tell one league's row from another's — and `seq` is
+ *  per-league, so the seq alone never could either. '' when absent. */
 export function rowToMessage(row) {
   return {
+    leagueId: row.league_id ? String(row.league_id) : '',
     seq: Number(row.seq),
     id: row.id,
     ts: row.ts ? new Date(row.ts).getTime() : null,
@@ -1464,6 +1486,18 @@ export function rowToMessage(row) {
     notify: !!row.notify,
     meta: row.meta && typeof row.meta === 'object' ? row.meta : null,
   };
+}
+
+/** SB-20 review B1 (2026-10-01) — the EXPORT-SHAPED event: rowToMessage()
+ *  WITHOUT `leagueId`. The Sheet export bundle's events never carried a league
+ *  (one Sheet was one league), so supabase/import/import-backup.mjs's
+ *  verifyMessages() hashes the database side through THIS, not rowToMessage(),
+ *  or every import would report a false mismatch. rowToMessage() keeps
+ *  `leagueId` for the chat fold, which needs it. Pure; no new column mapping —
+ *  the one map stays rowToMessage(). */
+export function rowToMessageEvent(row) {
+  const { leagueId, ...event } = rowToMessage(row);
+  return event;
 }
 
 /** One CFBP_SCRIBE_MEMORY row (`backend/Code.gs:6217-6218` SCRIBE_MEMORY_

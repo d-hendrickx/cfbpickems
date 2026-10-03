@@ -132,13 +132,20 @@ const CLIENT = {
     refreshSession: async () => ({ data: { session: SESSION }, error: null }),
   },
   from(table) {
-    const q = { table, filters: [] };
+    // SB-01 / RG-265 — the paging surface hydrate() uses: keyset `gt`, `order`, `limit`, and the
+    // exact count page one asks for (computed before the limit, as PostgREST does).
+    const q = { table, filters: [], gt: [], order: null, limit: Infinity, count: false };
     const api = {
-      select() { return api; },
+      select(_c, o) { q.count = !!(o && o.count); return api; },
       eq(c, v) { q.filters.push([c, v]); return api; },
+      gt(c, v) { q.gt.push([c, v]); return api; },
+      order(c) { q.order = c; return api; },
+      limit(n) { q.limit = n; return api; },
       then(res, rej) {
-        const rows = (ST[q.table] || []).filter(r => q.filters.every(([c, v]) => r[c] === v));
-        return Promise.resolve({ data: rows, error: null }).then(res, rej);
+        const rows = (ST[q.table] || []).filter(r => q.filters.every(([c, v]) => r[c] === v)
+          && q.gt.every(([c, v]) => r[c] > v));
+        if (q.order) rows.sort((a, b) => (a[q.order] < b[q.order] ? -1 : a[q.order] > b[q.order] ? 1 : 0));
+        return Promise.resolve({ data: rows.slice(0, q.limit), error: null, count: q.count ? rows.length : null }).then(res, rej);
       },
     };
     return api;

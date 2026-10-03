@@ -700,10 +700,28 @@ function blankWrapped(blanked) {
 }
 
 // ─── leaves ───────────────────────────────────────────────────────────────
+/** SB-24 (b) — index spans of every inline arrow's PARAMETER LIST in `b` (a
+ *  literal-blanked expression): the `(…)` or the bare name before each `=>`. */
+function arrowParamSpans(b) {
+  const spans = []; const re = /=>/g; let m;
+  while ((m = re.exec(b))) {
+    let k = m.index - 1; while (k >= 0 && /\s/.test(b[k])) k--;
+    if (b[k] === ')') { let d = 1, j = k - 1; while (j >= 0 && d > 0) { if (b[j] === ')') d++; else if (b[j] === '(') d--; j--; } spans.push([j + 1, k]); }
+    else { let j = k; while (j >= 0 && /[\w$]/.test(b[j])) j--; if (j < k) spans.push([j + 1, k]); }
+  }
+  return spans;
+}
+
 function leavesOf(expr) {
   const s = blankWrapped(blankLiterals(expr));
   const out = []; const re = /(?<![\w$.])([A-Za-z_$][\w$]*)/g; let m;
+  // SB-24 (b) — an inline arrow's PARAMETER LIST is a binding form, never a
+  // printed value: its names are not leaves. They are collected instead, and
+  // classify() denies a leaf of the arrow's BODY that prints one.
+  const spans = arrowParamSpans(s);
+  out.arrowNames = new Set(spans.flatMap(([a, b]) => [...bindingNames(s.slice(a, b + 1))]));
   while ((m = re.exec(s))) {
+    if (spans.some(([a, b]) => m.index >= a && m.index <= b)) continue;
     const head = m[1];
     let i = m.index + head.length, text = head, isCall = false, callArgs = '';
     const steps = []; let lastProp = null;
@@ -945,20 +963,169 @@ function paramNames(params) {
   });
 }
 
-/** Every `{ … }` body range in a module, innermost-last. Used for LEXICAL
- *  alias resolution: a bare `n` must be resolved against the assignments in
- *  its own function, not against every `n =` in a 13,000-line file. */
+// ─── SB-24 — BINDING FORMS: parameter lists and destructuring patterns ─────
+//
+// THE GAP (SP-53 security review, SB-24). assignmentsOf() below finds `name =`
+// with a regex, and three things that are NOT assignments matched it:
+//   (a) a LITERAL DEFAULT — `function f(x = '')`, `({ x = '' }) =>`,
+//       `const { x = '' } = opts` — was read as x's only value, so an
+//       unescaped `${x}` classified as a literal however the caller filled it;
+//   (b) a BARE ARROW PARAMETER — the `=` of `x =>` / `x=>` matched, and the
+//       arrow's BODY became the "right-hand side" (a swept markup template
+//       blanks to nothing, so it classified). This is how
+//       renderDataProofPanel()'s `espnIds.map(id=>`…${id}…`)` — game.espnEventId,
+//       commissioner-typed, rendered raw for a platform admin — sat green;
+//   (c) LEAKAGE ACROSS FUNCTIONS — a parameter list sat OUTSIDE its function's
+//       `{…}` scope range, so a default in one function was found by the
+//       module-level fallback while resolving the same bare name in a sibling.
+//
+// THE RULE, decided by CONTEXT, never by the preceding character (a `{` that
+// opens a BLOCK is legitimate — `if (c) { x = 'y'; }` is an assignment):
+//   • a match followed by `>` is an arrow parameter, never an assignment;
+//   • a `name =` inside a PARAMETER LIST or a DESTRUCTURING PATTERN is a
+//     binding (a parameter), never an assignment — it stays denied unless a
+//     call site binds it (fnSafe()'s env, which leaf() consults first);
+//   • a function's scope runs from its parameter list to the end of its body
+//     (concise arrow bodies included), and a name its parameter list binds is
+//     resolved THERE — the walk stops and denies instead of falling outward to
+//     whatever the enclosing function or the module happens to assign. A
+//     destructuring declaration binds its names in the scope that declares it,
+//     with the same stop.
+//   • SECURITY C1 (delta review, 2026-10-01): a CONCISE arrow's range is a
+//     BINDING range only. Its end comes from conciseEnd(), a heuristic that
+//     runs past a newline when there is no semicolon, and a literal assigned
+//     inside it is an assignment to the ENCLOSING function's variable — so
+//     resolving assignments there first hid `let s = evil.x` behind
+//     `(s = 'lit')` and cleared the site. resolveName() skips assignmentsOf()
+//     for a concise scope; its parameters still stop the walk.
+// Deny-by-default is untouched. A verdict can move toward SAFE in exactly two
+// places, both because something that is not an assignment is no longer read
+// as one: leavesOf() no longer reads an inline arrow's parameter LIST as a
+// printed value (its body still is, and a body that prints its own parameter
+// is denied); and a FREE name's assignments no longer include another
+// binding's default or an arrow's `=` (which used to be judged as its value).
+// No scope added here contributes an assignment that was not counted before.
+// Measured 2026-10-01 against every swept file (see the SB-24 report): the
+// fix reports sites the old classifier cleared and clears none it reported.
+const NOT_A_METHOD_NAME = new Set(['if', 'for', 'while', 'switch', 'catch', 'with', 'function', 'return', 'typeof',
+  'await', 'new', 'delete', 'void', 'in', 'of', 'do', 'else', 'yield', 'case', 'instanceof']);
+
+/** End (exclusive) of a concise arrow body that starts at `from`: the first
+ *  `)`/`]`/`}` closing an enclosing group, or a `,`/`;` at depth 0. */
+function conciseEnd(code, from) {
+  let j = from, d = 0;
+  while (j < code.length) {
+    const c = code[j];
+    if ('([{'.includes(c)) d++;
+    else if (')]}'.includes(c)) { if (d === 0) break; d--; }
+    else if ((c === ',' || c === ';') && d === 0) break;
+    j++;
+  }
+  return j;
+}
+
+/** Every function's PARAMETER LIST (with its scope: parameter list through the
+ *  end of the body) and every DESTRUCTURING PATTERN, read off the code-only
+ *  projection (strings, comments, regexes and template text already blank). */
+function bindingForms(code) {
+  const groups = [], stack = [];
+  for (let i = 0; i < code.length; i++) {
+    const c = code[i];
+    if (c === '(' || c === '[' || c === '{') stack.push({ kind: c, open: i });
+    else if (c === ')' || c === ']' || c === '}') { const t = stack.pop(); if (t) groups.push({ kind: t.kind, open: t.open, close: i }); }
+  }
+  const byOpen = new Map(groups.map(g => [g.open, g]));
+  const fnScope = (ps, pe, k) => {
+    let b = k; while (b < code.length && /\s/.test(code[b])) b++;
+    if (code[b] === '{') { const g = byOpen.get(b); return { start: ps, end: g ? g.close : matchBrace(code, b) - 1, params: { start: ps, end: pe }, bodyOpen: b }; }
+    return { start: ps, end: conciseEnd(code, b), params: { start: ps, end: pe }, bodyOpen: null };
+  };
+  const fns = [], patterns = [];
+  for (const g of groups) {
+    if (g.kind === '(') {
+      const after = code.slice(g.close + 1, g.close + 24);
+      const before = code.slice(Math.max(0, g.open - 80), g.open);
+      const arrow = /^\s*=>/.exec(after);
+      let isParams = !!arrow || /\bfunction\b\s*\*?\s*(?:[A-Za-z_$][\w$]*)?\s*$/.test(before);
+      if (!isParams && /^\s*\{/.test(after)) {                 // method shorthand: `name(…) {`
+        const mm = /(?:^|[^\w$.])([A-Za-z_$][\w$]*)\s*$/.exec(before);
+        isParams = !!mm && !NOT_A_METHOD_NAME.has(mm[1]);
+      }
+      if (isParams) fns.push(fnScope(g.open, g.close, g.close + 1 + (arrow ? arrow[0].length : 0)));
+    } else {
+      const before = code.slice(Math.max(0, g.open - 12), g.open);
+      const after = code.slice(g.close + 1, g.close + 8);
+      const decl = /\b(?:const|let|var)\s*$/.test(before);
+      const target = /^\s*=(?![=>])/.test(after) && (g.kind === '{' || !/[\w$)\]]\s*$/.test(before));
+      if (decl || target) patterns.push({ start: g.open, end: g.close });
+    }
+  }
+  const re = /(?<![\w$.])([A-Za-z_$][\w$]*)\s*=>/g; let m;      // bare `x =>` / `x=>`
+  while ((m = re.exec(code))) {
+    if (KEYWORDS.has(m[1])) continue;
+    fns.push(fnScope(m.index, m.index + m[1].length - 1, m.index + m[0].length));
+  }
+  // Two more binding forms with no `=` at all, so the assignment regex never
+  // saw them and the walk fell straight past them: a `for (const x of|in …)`
+  // loop variable and a `catch (e)` parameter. Each binds in the scope that
+  // holds it (a destructured loop variable is already a pattern, above).
+  for (const loose of [/\bfor\s*\(\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s+(?:of|in)\b/dg, /\bcatch\s*\(\s*([A-Za-z_$][\w$]*)\s*\)/dg]) {
+    while ((m = loose.exec(code))) patterns.push({ start: m.indices[1][0], end: m.indices[1][1] - 1 });
+  }
+  return { fns, patterns };
+}
+
+/** The names a parameter list / destructuring pattern BINDS: default-value
+ *  expressions blanked, property KEYS (`key:`) dropped. */
+function bindingNames(t) {
+  const b = t.split('');
+  for (let i = 0; i < b.length; i++) {
+    if (!(b[i] === '=' && b[i + 1] !== '=' && b[i + 1] !== '>' && !'=!<>'.includes(b[i - 1] || ''))) continue;
+    let j = i, d = 0;
+    for (; j < b.length; j++) { const c = b[j];
+      if ('([{'.includes(c)) d++;
+      else if (')]}'.includes(c)) { if (d === 0) break; d--; }
+      else if (c === ',' && d === 0) break; }
+    for (let k = i; k < j; k++) if (b[k] !== '\n') b[k] = ' ';
+    i = j - 1;
+  }
+  const out = new Set(); const re = /(?<![\w$.])([A-Za-z_$][\w$]*)(?![\w$])(?!\s*:)/g; let m;
+  const s = b.join('');
+  while ((m = re.exec(s))) if (!KEYWORDS.has(m[1])) out.add(m[1]);
+  return out;
+}
+
+/** Every scope range in a module, innermost-last. FUNCTION scopes run from
+ *  the parameter list to the end of the body (SB-24 (c)) and carry their
+ *  `params`; BLOCK scopes (`if (…) {`, `for (…) {`, …) are the `{ … }` body,
+ *  as before; the module is the last resort. Each destructuring pattern is
+ *  attached to the innermost scope that declares it. Used for LEXICAL alias
+ *  resolution: a bare `n` must be resolved against its own function, not
+ *  against every `n =` in a 30,000-line file. */
 function scopeRanges(code) {
-  const out = [];
+  const { fns, patterns } = bindingForms(code);
+  // `concise` — a concise arrow's range (no `{` body): BINDINGS only (security C1).
+  const out = fns.map(f => ({ start: f.start, end: f.end, params: f.params, concise: f.bodyOpen == null }));
+  const fnBodies = new Set(fns.map(f => f.bodyOpen).filter(o => o != null));
   const re = /(?:\)|=>)\s*\{/g; let m;
   while ((m = re.exec(code))) {
     const o = code.indexOf('{', m.index);
     if (o < 0) continue;
-    const e = matchBrace(code, o);
-    if (e > o + 1) out.push({ start: o + 1, end: e - 1 });
+    if (!fnBodies.has(o)) { const e = matchBrace(code, o); if (e > o + 1) out.push({ start: o + 1, end: e - 1 }); }
     re.lastIndex = o + 1;
   }
   out.push({ start: 0, end: code.length });   // module top level, last resort
+  for (const p of patterns) {
+    let owner = null;
+    for (const s of out) if (p.start >= s.start && p.start <= s.end && (!owner || (s.end - s.start) < (owner.end - owner.start))) owner = s;
+    (owner.patterns = owner.patterns || []).push(p);
+  }
+  // Positions inside a parameter list or a pattern: a `name =` there is a
+  // DEFAULT (a binding), never an assignment — assignmentsOf() skips it.
+  const mask = new Uint8Array(code.length + 1);
+  for (const f of fns) mask.fill(1, f.params.start, f.params.end + 1);
+  for (const p of patterns) mask.fill(1, p.start, p.end + 1);
+  out.bindMask = mask;
   return out;
 }
 
@@ -1009,30 +1176,64 @@ function makeClassifier(sources, mainFile, { maxDepth = 10 } = {}) {
     return out;
   }
 
-  /** Raw assignment texts of `name`, resolved lexically (no classification). */
+  /** Raw assignment texts of `name`, resolved lexically (no classification).
+   *  A name that a parameter list or a destructuring pattern binds has none
+   *  (SB-24): the walk stops at the binding. */
   function aliasRHS(mod, name, pos) {
-    const scopes = pos == null ? [{ start: 0, end: mod.code.length }] : scopesFor(mod, pos);
-    for (const sc of scopes) { const a = assignmentsOf(mod, name, sc); if (a.length) return a; }
-    return [];
+    return resolveName(mod, name, pos).rhss || [];
   }
 
   function scopesFor(mod, pos) {
     if (!mod.scopes) mod.scopes = scopeRanges(mod.code);
+    if (pos == null) return [mod.scopes[mod.scopes.length - 1]];   // the module scope
     const hits = mod.scopes.filter(s => pos >= s.start && pos <= s.end);
     hits.sort((a, b) => (a.end - a.start) - (b.end - b.start));   // innermost first
     return hits;
+  }
+
+  /** SB-24 — does THIS scope bind `name` through its own parameter list or a
+   *  destructuring pattern it declares? A binding inside a NESTED function
+   *  belongs to that function, never to this scope. */
+  function scopeBinds(mod, sc, name) {
+    if (!mod.bindNames) mod.bindNames = new Map();
+    const names = span => {
+      const k = span.start + ':' + span.end;
+      if (!mod.bindNames.has(k)) mod.bindNames.set(k, bindingNames(mod.code.slice(span.start, span.end + 1)));
+      return mod.bindNames.get(k);
+    };
+    return (sc.params && names(sc.params).has(name)) || (sc.patterns || []).some(p => names(p).has(name));
+  }
+
+  /** Walk the scopes innermost-outward. The FIRST scope that binds `name`
+   *  (a parameter / a pattern) or assigns it decides; a binding stops the walk.
+   *  A CONCISE arrow's range only ever BINDS (security C1): an assignment made
+   *  inside it is to a variable declared further out, and is found there. */
+  function resolveName(mod, name, pos) {
+    for (const sc of scopesFor(mod, pos)) {
+      if (scopeBinds(mod, sc, name)) return { bound: sc };
+      if (sc.concise) continue;
+      const a = assignmentsOf(mod, name, sc);
+      if (a.length) return { rhss: a, range: sc };
+    }
+    return {};
   }
 
   function assignmentsOf(mod, name, range) {
     const lo = range ? range.start : 0, hi = range ? range.end : mod.code.length;
     const memoKey = name + '@' + lo + ':' + hi;
     if (mod.assignMemo.has(memoKey)) return mod.assignMemo.get(memoKey);
+    if (!mod.scopes) mod.scopes = scopeRanges(mod.code);
+    const mask = mod.scopes.bindMask;
     const out = [];
-    const re = new RegExp(`(?:const|let|var)\\s+${name}\\s*=(?!=)|(?<![=!<>\\w$.])${name}\\s*=(?!=)`, 'g');
+    // SB-24 (b) — `(?![=>])`: the `=` of an arrow is never an assignment.
+    const re = new RegExp(`(?:const|let|var)\\s+${name}\\s*=(?![=>])|(?<![=!<>\\w$.])${name}\\s*=(?![=>])`, 'g');
     let m;
     re.lastIndex = lo;
     while ((m = re.exec(mod.code))) {
       if (m.index > hi) break;
+      // SB-24 (a) — a `name =` inside a parameter list or a destructuring
+      // pattern is a DEFAULT: a binding, never an assignment.
+      if (mask[m.index]) { re.lastIndex = m.index + m[0].length; continue; }
       let i = m.index + m[0].length, d = 0, tick = 0; const start = i;
       while (i < hi) { const c = mod.code[i];
         if (c === '`') { tick ^= 1; i++; continue; }
@@ -1088,7 +1289,12 @@ function makeClassifier(sources, mainFile, { maxDepth = 10 } = {}) {
     }
     if (LITERAL_LOOKUP.test(blankLiterals(expr).trimStart()) && isStructureOnly(expr.replace(/\[[\s\S]*/, '')))
       return { ok: true, why: 'lookup table whose values are all string literals' };
-    for (const lf of leavesOf(blankSweptTemplates(blankLiteralObjects(expr), mod))) {
+    const leaves = leavesOf(blankSweptTemplates(blankLiteralObjects(expr), mod));
+    for (const lf of leaves) {
+      // SB-24 (b) — the BODY of an inline arrow printing one of that arrow's
+      // own parameters: its value comes from whoever calls the arrow.
+      if (leaves.arrowNames.has(lf.head) && !env.has(lf.head))
+        return { ok: false, why: `${lf.head} is a parameter of an inline arrow function — its value comes from the arrow's caller (SB-24)`, leaf: lf.text.slice(0, 90) };
       const r = leaf(lf, mod, env, depth, stack, pos);
       if (!r.ok) return { ok: false, why: r.why, leaf: r.leaf || lf.text.slice(0, 90) };
     }
@@ -1110,6 +1316,7 @@ function makeClassifier(sources, mainFile, { maxDepth = 10 } = {}) {
     if (NOT_BEFORE.test(before) || KW_BEFORE.test(before)) return { ok: true, why: 'boolean / typeof / new context' };
     if (env.has(head) && lf.steps.length === 0) {
       const b = env.get(head);
+      if (b.deny) return { ok: false, why: b.deny };
       if (stack.has('p:' + head)) return { ok: true, why: 'recursive parameter' };
       const s2 = new Set(stack); s2.add('p:' + head);
       const r = classify(b.expr, b.mod, b.env, depth + 1, s2, b.pos);
@@ -1124,6 +1331,11 @@ function makeClassifier(sources, mainFile, { maxDepth = 10 } = {}) {
         // — the frozen data-model palettes), the callback's element parameter
         // is a literal, so bind it as one rather than denying it.
         const cbEnv = new Map(env);
+        // SB-24 — EVERY callback parameter is bound here, so the body can
+        // never resolve one outward to an unrelated assignment of the same
+        // name. Only on a literal receiver (below) is the element a literal.
+        for (const n of bindingNames(arrowParams(lf.steps[mapIdx].args)))
+          cbEnv.set(n, { deny: `${n} is a .map() callback parameter — its value comes from the receiver (SB-24)` });
         if (mapIdx === 0 || lf.steps.slice(0, mapIdx).every(st => PASSTHROUGH.has(st.name) || st.kind === 'index')) {
           for (const rhs of aliasRHS(mod, head, pos)) {
             if (!isLiteralValueArray(rhs)) continue;
@@ -1141,7 +1353,7 @@ function makeClassifier(sources, mainFile, { maxDepth = 10 } = {}) {
     while (steps.length && (PASSTHROUGH.has(steps[steps.length - 1].name) || steps[steps.length - 1].kind === 'index')) steps.pop();
     if (steps.length !== lf.steps.length) {
       if (!steps.length) {
-        if (env.has(head)) { const b = env.get(head); const s2 = new Set(stack); s2.add('p:' + head);
+        if (env.has(head)) { const b = env.get(head); if (b.deny) return { ok: false, why: b.deny }; const s2 = new Set(stack); s2.add('p:' + head);
           if (stack.has('p:' + head)) return { ok: true, why: 'recursive parameter' };
           const r = classify(b.expr, b.mod, b.env, depth + 1, s2, b.pos);
           return r.ok ? { ok: true, why: 'parameter, inert methods only' } : { ok: false, why: `parameter ${head} ← ${r.why}`, leaf: r.leaf }; }
@@ -1196,9 +1408,14 @@ function makeClassifier(sources, mainFile, { maxDepth = 10 } = {}) {
     // scope that actually binds `name`. Resolving file-wide (what round 2's
     // hand-listed LOCAL_ALIASES effectively did) unions every unrelated `n =`
     // in a 13,000-line file and makes the verdict meaningless.
-    const scopes = pos == null ? [{ start: 0, end: mod.code.length }] : scopesFor(mod, pos);
-    let rhss = [], range = null;
-    for (const sc of scopes) { const a = assignmentsOf(mod, name, sc); if (a.length) { rhss = a; range = sc; break; } }
+    const r = resolveName(mod, name, pos);
+    // SB-24 — a PARAMETER (plain, defaulted, destructured, an arrow's) of the
+    // function the use sits in, or a name a destructuring pattern binds. Its
+    // value is whatever the CALLER passed; only a call site can vouch for it,
+    // and call sites reach this classifier through fnSafe()'s env, which
+    // leaf() consults before it ever gets here.
+    if (r.bound) return { ok: false, why: 'a parameter or destructured binding of the enclosing function/pattern — its value comes from the caller (SB-24); deny-by-default unless a call site binds it' };
+    const rhss = r.rhss || [], range = r.range || null;
     const key = 'a:' + mod.file + '|' + name + '|' + (range ? range.start : 'none');
     if (stack.has(key)) return { ok: true, why: 'recursive alias' };
     if (mod.aliasMemo.has(key)) return mod.aliasMemo.get(key);
@@ -1248,7 +1465,18 @@ function makeClassifier(sources, mainFile, { maxDepth = 10 } = {}) {
 // render markup and none was in this suite's full sweep. [9c-1c] below
 // asserts each sweeps clean with NO exemption of its own.
 const SWEPT = ['js/app.js', 'js/chat-ui.js', 'js/extra-point.js', 'js/recap.js', 'js/notifications.js', 'js/auth.js', 'js/admin-panel.js',
-  'js/control-center.js', 'js/leagues-home.js', 'js/week-wizard.js', 'js/icons.js'];
+  'js/control-center.js', 'js/leagues-home.js', 'js/week-wizard.js', 'js/icons.js',
+  // Social Platform v1 Home (security C4, 2026-10-01) — the pure stats / feed modules join the swept set AT ZERO: none of them touches the DOM or builds
+  // markup, so there is nothing to classify; the sweep keeps it that way (a template literal with HTML and an unclassified `${}` added later fails here).
+  // js/home.js joins it too (2026-10-01, the Home renderer — DI-374 item 5 / S-C6): the one module of the set that DOES build markup. It joins AT ZERO, no exemption: every `${}` in a
+  // markup template is an escHtml()-wrapped value, a literal, or a local that classifies; finished fragments from outside (UX-2's news card, the injected compact dashboard) are
+  // SPLICED by the one joinHtml() helper, never interpolated (hometest [1] pins that the only concatenation of markup in the file is that helper).
+  'js/stats-core.js', 'js/stats.js', 'js/feed-cards.js', 'js/feed-caption-lines.js', 'js/home.js'];
+// Social Platform News (option A, Home security W9, 2026-10-01) -- the two modules that build news markup join AT ZERO, no exemption: js/newsCard.js (the card: every NewsItem field passes
+// its OWN quote-complete esc(), no href is built from item.url, no data-home-action / data-tab / data-comm-target / data-comm-tab / data-haptic is ever emitted) and js/newsSettings.js
+// (the News pane: every team name, a stored and so untrusted preference, passes its own esc(); composition is by array join, so the zero is a real sweep, not an absence of templates).
+// Pushed on AFTER the literal on purpose: hometest [1-26] pins the literal's exact tail ('js/home.js'];) and that file belongs to the Home thread.
+SWEPT.push('js/newsCard.js', 'js/newsSettings.js');
 // UN-312 (2026-09-29): 'js/brand.js' joins the resolvable set (it is a literal-only module, never swept). app.js
 // injects getGateMarkSVG() — the filled Munera logo, a fixed template literal with no interpolation — raw, exactly
 // like GOOGLE_G_MARK_SVG; a call the classifier cannot resolve is reported as a NEW unclassified site, so it has to
@@ -1256,8 +1484,12 @@ const SWEPT = ['js/app.js', 'js/chat-ui.js', 'js/extra-point.js', 'js/recap.js',
 // rejects a concatenated return, but it does not police an interpolation added INSIDE a returned template in this
 // module — brandtest.mjs [11c3] does that (getGateMarkSVG() must stay a parameterless, interpolation-free literal).
 // This edit widens what the ratchet can resolve; it loosens nothing.
+// SP-53 (2026-10-01): 'js/league-settings.js' and 'js/league-settings-view.js' join the resolvable set, READ-ONLY (never swept here: leaguesettingsuitest.mjs pins their own rendering rules — an
+// injected required escHtml, double-quoted attributes only, `num()` for a number that can be zero). Two call sites in swept files need to FOLLOW a call into them: admin-panel.js's
+// `departedLabel(...)` (it returns one of three string literals) and app.js's `waiveControlsHTML(...)` in the Comm Obligations card. Like brand.js, this widens what the ratchet can resolve
+// and loosens nothing: a call whose returns the classifier cannot prove is still reported as a NEW unclassified site.
 const RESOLVABLE = [...SWEPT, 'js/data-model.js', 'js/scoring.js', 'js/storage.js', 'js/chat.js',
-  'js/scribeLines.js', 'js/history-2025.js', 'js/data-provider.js', 'js/backend.js', 'js/chatTransport.js', 'js/roles.js', 'js/brand.js'];
+  'js/scribeLines.js', 'js/history-2025.js', 'js/data-provider.js', 'js/backend.js', 'js/chatTransport.js', 'js/roles.js', 'js/brand.js', 'js/league-settings.js', 'js/league-settings-view.js'];
 const SRC = {};
 for (const f of RESOLVABLE) SRC[f] = await readFile(new URL('./' + f, import.meta.url), 'utf8');
 
@@ -1308,10 +1540,102 @@ for (const expr of ['esc(evil.content)', 'esc(evil.attr)', 'esc(evil.nested)']) 
 assert(cleanHits.length === sweepFile('js/recap.js').length,
   '[9a] canary: wrapping the three synthetic sites removes all three findings and adds none');
 
+// [9a-2] SB-24 — A PARAMETER IS NOT AN ASSIGNMENT. The classifier's
+// assignmentsOf() found `name =` with a regex, and three binding forms matched
+// it: a LITERAL DEFAULT (positional or destructured) read as the variable's
+// only value; the `=` of a BARE ARROW (`x =>` / `x=>`) read as an assignment
+// whose right-hand side was the arrow's body; and a default in ONE function
+// whitelisting the same bare name in a SIBLING (a parameter list sat outside
+// its function's scope). renderDataProofPanel()'s `espnIds.map(id=>…${id}…)` —
+// game.espnEventId, commissioner-typed, rendered raw in the platform admin's
+// Data Proof card — sat green behind the second one. Every MUTANT below is a
+// synthetic function on an in-memory COPY of a swept file (never the file on
+// disk), and each must be REPORTED; the CLEAN shapes after them must NOT be —
+// the rule is decided by binding CONTEXT, so a block-opening `{` that precedes
+// a real assignment stays legitimate.
+{
+  const SB24_MUTANTS = [
+    ['destructured parameter default', 'sbDestrParam',
+      `function __sb24M1({ sbDestrParam = '' } = {}) { return \`<b>\${sbDestrParam}</b>\`; }`],
+    ['positional parameter default', 'sbPosParam',
+      `function __sb24M2(sbPosParam = '') { return \`<b>\${sbPosParam}</b>\`; }`],
+    ['bare arrow parameter, spaced (`x => …`)', 'sbArrowSpaced',
+      `function __sb24M3(list) { return list.map(sbArrowSpaced => \`<i>\${sbArrowSpaced}</i>\`).join(''); }`],
+    ['bare arrow parameter, tight (`x=>…`) — the Data Proof shape', 'sbArrowTight',
+      `function __sb24M4(list) { return list.map(sbArrowTight=>\`<i>\${sbArrowTight}</i>\`).join(''); }`],
+    ['destructuring-declaration default', 'sbDeclDefault',
+      `function __sb24M5(opts) { const { sbDeclDefault = '' } = opts; return \`<b>\${sbDeclDefault}</b>\`; }`],
+    ['a default in one function must not clear the same bare name in a sibling', 'sbShared',
+      `function __sb24M6Lit(sbShared = 'a literal') { return String(sbShared).length; }\nfunction __sb24M6Victim(sbShared) { return \`<b>\${sbShared}</b>\`; }`],
+    ['a sibling\'s same-named literal LOCAL must not clear a parameter', 'sbLocal',
+      `function __sb24M7Lit() { const sbLocal = 'lit'; return sbLocal.length; }\nfunction __sb24M7Victim(sbLocal) { return \`<b>\${sbLocal}</b>\`; }`],
+    ['parenthesised arrow parameter with a default', 'sbParenArrow',
+      `function __sb24M8(list) { return list.map((sbParenArrow = '') => \`<i>\${sbParenArrow}</i>\`).join(''); }`],
+    ['method-shorthand parameter default', 'sbMethodParam',
+      `const __sb24M9 = { render(sbMethodParam = '') { return \`<b>\${sbMethodParam}</b>\`; } };`],
+    ['concise-arrow function parameter default', 'sbConcise',
+      `const __sb24M10 = (sbConcise = '') => \`<b>\${sbConcise}</b>\`;`],
+    ['a .map() callback parameter never resolves to a same-named outer local', 'names.map(sbShadow => sbShadow).join(\'\')',
+      `function __sb24M11(names) { const sbShadow = 'lit'; return \`<b>\${names.map(sbShadow => sbShadow).join('')}</b>\`; }`],
+    ['a defaulted helper called with a non-literal argument', '__sb24Helper(evil.x)',
+      `function __sb24Helper(sbHelperParam = '') { return sbHelperParam; }\nfunction __sb24M13(evil) { return \`<b>\${__sb24Helper(evil.x)}</b>\`; }`],
+    ['a for…of loop variable is a binding, not cleared by a sibling\'s same-named literal', 'sbLoopVar',
+      `function __sb24M14(xs) { for (const sbLoopVar of xs) { return \`<b>\${sbLoopVar}</b>\`; } return ''; }\nfunction __sb24M14Lit() { const sbLoopVar = 'lit'; return sbLoopVar; }`],
+    ['a catch parameter is a binding, not cleared by a sibling\'s same-named literal', 'sbCaught',
+      `function __sb24M15() { try { return ''; } catch (sbCaught) { return \`<b>\${sbCaught}</b>\`; } }\nfunction __sb24M15Lit() { const sbCaught = 'lit'; return sbCaught; }`],
+    ['a FREE name (an import/global, never assigned) is not cleared by some function\'s default of the same name', 'sbFree',
+      `function __sb24M16Lit(sbFree = 'lit') { return sbFree.length; }\nfunction __sb24M16Victim() { return \`<b>\${sbFree}</b>\`; }`],
+    ['a site INSIDE a parameter default resolves in that function\'s scope (parameter-list text belongs to its own function)', 'sbDefSrc',
+      `function __sb24M17(sbDefSrc, sbDefOut = \`<i>\${sbDefSrc}</i>\`) { return sbDefOut; }\nfunction __sb24M17Lit() { const sbDefSrc = 'lit'; return sbDefSrc; }`],
+    // SECURITY C1 (SB-24 delta review, 2026-10-01) — a concise arrow's "scope" is a
+    // BINDING range only. Resolving ASSIGNMENTS inside it first hid the enclosing
+    // function's `let s = evil.x` behind a literal assigned inside the arrow (B1),
+    // and without semicolons conciseEnd() runs past the newline, so the arrow
+    // swallowed the rest of the function and a later literal assignment won (O).
+    ['security C1 / B1: a literal assigned INSIDE a concise arrow does not clear the enclosing function\'s tainted local', 'sbB1',
+      `function __sb24B1(list, evil) { let sbB1 = evil.x; return list.map(it => (it.ok && (sbB1 = 'lit'), \`<b>\${sbB1}</b>\`)).join(''); }`],
+    ['security C1 / O: no semicolons — a concise arrow does not swallow the rest of the function', 'sbO',
+      `function __sb24O(evil, xs) {\n  let sbO = evil.x\n  const f = x => x\n  if (xs.length) sbO = 'lit'\n  return \`<b>\${sbO}</b>\`;\n}`],
+    ['security C1 / O2 (control): the same shape WITH semicolons', 'sbO2',
+      `function __sb24O2(evil, xs) {\n  let sbO2 = evil.x;\n  const f = x => x;\n  if (xs.length) sbO2 = 'lit';\n  return \`<b>\${sbO2}</b>\`;\n}`],
+  ];
+  for (const [label, expr, code] of SB24_MUTANTS) {
+    const hits = sweepFile('js/recap.js', SRC['js/recap.js'] + '\n' + code + '\n').map(h => h.expr);
+    assert(hits.includes(expr),
+      `[9a-2] SB-24 mutant REPORTED — ${label}: \`\${${expr}}\` (got: ${JSON.stringify(hits.slice(-3))})`);
+  }
+  const SB24_CLEAN = [
+    ['the same defaulted parameter, escaped', `function __sb24C1(sbPosParam = '') { return \`<b>\${esc(sbPosParam)}</b>\`; }`],
+    ['the same arrow parameter, escaped', `function __sb24C2(list) { return list.map(sbArrowTight=>\`<i>\${esc(sbArrowTight)}</i>\`).join(''); }`],
+    ['a real assignment inside a block opened by `{` (context, not the preceding character)',
+      `function __sb24C3(c) { let sbBlk = ''; if (c) { sbBlk = 'yes'; } return \`<b>\${sbBlk}</b>\`; }`],
+    ['a real assignment inside a bare `{ … }` block', `function __sb24C4() { let sbBare; { sbBare = 'x'; } return \`<b>\${sbBare}</b>\`; }`],
+    ['an assignment made inside a nested callback still counts', `function __sb24C5(xs) { let sbAcc = ''; xs.forEach(() => { sbAcc = 'lit'; }); return \`<b>\${sbAcc}</b>\`; }`],
+    ['a defaulted helper bound by a LITERAL call site', `function __sb24Helper2(sbHelperParam2 = '') { return sbHelperParam2; }\nfunction __sb24C6() { return \`<b>\${__sb24Helper2('literal')}</b>\`; }`],
+    ['a literal-array .map() whose body escapes', `function __sb24C7() { return \`<b>\${['a', 'b'].map(sbLitEl => esc(sbLitEl)).join('')}</b>\`; }`],
+    ['an arrow\'s PARAMETER LIST is not a printed value (a local holding a swept, escaped <option> list)',
+      `function __sb24C8() { const sbOpts = ['a', 'b'].map(sbOpt => \`<option>\${esc(sbOpt)}</option>\`).join(''); return \`<select>\${sbOpts}</select>\`; }`],
+  ];
+  const baseline = sweepFile('js/recap.js').length;
+  for (const [label, code] of SB24_CLEAN) {
+    const hits = sweepFile('js/recap.js', SRC['js/recap.js'] + '\n' + code + '\n');
+    assert(hits.length === baseline,
+      `[9a-2] SB-24 clean shape NOT reported — ${label} (new: ${JSON.stringify(hits.slice(baseline).map(h => h.expr))})`);
+  }
+}
+
 // [9b] THE EXEMPTIONS TABLE. Every entry names a FILE, the EXACT expression
 // text, and a reason a reviewer can check. Exact text is the whole point: an
 // exemption must not be able to absorb a future site that merely resembles it.
 const EXEMPTIONS = [
+  // ── js/app.js — SP-54 / DI-468 (2026-10-01): Weekly History's tie-note row ──
+  // historyGroupHTML() builds `noteRow` as '' or ONE `<tr class="stand-note">` whose only data interpolation is `escHtml(l.text)` over tieNoteLines() output (plain text from
+  // validTieBreak()-checked descriptors, every caption led by a TIE_COPY constant, names and teams clipped to 80 characters); the other interpolation in it is a class suffix derived
+  // from a boolean. The scanner cannot follow the `.map(...).join('')` that builds it, so the site is declared here, with its guards: tiebreaktest [T26] (every caption, hostile
+  // names and teams, exact strings), the [9e] runtime proof below (a hostile player name and a hostile school come out escaped in the Dashboard caption) and layouttest's tie-note
+  // section (the same through the REAL Weekly History render).
+  { file: 'js/app.js', expr: 'noteRow',
+    why: "historyGroupHTML(): `noteRow` is '' or one <tr class=\"stand-note\"> whose only data interpolation is escHtml(l.text); built from tieNoteLines() (validTieBreak-checked, constant-led, clipped) — guarded by tiebreaktest [T26], xsstest [9e] and layouttest's tie-note section" },
   // ── chat-ui.js — PRE-ESCAPED BY THE CALLER ──────────────────────────────
   // bodyHTML() (chat-ui.js:878) opens with `const escaped = esc(m.body)` and
   // then DELIBERATELY emits markup: it splits the escaped text on URL_RE and
@@ -1356,6 +1680,14 @@ const EXEMPTIONS = [
   { file: 'js/chat-ui.js', expr: "almaOptionsHTML(player?.almaMater || '')",
     why: "almaOptionsHTML() returns <option> MARKUP by design; both producers escape every interpolation inside it — js/app.js's buildAlmaMaterOptions() uses escHtml() on value and label (the same call the commissioner modal makes), and the unregistered fallback in chat-ui.js uses esc() and is itself a site in this sweep" },
 
+  // SB-24 (2026-10-01) — surfaced by the classifier fix ([9a-2]: a parameter default is not an assignment; it used to
+  // classify the parameter as the literal ''). reactionsHTML(m, self, trailingButtonHTML = '') — two sites (empty-strip
+  // and full-strip returns). It is MARKUP by design: its one caller passes persistentStarHTML(m, self), which returns ''
+  // or a literal <button> whose id/title are esc()'d and whose glyph comes from a literal lookup table — escaping it
+  // would print the button's tags. Reviewer F2: the parameter was RENAMED from the generic `trailing`, because this
+  // match is exact text with no count — a future, unrelated `${trailing}` anywhere in chat-ui.js would have been exempt.
+  { file: 'js/chat-ui.js', expr: 'trailingButtonHTML',
+    why: "reactionsHTML()'s markup parameter: its only caller passes persistentStarHTML(m, self) — '' or a literal <button> with esc()'d attributes and a literal-table glyph (chat-ui.js persistentStarHTML()); escaping it would print the tags" },
   { file: 'js/chat-ui.js', expr: "m.deleted ? '' : whatsNewLinkHTML(m)",
     why: "whatsNewLinkHTML() returns '' or a template whose BOTH interpolations are esc()'d at chat-ui.js:1390; the scanner denies only because the value is String(m.meta?.version || '') and its String() rule accepts String(Number(...)) alone" },
 
@@ -1396,6 +1728,9 @@ const EXEMPTIONS = [
     why: "js/icons.js's icon(name) called with a hard-coded string literal — no data flows through this expression at all, so it cannot carry an injection" },
   { file: 'js/app.js', expr: "icon('calendarWeek', { label: 'ESPN Historical' })",
     why: "js/icons.js's icon(name, opts) called with two hard-coded string literals — no data flows through this expression" },
+  // Breathing Room sweep (2026-10-01) — the submitted-picks "Edit My Picks" button's pencil glyph replaces its ✏️ emoji: icon(name) called with a hard-coded string literal.
+  { file: 'js/app.js', expr: "icon('pencil')",
+    why: "js/icons.js's icon(name) called with a hard-coded string literal — no data flows through this expression at all, so it cannot carry an injection" },
   // STEP B(14) (3c fix window, third pass) — the week wizard's status-button
   // glyph. wizardStatusIconHTML() returns icon(b.icon) or '', where b.icon is
   // a name from js/week-wizard.js's FROZEN module-constant FULL_STATUS_BUTTONS
@@ -1432,7 +1767,8 @@ const EXEMPTIONS = [
   // v0.27.0 fix (2026-09-27) — the header #control-center-trigger fill
   // (renderControlCenterTrigger()): the native Munera mark and the web
   // chevron affordance. Same triviality as icon('close') above.
-  { file: 'js/app.js', expr: "icon('munera')",
+  // Home wiring (2026-10-01): the trigger now fills with the MENU glyph (the Munera mark moved to the center Home tab, index.html's static markup), so this exemption's text follows it.
+  { file: 'js/app.js', expr: "icon('menu')",
     why: "js/icons.js's icon(name) called with a hard-coded string literal — no data flows through this expression at all, so it cannot carry an injection" },
   // DI-393 (UN-353, 2026-09-27) — updateSyncBadge()'s header sync icon.
   // `iconName` is read from SYNC_ICON_BY_STATUS (js/app.js, module scope) —
@@ -1633,7 +1969,9 @@ const NEW_SWEPT_BACKLOG = {
     // `ctx.escHtml(player.almaMater || '')` interpolation is GONE (replaced
     // by the <select> above, whose ctx.bodies.almaMaterOptionsHTML pin
     // carries the escaping now) — the stale pin is removed, not left behind.
-    { d: "2920cdbf16", n: 2, t: "ctx.escHtml(label)" },
+    // SP-52 / DI-452 (2026-10-01) — grew 2 -> 3: the quick Light/Dark row's segment label (`ctx.escHtml(label)` inside renderQuickAppearance()'s seg() — a fixed
+    // 'Light'/'Dark' string, escaped through the SAME injected escHtml every other row-text site uses; xsstest's own [DI-452] sweep keeps the file swept).
+    { d: "2920cdbf16", n: 3, t: "ctx.escHtml(label)" },
     // Finding 6 (app-shell part 3A review, 2026-09-27) — accordionRow()'s new
     // OPTIONAL `secondary` line, escaped through the SAME injected
     // `ctx.escHtml(...)` every other row-text site in this file already uses.
@@ -1643,7 +1981,11 @@ const NEW_SWEPT_BACKLOG = {
     // renderFeedbackRulesGroup()) both gained the SAME chevron every other
     // drill-in row already carries — reusing the identical `chevron` local
     // each function already computes, not a new expression shape.
-    { d: "b55ac8822f", n: 5, t: "chevron" },
+    // SP-53 (2026-10-01) — grew 5 -> 6 and TWO new expressions: renderLeagueGroup()'s "League Settings" row (DI-457) is the same drill-in row every other navigating row is — the same
+    // `chevron` local, and the league's name through the SAME injected `ctx.escHtml(...)` (a text node and a double-quoted aria-label, nowhere else). Pinned, not approved.
+    { d: "b55ac8822f", n: 6, t: "chevron" },
+    { d: "bd86ebceaa", n: 1, t: "ctx.escHtml(name || 'your league')" },
+    { d: "4ac6ebc473", n: 1, t: "ctx.escHtml(name)" },
     { d: "e14d65d016", n: 1, t: "ctx.escHtml(p.target)" },
     { d: "2c7c720cbc", n: 1, t: "ctx.escHtml(p.label)" },
     { d: "3cd021bc86", n: 1, t: "ctx.escHtml(g.label)" },
@@ -1655,8 +1997,21 @@ const NEW_SWEPT_BACKLOG = {
     { d: "9c6bef1bca", n: 1, t: "ctx.escHtml(o.key ?? o.value)" },
     { d: "2a0aa77d30", n: 1, t: "ctx.escHtml(o.label)" },
     { d: "c0d2856b74", n: 1, t: "field" },
-    { d: "d2a1edd66c", n: 1, t: "opts" },
+    // SP-52 / DI-447 (2026-10-01) — the `opts` pin is REMOVED (stale: selectBody() no longer builds a local `opts`) and replaced by the three expressions of its
+    // grouped form, all safe by construction: every <option> label/value and every <optgroup> label goes through the injected `ctx.escHtml(...)`; `inner` is the
+    // joined result of those escaped renders; `list.filter(...).map(opt).join('')` is the pre-escaped `opt` render function (the same shape as the pinned `ctx.bodies.*` injections).
+    { d: "0d4f529237", n: 1, t: "ctx.escHtml(THEME_GROUP_LABELS[g] || g)" },
+    { d: "82efcb5dda", n: 1, t: "list.filter((o) => o.group === g).map(opt).join('')" },
+    { d: "33bf6fbd7c", n: 1, t: "inner" },
+    // SP-52 / DI-452 — the quick row's sun / moon glyphs, the injected icon family like every other glyph in this file (a fixed icon name, never player data).
+    { d: "ad665fbbc9", n: 1, t: "iconOrNothing(ctx, iconName)" },
+    // SP-52 / DI-452 — the quick row's caption (a FIXED string chosen by quickAppearanceModel(): "Set to Dark" / "Matches your phone · Light right now"), escaped through the injected escHtml.
+    { d: "df5215c6ca", n: 1, t: "ctx.escHtml(m.caption)" },
     { d: "ee2a7d5c9d", n: 1, t: "ctx.escHtml(copy)" },
+    // SB-24 integration (2026-10-01) — surfaced by the new classifier ([9a-2], a concise-arrow parameter is no longer treated as a safe local): renderQuickAppearance()'s seg(v, ...)
+    // `data-scheme="${v}"`. v is only ever the literal 'light' or 'dark' from the two seg() calls beside it; it now goes through the SAME injected `ctx.escHtml(...)` every other
+    // row-text site in this file uses (byte-identical output), and the pin records that expression. Pinned, not approved.
+    { d: "3f86b55802", n: 1, t: "ctx.escHtml(v)" },
     // DI-423 AMENDMENT (2026-09-28) — the Profile pane's alma-mater field
     // became the same ESPN <select> the chat-prefs picker/Comm->Players->Edit
     // use; its <option> list arrives pre-built via ctx.bodies.almaMaterOptionsHTML
@@ -1675,7 +2030,8 @@ const NEW_SWEPT_BACKLOG = {
   ],
   'js/leagues-home.js': [
     { d: "3e7b7d75d0", n: 1, t: "roleBadgeHTML(m.role, { leagueId: m.leagueId })" },
-    { d: "0b7aab5601", n: 3, t: "icon('chevronRight')" },
+    // SP-53 (2026-10-01) — grew 3 -> 4: the League Settings row (DI-457) carries the same injected-icon chevron League Standings does.
+    { d: "0b7aab5601", n: 4, t: "icon('chevronRight')" },
     { d: "fd1890afaf", n: 1, t: "glyph" },
     { d: "8b0e1ec23b", n: 2, t: "icon('chevronLeft')" },
     { d: "b4076cf587", n: 1, t: "sportCards" },
@@ -1685,6 +2041,12 @@ const NEW_SWEPT_BACKLOG = {
     //   • the League Page empty state's calendar glyph (`icon('calendarWeek')`, ×2 — commissioner and player variants), the injected icon family like every other glyph in this file.
     { d: "fc7a681517", n: 1, t: "renderCreateLeagueStubCard({ escHtml, icon, open: createOpen === true })" },
     { d: "ef259c9086", n: 2, t: "icon('calendarWeek')" },
+    // SB-24 (2026-10-01) — surfaced by the classifier fix ([9a-2]: a destructured parameter default is not an assignment).
+    // renderLeaguesHome({ notice = '' }) — an already-RENDERED banner by contract (its own header comment): app.js passes
+    // leaguesHomeNoticeHTML(), i.e. league-create.js bannerHTML(), which requires an injected escHtml and escapes its text.
+    // Markup by design, so it is pinned rather than wrapped. (The other surfaced site here, renderComingSoonCard()'s `cls`,
+    // was a class name from two literal callers and is escHtml()'d instead.)
+    { d: "9470e8cec3", n: 1, t: "notice || ''" },
   ],
   'js/icons.js': [
     { d: "2362533504", n: 1, t: "_escAttr(label)" },
@@ -1717,6 +2079,39 @@ function __xssNewSweptCanary(evil) { return \`<div title="\${evil.nsAttr}">\${ev
     assert(poisoned.includes('evil.nsAttr') && poisoned.includes('evil.nsText') && !pinned.has(digest('evil.nsAttr')) && !pinned.has(digest('evil.nsText')),
       `[9c-1c canary] ${file}: a NEW unwrapped site is REPORTED despite the pin (got: ${JSON.stringify(poisoned.slice(-2))})`);
   }
+  // Social Platform v1 Home (security C4, 2026-10-01): the four pure stats / feed modules sweep clean at ZERO with no exemptions, and the zero is a real sweep.
+  // js/home.js (the renderer, S-C6 / DI-374 item 5, 2026-10-01) is the fifth, and the one that builds markup: its zero is the real thing, not an absence of templates.
+  for (const f of ['js/stats-core.js', 'js/stats.js', 'js/feed-cards.js', 'js/feed-caption-lines.js', 'js/home.js']) {
+    assert(sweepFile(f).length === 0, `[9c-1f] ${f} sweeps clean at ZERO backlog, no exemptions (found ${sweepFile(f).length}${sweepFile(f).length ? ': ' + sweepFile(f).slice(0, 4).map(h => `${h.line}:${h.expr.slice(0, 80)}`).join(' | ') : ''})`);
+    const poison = SRC[f] + `
+function __xssHomeCanary(evil) { return \`<b>\${evil.homeText}</b>\`; }`;
+    assert(sweepFile(f, poison).some(h => h.expr === 'evil.homeText'),
+      `[9c-1f canary] ${f}: an unwrapped site added to it IS reported (its zero is a real sweep, not an empty one)`);
+  }
+  // Social Platform News (W9, 2026-10-01): the two news render modules sweep clean at ZERO with no exemptions, the same loop, the same canary.
+  for (const f of ['js/newsCard.js', 'js/newsSettings.js']) {
+    assert(sweepFile(f).length === 0, `[9c-1f] ${f} sweeps clean at ZERO backlog, no exemptions (found ${sweepFile(f).length}${sweepFile(f).length ? ': ' + sweepFile(f).slice(0, 4).map(h => `${h.line}:${h.expr.slice(0, 80)}`).join(' | ') : ''})`);
+    const poison = SRC[f] + `
+function __xssNewsCanary(evil) { return \`<b>\${evil.newsText}</b>\`; }`;
+    assert(sweepFile(f, poison).some(h => h.expr === 'evil.newsText'),
+      `[9c-1f canary] ${f}: an unwrapped site added to it IS reported (its zero is a real sweep, not an empty one)`);
+  }
+  // …and the news modules' zero is a REAL zero for the fields that matter. Remove the esc() from the headline, the aria-label's headline or
+  // the source in a scratch copy of newsCard.js, and from a stored team name in newsSettings.js, and the sweep REPORTS that site (the real files are untouched).
+  {
+    const nc = SRC['js/newsCard.js'], ns = SRC['js/newsSettings.js'];
+    const mut = (src, from, to) => { const out = src.replace(from, to); return out !== src ? out : null; };
+    const m1 = mut(nc, '<p class="news-card__headline">${esc(headline)}</p>', '<p class="news-card__headline">${headline}</p>');
+    const m2 = mut(nc, 'aria-label="${esc(headline)}, ${esc(source)}"', 'aria-label="${headline}, ${esc(source)}"');
+    const m3 = mut(nc, '<span class="news-card__pub">${esc(source)}</span>', '<span class="news-card__pub">${source}</span>');
+    const m4 = mut(nc, 'data-news-id="${esc(id)}"', 'data-news-id="${id}"');
+    const m5 = mut(ns, 'data-team="${esc(team)}"', 'data-team="${team}"');
+    assert(!!m1 && sweepFile('js/newsCard.js', m1).some(h => h.expr === 'headline'), '[9c-1f-m1] MUTATION: removing esc() from the news card headline IS reported by the sweep');
+    assert(!!m2 && sweepFile('js/newsCard.js', m2).some(h => h.expr === 'headline'), '[9c-1f-m2] MUTATION: removing esc() from the aria-label headline IS reported');
+    assert(!!m3 && sweepFile('js/newsCard.js', m3).some(h => h.expr === 'source'), '[9c-1f-m3] MUTATION: removing esc() from the publisher IS reported');
+    assert(!!m4 && sweepFile('js/newsCard.js', m4).some(h => h.expr === 'id'), '[9c-1f-m4] MUTATION: removing esc() from data-news-id IS reported');
+    assert(!!m5 && sweepFile('js/newsSettings.js', m5).some(h => h.expr === 'team'), '[9c-1f-m5] MUTATION: removing esc() from a stored team name (data-team) IS reported');
+  }
   // …and week-wizard.js's zero is not vacuous: the same poison is reported there too.
   const wwPoison = SRC['js/week-wizard.js'] + `
 function __xssWwCanary(evil) { return \`<b>\${evil.wwText}</b>\`; }`;
@@ -1748,6 +2143,15 @@ const LEAGUE_CREATE_BACKLOG = [
   { d: "a546c9b413", n: 1, t: "icon('share')" },
   { d: "949b2ddaaf", n: 1, t: "icon('plus')" },
   { d: "2c70e12b7a", n: 1, t: "key" },
+  // SB-24 (2026-10-01) — surfaced by the classifier fix ([9a-2]); both are parameters that carry MARKUP, not text:
+  //   lead        navBarHTML()'s `btn(side, action, label, { disabled = false, lead = '' })` — the Back button's leading glyph:
+  //               its one caller passes a literal `<span class="lc-nav-ic" aria-hidden="true">` wrapping icon('chevronLeft') (the
+  //               injected icon family); every other call omits it. Escaping it would print the <svg>.
+  //   actionAttr  actionSheetHTML({ actionAttr = 'data-lc-action' }) — an attribute NAME (three sites: scrim, danger, cancel).
+  //               Its two callers pass the literals 'data-lc-action' (default) and 'data-ax-action'. escHtml() cannot make an
+  //               attribute NAME safe (it leaves spaces and `=` alone), so wrapping it would be theatre, not a defence.
+  { d: "e3456bc1f4", n: 1, t: "lead" },
+  { d: "159d3565b5", n: 3, t: "actionAttr" },
 ];
 {
   const digest = e => createHash('sha256').update(e).digest('hex').slice(0, 10);
@@ -1776,6 +2180,91 @@ function __xssLcCanary(evil) { return \`<div title="\${evil.nsAttr}">\${evil.nsT
     '[9c-1e canary] js/league-create.js: a NEW unwrapped site is REPORTED despite the pin');
   console.log(`     ℹ js/league-create.js backlog: ${hits.length} sites (pinned: ${LEAGUE_CREATE_BACKLOG.reduce((a, b) => a + b.n, 0)} / ${LEAGUE_CREATE_BACKLOG.length} expressions) — pinned, not approved`);
 }
+
+// [9c-1g] SP-53 (security C-U2, 2026-10-01) — js/league-settings-view.js is SWEPT ON ITS OWN, as a ratchet (the shape of [9c-1e]). It renders a league name and a person's display name
+// (the page, the confirmation sheets, the hand-off sheet's `handedLine`) and Waive's `data-ob-id`, and until now it was only READ by this suite (RESOLVABLE, so a call from a swept file
+// can be followed into it): nothing swept its own interpolations, so unescaping any of them stayed green. (`[9c-1f]` is the Home modules' label on release; this block takes the next
+// free one.) Its parameters are NAMED `icon` and `escHtml` (injected, the leagues-home.js style), so like league-create.js its own sweep leaves a small set the classifier cannot resolve:
+// every site below is safe by construction — `icon('…')` is the injected family with a string-literal key, `NAME_MAX` is a number, `p.className` / `p.innerHTML` are the Save button's
+// parts (a class list of literals; markup built from escHtml()-wrapped copy and icon()), and `chev` / `commRow` / `more` / `err` / `notice` / `picker` are fragments already built from
+// escHtml()-wrapped parts or from the shared builders' own escaped output (league-create.js `bannerHTML`, account-exit.js `pickerHTML`, each with its own sweep and its own required
+// escHtml). Every value that can carry a person's text (the league name, a display name, `handedLine`, an obligation id) goes through escHtml() and is therefore NOT in this list —
+// that absence is the point, and the two mutations below prove it.
+const LEAGUE_SETTINGS_VIEW_BACKLOG = [
+  { d: "714bcef005", n: 2, t: "icon('check')" },
+  { d: "9aae8c6a98", n: 1, t: "p.className" },
+  { d: "125ff08337", n: 1, t: "p.innerHTML" },
+  { d: "4497f029c1", n: 1, t: "NAME_MAX" },
+  { d: "4b529285fb", n: 1, t: "icon('clear')" },
+  { d: "6e3f792925", n: 1, t: "icon('pause')" },
+  { d: "0b7aab5601", n: 1, t: "icon('chevronRight')" },
+  { d: "b500c567d5", n: 2, t: "chev" },
+  { d: "a651093b0c", n: 1, t: "commRow" },
+  { d: "8b0e1ec23b", n: 1, t: "icon('chevronLeft')" },
+  { d: "187897ce0a", n: 1, t: "more" },
+  { d: "856c5963db", n: 1, t: "icon('close')" },
+  { d: "875ebb8ad0", n: 1, t: "lcBannerHTML('err', h.error, { escHtml, icon })" },
+  { d: "d9eb253e06", n: 1, t: "err" },
+  { d: "9368a7d21e", n: 1, t: "notice" },
+  { d: "cb031aec54", n: 1, t: "picker" },
+];
+{
+  const digest = e => createHash('sha256').update(e).digest('hex').slice(0, 10);
+  const LSV_SRC = SRC['js/league-settings-view.js'];
+  const hits = sweepFile('js/league-settings-view.js');
+  const pinned = new Map(LEAGUE_SETTINGS_VIEW_BACKLOG.map(b => [b.d, b]));
+  const live = new Map();
+  for (const h of hits) { const d = digest(h.expr); live.set(d, (live.get(d) || 0) + 1); }
+  assert(pinned.size === LEAGUE_SETTINGS_VIEW_BACKLOG.length && LEAGUE_SETTINGS_VIEW_BACKLOG.every(b => Number.isInteger(b.n) && b.n >= 1),
+    '[9c-1g-a] js/league-settings-view.js: every pin is well-formed and no digest is pinned twice');
+  const added = hits.filter(h => !pinned.has(digest(h.expr)));
+  assert(added.length === 0,
+    `[9c-1g-b] js/league-settings-view.js: NO NEW unclassified interpolation (zero beyond the pinned injected-family sites) — new: ${added.map(h => `${h.line}:${h.expr.slice(0, 90)}`).join(' | ')}`);
+  const grew = [...live.entries()].filter(([d, n]) => pinned.has(d) && n > pinned.get(d).n).map(([d, n]) => `${pinned.get(d).t.slice(0, 60)} (pinned ${pinned.get(d).n}, now ${n})`);
+  assert(grew.length === 0, `[9c-1g-c] js/league-settings-view.js: NO ADDITIONAL site reuses a pinned expression — grew: ${grew.join(' | ')}`);
+  const shrunk = LEAGUE_SETTINGS_VIEW_BACKLOG.filter(b => (live.get(b.d) || 0) < b.n).map(b => `${b.t.slice(0, 60)} (pinned ${b.n}, now ${live.get(b.d) || 0})`);
+  assert(shrunk.length === 0, `[9c-1g-d] js/league-settings-view.js: the pinned backlog is current — stale pins hide the next regression: ${shrunk.join(' | ')}`);
+  // The values that carry a person's text are NOT pinned: they are wrapped. Proof by mutation on an in-memory copy (never the file on disk): unescape the hand-off sheet's `handedLine`
+  // (the giver's chosen successor's DISPLAY NAME is inside it) and Waive's `data-ob-id` (an obligation id) — the sweep must report each.
+  const handed = LSV_SRC.replace('${escHtml(AX.handedLine(h.handedName, league))}', '${AX.handedLine(h.handedName, league)}');
+  assert(handed !== LSV_SRC && sweepFile('js/league-settings-view.js', handed).some(h => /handedLine/.test(h.expr)),
+    '[9c-1g-e] MUTATION: removing escHtml() from the hand-off sheet\'s `handedLine` (a display name) IS reported by the sweep');
+  const obId = LSV_SRC.replace('data-ob-id="${escHtml(obId)}" data-ob-action="waive"', 'data-ob-id="${obId}" data-ob-action="waive"');
+  assert(obId !== LSV_SRC && sweepFile('js/league-settings-view.js', obId).some(h => h.expr === 'obId'),
+    '[9c-1g-f] MUTATION: removing escHtml() from Waive\'s `data-ob-id` attribute IS reported by the sweep');
+  const name = LSV_SRC.replace('value="${escHtml(name || \'\')}"', 'value="${name || \'\'}"');
+  assert(name !== LSV_SRC && sweepFile('js/league-settings-view.js', name).some(h => /name/.test(h.expr)),
+    '[9c-1g-g] MUTATION: removing escHtml() from the league name echoed into the name field\'s value attribute IS reported by the sweep');
+  const POISON = LSV_SRC + `
+function __xssLsvCanary(evil) { return \`<div title="\${evil.lsAttr}">\${evil.lsText}</div>\`; }`;
+  assert(sweepFile('js/league-settings-view.js', POISON).some(h => h.expr === 'evil.lsAttr') && sweepFile('js/league-settings-view.js', POISON).some(h => h.expr === 'evil.lsText'),
+    '[9c-1g canary] js/league-settings-view.js: a NEW unwrapped site is REPORTED despite the pin');
+  // EVERY escHtml()-wrapped interpolation, unwrapped one at a time in an in-memory copy, must be reported — except the named sites below, which the classifier calls safe for a stated reason.
+  // This is what found `obId`: a destructured DEFAULT (`obId = ''`) reads to the classifier as an assignment of a string literal, so an unwrapped default-valued parameter is silently "safe".
+  // The two exceptions are not person text: `nameCountText(len)` is a number rendered as a string, and `phase` is the switch row's closed enum (app.js sets it from code constants only).
+  const SILENT_OK = new Map([['nameCountText(len)', 'a number formatted by num(): digits and a slash'], ['phase', 'a closed enum set from code constants (loading / on / off / toggling / failed / paused)']]);
+  const silent = []; let wrapped = 0;
+  for (const m of LSV_SRC.matchAll(/\$\{escHtml\(/g)) {
+    let i = m.index + m[0].length, depth = 1;
+    while (i < LSV_SRC.length && depth > 0) { const c = LSV_SRC[i]; if (c === '(') depth++; else if (c === ')') depth--; i++; }
+    if (LSV_SRC[i] !== '}') continue;
+    const inner = LSV_SRC.slice(m.index + m[0].length, i - 1);
+    wrapped++;
+    const mutated = LSV_SRC.slice(0, m.index) + '${' + inner + '}' + LSV_SRC.slice(i + 1);
+    if (!sweepFile('js/league-settings-view.js', mutated).some(h => !pinned.has(digest(h.expr))) && !SILENT_OK.has(inner)) silent.push(`${LSV_SRC.slice(0, m.index).split('\n').length}:${inner.slice(0, 60)}`);
+  }
+  assert(wrapped >= 40 && silent.length === 0,
+    `[9c-1g-i] MUTATION SWEEP: each of the ${wrapped} escHtml()-wrapped interpolations in js/league-settings-view.js, unwrapped in a copy, is reported by the sweep (silent: ${silent.join(' | ') || 'none'}) — a parameter with a literal default would hide one`);
+  console.log(`     ℹ js/league-settings-view.js backlog: ${hits.length} sites (pinned: ${LEAGUE_SETTINGS_VIEW_BACKLOG.reduce((a, b) => a + b.n, 0)} / ${LEAGUE_SETTINGS_VIEW_BACKLOG.length} expressions) — pinned, not approved`);
+
+  // The pure text half builds NO markup at all (it is plain strings, so the page owns every escape): no tag, no escHtml, no HTML sink in its code (comments stripped).
+  const LS_CODE = SRC['js/league-settings.js'].replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"\\])\/\/[^\n]*/g, '$1');
+  assert(!/<\/?[a-zA-Z][^>]*>/.test(LS_CODE) && !/\bescHtml\b|\binnerHTML\b|\bouterHTML\b|insertAdjacentHTML/.test(LS_CODE),
+    '[9c-1g-h] js/league-settings.js builds NO markup: no tag, no escHtml, no innerHTML/outerHTML/insertAdjacentHTML in its code (it returns plain strings; the page escapes them)');
+  const LS_POISON = LS_CODE + '\nexport const __poison = (n) => `<b>${n}</b>`;';
+  assert(/<\/?[a-zA-Z][^>]*>/.test(LS_POISON), '[9c-1g-h canary] …and the same check DOES catch a markup template added to it');
+}
+
 
 // [9c-1b] SECURITY F3 (pass-2, 2026-09-25) — `js/admin-panel.js` was already in
 // `SWEPT`/`RESOLVABLE` (SECURITY GATE FINDING 4), but neither the [9c-1] bare
@@ -1895,6 +2384,28 @@ function __xssAdminPanelCanary(evil) { return \`<div title="\${evil.apAttr}">\${
 // suite stayed green. Both release gates reproduced it (reviewer F1 /
 // security-reviewer F3-2a).
 const APP_BACKLOG = [
+  // SB-24 (2026-10-01) — SEVEN sites the classifier fix SURFACED ([9a-2]: a parameter is not an assignment). Every one is a
+  // RAW-MARKUP PARAMETER: its job is to carry markup or an attribute fragment, so escaping it would print the tags, and each is
+  // filled only by internal callers that build the value from literals or already-escaped parts. Pinned, not approved — the
+  // ratchet still tightens, and a second `${…}` on any of these names fails (c).
+  //   errorHTML          scribeMemoryRowHTML(row, errorHTML = '') — its one caller passes errAt('row', row.id), whose only
+  //                      non-empty return is `<p …>${escHtml(e.message)}</p>`.
+  //   extraAttrs         teamLogoImgHTML(url, cssClass, extraAttrs = '') — all three callers pass the literal 'loading="lazy" '.
+  //   openAtDescribedBy  renderWeekWizardTimingFieldsHTML(…, openAtDescribedBy = '') — Step 4 passes the literal
+  //                      ' aria-describedby="wiz-open-at-error"' or ''; Manage passes nothing.
+  //   guardHTML          …(…, guardHTML = '', …) — Step 4's `<div id="wiz-open-at-guard">…</div>`, whose only content is
+  //                      renderStep4BlurbGuardHTML() (every string in it escHtml()'d) or ''.
+  //   sheetAttrs         mountSheetShell({ sheetAttrs = '' }) — two callers, both literal role/aria-modal/aria-labelledby strings.
+  //   headerInnerHTML    mountSheetShell({ headerInnerHTML = '' }) — three callers, each a LITERAL markup string (two empty nav
+  //                      mounts, the week wizard's fixed title + close button).
+  //   afterHeaderHTML    mountSheetShell({ afterHeaderHTML = '' }) — one caller, the literal '<div id="week-wizard-step-tracker"></div>'.
+  { d: "de8cd312a5", n: 1, t: "errorHTML" },
+  { d: "df90b5e1e7", n: 1, t: "extraAttrs" },
+  { d: "dbd58c0de4", n: 1, t: "openAtDescribedBy" },
+  { d: "68a69908fa", n: 1, t: "guardHTML" },
+  { d: "ac9736f2e7", n: 1, t: "sheetAttrs" },
+  { d: "9f114d5cbe", n: 1, t: "headerInnerHTML" },
+  { d: "ecd063bf7a", n: 1, t: "afterHeaderHTML" },
   // N1 league creation (DI-430, 2026-09-30) — SEVEN sites, all SAFE BY CONSTRUCTION but not provable by this classifier: each interpolates markup that ANOTHER function has
   // already escaped. js/league-create.js's renderers (bannerHTML, inviteLinkNoteHTML, claimInsteadHTML, landingCreateCardHTML, entryCardHTML) REQUIRE an injected escHtml and
   // throw without one (leaguecreatetest [5ah]), and every string they emit passes through it (its own sweep, [9c-1e]); leaguesHomeNoticeHTML() and `inviteNotice` are
@@ -1942,10 +2453,11 @@ const APP_BACKLOG = [
   { d: "b393df2a8d", n: 1, t: "disp.badgeClass" },
   { d: "c8268a17f9", n: 1, t: "espn" },
   { d: "95e27bcfc7", n: 1, t: "fetchMethod" },
-  { d: "e3559de245", n: 2, t: "g.gameId" },
-  { d: "648cec5be4", n: 1, t: "g.status" },
+  // SB-24 security F2 (2026-10-01) — "e3559de245" g.gameId (n 2), "648cec5be4" g.status (n 1) and "ac8c754b7b"
+  // game.gameId (n 6) REMOVED, not left stale: every id-in-attribute site (renderGameCard's card + both pick buttons,
+  // the batch-grid row, the Games-tab Edit/Lock/Remove buttons, the game <option>) and the option's status text are
+  // escHtml()'d now. games.id is commissioner-writable text; a `"` in it closed the attribute (xsstest [10i]).
   { d: "a4123a3327", n: 1, t: "game.espnEventId ? `<a class=\"espn-link\" href=\"https://www.espn.com/${game.isManual && game.espn…" },
-  { d: "ac8c754b7b", n: 6, t: "game.gameId" },
   // "60a52e8c9d" game.status (n 2) RETIRED fix-final-v0270 (2026-09-28) — the
   // one site (game row status badge, class + text) is escHtml()'d now.
   { d: "86c3e75df5", n: 1, t: "gameId" },
@@ -1962,7 +2474,12 @@ const APP_BACKLOG = [
   // one caller, "➕ New Week", was a duplicate entry point for the wizard's
   // own week-wizard-entry-btn — see js/app.js's DI-355 comment at its old
   // location). Zero hits now; a stale pin would hide the next regression.
-  { d: "767e85a142", n: 1, t: "groupRows.map(({gid,label,winner,loser})=>{ // UN-126 — presence of an obligation for this gid n…" },
+  // SP-56 (2026-09-30, Standings fit) — "767e85a142" (the OLD Weekly History
+  // `groupRows.map(({gid,label,winner,loser})=>{…})` row template, one giant
+  // unclassified expression) REMOVED, not left stale: the rows are built by
+  // historyGroupHTML() now, whose every interpolation classifies (escHtml,
+  // numHtml, literals, and the two string-returning obligation halves that the
+  // sweep resolves through their callee's returns). Zero hits on that text.
   { d: "81d121bc48", n: 1, t: "guesses || '<span class=\"text-muted\">none yet</span>'" },
   // v0.27.0 UX Revamp post-deploy pass (2026-09-27, DI-359) —
   // renderFinalizeStep1HTML()'s (js/app.js) no-games fallback: `rows` is
@@ -1995,7 +2512,7 @@ const APP_BACKLOG = [
   { d: "ef9b3a568e", n: 1, t: "latest.metrics.rewriteCount" },
   { d: "9ab9a9a1fd", n: 1, t: "metricsBlock" },
   { d: "e642b12901", n: 1, t: "mode" },
-  { d: "e46b320165", n: 1, t: "msg" },
+  // SB-24 (2026-10-01) — "e46b320165" msg (n 1) REMOVED with "title" below: emptyState() escapes all three now.
   { d: "1119094d5a", n: 1, t: "multiDay && day.name ? `${escHtml(day.name)} · ${wl}` : wl" },
   { d: "1b16b1df53", n: 1, t: "n" },
   // n bumped 1 -> 2, v0.27.0 UX Revamp post-deploy pass (2026-09-27, DI-358)
@@ -2009,11 +2526,21 @@ const APP_BACKLOG = [
   { d: "65082ecc44", n: 1, t: "ob.obligationId" },
   { d: "46f8adf6c9", n: 2, t: "obClass" },
   { d: "d4e7fc3c11", n: 1, t: "onSlate ? `<div class=\"flex gap-sm flex-center\"> <span class=\"badge badge-open\">✓ On Slate</span…" },
-  { d: "861494edbb", n: 1, t: "onSlate ? `<span class=\"badge badge-open\">✓ On Slate</span>` : `<button class=\"btn btn-primary b…" },
+  // SB-24 (2026-10-01) — SAME expression, same single pinned site, EXACT same debt (the nested-template `$` the
+  // lexer cannot resolve): its text changed only because its `data-idx="${i}"` is now `${numHtml(i)}` (the index
+  // param SB-24's classifier fix surfaced), so the digest moved ("861494edbb" -> "e83edd93e7").
+  { d: "e83edd93e7", n: 1, t: "onSlate ? `<span class=\"badge badge-open\">✓ On Slate</span>` : `<button class=\"btn btn-primary b…" },
   { d: "18f3f2139f", n: 1, t: "openCount" },
-  { d: "b6e59d5ca1", n: 1, t: "openRows.length ? openRows.map(r => { const status = ob2025Status(paidMap, r.obligationId); retu…" },
+  // SP-56 (2026-09-30) — the Standings 2K25 Outstanding card's row template. SAME expression, same single pinned site, EXACT same debt: its text changed only because the
+  // call inside it now passes `withUndo: false` (Amendment 1, "undo com only") and carries a dated comment, so the digest moved
+  // ("b6e59d5ca1" -> "deaf49c4be"). Nothing was added to the backlog by this edit and nothing was waved through.
+  // Breathing Room sweep (2026-10-01) — RE-PINNED, not added: deaf49c4be -> 82af3790a6 -> b78bc68c9e. The expression text is the 2K25 Outstanding card's row map; the sweep wrapped
+  // its action markup in <div class="ob-actions"> and moved the row's padding to 8px (82af3790a6), then gave that one card's group the .ob-actions-tap modifier for the 44pt tap
+  // floor (reviewer N3, b78bc68c9e), so the digest of the SAME single site changed. Still n:1, still one expression, no new debt.
+  { d: "b78bc68c9e", n: 1, t: "openRows.length ? openRows.map(r => { const status = ob2025Status(paidMap, r.obligationId); retu…" },
   { d: "3b27b3ba43", n: 13, t: "p.playerId" },
-  { d: "df8641f3a0", n: 4, t: "pageKey" },
+  // n LOWERED 4 -> 3, SP-57 (2026-10-01): the retired Edit-layout button and instruction strip each carried one `data-layout-page="${pageKey}"`; the survivors are the hidden Up, Down and Reset-twin buttons in composeSections() (a constant "dashboard" | "standings" key, never data).
+  { d: "df8641f3a0", n: 3, t: "pageKey" },
   { d: "0e5dfc9af6", n: 1, t: "parts[id]" },
   { d: "62a2fed3d6", n: 1, t: "pending" },
   { d: "98df4506a5", n: 1, t: "pickCells" },
@@ -2026,7 +2553,10 @@ const APP_BACKLOG = [
   // rather than restructured, matching this backlog's existing precedent
   // for other pre-composed-HTML-chunk variables (e.g. "standComposed.html").
   { d: "d3f33f86ff", n: 1, t: "pickShapedScope" },
-  { d: "633ed3870b", n: 1, t: "players.filter(p=>p.active).map(p=>{ const nick=getNickname(week.weekId,p.playerId)||''; return`…" },
+  // SB-24 security F2 (2026-10-01) — SAME expression, same single pinned site, EXACT same debt (its `p.playerId`
+  // attribute): its text changed only because the Save button's data-week-id is now `${escHtml(week.weekId)}`, so the
+  // digest moved ("633ed3870b" -> "608f2660cf").
+  { d: "608f2660cf", n: 1, t: "players.filter(p=>p.active).map(p=>{ const nick=getNickname(week.weekId,p.playerId)||''; return`…" },
   { d: "2db8bd1d98", n: 1, t: "players.map(p => { const sub = week ? hasPlayerSubmitted(week.weekId, p.playerId) : false; const…" },
   { d: "69fedf42f3", n: 1, t: "players.map(p=>{ const pin = getPlayerPin(p.playerId); return ` <div class=\"player-admin-row\" da…" },
   // v0.27.0 UX Revamp post-deploy pass (2026-09-27, DI-352) — n bumped 1 -> 2:
@@ -2064,16 +2594,13 @@ const APP_BACKLOG = [
   { d: "a3e20e78ce", n: 1, t: "s.cfpQF" },
   { d: "da49d8d1ad", n: 1, t: "s.cfpR1" },
   { d: "b4e623554c", n: 1, t: "s.conf" },
-  { d: "648f905dc5", n: 2, t: "s.currentRank" },
+  // SP-56 (2026-09-30, Standings fit) — "648f905dc5" s.currentRank (n 2), "6fc3671425" s.totalCorrect, "04ee9b0245" s.totalIncorrect, "2d6dfc8094" s.weeklyLosses,
+  // "31c9874cb8" s.weeklyWins and "633597e445" s.winPct (n 1 each) REMOVED, not left stale: the Season Summary rows go through numHtml() now (a zero must print as 0 —
+  // escHtml(0) is '' — so these are coerced, never wrapped in escHtml, and never waved through). Six numeric backlog pins retired by the change that needed them gone.
   { d: "5e06de0ec2", n: 1, t: "s.extraPt" },
   { d: "ba5b6b4862", n: 1, t: "s.reg" },
   { d: "ceccb49114", n: 1, t: "s.semis??'DNP'" },
   { d: "fed210a099", n: 1, t: "s.total" },
-  { d: "6fc3671425", n: 1, t: "s.totalCorrect" },
-  { d: "04ee9b0245", n: 1, t: "s.totalIncorrect" },
-  { d: "2d6dfc8094", n: 1, t: "s.weeklyLosses" },
-  { d: "31c9874cb8", n: 1, t: "s.weeklyWins" },
-  { d: "633597e445", n: 1, t: "s.winPct" },
   { d: "913cbdc64e", n: 1, t: "settings.season" },
   { d: "489a3892a1", n: 1, t: "showFilter ? ` <div class=\"ob-filter-tabs mb-sm\"> <button type=\"button\" class=\"ob-filter-tab${fi…" },
   { d: "e68d705100", n: 1, t: "slateMatch?slateMatch.gameId:''" },
@@ -2092,7 +2619,8 @@ const APP_BACKLOG = [
   { d: "05e7c62dfb", n: 2, t: "tally.pendingWeeks" },
   { d: "4e019a2921", n: 1, t: "tally.pendingWeeks === 1 ? `${tally.pendingWeeks} week isn't counted yet.` : `${tally.pendingWee…" },
   { d: "14dcb0dcd3", n: 1, t: "thisWeek.length ? groupGameRequests(thisWeek).map(rowHTML).join('') : `<p class=\"text-muted text…" },
-  { d: "aaf2320646", n: 1, t: "title" },
+  // SB-24 (2026-10-01) — "aaf2320646" title (n 1) REMOVED, not left stale: emptyState()'s three interpolations
+  // (icon, title, msg) are escHtml()'d now — its one caller passes literals, so the escape is free.
   { d: "11239872d1", n: 2, t: "total" },
   { d: "153c0369aa", n: 1, t: "totalUnfiltered" },
   { d: "1a08b06f0b", n: 2, t: "tz.key" },
@@ -2133,9 +2661,15 @@ const APP_BACKLOG = [
   // "a61321bcae" week.status / "33d65aca32" week.status.toUpperCase() (n 1
   // each) RETIRED fix-final-v0270 (2026-09-28) — the header's own status badge
   // (refreshHeader(), class + text) is escHtml()'d now, same as viewWeek's.
-  { d: "a5d9936b85", n: 1, t: "week.weekId" },
+  // SB-24 security F2 (2026-10-01) — "a5d9936b85" week.weekId (n 1) REMOVED: the nickname Save button's data-week-id
+  // is escHtml()'d now. The `weekId` / `gameId` pins (app.js reaction-strip, one site each) STAY: that template is a CSS
+  // SELECTOR assigned to a local, not markup, and escHtml() is the wrong escape for a selector (CSS.escape() is the right
+  // one) — recorded as a follow-up rather than mis-fixed here.
   { d: "7cc1eb0858", n: 1, t: "weekId" },
-  { d: "04176e6538", n: 1, t: "wkNames.map(n=>{ const arr=SEASON_2025.weeklyScores[n]; return `<tr><td class=\"player-name-cell\"…" },
+  // SB-24 (2026-10-01) — SAME expression, same single pinned site, EXACT same debt (`arr` reads the member expression
+  // SEASON_2025.weeklyScores[n]): its text changed only because the baked 2K25 cell `${v}` is now `${numHtml(v)}`
+  // (every value is a number, so the output is byte-identical), so the digest moved ("04176e6538" -> "f944c5f374").
+  { d: "f944c5f374", n: 1, t: "wkNames.map(n=>{ const arr=SEASON_2025.weeklyScores[n]; return `<tr><td class=\"player-name-cell\"…" },
   { d: "9d709a05ea", n: 1, t: "wl" },
   { d: "816415a13a", n: 1, t: "x.cls" },
   // "x.label" (was pinned e6b1b31a8d) REMOVED, reviewer round 3 item 5
@@ -2266,6 +2800,37 @@ const sumZero = app.renderScoreSummaryRowsHTML(
 assert(/>0 \(Δ0\)</.test(sumZero),
   `[9d] a 0 guess with a 0 delta still reads "0 (Δ0)" — the zero guard, one column over (got: ${JSON.stringify((sumZero.match(/text-muted text-sm">([^<]*)</) || [])[1])})`);
 
+// [9e] SP-54 / DI-468 (2026-10-01) — the tie-reason caption under the Dashboard's winner / loser row. The names, the neighbour's name and the school printed all come
+// from SYNCED data (a player's display name, a game row's team name), and the descriptor itself comes from `results.extra` (commissioner-writable, older clients can shape
+// it): validated first (SC-K6), constant-led, clipped, escaped at the sink, and NEVER placed in an attribute.
+console.log('\n[9e] SP-54 — hostile names and a hostile school through the Dashboard tie caption…');
+{
+  const finalWk = { ...wk, status: 'final' };
+  const pl = [{ playerId: 'xss_w', displayName: PAYLOAD, active: true }, { playerId: 'xss_l', displayName: `Other ${PAYLOAD}`, active: true }];
+  const mk = (pid, over) => ({ playerId: pid, rank: 1, correctPicks: 5, incorrectPicks: 1, tiebreakerGuess: null, tiebreakerDelta: null, isWinner: false, isLoser: false, wonByTiebreaker: false, ...over });
+  const hostileTeam = `=cmd|' /C calc'!A0 ${PAYLOAD}`;
+  const winner = mk('xss_w', { isWinner: true, tieBreak: { v: 1, end: 'winner', stage: 'alma', vs: 'xss_l', src: 'snapshot',
+    me: { team: PAYLOAD, cov: 1, mis: 0, psh: 0, src: 'snapshot' }, other: { team: hostileTeam, cov: 0, mis: 1, psh: 0, src: 'snapshot' } } });
+  const loser = mk('xss_l', { rank: 2, isLoser: true, tieBreak: { v: 1, end: 'loser', stage: 'tiebreaker', vs: 'xss_w', me: { delta: 7 }, other: { delta: 3 } } });
+  const html = app.renderScoreSummaryRowsHTML(finalWk, [winner, loser], pl, null);
+  assert(/tie-note-row/.test(html) && /class="tie-note"/.test(html), 'fixture: the tie caption rows actually rendered for a final week');
+  assert(!/<img/i.test(html), '[9e] renderScoreSummaryRowsHTML: no live <img from a hostile name, school or neighbour in the caption');
+  assert(/&lt;img/.test(html), '[9e] …the payload is present as ESCAPED text');
+  assert(/<p class="tie-note">Won the tie: /.test(html) && /<p class="tie-note">Last on the tie: /.test(html), '[9e] every caption BEGINS with a fixed constant, never with data');
+  assert(!/(title|aria-label|data-[a-z-]+)="[^"]*(Won the tie|Last on the tie|onerror)/i.test(html), '[9e] no descriptor field reaches an attribute (no title, aria-label or data-*)');
+  // the guard: a viewer who may not see standing sees no reason
+  const hidden = app.renderScoreSummaryRowsHTML({ ...wk, status: 'open' }, [winner, loser], pl, null);
+  assert(!/tie-note|Won the tie|Last on the tie/.test(hidden), '[9e] an OPEN week (rank hidden) shows NO caption — the reason rides hideStanding');
+  // an invalid / forged descriptor is treated as absent: no caption, and the old (TB) tag is the only fallback
+  const forged = mk('xss_w', { isWinner: true, wonByTiebreaker: true, tieBreak: { v: 2, end: 'winner', stage: 'alma', vs: 'xss_l', me: { team: PAYLOAD }, other: {} } });
+  const forgedHtml = app.renderScoreSummaryRowsHTML(finalWk, [forged], pl, null);
+  assert(!/tie-note/.test(forgedHtml) && /\(TB\)/.test(forgedHtml), '[9e] a descriptor with the wrong version is ignored: no caption, and the (TB) fallback shows for a wonByTiebreaker row');
+  const wrongEnd = mk('xss_l', { rank: 2, isLoser: true, tieBreak: { v: 1, end: 'winner', stage: 'draw', vs: 'xss_w', me: null, other: null } });
+  const wrongEndHtml = app.renderScoreSummaryRowsHTML(finalWk, [winner, wrongEnd], pl, null);
+  assert((wrongEndHtml.match(/tie-note-row/g) || []).length === 1 && !/Dead heat/.test(wrongEndHtml),
+    '[9e] a descriptor whose `end` is not the row\'s own end (a loser row carrying a winner descriptor) is ignored: only the winner\'s caption renders')
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 // [10] C5 — game.espnEventId
 //
@@ -2337,34 +2902,162 @@ const parsedIds = (parsed.games || []).map(g => g.espnEventId);
 assert(parsedIds.length === 2, `fixture: both events parsed (got ${parsedIds.length})`);
 assert(parsedIds.includes('401520999'), '[10d] a legitimate all-digits id is kept verbatim');
 assert(!parsedIds.some(id => /[<>"'&\/\\ ]/.test(String(id))),
-  `[10d] an id carrying any markup-forming character never reaches game.espnEventId — it is dropped to '' (got: ${JSON.stringify(parsedIds)})`);
+  `[10d] an id carrying any markup-forming character never reaches game.espnEventId (got: ${JSON.stringify(parsedIds)})`);
+assert(parsedIds.filter(id => id === null).length === 1 && !parsedIds.includes(''),
+  `[10d] …it is dropped to null — "no id" to every reader — never to '' (got: ${JSON.stringify(parsedIds)})`);
 assert(warned.some(w => /espnEventId/i.test(w)),
   `[10d] and the drop is announced on the console rather than happening silently (got: ${JSON.stringify(warned.slice(0, 3))})`);
 
-// [10e] The rule is a CHARACTER allow-list, not digits-only, ON PURPOSE: the
-// id is the join key between a parsed game and a stored one, so dropping an
-// inert-but-unusual id would cost that game its live scores while protecting
-// nothing the render-site escaping does not already cover. An inert id is
-// KEPT — and warned about, so a genuine ESPN schema change is still visible.
+// [10e] SB-24 (2026-10-01, coordinator ruling: option (a)) — THE RULE IS DIGITS
+// ONLY, 1-20, the set migration 0040's CHECK on games.espn_event_id accepts.
+// Round 2 (2026-09-12) kept an "inert" non-digit id here, so an unusual id
+// would not cost a game its live scores. With 0040 in place the server REFUSES
+// such a game outright — a hard write failure for the whole games key — so the
+// parser now drops anything that is not 1-20 digits, to null, and warns. ESPN's
+// event ids are digits by definition; a change in that is still visible on the
+// console, it just no longer reaches a row the server would refuse.
 const warned2 = [];
 console.warn = (...a) => { warned2.push(a.join(' ')); };
 globalThis.fetch = async () => ({ ok: true, json: async () => ({ events: [espnEvent('espn_evt_401520000')] }) });
 const parsed2 = await provider.fetchCurrentCFBGames();
 console.warn = realWarn;
 globalThis.fetch = async () => { throw new Error('network disabled in xsstest'); };
-assert(parsed2.games?.[0]?.espnEventId === 'espn_evt_401520000',
-  `[10e] an inert non-numeric id is KEPT so score-refresh matching still works (got: ${JSON.stringify(parsed2.games?.[0]?.espnEventId)})`);
-assert(warned2.some(w => /non-numeric/i.test(w)),
-  '[10e] …and is warned about, because ESPN itself only ever sends digits');
-for (const hostile of ['401<img src=x>', '401" onload="x', "401' onload='x", '401&lt;', '4 0 1', '401/../..', 'x'.repeat(65)]) {
+assert(parsed2.games?.length === 1 && parsed2.games[0].espnEventId === null,
+  `[10e] a non-numeric id is DROPPED to null (the 0040 CHECK would refuse the row) — the game itself is still parsed (got: ${JSON.stringify(parsed2.games?.[0]?.espnEventId)})`);
+assert(warned2.some(w => /espnEventId/i.test(w) && /espn_evt_401520000/.test(w)),
+  `[10e] …and the drop is warned about, naming the id, so an ESPN schema change stays visible (got: ${JSON.stringify(warned2.slice(0, 2))})`);
+for (const hostile of ['401<img src=x>', '401" onload="x', "401' onload='x", '401&lt;', '4 0 1', '401/../..', 'x'.repeat(65), '9'.repeat(21), '401_5', '401.5', '401:5', '401-5']) {
   console.warn = () => {};
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ events: [espnEvent(hostile)] }) });
   const p3 = await provider.fetchCurrentCFBGames();
   console.warn = realWarn;
-  assert(p3.games?.[0]?.espnEventId === '',
-    `[10e] ${JSON.stringify(hostile.slice(0, 18))} is rejected outright (got: ${JSON.stringify(p3.games?.[0]?.espnEventId)})`);
+  assert(p3.games?.[0]?.espnEventId === null,
+    `[10e] ${JSON.stringify(hostile.slice(0, 18))} is dropped to null (got: ${JSON.stringify(p3.games?.[0]?.espnEventId)})`);
+}
+{
+  // A numeric id (ESPN's JSON could carry one) is kept as its digit string.
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ events: [espnEvent(401520998)] }) });
+  const p4 = await provider.fetchCurrentCFBGames();
+  assert(p4.games?.[0]?.espnEventId === '401520998', `[10e] a numeric id is kept as its digit string (got: ${JSON.stringify(p4.games?.[0]?.espnEventId)})`);
 }
 globalThis.fetch = async () => { throw new Error('network disabled in xsstest'); };
+
+// [10g] SB-24 — ONE ACCEPT SET, THREE PLACES. The ESPN parser (what it keeps),
+// migration 0040's CHECK (what the server stores) and the manual form's
+// parseEspnEventIdInput() (what a commissioner can type) must agree on every
+// bare id, or a value one layer produces is refused by the next — a silent
+// drop or a hard write failure. gradetest [8m] pins form = server through the
+// real modal; this pins parser = server = form on the same probe set. (The form
+// ALSO trims whitespace and reads the digits out of a gamecast link; those are
+// input conveniences, and whatever they yield is itself checked against the
+// server here.)
+{
+  let check = null;
+  try {
+    const sql = await readFile(new URL('./supabase/migrations/0040_sb24_espn_event_id_check.sql', import.meta.url), 'utf8');
+    const m = /check \(espn_event_id is null or espn_event_id ~ '([^']+)'\)/.exec(sql);
+    check = m ? new RegExp(m[1]) : null;
+  } catch { check = null; }
+  const form = app._parseEspnEventIdInputForTest;
+  assert(!!check && typeof form === 'function', 'fixture: 0040\'s CHECK pattern and parseEspnEventIdInput() are both readable');
+  const PROBES = ['0', '7', '401671626', '9'.repeat(20), '9'.repeat(21), '', 'espn_evt_401520000', '401a', 'a401', '401.5', '401-5', '401:5',
+    '401_5', '４０１', '-401', '+401', '0x1A', '1e9', '<img>', '401 671', '401\n9', '"401"'];
+  const disagree = [];
+  if (check && typeof form === 'function') {
+    for (const p of PROBES) {
+      console.warn = () => {};
+      globalThis.fetch = async () => ({ ok: true, json: async () => ({ events: [espnEvent(p)] }) });
+      const res = await provider.fetchCurrentCFBGames();
+      console.warn = realWarn;
+      const kept = res.games?.[0]?.espnEventId === p;
+      const server = check.test(p);
+      const f = form(p);
+      const typed = f.ok && f.id === p;
+      if (kept !== server || typed !== server) disagree.push({ p: p.slice(0, 22), parserKeeps: kept, serverAccepts: server, formStores: typed });
+    }
+    globalThis.fetch = async () => { throw new Error('network disabled in xsstest'); };
+    // Whatever the form makes of a link or padded input is itself server-valid.
+    for (const raw of ['  401671626  ', 'https://www.espn.com/nfl/game/_/gameId/401671627/x', '?gameId=401671628']) {
+      const f = form(raw);
+      if (!(f.ok && f.id !== null && check.test(f.id))) disagree.push({ p: raw.slice(0, 30), formStores: f.id, serverAccepts: f.id !== null && check.test(f.id) });
+    }
+  }
+  assert(!!check && disagree.length === 0,
+    `[10g] parser keeps ⇔ 0040 CHECK accepts ⇔ the manual form stores, on all ${PROBES.length} bare probes (and the form's link/trim output is server-valid) — disagreements: ${JSON.stringify(disagree)}`);
+}
+
+// [10h] SB-24 — "no id" is never a MATCH KEY in the live-score refresh. A live
+// event whose id the parser dropped is null, and String(null) is 'null': the
+// matcher must skip it rather than compare that text against a stored id.
+{
+  console.warn = () => {};
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ events: [espnEvent('x<img src=x>')] }) });
+  const r = await provider.refreshScoresByEventIds([], [{ gameId: 'sb24_nullkey', espnEventId: 'null', espnSport: 'college-football' }]);
+  console.warn = realWarn;
+  globalThis.fetch = async () => { throw new Error('network disabled in xsstest'); };
+  assert(Array.isArray(r.updated) && r.updated.length === 0,
+    `[10h] a live event with a dropped (null) id updates no stored game, not even one whose id is the text "null" (got ${JSON.stringify(r.updated)})`);
+}
+
+// [10i] SECURITY F2 (SB-24 delta review, 2026-10-01) — THE SAME CLASS, ON IDS IN
+// ATTRIBUTES. games.id and weeks.id are unconstrained, commissioner-writable
+// text, and the game card printed `data-game-id="${game.gameId}"` raw: a gameId
+// carrying a `"` closes the attribute and adds its own (`autofocus onfocus=…`).
+// Every id-in-attribute site is escHtml()'d now (the output is unchanged for an
+// ordinary id); the server CHECK on those columns is recorded for the next
+// release, before league creation opens.
+{
+  const HOSTILE_ID = 'g1" autofocus onfocus="alert(1)" x="';
+  const hostileGame = { ...createGame(wk.weekId, { gameId: HOSTILE_ID, homeTeam: 'Home U', awayTeam: 'Away U',
+    spread: -3, favorite: 'Home U', status: GAME_STATUS.SCHEDULED, kickoff: '2099-10-03T17:00:00Z', kickoffConfirmed: true }) };
+  const card = app.renderGameCard(hostileGame, null, PICK_RESULT.PENDING, false, false);
+  assert(/data-game-id=/.test(card), 'fixture: the game card rendered its data-game-id attributes');
+  assert(!/autofocus|onfocus=/.test(card.replace(/data-game-id="[^"]*"/g, 'data-game-id=""')),
+    `[10i] renderGameCard: a hostile gameId adds no attribute of its own — every data-game-id stays one quoted value (got: ${JSON.stringify((card.match(/data-game-id="[^"]*"[^>]{0,40}/) || [''])[0])})`);
+  assert(card.includes('data-game-id="g1&quot; autofocus onfocus=&quot;alert(1)&quot; x=&quot;"'),
+    '[10i] …the id is present, escaped, inside its own attribute');
+  const ordinary = app.renderGameCard({ ...hostileGame, gameId: 'g_1727800000000_ab12c' }, null, PICK_RESULT.PENDING, false, false);
+  assert(ordinary.includes('data-game-id="g_1727800000000_ab12c"'), '[10i] an ordinary gameId renders byte-identical');
+  const adminList = app.renderAdminGamesList([hostileGame], wk, {});
+  assert(/edit-game-btn/.test(adminList), 'fixture: the commissioner game list rendered its edit buttons');
+  assert(!/autofocus|onfocus=/.test(adminList.replace(/data-game-id="[^"]*"/g, 'data-game-id=""').replace(/data-game='[^']*'/g, "data-game=''")),
+    '[10i] renderAdminGamesList: the Edit / Lock / Remove buttons\' data-game-id carries no injected attribute');
+}
+
+// [10f] SB-24 — THE FOURTH SITE: the platform admin's Data Proof card (Admin →
+// Games → Data Proof, roles.js: platform-admin only) lists every slate game's
+// espnEventId as an `.id-chip`, and that chip interpolated the RAW value. The
+// value need not come through the parser above: the commissioner's manual game
+// form kept whatever was typed when it was neither digits nor a gamecast URL,
+// `games.espn_event_id` was unconstrained text, and games_update admits any
+// commissioner of an active league. So a commissioner typing
+// `<img src=x onerror=…>` ran script in the PLATFORM ADMIN's session. Fixed at
+// all three layers: escaped here, refused by the form (gradetest [8]), refused
+// by the server (migration 0040's CHECK, static.check SB-24).
+{
+  const dpHtml = app._renderDataProofPanelForTest({}, {}, null, [
+    { gameId: 'dp1', espnEventId: PAYLOAD },
+    { gameId: 'dp2', espnEventId: '401520999' },
+    { gameId: 'dp3', espnEventId: null },
+  ]);
+  assert(/id-chip/.test(dpHtml), 'fixture: the Data Proof card rendered its ESPN id chips');
+  assert(!/<img/i.test(dpHtml), '[10f] renderDataProofPanel: no live <img from a hostile espnEventId (SB-24)');
+  assert(/<code class="id-chip">&lt;img src=x onerror=1&gt;<\/code>/.test(dpHtml),
+    `[10f] the hostile id is present as escaped TEXT inside its own chip (got: ${JSON.stringify((dpHtml.match(/<div class="proof-ids">[\s\S]*?<\/div>/) || [''])[0].slice(0, 160))})`);
+  assert(/<code class="id-chip">401520999<\/code>/.test(dpHtml), '[10f] an ordinary all-digits id still renders verbatim');
+
+  // [10f-2] …and the structural sweep SEES this sink. It sat green behind the
+  // classifier's bare-arrow gap ([9a-2]): `espnIds.map(id=>…${id}…)` read the
+  // `=` of `id=>` as an assignment. On an in-memory copy with the escape
+  // removed again (never the file on disk), the sweep must report `id` on
+  // exactly the id-chip line.
+  const chip = '<code class="id-chip">${escHtml(id)}</code>';
+  const unescaped = appSrc.includes(chip) ? appSrc.replace(chip, '<code class="id-chip">${id}</code>') : appSrc;
+  const chipLine = unescaped.slice(0, unescaped.indexOf('<code class="id-chip">')).split('\n').length;
+  const chipHits = sweepFile('js/app.js', unescaped).filter(h => h.line === chipLine).map(h => h.expr);
+  assert(unescaped.includes('<code class="id-chip">${id}</code>') && chipHits.includes('id'),
+    `[10f-2] the sweep reports the UNESCAPED Data Proof id chip (app.js:${chipLine}) — the site the bare-arrow gap hid (got: ${JSON.stringify(chipHits)})`);
+}
 
 // ══════════════════════════════════════════════════════════════════════════
 // [11] C6 — renderUrlToken()'s own scheme allow-list (defence in depth)
@@ -2420,11 +3113,35 @@ assert(chatUi._escForTest ? chatUi._escForTest(0) === '0' : true,
 // ══════════════════════════════════════════════════════════════════════════
 console.log('\n[13] Escapers vs. attribute quoting…');
 const SINGLE_QUOTED_ATTR = /=\s*'[^'\n]*\$\{(?:numHtml|escHtml|esc)\(/g;
-for (const [file, src] of [['js/app.js', appSrc], ['js/chat-ui.js', chatUiSrc], ['js/admin-panel.js', adminPanelSrc]]) {
+// js/home.js joins the list (Social Platform v1 Home, security B1, 2026-10-01): the Home renderer builds markup with the app's escHtml(), which leaves the apostrophe alone, so every one
+// of its attributes must be double-quoted. hometest [1-27..29] adds the half this regex cannot see (joinHtml array elements ending in =') and proves both halves have teeth.
+for (const [file, src] of [['js/app.js', appSrc], ['js/chat-ui.js', chatUiSrc], ['js/admin-panel.js', adminPanelSrc], ['js/home.js', SRC['js/home.js']]]) {
   SINGLE_QUOTED_ATTR.lastIndex = 0;
   const hits = [...src.matchAll(SINGLE_QUOTED_ATTR)].map(m => src.slice(0, m.index).split('\n').length);
   assert(hits.length === 0,
     `[13a] ${file}: no escaped interpolation sits inside a SINGLE-quoted attribute (escHtml does not escape "'") — found at: ${hits.join(', ') || 'none'}`);
+}
+{
+  // canary: the SAME regex over a scratch copy of home.js with one attribute single-quoted must find it (the zero above is a real scan, not an empty one)
+  const homePoisoned = SRC['js/home.js'].replace('data-nudge-category="${escHtml(n.category)}"', "data-nudge-category='${escHtml(n.category)}'");
+  SINGLE_QUOTED_ATTR.lastIndex = 0;
+  assert(homePoisoned !== SRC['js/home.js'] && [...homePoisoned.matchAll(SINGLE_QUOTED_ATTR)].length === 1,
+    '[13a canary] js/home.js: data-nudge-category single-quoted in a scratch copy IS reported (B1 proof — the real file is untouched)');
+}
+// Social Platform News (W9, 2026-10-01): the two news render modules join [13a] -- no escaped interpolation in a SINGLE-quoted attribute.
+for (const [file, src] of [['js/newsCard.js', SRC['js/newsCard.js']], ['js/newsSettings.js', SRC['js/newsSettings.js']]]) {
+  SINGLE_QUOTED_ATTR.lastIndex = 0;
+  const hits = [...src.matchAll(SINGLE_QUOTED_ATTR)].map(m => src.slice(0, m.index).split('\n').length);
+  assert(hits.length === 0,
+    `[13a] ${file}: no escaped interpolation sits inside a SINGLE-quoted attribute (escHtml does not escape "'") — found at: ${hits.join(', ') || 'none'}`);
+}
+{
+  // Social Platform News (W9): the same canary on a scratch copy of newsCard.js -- its data-news-id single-quoted IS reported (the real file is untouched); newsCard.js's own esc() DOES
+  // escape the apostrophe, so this is the belt, not the only guard (newstest.mjs proves the apostrophe is escaped).
+  const newsPoisoned = SRC['js/newsCard.js'].replace('data-news-id="${esc(id)}"', "data-news-id='${esc(id)}'");
+  SINGLE_QUOTED_ATTR.lastIndex = 0;
+  assert(newsPoisoned !== SRC['js/newsCard.js'] && [...newsPoisoned.matchAll(SINGLE_QUOTED_ATTR)].length === 1,
+    '[13a canary] js/newsCard.js: data-news-id single-quoted in a scratch copy IS reported (W9 proof -- the real file is untouched)');
 }
 const numHtmlDoc = appSrc.slice(Math.max(0, appSrc.indexOf('function numHtml(v){') - 1600), appSrc.indexOf('function numHtml(v){'));
 assert(/DOUBLE-QUOTED attribute/i.test(numHtmlDoc) && /NOT the apostrophe/i.test(numHtmlDoc),

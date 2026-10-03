@@ -151,6 +151,7 @@
  *                              // Leagues Home overlay, replacing the old
  *                              // onSwitchLeague/showLeagueSelectorSheet() action
  *     onOpenLeaguePage,           // SECURITY GATE FINDING 3 (2026-09-25) — the identity header's league-name tap
+ *     onOpenLeagueSettings,       // SP-53 / DI-457 (2026-10-01) — the "League" group's League Settings row (renderLeagueGroup())
  *     onOpenPasswordChange, onOpenDeleteAccount,              // DI-335/DI-340
  *     onSaveDisplayName, onSaveInitials, onSaveAlmaMater,      // Profile pane
  *     onSetTimeZone, onSetTheme, onSetLogoView,                // DI-303/307/331
@@ -315,10 +316,10 @@
  */
 
 import { haptic } from './haptics.js';
-import { prefersReducedMotion, AXIS_DEAD_ZONE_PX, isInDrawerOpenZone, touchClaimedBy, clearStaleTouchClaim } from './nav-gestures.js';
+import { prefersReducedMotion, AXIS_DEAD_ZONE_PX, isInDrawerOpenZone, touchClaimedBy, clearStaleTouchClaim, claimTouch, releaseTouchAndFlush, DRAWER_TOUCH_OWNER } from './nav-gestures.js';
 import { comingSoonCopy } from './leagues-home.js';
 import { getShellBrandName } from './brand.js';
-import { TIME_ZONES, DEFAULT_TZ, THEMES } from './data-model.js';
+import { TIME_ZONES, DEFAULT_TZ, THEMES, THEME_GROUP_LABELS } from './data-model.js';
 import { captureDirtyFields, restoreDirtyFields, stampFieldOwner } from './field-preserve.js';
 // Security fix round (2026-09-25), NOTE 1 — call js/roles.js's own
 // predicates rather than inlining a second `=== true` copy of the same
@@ -332,6 +333,11 @@ import { captureDirtyFields, restoreDirtyFields, stampFieldOwner } from './field
 import { isSuperAdmin, isPlatformAdmin } from './roles.js';
 // N1 (DI-432 §7, 2026-09-30) — the pilot-only registry's one predicate (renderIdentityHeader()'s league-name fallback).
 import { isPilotOnlyAllowed } from './pilot-only.js';
+// === SOCIAL PLATFORM NEWS (SP-07, DI-379, 2026-10-01) -- BEGIN (one of the banner-delimited News edits in this file: the third pane, its row, its taps) ===
+// The News pane's markup, its nav row and the tap -> preference-PATCH reducer live in js/newsSettings.js (pure; it escapes every team name with its OWN
+// quote-complete esc(), so this file's `ctx.escHtml` never touches one). This file only dispatches, paints and wires.
+import { renderNewsNavRow, renderNewsSettingsPane, newsPatchFor } from './newsSettings.js';
+// === SOCIAL PLATFORM NEWS -- END ===
 
 // ═════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -387,7 +393,7 @@ function clamp01(n) {
 
 /** Renders `ctx.icon(name)` only for names known to exist today (file-header
  *  note 7) — every other row renders text-only, never an emoji fallback. */
-const KNOWN_ICONS = new Set(['bell', 'almaMater', 'chevronRight', 'chevronLeft', 'sportFootball', 'settings', 'close']);
+const KNOWN_ICONS = new Set(['bell', 'almaMater', 'chevronRight', 'chevronLeft', 'sportFootball', 'settings', 'close', 'sun', 'moon']);
 function iconOrNothing(ctx, name) {
   if (!name || !KNOWN_ICONS.has(name)) return '';
   return ctx.icon(name) || '';
@@ -435,6 +441,15 @@ function stepControlCenter(state, event) {
       return { ...state, phase: event.reducedMotion ? 'open' : 'opening', dragProgress: 1 };
     }
     case 'close': {
+      // SB-15 (2026-10-01) — a close ALWAYS ends a drag. A drag whose
+      // touchend never reached the binder (a repaint replaced the node under
+      // the finger) left `dragging` true at phase 'closed' — and the guard
+      // just below made ✕, the scrim and every app-side close a no-op, while
+      // SB-05's data-dragging lock froze the page. Exactly what releasing
+      // that drag toward "closed" does (drag-end → settle 0 → close).
+      if (state.dragging) {
+        return stepControlCenter(state, { type: 'drag-end', settleOpen: false, reducedMotion: event.reducedMotion });
+      }
       if (state.phase === 'closed' || state.phase === 'closing') return state;
       const reducedMotion = !!event.reducedMotion;
       return {
@@ -456,6 +471,15 @@ function stepControlCenter(state, event) {
     case 'pop-profile':
       if (state.pane === 'main') return state;
       return { ...state, pane: 'main' };
+    // === SOCIAL PLATFORM NEWS -- BEGIN === the third pushed pane, mirroring push-profile / pop-profile (only main -> news, only news -> main).
+    case 'push-news':
+      if (state.phase !== 'open') return state;
+      if (state.pane !== 'main') return state;
+      return { ...state, pane: 'news' };
+    case 'pop-news':
+      if (state.pane !== 'news') return state;
+      return { ...state, pane: 'main' };
+    // === SOCIAL PLATFORM NEWS -- END ===
     case 'drag-start':
       if (state.dragging) return state;
       // v0.27.1 round 2 (reviewer finding 7) — keep the SETTLED progress
@@ -629,8 +653,27 @@ export function bindControlCenterEdgeSwipe(dispatch, getState, opts = {}) {
     return (typeof window !== 'undefined' && typeof window.innerWidth === 'number') ? window.innerWidth : 0;
   }
 
+  /** SB-15 (2026-10-01) — a drag whose END never reached this binder. A fresh
+   *  ONE-finger touchstart begins a new gesture (a live drag would still have
+   *  its finger down: touches.length ≥ 2), so a drawer still `dragging` here
+   *  lost its release — the node under the finger was replaced by a repaint
+   *  outside the deferral door, or the app was backgrounded. Cancel it the
+   *  native way (a cancelled pan returns to where it began: an opening drag
+   *  closes, a closing drag reopens), with no haptic — nothing was released.
+   *  Before this, a touch in the edge zone reset `dragActive` WITHOUT ending
+   *  the drag, so the drawer stayed stranded for good, and one outside the
+   *  zone settled it at ITS end with the lost drag's velocity. */
+  function cancelStrandedDrag() {
+    const state = getState();
+    if (state.dragging) {
+      dispatch({ type: 'drag-end', settleOpen: state.phase === 'open' || state.phase === 'opening', reducedMotion: prefersReducedMotion() });
+    }
+    start = null; axis = null; dragActive = false; velocityPxPerMs = 0;
+  }
+
   function onTouchStart(e) {
     clearStaleTouchClaim(e);   // RG-TBD-A2 — see nav-gestures.js
+    if ((e?.touches?.length ?? 0) === 1) cancelStrandedDrag();   // SB-15
     if (isBlockedByOtherSurface()) { start = null; return; }
     const t = e.touches?.[0];
     if (!t) return;
@@ -669,7 +712,18 @@ export function bindControlCenterEdgeSwipe(dispatch, getState, opts = {}) {
       // Dashboard's long-press reorder, or a week swipe that locked first):
       // the drawer never starts a drag on it. A reorder drag from a chip in
       // the left quarter used to open the drawer.
-      if (axis === 'x' && touchClaimedBy() !== null) { start = null; return; }
+      // SB-15 (2026-10-01) — and when nobody does, the drawer now CLAIMS it
+      // (the week swipe's model): one owner per touch, and while it is the
+      // drawer's, renderPicksPage()/renderDashboard() park their repaint
+      // (nav-gestures.js deferRenderWhileWeekSwiping()) instead of replacing
+      // the node under the finger — which is what lost this drag's touchend.
+      // Only a drag that can MOVE the drawer commits to it: a leftward drag
+      // on a closed drawer clamps to 0 (DI-419's R→L carve-out belongs to the
+      // week swipe), so it claims nothing and keeps the old stand-down rule.
+      if (axis === 'x') {
+        const canMove = dx > 0 || clamp01(getState().dragProgress || 0) > 0;
+        if (canMove ? !claimTouch(DRAWER_TOUCH_OWNER) : touchClaimedBy() !== null) { start = null; return; }
+      }
       if (axis === 'x') {
         dragActive = true; dispatch({ type: 'drag-start' });
         // Round 2 (finding 7) — continue from where the panel IS (drag-start
@@ -696,7 +750,23 @@ export function bindControlCenterEdgeSwipe(dispatch, getState, opts = {}) {
       dispatch({ type: 'drag-end', settleOpen, reducedMotion: prefersReducedMotion() });
     }
     start = null; axis = null; dragActive = false; velocityPxPerMs = 0;
+    // SB-15 — the touch is over: hand it back and run any repaint parked
+    // under the drag (after the drawer has settled). No-op if not ours.
+    releaseTouchAndFlush(DRAWER_TOUCH_OWNER);
   }
+
+  // SB-15 — the week swipe's c7f8bee safety net, for the same reason: if the
+  // app is backgrounded mid-drag iOS may never deliver the touch's end. On
+  // the way back (hidden → visible) and on pagehide, cancel the stranded drag
+  // and run any repaint parked under it — no finger is on the glass then.
+  function recoverAbandonedDrag() {
+    cancelStrandedDrag();
+    releaseTouchAndFlush(DRAWER_TOUCH_OWNER);
+  }
+  const onVisibility = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') recoverAbandonedDrag();
+  };
+  const canDoc = typeof document !== 'undefined' && typeof document.addEventListener === 'function';
 
   const target = typeof window !== 'undefined' ? window : null;
   if (!target) return () => {};
@@ -704,12 +774,16 @@ export function bindControlCenterEdgeSwipe(dispatch, getState, opts = {}) {
   target.addEventListener('touchmove', onTouchMove, { passive: true });
   target.addEventListener('touchend', settle, { passive: true });
   target.addEventListener('touchcancel', settle, { passive: true });
+  target.addEventListener('pagehide', recoverAbandonedDrag);
+  if (canDoc) document.addEventListener('visibilitychange', onVisibility);
 
   return () => {
     target.removeEventListener('touchstart', onTouchStart);
     target.removeEventListener('touchmove', onTouchMove);
     target.removeEventListener('touchend', settle);
     target.removeEventListener('touchcancel', settle);
+    target.removeEventListener('pagehide', recoverAbandonedDrag);
+    if (canDoc) document.removeEventListener('visibilitychange', onVisibility);
   };
 }
 
@@ -1001,9 +1075,10 @@ export function renderStarredPanels(ctx) {
  * `<span class="cc-row-secondary">` (the CSS pass owns that class's styling —
  * not added here, same "markup now, styling in the CSS pass" split DI-391's
  * own label/secondary debt already uses). `undefined`/`''` renders nothing,
- * so every existing accordionRow() call site is unaffected. First consumer:
- * the Appearance row's "Night mode is available with the Munera theme" note
- * when a school theme is active (finding 6, below).
+ * so every existing accordionRow() call site is unaffected. It had one
+ * consumer, the Appearance row's school-theme note, retired by SP-52 (DI-447,
+ * 2026-10-01: every theme has both sides, so there is nothing to explain);
+ * the parameter stays for a future row, with no caller today.
  */
 function accordionRow(ctx, state, { group, rowId, label, iconName, bodyHTML, openRowValue, secondary }) {
   requireFn(ctx.escHtml, 'escHtml', 'accordionRow');
@@ -1019,9 +1094,21 @@ function accordionRow(ctx, state, { group, rowId, label, iconName, bodyHTML, ope
     </div>`;
 }
 
+/**
+ * SP-52 (DI-447, 2026-10-01) — an option list whose entries carry a `group`
+ * (the Theme list: THEMES[].group) renders as native <optgroup>s, in order of
+ * first appearance, so iOS shows the wheel with `Munera / Neutral / School
+ * colors` as non-selectable headers (the native control, no custom picker). An
+ * option list without `group` (the time zone list) renders exactly as before.
+ * Every label — option and group — goes through ctx.escHtml.
+ */
 function selectBody(ctx, { field, options, current, disabled }) {
-  const opts = (options || []).map(o => `<option value="${ctx.escHtml(o.key ?? o.value)}"${(o.key ?? o.value) === current ? ' selected' : ''}>${ctx.escHtml(o.label)}</option>`).join('');
-  return `<select class="form-input" data-field="${field}"${disabled ? ' disabled' : ''}>${opts}</select>`;
+  const opt = (o) => `<option value="${ctx.escHtml(o.key ?? o.value)}"${(o.key ?? o.value) === current ? ' selected' : ''}>${ctx.escHtml(o.label)}</option>`;
+  const list = options || [];
+  const inner = list.some((o) => o.group)
+    ? [...new Set(list.map((o) => o.group))].map((g) => `<optgroup label="${ctx.escHtml(THEME_GROUP_LABELS[g] || g)}">${list.filter((o) => o.group === g).map(opt).join('')}</optgroup>`).join('')
+    : list.map(opt).join('');
+  return `<select class="form-input" data-field="${field}"${disabled ? ' disabled' : ''}>${inner}</select>`;
 }
 
 /** DI-422 finding 12 — Team logos, reshaped INTO `accordionRow()`'s own
@@ -1040,20 +1127,22 @@ function teamLogosBodyHTML(ctx) {
     <div class="cc-row-helper text-muted">Show team logos instead of names on Picks and the compact dashboard.</div>`;
 }
 
-/** DI-422 finding 12 — Appearance's school-theme caption, moved from the
- *  row's collapsed label line (the `secondary` param, still supported by
- *  `accordionRow()` for any future row) into the body, above the `<select>`.
- *  Same conditional (`currentTheme !== 'neutral'`), same text — only the DOM
- *  position changed, so it is visible only once the row is expanded. */
+/** SP-52 (DI-447, 2026-10-01) — the Appearance row is ONE live
+ *  `<select data-field="colorScheme">` (System / Light / Dark) under EVERY
+ *  Theme. It used to be disabled under a school theme with the caption "Night
+ *  mode is available with the Munera theme" (DI-422 finding 12 moved that
+ *  caption into this body; DI-360 / finding 6 had disabled it, because night
+ *  mode's CSS was scoped to `body.theme-neutral` only). Every school theme has
+ *  a Dark side now (DI-451), so neither the disabled state nor the caption has
+ *  a reason to exist. Theme and Appearance are independent axes: changing
+ *  Theme never writes `colorScheme`, changing Appearance never writes `theme`.
+ *  `accordionRow()`'s `secondary` parameter stays (no caller today). */
 function appearanceBodyHTML(ctx) {
-  const isSchoolTheme = (ctx.currentTheme || 'neutral') !== 'neutral';
-  const caption = isSchoolTheme ? `<p class="cc-row-secondary">Night mode is available with the Munera theme</p>` : '';
-  return `${caption}${selectBody(ctx, {
+  return selectBody(ctx, {
     field: 'colorScheme',
     options: [{ key: 'system', label: 'System' }, { key: 'light', label: 'Light' }, { key: 'dark', label: 'Dark' }],
     current: ctx.currentColorScheme || 'system',
-    disabled: isSchoolTheme,
-  })}`;
+  });
 }
 
 /**
@@ -1088,6 +1177,9 @@ export function renderSettingsAccordion(ctx, state) {
       group: 'settings', rowId: 'chat', label: 'Chat settings', openRowValue: openRow,
       bodyHTML: ctx.bodies?.chatPrefsHTML || '',
     }),
+    // === SOCIAL PLATFORM NEWS -- BEGIN === a NAV row (label + chevron) that pushes the News pane, not an accordion row; absent when ctx.news is absent (the feature is off app-wide).
+    ...(ctx.news ? [renderNewsNavRow()] : []),
+    // === SOCIAL PLATFORM NEWS -- END ===
     accordionRow(ctx, state, {
       group: 'settings', rowId: 'logo-view', label: 'Team logos', openRowValue: openRow,
       bodyHTML: teamLogosBodyHTML(ctx),
@@ -1101,15 +1193,12 @@ export function renderSettingsAccordion(ctx, state) {
     // a new control pattern). `ctx.currentColorScheme` defaults to 'system'
     // — matching getColorScheme()'s own default-when-missing.
     //
-    // Finding 6 (app-shell part 3A review, 2026-09-27) — night mode's own CSS
-    // is scoped to `body.theme-neutral[data-color-scheme]` (css/styles.css)
-    // ONLY; a school theme (`currentTheme !== 'neutral'`) paints zero visual
-    // difference for any colorScheme choice, so a live, undisabled control
-    // would be a dead one — no error, just silently no effect. EXPLAINED, not
-    // hidden: the control stays discoverable (a player who wants night mode
-    // now knows exactly what to switch), disabled so nothing gets "saved"
-    // that would never paint, with the reason named — DI-422 finding 12 moved
-    // that explanation into the row's own body (appearanceBodyHTML(), above).
+    // SP-52 (DI-447, 2026-10-01) — LIVE UNDER EVERY THEME. The Finding-6
+    // reasoning that used to stand here (night mode scoped to the Munera
+    // theme, so the control was disabled and explained under a school theme)
+    // is superseded: Munera, Paper, Ink, Graphite and all six schools have a
+    // Dark side. The quick Light/Dark toggle at the top of the drawer
+    // (DI-452) is the one-tap path; this row stays the full three-way control.
     accordionRow(ctx, state, {
       group: 'settings', rowId: 'appearance', label: 'Appearance', openRowValue: openRow,
       bodyHTML: appearanceBodyHTML(ctx),
@@ -1203,8 +1292,111 @@ export function renderHelpFooter(ctx) {
     </div>`;
 }
 
+// ═════════════════════════════════════════════════════════════════════════
+// SP-53 / DI-457 (2026-10-01) — THE "LEAGUE" GROUP. One row, between the starred panels (Commissioner Panel, Admin) and My Preferences: "League Settings", its secondary line the ACTIVE
+// league's name so a multi-league player knows which one it opens. It opens the SAME page the League Page's last row opens, for the active league only (DI-312: to change another league,
+// switch first). Rendered only when the account rows are (Supabase auth mode: local PIN mode has no leagues), memberships have resolved (`!== false`, the Profile rows' gate) and an active
+// league is resolved (`ctx.league`): it is ABSENT, not disabled, otherwise. The league name is user data and goes through ctx.escHtml in a text node and a double-quoted attribute only.
+// ═════════════════════════════════════════════════════════════════════════
+export function renderLeagueGroup(ctx) {
+  requireFn(ctx.escHtml, 'escHtml', 'renderLeagueGroup');
+  if (ctx.accountRows !== true || ctx.membershipsResolved === false || !ctx.league || !ctx.league.id) return '';
+  const chevron = iconOrNothing(ctx, 'chevronRight');
+  const name = String(ctx.league.name || '').trim();
+  return `<div class="control-center-group" data-cc-group="league">
+      <div class="control-center-group-label">League</div>
+      <button type="button" class="control-center-row control-center-row--nav cc-league-row" data-action="cc-open-league-settings" aria-label="Open League Settings for ${ctx.escHtml(name || 'your league')}">
+        <span class="cc-row-label">League Settings${name ? `<span class="cc-row-secondary">${ctx.escHtml(name)}</span>` : ''}</span>
+        <span class="cc-row-chevron" aria-hidden="true">${chevron}</span>
+      </button>
+    </div>`;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// RENDER — SP-52 / DI-452 — the QUICK LIGHT/DARK TOGGLE
+// ═════════════════════════════════════════════════════════════════════════
+//
+// A TWO-STATE control over a THREE-STATE preference (the shipped System / Light / Dark `colorScheme`). Two segments, never three:
+// "System" is the caption plus a "Match my phone" link back. Pinned directly under the identity block so it is above the fold on
+// open, on web and on the iOS shell alike. Apple's HIG advises following the system appearance and not adding an app-specific
+// control; Drew ruled for one (2026-09-30, recorded deviation), mitigated by the System default, the honest caption and the
+// one-tap return. The Appearance row in My Preferences stays as the full three-way control.
+//
+// Tapping a segment ALWAYS leaves System, including when it equals what the phone already shows (that is how someone pins "always
+// Dark"). The only routes back are "Match my phone" and Appearance -> System. Rejected, recorded so they are not re-proposed:
+// auto-heal to System when a pin equals the phone's appearance (an app that flips at sunset with no tap is unpredictable), and iOS
+// Control Center's "until the next automatic change" (a per-player stored value conditional on a per-device event is a hidden state).
+
+/** Pure: what the quick row shows for a stored preference and the phone's own appearance. */
+export function quickAppearanceModel({ scheme = 'system', systemIsDark = false } = {}) {
+  const pinned = scheme === 'light' || scheme === 'dark';
+  const checked = pinned ? scheme : (systemIsDark ? 'dark' : 'light');
+  return {
+    pinned,
+    checked,
+    showReturn: pinned,
+    caption: pinned ? (scheme === 'dark' ? 'Set to Dark' : 'Set to Light')
+                    : `Matches your phone \u00b7 ${checked === 'dark' ? 'Dark' : 'Light'} right now`,
+  };
+}
+
+/** Signed out: not rendered, no device write (UN-127 kept; a shared handset must not let any one of six people repaint it). All
+ *  strings are fixed (nothing user-supplied) and still go through ctx.escHtml. */
+export function renderQuickAppearance(ctx) {
+  requireFn(ctx.escHtml, 'escHtml', 'renderQuickAppearance');
+  if (!ctx.session?.player) return '';
+  const m = quickAppearanceModel({ scheme: ctx.currentColorScheme || 'system', systemIsDark: !!ctx.systemIsDark });
+  const seg = (v, label, iconName) => `<button type="button" role="radio" class="cc-quick-seg" data-action="cc-quick-scheme" data-scheme="${ctx.escHtml(v)}" aria-checked="${m.checked === v}" tabindex="${m.checked === v ? 0 : -1}"${m.checked === v ? ' aria-describedby="cc-quick-cap"' : ''}>${iconOrNothing(ctx, iconName)}<span>${ctx.escHtml(label)}</span></button>`;
+  return `<div class="cc-quick" id="cc-quick-appearance">
+      <div class="cc-quick-track" role="radiogroup" aria-label="Appearance">${seg('light', 'Light', 'sun')}${seg('dark', 'Dark', 'moon')}</div>
+      <div class="cc-quick-cap"><span id="cc-quick-cap" aria-live="polite">${ctx.escHtml(m.caption)}</span><button type="button" class="cc-quick-return" data-action="cc-quick-scheme" data-scheme="system" aria-label="Match my phone's appearance"${m.showReturn ? '' : ' hidden'}>Match my phone</button></div>
+    </div>`;
+}
+
+/** Update the quick row IN PLACE (F4): rewrites only aria-checked / tabindex / aria-describedby on the two segment nodes, the
+ *  caption's textContent, the return button's `hidden`, and (when the Appearance row is open) the three-way <select>'s value. It
+ *  never assigns innerHTML — the existing onSetColorScheme ends in a pane repaint that replaces the tapped segment and drops
+ *  VoiceOver focus, so the quick row uses its own path. If the return button holds focus when it hides, focus moves to the
+ *  checked segment FIRST, so VoiceOver announces "Dark, radio button, selected, 1 of 2" instead of losing its place. Returns
+ *  true when the quick row was found. */
+export function patchQuickAppearance(rootEl, ctx, { activeEl } = {}) {
+  const wrap = rootEl?.querySelector?.('#cc-quick-appearance');
+  if (!wrap) return false;
+  const m = quickAppearanceModel({ scheme: ctx.currentColorScheme || 'system', systemIsDark: !!ctx.systemIsDark });
+  const segs = [...(wrap.querySelectorAll?.('.cc-quick-seg') || [])];
+  let checkedSeg = null;
+  segs.forEach((seg) => {
+    const on = seg.dataset?.scheme === m.checked;
+    seg.setAttribute('aria-checked', String(on));
+    seg.setAttribute('tabindex', on ? '0' : '-1');
+    if (on) { seg.setAttribute('aria-describedby', 'cc-quick-cap'); checkedSeg = seg; }
+    else seg.removeAttribute('aria-describedby');
+  });
+  const cap = wrap.querySelector('#cc-quick-cap');
+  if (cap) cap.textContent = m.caption;
+  const ret = wrap.querySelector('.cc-quick-return');
+  if (ret) {
+    const active = activeEl !== undefined ? activeEl : (typeof document !== 'undefined' ? document.activeElement : null);
+    if (!m.showReturn && active === ret) checkedSeg?.focus?.();
+    if (m.showReturn) ret.removeAttribute('hidden'); else ret.setAttribute('hidden', '');
+  }
+  const sel = rootEl.querySelector('select[data-field="colorScheme"]');
+  if (sel) sel.value = ctx.currentColorScheme || 'system';
+  return true;
+}
+
+// v0.29.0 batch-5b integration (2026-10-01): SP-52's quick row sits directly under the identity block (DI-452) and SP-53's League group between the
+// starred panels and My Preferences (DI-457) — both placements hold.
+
+// === SOCIAL PLATFORM NEWS -- BEGIN === DI-379's `renderNewsSettingsScreen(ctx)`: the pushed pane's content, '' when ctx.news is absent.
+export function renderNewsSettingsScreen(ctx) {
+  if (!ctx || !ctx.news) return '';
+  return renderNewsSettingsPane({ ...ctx.news, catalogNote: ctx.bodies?.almaMaterNoteText || '' });
+}
+// === SOCIAL PLATFORM NEWS -- END ===
+
 function renderMainPaneInnerHTML(ctx, state) {
-  return `${renderIdentityHeader(ctx)}${renderStarredPanels(ctx)}${renderSettingsAccordion(ctx, state)}${renderFeedbackRulesGroup(ctx, state)}${renderHelpFooter(ctx)}`;
+  return `${renderIdentityHeader(ctx)}${renderQuickAppearance(ctx)}${renderStarredPanels(ctx)}${renderLeagueGroup(ctx)}${renderSettingsAccordion(ctx, state)}${renderFeedbackRulesGroup(ctx, state)}${renderHelpFooter(ctx)}`;
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -1232,6 +1424,9 @@ export function renderControlCenter(ctx, state) {
       </div>
       <div class="control-center-pane" data-pane="profile" data-active="${state.pane === 'profile'}">
         <div class="control-center-pane-content" data-pane-content="profile">${renderProfileScreen(ctx)}</div>
+      </div>
+      <div class="control-center-pane" data-pane="news" data-active="${state.pane === 'news'}">
+        <div class="control-center-pane-content" data-pane-content="news">${renderNewsSettingsScreen(ctx)}</div>
       </div>
     </div>`;
 }
@@ -1264,6 +1459,10 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
   const profilePaneWrapEl = drawerEl?.querySelector('[data-pane="profile"]') || null;
   const mainContentEl = drawerEl?.querySelector('[data-pane-content="main"]') || null;
   const profileContentEl = drawerEl?.querySelector('[data-pane-content="profile"]') || null;
+  // === SOCIAL PLATFORM NEWS -- BEGIN === the third pane's stable nodes, built exactly like the profile pane's.
+  const newsPaneWrapEl = drawerEl?.querySelector('[data-pane="news"]') || null;
+  const newsContentEl = drawerEl?.querySelector('[data-pane-content="news"]') || null;
+  // === SOCIAL PLATFORM NEWS -- END ===
 
   function ownerKey() { return ctx.session?.player?.id ?? null; }
 
@@ -1276,7 +1475,7 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
   // update()/toggle-row after mount silently unable to preserve anything).
   {
     const key = ownerKey();
-    if (key) { stampFieldOwner(mainContentEl, key); stampFieldOwner(profileContentEl, key); }
+    if (key) { stampFieldOwner(mainContentEl, key); stampFieldOwner(profileContentEl, key); stampFieldOwner(newsContentEl, key); }
   }
 
   function paintMainContent() {
@@ -1293,6 +1492,57 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
     profileContentEl.innerHTML = renderProfileScreen(ctx);
     if (key) { restoreDirtyFields(snap, profileContentEl, key); stampFieldOwner(profileContentEl, key); }
   }
+  // === SOCIAL PLATFORM NEWS -- BEGIN ===
+  function paintNewsContent() {
+    if (!newsContentEl) return;
+    const key = ownerKey();
+    const snap = key ? captureDirtyFields(newsContentEl, key) : null;
+    newsContentEl.innerHTML = renderNewsSettingsScreen(ctx);
+    if (key) { restoreDirtyFields(snap, newsContentEl, key); stampFieldOwner(newsContentEl, key); }
+  }
+  /**
+   * Reviewer F1 (2026-10-01). ESPN's full school list lands IN PLACE (app.js patches the picker's <option>s and writes its caption as text), so the live DOM is AHEAD of this
+   * closure's ctx, which was built from the short fallback list and "Loading every school…". A chip add / remove repaints the pane from that ctx, and without this the picker
+   * dropped back to the short list and the caption lied. Before any such repaint the live picker's options and its caption are ABSORBED into ctx: options not already in the
+   * catalog are added to it (the followed teams were excluded from the live list on purpose, so `alsoKnown` re-adds a team that is being removed and must be offered again),
+   * and the live caption becomes the note — unless it is the "most teams" message, which is a state of the pane and not a catalog note. An `update()` from the host replaces ctx
+   * wholesale and needs none of this.
+   */
+  function absorbLiveNewsPicker(alsoKnown) {
+    if (!newsContentEl || !ctx.news) return;
+    const catalog = Array.isArray(ctx.news.catalog) ? ctx.news.catalog.slice() : [];
+    const have = new Set(catalog.map((c) => String(c.location).toLowerCase()));
+    const sel = newsContentEl.querySelector('#cc-news-team-add');
+    const found = [];
+    if (sel) {
+      for (const o of Array.from(sel.querySelectorAll('option'))) {
+        // Named optValue, not `v`: xsstest's classifier resolves an identifier file-wide by name, and SP-52's quick-appearance seg(v, ...) parameter is `v` (merge finding, 2026-10-01).
+        const optValue = o.getAttribute('value');
+        if (optValue) found.push({ location: optValue, displayName: (typeof o.textContent === 'string' && o.textContent) || optValue });
+      }
+    }
+    if (alsoKnown && alsoKnown.location) found.push(alsoKnown);
+    let grew = false;
+    for (const c of found) {
+      const k = String(c.location).toLowerCase();
+      if (have.has(k)) continue;
+      have.add(k); catalog.push(c); grew = true;
+    }
+    if (grew) ctx = { ...ctx, news: { ...ctx.news, catalog } };
+    const note = newsContentEl.querySelector('#cc-news-team-note');
+    const max = Number.isInteger(ctx.news.maxTeams) && ctx.news.maxTeams > 0 ? ctx.news.maxTeams : 20;
+    const full = Array.isArray(ctx.news.teams) && ctx.news.teams.length >= max;
+    if (note && !full && typeof note.textContent === 'string' && note.textContent) ctx = { ...ctx, bodies: { ...(ctx.bodies || {}), almaMaterNoteText: note.textContent } };
+  }
+  /** Reviewer F5: after a chip is removed (or one is added) the node the player was on is gone — put keyboard and VoiceOver focus back on something real: the chip that took its
+   *  place, else the last chip, else the picker. */
+  function refocusNewsPane(index) {
+    if (!newsContentEl) return;
+    const chips = Array.from(newsContentEl.querySelectorAll('[data-action="cc-news-remove-team"]'));
+    const target = (index >= 0 && (chips[index] || chips[chips.length - 1])) || newsContentEl.querySelector('#cc-news-team-add');
+    if (target && typeof target.focus === 'function') target.focus();
+  }
+  // === SOCIAL PLATFORM NEWS -- END ===
 
   // Fix round 1, finding 8: attribute-only — NEVER touches innerHTML, safe to
   // call on every dispatch including drag-move (1:1 finger tracking via the
@@ -1313,6 +1563,7 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
     }
     mainPaneWrapEl?.setAttribute('data-active', String(next.pane === 'main'));
     profilePaneWrapEl?.setAttribute('data-active', String(next.pane === 'profile'));
+    newsPaneWrapEl?.setAttribute('data-active', String(next.pane === 'news'));    // SOCIAL PLATFORM NEWS
   }
 
   function clearFallback() { if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; } }
@@ -1393,6 +1644,45 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
         dispatch({ type: 'pop-profile' });
         haptic('selection');
         break;
+      // === SOCIAL PLATFORM NEWS -- BEGIN === the News pane. Push / pop mirror Profile's (selection haptic). A SWITCH flips in place (aria-checked + data-on, so the
+      // shipped 150 ms switch transition plays -- a repaint would replace the node and snap it), the local ctx.news follows, and the write is the callback's;
+      // only a TEAM change is structural and repaints the pane. The reducer (newsPatchFor) returns null for anything it does not own, so a stray event writes nothing.
+      case 'cc-push-news':
+        dispatch({ type: 'push-news' });
+        haptic('selection');
+        ctx.callbacks?.onOpenNews?.();
+        break;
+      case 'cc-pop-news':
+        dispatch({ type: 'pop-news' });
+        haptic('selection');
+        break;
+      case 'cc-news-toggle-on':
+      case 'cc-news-toggle-sport': {
+        const patch = newsPatchFor(action, ctx.news, { sport: el.dataset.sport });
+        if (!patch) break;
+        const nowOn = action === 'cc-news-toggle-on' ? patch.on === true : patch.sports.indexOf(el.dataset.sport) >= 0;   // from the patch, never from the DOM
+        el.setAttribute('aria-checked', String(nowOn));
+        el.querySelector('.cc-row-switch')?.setAttribute('data-on', String(nowOn));
+        ctx = { ...ctx, news: { ...ctx.news, ...patch } };
+        haptic('selection');
+        ctx.callbacks?.onSetNewsPrefs?.(patch);
+        break;
+      }
+      case 'cc-news-remove-team': {
+        const team = el.dataset.team;
+        const patch = newsPatchFor(action, ctx.news, { team });
+        if (!patch) break;
+        const index = newsContentEl ? Array.from(newsContentEl.querySelectorAll('[data-action="cc-news-remove-team"]')).indexOf(el) : -1;
+        const labelEl = el.querySelector('.news-chip__label');
+        absorbLiveNewsPicker({ location: team, displayName: (labelEl && typeof labelEl.textContent === 'string' && labelEl.textContent) || team });
+        ctx = { ...ctx, news: { ...ctx.news, ...patch } };
+        paintNewsContent();
+        refocusNewsPane(index);
+        haptic('light');
+        ctx.callbacks?.onSetNewsPrefs?.(patch);
+        break;
+      }
+      // === SOCIAL PLATFORM NEWS -- END ===
       case 'cc-toggle-row':
         dispatch({ type: 'toggle-row', group: el.dataset.group, rowId: el.dataset.row });
         haptic('selection');
@@ -1432,6 +1722,13 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
         haptic('selection');
         ctx.callbacks?.onOpenLeaguePage?.();
         break;
+      // SP-53 / DI-457 (2026-10-01) — the "League" group's League Settings row: the SAME close-the-drawer-first shape as the league-name tap above (a full-screen surface must never
+      // open UNDER the still-open drawer); the selection haptic is the page-entry haptic (DI-457), fired here and not again by the page.
+      case 'cc-open-league-settings':
+        dispatch({ type: 'close', reducedMotion: rm() });
+        haptic('selection');
+        ctx.callbacks?.onOpenLeagueSettings?.();
+        break;
       // DI-335/DI-340 (2026-09-25) — both open a full modal sheet in app.js
       // (the identical `.modal-overlay.centered`/`.modal` idiom
       // `showAccountSheet()` already uses), not a drawer pane — closing the
@@ -1450,6 +1747,19 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
         ctx.callbacks?.onSetLogoView?.(!(ctx.logoView === true));
         haptic('selection');
         break;
+      // ══ SP-52 / DI-452 (2026-10-01) — THE QUICK LIGHT/DARK TOGGLE ═══════════════════════════════════════════
+      // One write path (the callback -> applyColorSchemeChoice), then an IN-PLACE patch: no innerHTML, no pane
+      // repaint (so the tapped node and VoiceOver focus survive). A selection haptic on every state CHANGE
+      // (including pinning and Match my phone; native only — haptic() is the guard), none on a no-op tap.
+      case 'cc-quick-scheme': {
+        const want = el.dataset.scheme;
+        if (want !== 'light' && want !== 'dark' && want !== 'system') break;
+        const r = ctx.callbacks?.onQuickColorScheme?.(want);
+        if (r?.changed) haptic('selection');
+        if (r) { ctx = { ...ctx, currentColorScheme: r.scheme }; patchQuickAppearance(mainContentEl, ctx); }
+        break;
+      }
+      // ══ end SP-52 / DI-452 ═══════════════════════════════════════════════════════════════════════════════
       case 'cc-save-profile': {
         const val = (field) => profileContentEl?.querySelector(`[data-field="${field}"]`)?.value ?? '';
         ctx.callbacks?.onSaveDisplayName?.(val('display-name'));
@@ -1474,6 +1784,18 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
     if (el.dataset.field === 'timezone') ctx.callbacks?.onSetTimeZone?.(el.value);
     else if (el.dataset.field === 'theme') ctx.callbacks?.onSetTheme?.(el.value);
     else if (el.dataset.field === 'colorScheme') ctx.callbacks?.onSetColorScheme?.(el.value);
+    // === SOCIAL PLATFORM NEWS -- BEGIN === the team picker: a chosen school becomes a chip (structural, so the pane repaints and the select returns to its placeholder).
+    else if (el.dataset.field === 'news-add-team') {
+      const patch = newsPatchFor('cc-news-add-team', ctx.news, { value: el.value });
+      if (!patch) { el.value = ''; return; }
+      absorbLiveNewsPicker();
+      ctx = { ...ctx, news: { ...ctx.news, ...patch } };
+      paintNewsContent();
+      refocusNewsPane(-1);
+      haptic('selection');
+      ctx.callbacks?.onSetNewsPrefs?.(patch);
+    }
+    // === SOCIAL PLATFORM NEWS -- END ===
   }
 
   function focusableEls(container) {
@@ -1488,7 +1810,7 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
       return;
     }
     if (e.key === 'Tab') {
-      const pane = state.pane === 'profile' ? profilePaneWrapEl : mainPaneWrapEl;
+      const pane = state.pane === 'profile' ? profilePaneWrapEl : state.pane === 'news' ? newsPaneWrapEl : mainPaneWrapEl;   // SOCIAL PLATFORM NEWS: the third pane
       if (!pane) return;
       const els = focusableEls(pane);
       if (els.length === 0) return;
@@ -1496,6 +1818,24 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
       if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     }
+  }
+
+  // SP-52 / DI-452 — radio-group keyboard behaviour on the quick row: Arrow keys move AND commit (the next segment is focused,
+  // then clicked, so the one onClick path handles it); Space/Enter activate the focused <button> natively. Roving tabindex means
+  // the checked segment is the tab stop.
+  function onQuickKeydown(e) {
+    const track = e.target?.closest?.('.cc-quick-track');
+    if (!track) return;
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    const segs = [...track.querySelectorAll('.cc-quick-seg')];
+    const here = e.target.closest('.cc-quick-seg');
+    const i = segs.indexOf(here);
+    if (i < 0 || segs.length < 2) return;
+    e.preventDefault();
+    const dir = (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ? -1 : 1;
+    const next = segs[(i + dir + segs.length) % segs.length];
+    next.focus?.();
+    next.click?.();
   }
 
   function onTransitionEnd(e) {
@@ -1507,6 +1847,7 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
 
   rootEl.addEventListener('click', onClick);
   rootEl.addEventListener('change', onChange);
+  rootEl.addEventListener('keydown', onQuickKeydown);
   rootEl.addEventListener('transitionend', onTransitionEnd);
   if (typeof document !== 'undefined') document.addEventListener('keydown', onKeydown);
 
@@ -1532,16 +1873,21 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
       ctx = nextCtx;
       paintMainContent();
       paintProfileContent();
+      paintNewsContent();                                                       // SOCIAL PLATFORM NEWS
       firePaintHook();
     },
     destroy: () => {
       clearFallback();
       rootEl.removeEventListener('click', onClick);
       rootEl.removeEventListener('change', onChange);
+      rootEl.removeEventListener('keydown', onQuickKeydown);
       rootEl.removeEventListener('transitionend', onTransitionEnd);
       if (typeof document !== 'undefined') document.removeEventListener('keydown', onKeydown);
       unbindSwipe();
     },
     getState: () => ({ ...state }),
+    /** SP-52 / DI-452 — the phone-initiated case: the phone's own appearance changed while the drawer is open
+     *  (`{ systemIsDark }`), so the highlight and caption must stay true. Same in-place patch, no repaint. */
+    setQuickAppearance: (partial = {}) => { ctx = { ...ctx, ...partial }; patchQuickAppearance(mainContentEl, ctx); },
   };
 }

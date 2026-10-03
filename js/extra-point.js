@@ -174,17 +174,27 @@ export function isCountedExtraPointWeek(week, { canViewOtherPicks = () => false 
   if (week.status === 'draft') return false;
   if (week.dataSourceMode === 'demo') return false;
   if (week.showInHistory === false) return false;
-  // "a finite extraPointActual" spelled out. The commissioner's own Save
-  // handler runs parseInt() and refuses anything non-finite, so the UI can
-  // never write junk — but a hand-edited or legacy record can, and
-  // Number('') is 0, which would otherwise grade as a real 0-yard result and
-  // bust the entire league on a week nobody played. An empty/blank string is
-  // an ABSENT value, not a zero.
-  const rawActual = week.extraPointActual;
+  if (!extraPointActualIsUsable(week)) return false;
+  return !!canViewOtherPicks(week);
+}
+
+/**
+ * "a finite extraPointActual" spelled out — the ONE definition, shared by the season tally above and by the
+ * weekly tie-break's key builder (js/tie-context.js, SP-54 / DI-466). The commissioner's own Save
+ * handler runs parseInt() and refuses anything non-finite, so the UI can
+ * never write junk — but a hand-edited or legacy record can, and
+ * Number('') is 0, which would otherwise grade as a real 0-yard result and
+ * bust the entire league on a week nobody played. An empty/blank string is
+ * an ABSENT value, not a zero.
+ *
+ * This is the trap `gradeWeekExtraPoint()` alone does not avoid (it only refuses `== null`), which is why
+ * the tie-break asks THIS first.
+ */
+export function extraPointActualIsUsable(week) {
+  const rawActual = week ? week.extraPointActual : null;
   if (rawActual == null) return false;
   if (typeof rawActual === 'string' && rawActual.trim() === '') return false;
-  if (!Number.isFinite(Number(rawActual))) return false;
-  return !!canViewOtherPicks(week);
+  return Number.isFinite(Number(rawActual));
 }
 
 /** Weeks that are eligible in principle (enabled, visible, non-demo, opened)

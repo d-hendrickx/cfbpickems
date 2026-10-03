@@ -1282,8 +1282,11 @@ let sharedBootHandler = null;
             // in this harness touches.
             from(table) {
               sbTables.push(String(table || ''));
-              const b = { select(){ return b; }, eq(){ return b; },
-                then(res, rej) { return Promise.resolve({ data: [{ league_id: 'L-STRANGER', id: 'm-stranger', role: 'commissioner', display_name: 'Stranger', active: true, leagues: { name: 'Stranger League' } }], error: null }).then(res, rej); } };
+              // SB-01 / RG-265 — hydrate() pages every read and asks page one for `count: 'exact'`;
+              // this fake's one row is its whole table, so it answers the count and page one is
+              // proven complete: still ONE `from('league_kv')` per hydrate, as the observable needs.
+              const b = { select(){ return b; }, eq(){ return b; }, order(){ return b; }, limit(){ return b; }, gt(){ return b; },
+                then(res, rej) { return Promise.resolve({ data: [{ league_id: 'L-STRANGER', id: 'm-stranger', role: 'commissioner', display_name: 'Stranger', active: true, leagues: { name: 'Stranger League' } }], error: null, count: 1 }).then(res, rej); } };
               return b;
             },
             rpc: async () => ({ data: null, error: null }),
@@ -2267,8 +2270,9 @@ let sharedBootHandler = null;
       // DI-397 (UN-357, 2026-09-27) retires #page-settings along with the
       // Settings tab — EIGHT containers now (seven page sections + week
       // block), not nine.
-      assert(Object.keys(r.paintedPages).length === 8,
-        `${reason}: fixture — eight containers were painted before the boot (seven page sections + week block), so the assertion above is about a real teardown`);
+      // UPDATED AGAIN — Home wiring (2026-10-01): #page-home is the EIGHTH page section, so NINE containers (eight page sections + week block).
+      assert(Object.keys(r.paintedPages).length === 9,
+        `${reason}: fixture — nine containers were painted before the boot (eight page sections + week block), so the assertion above is about a real teardown`);
       assert(r.hydrateCalls.length === 0,
         `${reason}: and no hydrate runs behind the hold (${r.hydrateCalls.length} call(s)) — the hold is a real hold`);
       assert(storageMod.getSession().isAdmin === false,
@@ -3427,7 +3431,7 @@ let sharedBootHandler = null;
 
       // ── (C) GARBAGE IS NOT A THEME, AND IS NEVER A CLASS NAME ───────────
       // The value is read from the device and spliced into a class name; the
-      // only safe rule is an allow-list of the seven real keys.
+      // only safe rule is an allow-list of the real keys (ten since SP-52).
       for (const junk of ['bogus', '"><script>alert(1)</script>', 'theme-aggie', '', 42]) {
         const r = await bootWithHint(junk);
         assert(r.themeOrder[0] === 'theme-neutral',
@@ -3486,7 +3490,7 @@ let sharedBootHandler = null;
         assert(JSON.stringify(runInline(JSON.stringify('boilermaker'))) === JSON.stringify(['theme-boilermaker']),
           `[29] …and it paints that palette (got ${JSON.stringify(runInline(JSON.stringify('boilermaker')))})`);
         assert(JSON.stringify(runInline(JSON.stringify('bogus'))) === JSON.stringify(['theme-neutral']),
-          '[29] …validates against the seven real keys, so an unknown value is the default');
+          '[29] …validates against the ten real keys, so an unknown value is the default');
         assert(JSON.stringify(runInline('not json at all')) === JSON.stringify(['theme-neutral']),
           '[29] …survives a corrupt value');
         assert(JSON.stringify(runInline(undefined)) === JSON.stringify(['theme-neutral']),
@@ -3617,9 +3621,17 @@ let sharedBootHandler = null;
       // Asserted rather than skipped so the decision is pinned and visible.
       ['a VALID unresolved session', sess30(3600), false],
     ];
+    // SB-20 review N1 (2026-10-01) — the device-data OWNER MARKER is seeded. A
+    // returning Supabase device has one (DI-180q writes it on the first resolved
+    // identity); since SB-20 the early phase REFUSES to replay a cache with no
+    // recorded owner on a last-known-supabase device ("missing reads as not
+    // yours"), which would leave this section's leak assertions with nothing to
+    // leak. The tuple's league term is 'null' because this boot seeds no league
+    // pointer. The marker-less shape is asserted on its own just below.
+    const OWNER30 = ['u-drew', 'null'].join('\u0000');
     for (const [label, session, mustWithhold] of SESSIONS30) {
       const b = await bootParked({
-        seed: { cfbp_auth_mode_last_known: 'supabase', ...(session ? { cfbp_supabase_session: session } : {}) },
+        seed: { cfbp_auth_mode_last_known: 'supabase', cfbp_device_data_owner: OWNER30, ...(session ? { cfbp_supabase_session: session } : {}) },
         cfgExtra: SUPA30,
       });
       try {
@@ -3652,6 +3664,20 @@ let sharedBootHandler = null;
           assert(appMod.isContentWithheld() === false,
             `[30] ${label}: STATED DECISION — an unexpired token in this device's own storage IS the credential, so content is not withheld. Pinned so the decision is visible rather than assumed.`);
         }
+      } finally { await b.release(); b.restoreNav(); }
+    }
+
+    // ── (A2) SB-20 N1 — NO OWNER MARKER: THE EARLY PHASE DOES NOT REPLAY ──
+    // The same parked pre-config window, through the real boot(): a
+    // last-known-supabase device holding a cache whose owner was never recorded
+    // (or whose marker a Sign Out removed) folds none of it.
+    {
+      const b = await bootParked({ seed: { cfbp_auth_mode_last_known: 'supabase' }, cfgExtra: SUPA30 });
+      try {
+        assert(b.r.fetches.some(u => String(u).includes('config.json')),
+          '[30] SB-20 N1: fixture — the boot reached the config fetch and parked there');
+        assert(!chatMod30.getMessages({ tag: 'all' }).some(m => m.id === 'm9'),
+          '[30] SB-20 N1: with NO owner marker, the early phase does NOT replay the device cache on a last-known-supabase device — an unowned room is never folded before the identity that might not own it');
       } finally { await b.release(); b.restoreNav(); }
     }
 
@@ -3840,8 +3866,9 @@ let sharedBootHandler = null;
       // byte-identical markup shape (icon only).
       assert(text36(t) === '',
         `[36a] …and no visible text beside it — the mark alone is the logo on web too, matching NATIVE's own assertion below (got ${JSON.stringify(text36(t))})`);
-      assert(String(t?.innerHTML || '').includes(iconsMod36.icon('munera')),
-        '[36a] …and it carries the Munera mark glyph — the same logo affordance as native');
+      // Home wiring (2026-10-01, UN-320c / Amendment 3 A3.6): the trigger carries the MENU glyph now; the Munera mark moved to the center Home tab.
+      assert(String(t?.innerHTML || '').includes(iconsMod36.icon('menu')) && !String(t?.innerHTML || '').includes(iconsMod36.icon('munera')),
+        '[36a] …and it carries the MENU glyph (three strokes), not the Munera mark — the same affordance as native');
       assert(!String(t?.innerHTML || '').includes(iconsMod36.icon('chevronRight')),
         '[36a] …and NOT a trailing chevron — that reads as push-forward navigation, not "open a drawer" (coordinator ruling replacing the chevron this trigger shipped with)');
       // DI-405 — with no visible name, there is nothing to echo into the
@@ -3865,8 +3892,8 @@ let sharedBootHandler = null;
         '[36b] fixture: js/icons.js carries a `munera` mark glyph');
       assert(String(t?.innerHTML || '').trim().length > 0,
         `[36b] RG — after a signed-in supabase boot on NATIVE, #control-center-trigger is NOT EMPTY (got ${JSON.stringify(t?.innerHTML)})`);
-      assert(/<svg\b/.test(String(t?.innerHTML || '')) && String(t?.innerHTML || '').includes(iconsMod36.icon('munera')),
-        '[36b] …it holds the icon(\'munera\') inline SVG (fill="none" stroke="currentColor", no external asset)');
+      assert(/<svg\b/.test(String(t?.innerHTML || '')) && String(t?.innerHTML || '').includes(iconsMod36.icon('menu')),
+        '[36b] …it holds the icon(\'menu\') inline SVG (fill="none" stroke="currentColor", no external asset)');
       assert(text36(t) === '',
         `[36b] …and no text beside it — the mark alone is the logo (got ${JSON.stringify(text36(t))})`);
       // REVIEWER note 2 — native's trigger is icon-only chrome with no
@@ -3953,6 +3980,71 @@ let sharedBootHandler = null;
     await reset36();
   }
 
+  // ═════════════════════════════════════════════════════════════════
+  // [HOME] Social Platform Home wiring (v0.29.0; DI-374 item 6 / security W8, "S-C7": Home paints NOTHING while no identity is proven)
+  //
+  // The cold-boot hole this closes: "chat cache primed, the SDK injected late, config unread". With NO resolved identity the real Home wiring (js/app.js getHomeWiring(), every gate
+  // injected by reference) must write NOTHING into #page-home / #home-root: no skeleton, no cached-card flash, no partial DOM, whatever the chat engine already holds. It is the same
+  // identity-less device [28] covers for chat, one surface over; the three unresolved states are [28]'s own, and the SDK-never-lands boot is a fourth.
+  // (DI-370 test 1, "cold boot lands on Home", is homenavtest.mjs [1]/[4]/[5]: state.currentTab's initializer is "home" iff the Home button exists, _repaintForSupabaseData's
+  //  navigateTo(state.currentTab || ...) is the first paint, and the real navigateTo("home") lights #page-home and the Home tab: this harness's fake server cannot complete a league
+  //  hydrate, so a cold boot here never reaches navigateTo, and a test claiming it did would be vacuous.)
+  // ═════════════════════════════════════════════════════════════════
+  console.log('\n[HOME] S-C7 / W8 — with no identity proven (chat cache primed, SDK late or absent, config unread), Home paints NOTHING…');
+  {
+    const chatModH = await import('./js/chat.js');
+    const homeModH = await import('./js/home.js');
+    const quietH = async (fn) => {
+      const e = console.error, w = console.warn, i = console.info, l = console.log;
+      console.error = () => {}; console.warn = () => {}; console.info = () => {}; console.log = () => {};
+      try { return await fn(); } finally { console.error = e; console.warn = w; console.info = i; console.log = l; }
+    };
+    const SUPAH = { authMode: 'supabase', dataMode: 'supabase', supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon' };
+    const EXPIREDH = () => JSON.stringify({ access_token: 'tok', refresh_token: 'r', expires_at: Math.floor(Date.now() / 1000) - 7200, user: { id: 'u-drew', email: 'd@x.test' } });
+    const CACHEH = () => JSON.stringify({ epoch: 0, head: 7, events: [{ id: 'm7', seq: 7, ts: Date.now() - 60000, type: 'message', author: 'scribe', body: 'SCRIBE: Kihoon is up 4-2 on the season', notify: true }] });
+    const EVH = () => ({ id: 'm7', seq: 7, ts: Date.now() - 60000, type: 'message', author: 'scribe', body: 'SCRIBE: Kihoon is up 4-2 on the season', notify: true });
+    const STATESH = [['no session at all', null, true], ['an EXPIRED session', EXPIREDH(), true], ['no session, and the SDK never lands (late / blocked)', null, false]];
+    for (const [label, session, withSdk] of STATESH) {
+      let r = null;
+      try {
+        await quietH(async () => { appMod._resetHomeWiringForTest(); });
+        r = await quietH(() => runBoot({ config: okConfig(SUPAH), withSdk, paintPages: true, seed: { cfbp_auth_mode_last_known: 'supabase', cfbp_backend_config: BACKEND_CFG, cfbp_chat_events_cache: CACHEH(), ...(session ? { cfbp_supabase_session: session } : {}) } }));
+        const pageHome = r.reg.get('page-home');
+        const htmlBefore = String(pageHome?.innerHTML ?? '');
+        assert(!!pageHome && appMod._APP_PAGE_CONTAINER_IDS_FOR_TEST.includes('page-home'),
+          `[HOME] ${label}: fixture — #page-home exists and the A6 teardown list names it (it holds ${JSON.stringify(htmlBefore.slice(0, 40))} before Home is asked to paint: the harness's pre-painted league data, or nothing after a hold teardown)`);
+        await quietH(async () => { chatModH.ingest([EVH()]); });
+        assert(chatModH.getMessages({ tag: 'all' }).some((m) => m.id === 'm7') && chatModH.chatBoundToLeague('L1') === false,
+          `[HOME] ${label}: fixture — the cached SCRIBE message really IS in the chat engine, and chatBoundToLeague("L1") is false for it (nothing is bound before this device knows who it is)`);
+        assert(appMod.isContentWithheld() === true, `[HOME] ${label}: fixture — the app is withholding content (isContentWithheld() is true)`);
+        const writes = [];
+        const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(pageHome), 'innerHTML');
+        if (desc && desc.set) Object.defineProperty(pageHome, 'innerHTML', { configurable: true, get() { return desc.get.call(this); }, set(v) { writes.push(String(v).length); desc.set.call(this, v); } });
+        let painted = null;
+        await quietH(async () => { painted = appMod._getHomeWiringForTest().homeView.renderHome(); appMod._renderHomePageForTest(); });
+        assert(painted === false && String(pageHome.innerHTML ?? '') === htmlBefore && writes.length === 0 && !r.reg.get('home-root'),
+          `[HOME] ${label}: S-C7 — renderHome() returns false and #page-home receives ZERO writes and is byte-identical to before (no #home-root created, no skeleton, no cards, no partial DOM) while no identity is proven (${writes.length} write(s))`);
+        // POSITIVE CONTROL (the assertion above is not vacuous): the same Home with a gate stubbed to "never withheld" DOES write into the same container.
+        const ctl = new BEl('div');
+        const stub = homeModH.createHome({
+          escHtml: (x) => String(x), isContentWithheld: () => false, confirmedStatusFor: (w) => w.status, picksReadConfirmed: () => true, renderCompact: () => '',
+          chatCandidates: () => ({ scribe: [], lockerRoom: [] }), getContainer: () => ctl, currentIdentityKey: () => 'a|b|c', getCurrentTab: () => 'home',
+        });
+        const wrote = stub.renderHome();
+        assert(wrote === true && /home-feed/.test(String(ctl.innerHTML || '')),
+          `[HOME] ${label}: positive control — the SAME Home with isContentWithheld stubbed to () => false DOES paint (so the zero writes above are the gate's doing, and a wiring that stubbed it would turn this section red)`);
+      } finally {
+        await quietH(async () => {
+          // the same teardown [36] ends with: the next section starts from a LOCAL, unconfigured device
+          const sbH = await import('./js/supabase-backend.js');
+          sbH._resetForTest(); chatModH._resetForTest(); appMod._resetHomeWiringForTest(); appMod._resetSupabaseDataForTest(); appMod._resetAuthHoldForTest();
+          authMod._resetAuthForTest(); authMod.configureAuth({}); storageMod.setBackendMode('local');
+        });
+      }
+    }
+  }
+
+
   // ═════════════════════════════════════════════════════════════════════════
   // [37] FINDING 9 (app-shell part 3A review, 2026-09-27) — three-state
   //      colorScheme coverage was PIN-ONLY (a structural regex on boot()'s
@@ -4026,6 +4118,390 @@ let sharedBootHandler = null;
     if (globalThis.document) globalThis.document.body = prevBody37;
     globalThis.localStorage.removeItem('cfbp_players');
     storageMod37.clearSession();
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // [SP52] SP-52 (2026-10-01) — THE FIRST FRAME IS RIGHT (DI-453) AND THE QUICK TOGGLE'S WRITE PATH (DI-452).
+  //   (a) getColorSchemeBoot(): a readable player record is authoritative, the device hint stands in only while it is not
+  //   (b) the RECORDING RULE (RG-201's twin): only a scheme a RESOLVED PLAYER RECORD supplied is ever written down
+  //   (c) sign-out keeps the painted scheme (J6) and the hint is swept with every other cfbp_ key on a handover
+  //   (d) withSchemeFade(): the class goes on BEFORE the write, comes off at 300ms, never fades at boot / under Reduce Motion / when nothing changes
+  //   (e) onQuickColorScheme: ONE write path, no pane repaint, a no-op tap is silent, a refused write reverts and says so
+  //   (f) BOOT ORDER (CLAUDE.md, 2026-09-26): bindSchemeMediaListener() sits AFTER the first scheme paint in boot()'s source order, and a runtime case
+  //       where the precondition (the control center) arrives LATE — the phone flips before the drawer is mounted
+  // ═════════════════════════════════════════════════════════════════════════
+  console.log('\n[SP52] first-paint scheme hint (DI-453), the one cross-fade (DI-452), the quick toggle\'s write path, and its boot-order assertions…');
+  {
+    const storageSP = await import('./js/storage.js');
+    const authSP = await import('./js/auth.js');
+    storageSP.setBackendMode('local');
+    const prevBodySP = globalThis.document && globalThis.document.body;
+    const prevMatchMedia = globalThis.matchMedia;
+    const prevSetTimeout = globalThis.setTimeout, prevClearTimeout = globalThis.clearTimeout;
+    const hintOf = () => storageSP.getSchemeHint();
+    const reset = () => { storageSP.clearSession(); globalThis.localStorage.removeItem('cfbp_players'); globalThis.localStorage.removeItem('cfbp_scheme_hint'); };
+
+    // ── (a) getColorSchemeBoot ────────────────────────────────────────────────────────────────────────────────
+    // F4 (reviewer, A1.9 round) — the hint must be a DEVICE-LOCAL key. Reviewer mutation R3 removed KEYS.SCHEME_HINT from DEVICE_LOCAL_KEYS and SURVIVED: in production the
+    // write would then route through the Supabase adapter (a key it does not project), be refused or queued, and the first-frame fix would silently never work.
+    {
+      const dl = storageSP.getDeviceLocalKeysForTest();
+      assert(dl.has('cfbp_scheme_hint') && dl.has('cfbp_theme_hint'),
+        '[SP52-a] F4: cfbp_scheme_hint IS in DEVICE_LOCAL_KEYS (and so is its sibling cfbp_theme_hint) — a fact about what THIS screen last showed, never routed through a backend');
+      const srcF4 = readFileSync(new URL('./js/storage.js', import.meta.url), 'utf8');
+      const setBlock = srcF4.slice(srcF4.indexOf('const DEVICE_LOCAL_KEYS = new Set(['), srcF4.indexOf(']);', srcF4.indexOf('const DEVICE_LOCAL_KEYS = new Set([')));
+      assert(/KEYS\.SCHEME_HINT,/.test(setBlock) && /KEYS\.THEME_HINT,/.test(setBlock) && storageSP.getDeviceLocalKeysForTest().size === (setBlock.match(/KEYS\.[A-Z_]+,/g) || []).length + (setBlock.match(/'cfbp_[a-z_]+'/g) || []).length,
+        '[SP52-a] F4 [structural]: the Set literal names KEYS.SCHEME_HINT, and the runtime set is exactly the literal\'s entries (the test seam cannot drift from the source)');
+    }
+    reset();
+    assert(storageSP.getColorSchemeBoot() === 'system' && storageSP.getSchemeHint() === '', '[SP52-a] nothing signed in, no hint: the boot scheme is "system" (and the hint reads as the empty string)');
+    storageSP.setSchemeHint('dark');
+    assert(storageSP.getColorSchemeBoot() === 'dark', '[SP52-a] no readable record + hint "dark": the first frame is Dark (the hint stands in until the hydrate lands)');
+    storageSP.setSchemeHint('light');
+    assert(storageSP.getColorSchemeBoot() === 'light', '[SP52-a] …and hint "light" paints Light');
+    for (const junk of ['system', 'bogus', '<script>', 42, null]) {
+      globalThis.localStorage.setItem('cfbp_scheme_hint', JSON.stringify(junk));
+      assert(storageSP.getColorSchemeBoot() === 'system', `[SP52-a] a hint of ${JSON.stringify(junk)} is NOT a pinned scheme: the boot scheme is "system" (the CSS media query decides)`);
+    }
+    assert(storageSP.setSchemeHint('neon') === undefined && !['neon'].includes(storageSP.getSchemeHint()), '[SP52-a] setSchemeHint() refuses a value outside {light, dark, system} (allow-list at the write seam too)');
+    storageSP.addPlayer({ playerId: 'p-sp52', name: 'Drew', active: true, preferences: {} });
+    storageSP.setSession('p-sp52');
+    storageSP.setColorScheme('system');
+    storageSP.setSchemeHint('dark');
+    assert(storageSP.getColorSchemeBoot() === 'system',
+      '[SP52-a] A READABLE RECORD SAYING "system" BEATS A HINT SAYING "dark" — a stale hint can never strand a player on a scheme their record no longer holds');
+    storageSP.setColorScheme('light');
+    assert(storageSP.getColorSchemeBoot() === 'light', '[SP52-a] a readable record pinned to Light is the answer, hint or no hint');
+
+    // ── (b) the recording rule ────────────────────────────────────────────────────────────────────────────────
+    reset();
+    const bodySP = { dataset: {}, classList: { add() {}, remove() {}, contains: () => false } };
+    if (globalThis.document) globalThis.document.body = bodySP;
+    storageSP.addPlayer({ playerId: 'p-sp52', name: 'Drew', active: true, preferences: {} });
+    storageSP.setSession('p-sp52');
+    storageSP.setColorScheme('dark');
+    appMod._applyColorSchemeForTest('dark');
+    assert(hintOf() === 'dark', '[SP52-b] a resolved record that says Dark, painted Dark, RECORDS "dark" — that recording is what makes the next cold open right');
+    storageSP.setColorScheme('system');
+    appMod._applyColorSchemeForTest('system');
+    assert(hintOf() === 'system', '[SP52-b] a readable record that genuinely says "system" records "system" (a real choice, not an absence)');
+    reset();
+    storageSP.setSchemeHint('dark');
+    storageSP.setSession('p-ghost');   // a session whose player row is NOT readable — the Supabase cold boot before the hydrate
+    appMod._applyColorSchemeForTest(appMod._bootColorSchemeForTest());
+    assert(bodySP.dataset.colorScheme === 'dark' && hintOf() === 'dark',
+      `[SP52-b] the hint-driven BOOT PAINT paints Dark and does not record itself back (hint still "dark")`);
+    appMod._applyColorSchemeForTest('system');
+    assert(hintOf() === 'dark', '[SP52-b] an UNREADABLE record never records "system" over "dark" (provenance: only a resolved player record supplies a recordable value)');
+    reset();
+    appMod._applyColorSchemeForTest('dark');
+    assert(hintOf() === '', '[SP52-b] signed OUT: nothing is recorded at all (an anonymous visitor cannot write the hint — UN-127 kept)');
+
+    // ── (c) sign-out keeps the pixel; the hint is swept with every other cfbp_ key ──────────────────────────────
+    reset();
+    bodySP.dataset.colorScheme = 'dark';
+    assert(appMod._resyncSchemeKeyForTest() === 'dark', '[SP52-c] signed OUT, the screen wore Dark: resyncSchemeKey() keeps Dark until the next sign-in (Drew\'s 2026-09-25 "keep", J6) — no repaint flash behind the gate');
+    bodySP.dataset.colorScheme = 'evil';
+    assert(appMod._resyncSchemeKeyForTest() === 'system', '[SP52-c] …validated: a painted value that is not light/dark is "system" (never spliced back)');
+    delete bodySP.dataset.colorScheme;
+    assert(appMod._resyncSchemeKeyForTest() === 'system', '[SP52-c] …and nothing painted is "system"');
+    storageSP.addPlayer({ playerId: 'p-sp52', name: 'Drew', active: true, preferences: { colorScheme: 'light' } });
+    storageSP.setSession('p-sp52');
+    bodySP.dataset.colorScheme = 'dark';
+    assert(appMod._resyncSchemeKeyForTest() === 'light', '[SP52-c] SIGNED IN the answer is the incoming player\'s own (bootColorScheme()), never the departed player\'s pixel');
+    {
+      const store = new Map([['cfbp_scheme_hint', JSON.stringify('dark')], ['cfbp_site_unlocked', '1']]);
+      const saved = globalThis.localStorage;
+      globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k), clear: () => store.clear(), get length() { return store.size; }, key: (i) => [...store.keys()][i] ?? null };
+      try {
+        const quietLog = console.warn; console.warn = () => {};
+        try { authSP.clearDeviceLocalSessionData('handover'); } finally { console.warn = quietLog; }
+        assert(store.get('cfbp_scheme_hint') === undefined && store.get('cfbp_site_unlocked') === '1',
+          '[SP52-c] a handover clears cfbp_scheme_hint with every other cfbp_ key — player B never boots in player A\'s scheme (and the sweep is the real one: it kept the site-unlock flag)');
+      } finally { globalThis.localStorage = saved; }
+    }
+
+    // ── (d) withSchemeFade ───────────────────────────────────────────────────────────────────────────────────
+    reset();
+    const log = [];
+    const timers = [];
+    globalThis.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
+    globalThis.clearTimeout = () => {};
+    const fadeBody = { classList: { add: (c) => log.push('add:' + c), remove: (c) => log.push('remove:' + c), contains: () => false } };
+    const dataset = {};
+    Object.defineProperty(dataset, 'colorScheme', { get() { return this._v; }, set(v) { this._v = v; log.push('write:' + v); }, configurable: true, enumerable: true });
+    fadeBody.dataset = dataset;
+    if (globalThis.document) { globalThis.document.body = fadeBody; globalThis.document.querySelectorAll = () => { log.push('reconcile'); return []; }; globalThis.document.querySelector = () => null; }
+    globalThis.matchMedia = () => ({ matches: false });
+    log.length = 0; timers.length = 0;
+    appMod._applyColorSchemeForTest('dark', { animate: true });
+    assert(log.slice(0, 2).join() === 'add:scheme-swap,write:dark', `[SP52-d] the fade class goes on BEFORE the new value is written (${log.join(' ')})`);
+    assert(timers.some((t) => t.ms === 300), '[SP52-d] …and a 300ms timer is armed to remove it (the page cross-fade is --motion-nav 260ms + a beat)');
+    timers.filter((t) => t.ms === 300).forEach((t) => t.fn());
+    assert(log.includes('remove:scheme-swap') && log.filter((l) => l === 'reconcile').length === 1 && log.indexOf('remove:scheme-swap') < log.indexOf('reconcile'),
+      `[SP52-d] at 300ms the class comes OFF and the settle runs ONCE, AFTER the class removal — the logo reconcile reads computed surfaces, which are mid-transition while the class is on (${log.join(' ')})`);
+    log.length = 0; timers.length = 0;
+    appMod._applyColorSchemeForTest('dark', { animate: true });
+    assert(log.length === 0 && timers.length === 0, `[SP52-d] the attribute already matches: NOTHING is written, no fade, no timer — a realtime repaint never fades (${log.join(' ') || 'silent'})`);
+    log.length = 0; timers.length = 0;
+    appMod._applyColorSchemeForTest('light', { animate: false });
+    assert(!log.includes('add:scheme-swap') && log.includes('write:light'), '[SP52-d] animate:false (the first paint at boot) never adds the fade class — right from frame 0');
+    assert(timers.some((t) => t.ms >= 200), '[SP52-d] …but even a non-animated change settles AFTER >= 200ms before the logos are re-read (A1.2: .pick-btn has transition: all .16s, even under Reduce Motion)');
+    log.length = 0; timers.length = 0;
+    globalThis.matchMedia = (q) => ({ matches: /reduce/.test(q) });
+    appMod._applyColorSchemeForTest('dark', { animate: true });
+    assert(!log.includes('add:scheme-swap') && log.includes('write:dark'), '[SP52-d] REDUCE MOTION: no fade class, the change is instant (polish never depends on animation)');
+    assert(timers.some((t) => t.ms >= 200), '[SP52-d] …and the settle still runs, so the chrome and the logos still follow');
+    globalThis.matchMedia = () => ({ matches: false });
+    // the theme change shares the language
+    log.length = 0; timers.length = 0;
+    {
+      const fn = appMod._withSchemeFadeForTest;
+      let wrote = 0;
+      fn(() => { wrote++; log.push('theme-write'); }, true);
+      assert(log.join() === 'add:scheme-swap,theme-write' && wrote === 1, `[SP52-d] a Theme change uses the same withSchemeFade (class, then the one write) (${log.join(' ')})`);
+    }
+    globalThis.setTimeout = prevSetTimeout; globalThis.clearTimeout = prevClearTimeout;
+
+    // ── (e) onQuickColorScheme ───────────────────────────────────────────────────────────────────────────────
+    reset();
+    storageSP.addPlayer({ playerId: 'p-sp52', name: 'Drew', active: true, preferences: {} });
+    storageSP.setSession('p-sp52');
+    const bodyE = { dataset: {}, classList: { add() {}, remove() {}, contains: () => false } };
+    if (globalThis.document) { globalThis.document.body = bodyE; globalThis.document.querySelectorAll = () => []; }
+    let updates = 0;
+    const prevApi = appMod._setControlCenterApiForTest({ update: () => { updates++; }, open() {}, close() {} });
+    try {
+      const cb = appMod._buildControlCenterCtxForTest().callbacks;
+      assert(typeof cb.onQuickColorScheme === 'function' && typeof cb.onSetColorScheme === 'function', '[SP52-e] fixture: the real ctx carries onQuickColorScheme next to onSetColorScheme');
+      updates = 0;
+      const r1 = cb.onQuickColorScheme('dark');
+      assert(r1.changed === true && r1.scheme === 'dark' && storageSP.getColorScheme() === 'dark' && bodyE.dataset.colorScheme === 'dark',
+        `[SP52-e] one tap writes THE key (preferences.colorScheme) and paints it (${JSON.stringify(r1)})`);
+      assert(updates === 0, `[SP52-e] …and calls NOTHING that repaints the pane (control-center update() ran ${updates}×): focus and the tapped node survive (F4)`);
+      const r2 = cb.onQuickColorScheme('dark');
+      assert(r2.changed === false && r2.scheme === 'dark' && updates === 0, '[SP52-e] tapping what is already stored is a NO-OP: {changed:false} — no haptic, no fade');
+      const before = bodyE.dataset.colorScheme;
+      const r3 = cb.onQuickColorScheme('evil-mode');
+      assert(r3.changed === false && r3.refused === true && r3.scheme === 'dark' && bodyE.dataset.colorScheme === before && storageSP.getColorScheme() === 'dark',
+        `[SP52-e] a REFUSED write: {refused:true}, the paint re-derives from the stored value and nothing is persisted (${JSON.stringify(r3)})`);
+      updates = 0;
+      cb.onSetColorScheme('light');
+      assert(updates >= 1, '[SP52-e] contrast: the Appearance <select>\'s onSetColorScheme DOES repaint the pane (that is why the quick row has its own path)');
+    } finally { appMod._setControlCenterApiForTest(prevApi); }
+    {
+      const src = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+      const quickBody = src.slice(src.indexOf('onQuickColorScheme: (v) => {'), src.indexOf('onSetLogoView: (v) => {'));
+      const code = quickBody.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^[ \t]*\/\/[^\n]*$/gm, ' ');
+      assert((code.match(/applyColorSchemeChoice\(/g) || []).length === 1 && !/refreshControlCenterAndSettingsPage\(/.test(code) && !/navigateTo\(/.test(code),
+        '[SP52-e] [structural] onQuickColorScheme calls applyColorSchemeChoice exactly ONCE and never refreshControlCenterAndSettingsPage() / navigateTo()');
+      assert(/showToast\("Couldn't change the appearance\. Try again\.", 'error'\)/.test(code), '[SP52-e] [structural] a refused write toasts the exact copy: "Couldn\'t change the appearance. Try again."');
+    }
+
+    // ── (f) BOOT ORDER ─────────────────────────────────────────────────────────────────────────────────────────
+    {
+      const src = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+      const bootBodySP = src.slice(src.indexOf('async function boot() {'), src.indexOf('async function runPostHydrateTail'));
+      const bootCodeSP = bootBodySP.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^[ \t]*\/\/[^\n]*$/gm, ' ');
+      const iPaint = bootCodeSP.indexOf('applyColorScheme(bootColorScheme())');
+      const iBind = bootCodeSP.indexOf('bindSchemeMediaListener()');
+      const iMount = bootCodeSP.indexOf('mountControlCenterDrawer()');
+      assert(iPaint > 0 && iBind > iPaint && (iMount < 0 || iBind < iMount) && (bootCodeSP.match(/bindSchemeMediaListener\(\)/g) || []).length === 1,
+        `[SP52-f] [boot order] bindSchemeMediaListener() is called ONCE in boot(), AFTER the first scheme paint (${iPaint}) and before the drawer mounts (${iBind} < ${iMount}) — a comment-stripped source-position scan`);
+      assert(!/hasValidSupabaseSession|isSignedInForApp|getAccountUserId/.test(src.slice(src.indexOf('function bindSchemeMediaListener'), src.indexOf('export const _bindSchemeMediaListenerForTest'))),
+        '[SP52-f] [boot order] the listener needs NO auth / league / config precondition: its handler reads the preference when it FIRES (bootColorScheme()), never at bind time');
+    }
+    {
+      // the runtime case where the precondition arrives LATE: the phone flips BEFORE the drawer is mounted (controlCenterApi is still null)
+      let handler = null;
+      const mql = { matches: true, addEventListener: (t, fn) => { if (t === 'change') handler = fn; } };
+      globalThis.matchMedia = (q) => (/prefers-color-scheme/.test(q) ? mql : { matches: false });
+      reset();
+      storageSP.addPlayer({ playerId: 'p-sp52', name: 'Drew', active: true, preferences: {} });
+      storageSP.setSession('p-sp52');
+      storageSP.setColorScheme('system');
+      const bodyF = { dataset: {}, classList: { add: (c) => logF.push('add:' + c), remove() {}, contains: () => false } };
+      const logF = [];
+      if (globalThis.document) globalThis.document.body = bodyF;
+      globalThis.setTimeout = (fn, ms) => { logF.push('timer:' + ms); return 1; };
+      appMod._bindSchemeMediaListenerForTest();
+      assert(typeof handler === 'function', '[SP52-f] fixture: the real binder attached a change listener to the prefers-color-scheme media query');
+      const prev0 = appMod._setControlCenterApiForTest(null);
+      let threw = false;
+      try { handler(); } catch { threw = true; }
+      assert(!threw && logF.includes('add:scheme-swap'), `[SP52-f] the phone flips while the drawer is NOT mounted yet: the handler runs without throwing and still fades the page (${logF.join(' ')})`);
+      const calls = [];
+      appMod._setControlCenterApiForTest({ setQuickAppearance: (p) => calls.push(p) });
+      logF.length = 0;
+      handler();
+      assert(calls.length === 1 && calls[0].systemIsDark === true, `[SP52-f] …and once the drawer IS mounted the same listener updates its quick row in place (${JSON.stringify(calls)})`);
+      storageSP.setColorScheme('dark');
+      logF.length = 0; calls.length = 0;
+      handler();
+      assert(calls.length === 0 && !logF.includes('add:scheme-swap'), '[SP52-f] a PINNED scheme ignores the phone entirely: no fade, no quick-row update');
+      appMod._setControlCenterApiForTest(prev0);
+    }
+
+    // ── (g) DI-454 / Amendment A1.1 — syncChromeFromTokens(): the theme-color tint reads --chrome-bg; the native status bar is the SB-08 TRACKER'S ──
+    {
+      const doc = globalThis.document, win = globalThis.window;
+      const prev = { gcs: globalThis.getComputedStyle, wgcs: win && win.getComputedStyle, qs: doc && doc.querySelector, cap: win && win.Capacitor, dAdd: doc && doc.addEventListener, wAdd: win && win.addEventListener };
+      const tokens = { '--chrome-bg': ' #8C1515 ', '--bg': '#E8E4DC' };
+      const gcs = () => ({ getPropertyValue: (n) => tokens[n] || '', height: '0px', backgroundColor: 'rgba(0, 0, 0, 0)', opacity: '1' });
+      const meta = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } };
+      try {
+        globalThis.getComputedStyle = gcs; if (win) win.getComputedStyle = gcs;
+        if (doc && !doc.addEventListener) doc.addEventListener = () => {};
+        if (win && !win.addEventListener) win.addEventListener = () => {};
+        // web, tag present: the tint is the TRIMMED --chrome-bg
+        if (doc) doc.querySelector = (sel) => (/theme-color/.test(sel) ? meta : null);
+        appMod._syncChromeFromTokensForTest();
+        assert(meta.attrs.content === '#8C1515', `[SP52-g] web: <meta name="theme-color"> is set from the resolved --chrome-bg, trimmed (${JSON.stringify(meta.attrs)})`);
+        tokens['--chrome-bg'] = '#FFFFFF';
+        appMod._syncChromeFromTokensForTest();
+        assert(meta.attrs.content === '#FFFFFF', '[SP52-g] …and it follows a change of look (Graphite Light: white) — the old inline block read --maroon, so it would have stayed crimson');
+        // web, no tag: the round-1 short-circuit — no style computation at all
+        let gcsCalls = 0;
+        globalThis.getComputedStyle = () => { gcsCalls++; return gcs(); };
+        if (doc) doc.querySelector = () => null;
+        appMod._syncChromeFromTokensForTest();
+        assert(gcsCalls === 0, `[SP52-g] a web page WITHOUT the tag pays no style computation (the round-1 short-circuit, kept; getComputedStyle ran ${gcsCalls}x)`);
+        // native: the plugin's style is the tracker's choice (surface under the clock), NEVER derived from --chrome-bg here
+        globalThis.getComputedStyle = gcs;
+        const calls = [];
+        win.Capacitor = { isNativePlatform: () => true, Plugins: { StatusBar: { setStyle: (o) => calls.push('style:' + o.style), setBackgroundColor: (o) => calls.push('bg:' + o.color) } } };
+        tokens['--chrome-bg'] = '#8C1515';   // a DARK header colour...
+        tokens['--bg'] = '#E8E4DC';          // ...over a LIGHT page, with no header element in this document: the surface under the clock is the PAGE
+        appMod._syncChromeFromTokensForTest();
+        assert(calls.includes('style:LIGHT') && !calls.includes('style:DARK'),
+          `[SP52-g] native: with a dark --chrome-bg and a light page and no header under the clock, the style is the tracker's LIGHT (dark glyphs on the page) — chrome-bg alone would have said DARK (${calls.join(' ')})`);
+        assert(calls.includes('bg:#8C1515'), '[SP52-g] …and the Android-only background is sent from --chrome-bg (not --maroon), by the tracker');
+        const before = calls.filter((c) => c.startsWith('style:')).length;
+        appMod._syncChromeFromTokensForTest();
+        assert(calls.filter((c) => c.startsWith('style:')).length === before + 1, '[SP52-g] every call FORCES the style (A1.1: syncStatusBar({ force: true })) — the plugin resets it on each native viewDidAppear, so an unchanged style is still re-sent');
+        // a web page that merely has a Capacitor-less window sends nothing to any plugin
+        delete win.Capacitor; calls.length = 0;
+        appMod._syncChromeFromTokensForTest();
+        assert(calls.length === 0, '[SP52-g] not native: no plugin call at all (the tracker is native-only)');
+      } finally {
+        globalThis.getComputedStyle = prev.gcs; if (win) { win.getComputedStyle = prev.wgcs; if (prev.cap === undefined) delete win.Capacitor; else win.Capacitor = prev.cap; win.addEventListener = prev.wAdd; }
+        if (doc) { doc.querySelector = prev.qs; doc.addEventListener = prev.dAdd; }
+        if (prev.gcs === undefined) delete globalThis.getComputedStyle;
+      }
+      const fnSrc = (() => { const src = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8'); const i = src.indexOf('function syncChromeFromTokens()'); return src.slice(i, src.indexOf('\n}', i) + 2).replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^[ \t]*\/\/[^\n]*$/gm, ' '); })();
+      assert(/syncNativeStatusBar\(\)/.test(fnSrc) && !/setStyle|isLightColor|setBackgroundColor|--maroon/.test(fnSrc),
+        '[SP52-g] [structural] syncChromeFromTokens() delegates the native status bar to syncNativeStatusBar() and never sets a style, a luminance verdict or a --maroon read itself (A1.1)');
+    }
+
+    // ── (h) SECURITY C1 (2026-10-01) — preferences.theme is validated: at the READ side (applyTheme, bootThemeKey) and the WRITE seam (setTheme) ──────────────────
+    {
+      const docH = globalThis.document;
+      const prevH = { body: docH && docH.body };
+      const classesH = new Set();
+      const bodyH = { dataset: {}, classList: { add: (c) => classesH.add(c), remove: (c) => classesH.delete(c), contains: (c) => classesH.has(c), [Symbol.iterator]: () => classesH[Symbol.iterator]() } };
+      if (docH) docH.body = bodyH;
+      const warnH = console.warn; console.warn = () => {};
+      const hintThemeOf = () => storageSP.getThemeHint();
+      const seat = (theme) => { reset(); globalThis.localStorage.removeItem('cfbp_theme_hint'); storageSP.addPlayer({ playerId: 'p-c1', name: 'Drew', active: true, preferences: theme === undefined ? {} : { theme } }); storageSP.setSession('p-c1'); classesH.clear(); };
+      try {
+        // the control: a VALID stored theme paints and records its hint (so "no hint" below is not a vacuous result)
+        seat('aggie');
+        appMod._applyThemeForTest(storageSP.getTheme());
+        assert([...classesH].join() === 'theme-aggie' && hintThemeOf() === 'aggie', `[SP52-h] control: a record holding "aggie" paints theme-aggie and records the hint (${[...classesH].join()} / ${JSON.stringify(hintThemeOf())})`);
+        for (const junk of ['neutral x', 'evil', '<img src=x onerror=1>', 'AGGIE', 'theme-aggie', 'aggie ', ' ', 'neutral\nx', '__proto__']) {
+          seat(junk);
+          let threw = false;
+          try { appMod._applyThemeForTest(storageSP.getTheme()); } catch { threw = true; }
+          assert(!threw && [...classesH].join() === 'theme-neutral' && hintThemeOf() === '',
+            `[SP52-h] a record holding ${JSON.stringify(junk)} paints theme-neutral (never a second class, never theme-<junk>), does not throw, and records NO hint (${[...classesH].join() || 'no class'} / hint ${JSON.stringify(hintThemeOf())})`);
+          assert(appMod._bootThemeKeyForTest() === 'neutral', `[SP52-h] …and bootThemeKey() reads ${JSON.stringify(junk)} as the league default, never as a palette`);
+        }
+        // the SAME junk record through the REAL session chokepoint (resyncPlayerPreferences -> applyTheme(resyncThemeKey())): no throw, the default painted, no hint
+        for (const junk of ['neutral x', 'evil']) {
+          seat(junk);
+          let threw = null;
+          try { appMod._resyncPlayerPreferencesForTest(); } catch (e) { threw = e; }
+          assert(!threw && [...classesH].join() === 'theme-neutral' && hintThemeOf() === '',
+            `[SP52-h] ${JSON.stringify(junk)} through resyncPlayerPreferences() (the session chokepoint): no throw${threw ? ' — THREW ' + String(threw && threw.message).slice(0, 120) : ''}, theme-neutral painted, no hint (${[...classesH].join() || 'no class'} / ${JSON.stringify(hintThemeOf())})`);
+        }
+        // a junk record must not shadow a valid hint on a cold boot either (the record is unreadable-as-a-palette, so the hint stands in)
+        seat('evil'); globalThis.localStorage.setItem('cfbp_theme_hint', JSON.stringify('razorback'));
+        assert(appMod._bootThemeKeyForTest() === 'razorback', '[SP52-h] a junk record does not SHADOW the device hint: the first frame is the hint\'s palette (the old reader returned the junk as the palette)');
+        // the WRITE seam
+        seat('aggie');
+        assert(storageSP.setTheme('evil') === false && storageSP.getTheme() === 'aggie', '[SP52-h] setTheme("evil") is REFUSED (false) and writes nothing — the stored palette is still aggie');
+        assert(['', 'neutral x', 'AGGIE', '<b>', null, undefined, 7].every((v) => storageSP.setTheme(v) === false) && storageSP.getTheme() === 'aggie', '[SP52-h] …so is every other value outside THEMES (empty, a class-injection, wrong case, markup, null, undefined, a number)');
+        assert(storageSP.setTheme('paper') === true && storageSP.getTheme() === 'paper' && storageSP.setTheme('graphite') === true, '[SP52-h] …while every real key is accepted and persisted (paper, graphite)');
+        reset();
+        assert(storageSP.setTheme('aggie') === false, '[SP52-h] signed OUT: setTheme returns false (no player record took it — UN-127 kept)');
+        // the drawer's callback: a refused key repaints the PERSISTED palette, never the junk and never a silent neutral
+        seat('aggie');
+        const prevApiH = appMod._setControlCenterApiForTest({ update() {}, open() {}, close() {} });
+        try {
+          const cbH = appMod._buildControlCenterCtxForTest().callbacks;
+          appMod._applyThemeForTest('aggie');
+          cbH.onSetTheme('evil');
+          const themeClasses = () => [...classesH].filter((c) => c.startsWith('theme-')).join();   // body.scheme-swap (the fade) rides the same classList
+          assert(storageSP.getTheme() === 'aggie' && themeClasses() === 'theme-aggie', `[SP52-h] onSetTheme("evil"): storage keeps aggie AND the page keeps wearing aggie — the paint never disagrees with what is persisted (${[...classesH].join()})`);
+          cbH.onSetTheme('ink');
+          assert(storageSP.getTheme() === 'ink' && themeClasses() === 'theme-ink', '[SP52-h] …and a real key still changes both');
+        } finally { appMod._setControlCenterApiForTest(prevApiH); }
+        const srcH = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+        const applyBody = srcH.slice(srcH.indexOf('function applyTheme(themeKey) {'), srcH.indexOf('\n}\n', srcH.indexOf('function applyTheme(themeKey) {')));
+        assert(/THEMES\.some\(t => t\.key === wanted\)/.test(applyBody) && /theme-' \+ key/.test(applyBody) && !/theme-' \+ themeKey/.test(applyBody),
+          '[SP52-h] [structural] applyTheme() concatenates only the VALIDATED key into the class name');
+      } finally {
+        console.warn = warnH;
+        if (docH) docH.body = prevH.body;
+      }
+    }
+
+    // ── (i) The "Write refused" state is REACHABLE (reviewer/security, 2026-10-01): setColorScheme returns the REAL result of the write ───────────────────────────────
+    {
+      const docI = globalThis.document;
+      const prevI = { body: docI && docI.body, gid: docI && docI.getElementById, ce: docI && docI.createElement, st: globalThis.setTimeout };
+      const classesI = new Set();
+      const bodyI = { dataset: {}, classList: { add: (c) => classesI.add(c), remove: (c) => classesI.delete(c), contains: (c) => classesI.has(c), [Symbol.iterator]: () => classesI[Symbol.iterator]() } };
+      const toasts = [];
+      const container = { appendChild: (t) => toasts.push(t) };
+      if (docI) {
+        docI.body = bodyI;
+        docI.getElementById = (id) => (id === 'toast-container' ? container : null);
+        docI.createElement = () => ({ className: '', innerHTML: '', style: { cssText: '' }, remove() {} });
+      }
+      globalThis.setTimeout = () => 1;
+      const warnI = console.warn; console.warn = () => {};
+      try {
+        reset();
+        assert(storageSP.setColorScheme('dark') === false, '[SP52-i] signed OUT: setColorScheme("dark") is false — nothing took the write (it used to answer true)');
+        storageSP.setSession('p-ghost-sp52');
+        assert(storageSP.setColorScheme('dark') === false, '[SP52-i] a session whose player RECORD does not exist: false too (the "no player record" case DI-452 names)');
+        storageSP.addPlayer({ playerId: 'p-sp52-i', name: 'Drew', active: true, preferences: {} });
+        storageSP.setSession('p-sp52-i');
+        assert(storageSP.setColorScheme('dark') === true && storageSP.getColorScheme() === 'dark' && storageSP.setColorScheme('system') === true, '[SP52-i] a signed-in player with a record: true, and it persisted');
+        assert(storageSP.setColorScheme('neon') === false, '[SP52-i] an out-of-allow-list value is still refused (false)');
+        // the REACHABLE refused state, through the drawer's own callback
+        reset(); storageSP.setSession('p-ghost-sp52'); classesI.clear(); delete bodyI.dataset.colorScheme; toasts.length = 0;
+        const prevApiI = appMod._setControlCenterApiForTest({ update() {}, open() {}, close() {} });
+        try {
+          const cbI = appMod._buildControlCenterCtxForTest().callbacks;
+          const r = cbI.onQuickColorScheme('dark');
+          assert(r.refused === true && r.changed === false && r.scheme === 'system', `[SP52-i] the quick toggle on a refused write answers {refused:true, changed:false, scheme:"system"} (${JSON.stringify(r)})`);
+          assert(toasts.length === 1 && toasts[0].className === 'toast error' && toasts[0].innerHTML === "Couldn't change the appearance. Try again.",
+            `[SP52-i] …and the calm toast FIRES with the exact copy, as an error toast, once (${JSON.stringify(toasts.map((t) => [t.className, t.innerHTML]))})`);
+          assert(bodyI.dataset.colorScheme === undefined || bodyI.dataset.colorScheme === 'system' || bodyI.dataset.colorScheme === '', `[SP52-i] …and the page did NOT stay on the refused scheme (data-color-scheme ${JSON.stringify(bodyI.dataset.colorScheme)}): the paint re-derives from the persisted value`);
+        } finally { appMod._setControlCenterApiForTest(prevApiI); }
+      } finally {
+        console.warn = warnI; globalThis.setTimeout = prevI.st;
+        if (docI) { docI.body = prevI.body; docI.getElementById = prevI.gid; docI.createElement = prevI.ce; }
+      }
+    }
+
+    // ── restore ─────────────────────────────────────────────────────────────────────────────────────────────
+    globalThis.setTimeout = prevSetTimeout; globalThis.clearTimeout = prevClearTimeout;
+    globalThis.matchMedia = prevMatchMedia;
+    if (globalThis.document) globalThis.document.body = prevBodySP;
+    reset();
   }
 
   // ═════════════════════════════════════════════════════════════════════════
@@ -4801,13 +5277,20 @@ console.log('\n[25] RG-179 — the player\'s saved theme/timezone are re-applied
   /** A PostgREST-shaped read-only fake. Reads only: [25] never writes. */
   const CLIENT25 = {
     from(table) {
-      const q = { table, filters: [] };
+      // SB-01 / RG-265 — the paging surface hydrate() uses: keyset `gt`, `order`, `limit`, and the
+      // exact count page one asks for (computed before the limit, as PostgREST does).
+      const q = { table, filters: [], gt: [], order: null, limit: Infinity, count: false };
       const api = {
-        select() { return api; },
+        select(_c, o) { q.count = !!(o && o.count); return api; },
         eq(c, v) { q.filters.push([c, v]); return api; },
+        gt(c, v) { q.gt.push([c, v]); return api; },
+        order(c) { q.order = c; return api; },
+        limit(n) { q.limit = n; return api; },
         then(res, rej) {
-          const rows = (ST25[q.table] || []).filter(r => q.filters.every(([c, v]) => r[c] === v));
-          return Promise.resolve({ data: rows, error: null }).then(res, rej);
+          const rows = (ST25[q.table] || []).filter(r => q.filters.every(([c, v]) => r[c] === v)
+            && q.gt.every(([c, v]) => r[c] > v));
+          if (q.order) rows.sort((a, b) => (a[q.order] < b[q.order] ? -1 : a[q.order] > b[q.order] ? 1 : 0));
+          return Promise.resolve({ data: rows.slice(0, q.limit), error: null, count: q.count ? rows.length : null }).then(res, rej);
         },
       };
       return api;
@@ -4881,7 +5364,9 @@ console.log('\n[25] RG-179 — the player\'s saved theme/timezone are re-applied
     // now sits between the two, a second, independent axis added at the SAME
     // boot-time position (never routed through applyTheme() itself — see that
     // function's own header) — same site, text extended to match verbatim.
-    assert(/applyTheme\(bootThemeKey\(\)\); applyColorScheme\(bootColorScheme\(\)\); setupAutoRefresh\(\);/.test(bootBody25),
+    // Re-derived 2026-10-01 (SP-52 DI-452) — `bindSchemeMediaListener();` joins the line, right after the first scheme paint: the phone-appearance listener is bound ONCE,
+    // at the same boot-time position, and reads the preference lazily when it fires (see the [SP52] section's boot-order assertions below). Same site, text extended verbatim.
+    assert(/applyTheme\(bootThemeKey\(\)\); applyColorScheme\(bootColorScheme\(\)\); bindSchemeMediaListener\(\); setupAutoRefresh\(\);/.test(bootBody25),
       '[25] fixture: boot() really does apply the theme at that point [structural]');
     assert(/const fromPlayer = getTheme\(\);/.test(appSrc25),
       '[25] …and bootThemeKey() still prefers the PLAYER record: the hint is a first-frame stand-in, never a second source of truth [structural]');
@@ -6010,20 +6495,163 @@ console.log('     every gate/release site the security probe reverted reads isSi
 
   // Re-derived 2026-09-29 (bug batch B — RG-TBD-B3 (alma-mater catalog notes + reviewer follow-ups, ~app.js:4030–4190) and RG-TBD-B1 (Weekly Blurb card title, ~app.js:12960) sit above these sites) — line numbers only, matched by exact text.
   // Re-derived 2026-09-29 (RG-TBD-N15 — the logo-toggle repaint (+8) and the sweep's time-zone/display-name/initials repaints (+22) in buildControlCenterCtx() sit above every site from 5098 on; 575/1322/1750 unchanged) — line numbers only, matched by exact text.
+  //
+  // POSITION-INDEPENDENT PINS (2026-10-01, int/pins-and-sb14, Social Platform
+  // release v0.29.0 integration). Every "Re-derived" note above (and inside
+  // the two lists below) is history: a branch that added lines ANYWHERE above
+  // a site moved its line number, the line pin went red, and someone re-typed
+  // the number by matching the exact text. SP-56 (+155) and SB-14 (+4) each
+  // did it again, and two branches doing it independently is a guaranteed
+  // merge conflict. What the line pin actually guaranteed, and what each
+  // guarantee is now:
+  //   * the exact SET of hits      -> [35a] (no unlisted hit) + [35a-canary]
+  //                                   (hit count === list length) + [35a-each]
+  //                                   (every pin found exactly once);
+  //   * each site's exact TEXT     -> unchanged: the raw trimmed line, compared
+  //                                   whole;
+  //   * WHERE the site lives       -> `within`: the top-level function (or the
+  //                                   import statement) the line sits in, by
+  //                                   topLevelOwner() below. Two pins with
+  //                                   identical text in two functions stay
+  //                                   distinct, and a site moved into another
+  //                                   function is an offender;
+  //   * ORDER                      -> [35a-order]: the hits, in file order, are
+  //                                   exactly the list, in list order.
+  // Line numbers are still REPORTED in every message (for the reader), never
+  // compared. [35a-shift] proves 50 blank lines at the top of app.js change
+  // nothing; [35a-move] proves a relocated site is still caught. A site moved
+  // WITHIN its own top-level function is the one thing text + function cannot
+  // see; for the nine gates that matter most, [35d-preamble] (below [35b])
+  // closes the part of that which is dangerous — something new put in FRONT
+  // of the gate.
+  //
+  // topLevelOwner() reads this file's formatting convention rather than
+  // parsing JavaScript: every top-level function / const / class / import
+  // opens at column 0, and its body is indented under it. Walk up from the
+  // line to the nearest column-0 opener.
+  // HARDENED 2026-10-01 (int/batch3, reviewer merge condition R-C1). The first
+  // version stopped only at a column-0 `}`, `]` or `)`, and both of the
+  // reviewer's counterexamples resolved a moved site to the WRONG pinned owner
+  // (silently green, [35c-owner] re-runs them):
+  //   (a) ANY column-0 code line met on the way up that is not an opener ends
+  //       the walk as module level. A function whose closing brace is
+  //       indented, followed by a column-0 statement holding a pinned text,
+  //       used to hand that text to the function above. Column-0
+  //       comment-only lines (`//…`, `/*…*/`, `* …`) are skipped; a column-0
+  //       line that STARTS with a comment and has code after it is code.
+  //   (b) the line itself (j === idx), when it starts at column 0 and is not
+  //       an opener or a closer, is its own module-level statement — it is
+  //       not handed to whatever function sits above it.
+  //   (c) a multi-line import's source is the first `} from '…'` at ANY
+  //       indentation (comments on the line ignored). An import whose closer
+  //       is indented used to borrow the NEXT import's source — app.js's own
+  //       scribeAgent.js and scribeLines.js imports were reported as
+  //       './extra-point.js' until this change.
+  //       WIDENED 2026-10-01 (v0.29.0 batch 4, reviewer N1): the source is the
+  //       first `from '…'` after the opener in the code-only view — the `}` is
+  //       no longer required on the same line, so a closer split across two
+  //       lines (`}` then `from './x.js';`) names its OWN source instead of
+  //       borrowing the next import's. [35c-owner] (c) is the teeth.
+  // Where the convention is broken in a way (a)–(c) do not describe — e.g.
+  // template-literal text at column 0 inside a function — the walk ends early
+  // and the owner comes out as module level: a pin there goes RED (loud).
+  //
+  // WHAT THESE PINS STILL DO NOT SEE (stated 2026-10-01, int/batch3, after the
+  // reviewer's R-C1 and security's S-O1/S-C1/S-C2; this replaces the first
+  // version's "never silently green", which both reviews disproved). Checked:
+  // the union hit set ([35a], two views, findHvsHits), exact text, enclosing
+  // function, list order, one column-0 opener per pinned function
+  // ([35c-openers]), and the exact preamble of nine gates ([35d-preamble]).
+  // Still open, all silent:
+  //   * any count-preserving preamble edit — a preamble line replaced in
+  //     place, or one line added and another removed — keeps its count; only a
+  //     NET change in the number of code lines moves it. (Since the v0.29.0
+  //     batch-4 integration, attemptAutoLink()'s FIRST preamble line, the
+  //     once-per-page latch, is text-pinned on its own — [35e-latch] — so
+  //     swapping THAT line for `if (false)` is red; its other preamble line,
+  //     the non-supabase return, and every other counted gate's preamble
+  //     lines are not pinned by text.)
+  //   * the five [35a]/[35b] sites with no preamble count (the auth.js import,
+  //     applyAuthModeDecision()'s sdk hold, wireSupabaseAdapter()'s deps entry,
+  //     refreshAuthUI()'s two lines): a dead `if` or an uncalled closure put
+  //     in front of one of them inside its own function is not seen;
+  //   * anything AFTER a gate — a later line undoing what the gate decided;
+  //   * a reference that never spells the bare identifier (a computed key on a
+  //     namespace import) — no text scan sees that;
+  //   * a line BOTH views miss (added 2026-10-01, v0.29.0 batch 4, security
+  //     F1): a `/*` inside a string or inside a `//` comment opens a fake block
+  //     comment for the stripper, which blanks everything to the next real
+  //     `*/`; a code line inside that span that STARTS with `*` and carries the
+  //     identifier — e.g. a continued product `* (hasValidSupabaseSession() ?
+  //     1 : 0)` — is skipped by the raw view as a comment continuation. The
+  //     union closes each view's blind spot alone, not the two together;
+  //   * a NEW PATH to the gated action (added 2026-10-01, v0.29.0 batch 4,
+  //     security F1): these pins prove each gate is still written, once, in
+  //     its own function — not that the action it guards is reached ONLY
+  //     through that function. A new function that calls linkMemberByEmail()
+  //     directly bypasses attemptAutoLink()'s guards entirely, and nothing
+  //     here looks at linkMemberByEmail()'s callers.
+  // Every mutant in the reviewer's and security's kits outside those six
+  // classes goes red on this tree (dead `if` above each of the nine counted
+  // gates, nested closure, moved gate, same-name decoy, comment-prefixed code,
+  // both stripper fail-opens).
+  const OPENER_FN = /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(/;
+  const OPENER_DECL = /^(?:export\s+)?(?:const|let|var|class)\s+([A-Za-z_$][\w$]*)/;
+  const openerName = (l) => { const m = OPENER_FN.exec(l) || OPENER_DECL.exec(l); return m ? m[1] : null; };
+  // One line, judged on its own: nothing but comment text (and whitespace)?
+  // `/* x */ code` and `*/ code` are code; a lone `/*` (block comment opens)
+  // and a `* …` continuation are comment.
+  function isCommentOnlyLine(l) {
+    let r = l.trim();
+    if (r.startsWith('*/')) r = r.slice(2).trim();
+    else if (r.startsWith('*')) { const e = r.indexOf('*/'); if (e < 0) return true; r = r.slice(e + 2).trim(); }
+    for (;;) {
+      if (r === '' || r.startsWith('//')) return true;
+      if (!r.startsWith('/*')) return false;
+      const e = r.indexOf('*/', 2);
+      if (e < 0) return true;
+      r = r.slice(e + 2).trim();
+    }
+  }
+  const lineCodeOnly = (l) => l.replace(/\/\*.*?\*\//g, ' ').replace(/(^|\s)\/\/.*$/, '$1');
+  // Returns the owner's name AND the index of its opener line (-1 at module
+  // level) — [35d-preamble] counts from that opener.
+  function topLevelOwnerAt(lines, idx) {
+    for (let j = idx; j >= 0; j--) {
+      const l = lines[j];
+      const name = openerName(l);
+      if (name) return { name, at: j };
+      if (/^import\b/.test(l)) {
+        const own = /\bfrom\s+(['"])([^'"]+)\1/.exec(lineCodeOnly(l));
+        if (own) return { name: `import from ${own[2]}`, at: j };
+        for (let k = j + 1; k < lines.length; k++) {
+          const f = /\bfrom\s+(['"])([^'"]+)\1/.exec(lineCodeOnly(lines[k]));   // reviewer N1: the first `from '…'`, `}` on this line or not
+          if (f) return { name: `import from ${f[2]}`, at: j };
+        }
+        return { name: 'import', at: j };
+      }
+      if (l === '' || /^\s/.test(l) || isCommentOnlyLine(l)) continue;
+      if (j === idx && /^[}\])]/.test(l)) continue; // the line closes a construct opened above it
+      return { name: '(module level)', at: -1 };
+    }
+    return { name: '(module level)', at: -1 };
+  }
+  const topLevelOwner = (lines, idx) => topLevelOwnerAt(lines, idx).name;
+
   const ENUMERATED_HVS_SITES = [
     // The import itself — not a "call site," but unavoidable to use the
     // function at all; excluded here rather than by file-level exemption
     // (rolestest's "the module itself" shape) so a SECOND import line
     // elsewhere in the file still gets caught.
-    { line: 612, text: "hasValidSupabaseSession, isSessionExpired, clearSessionExpired," },
+    { within: 'import from ./auth.js', text: "hasValidSupabaseSession, isSessionExpired, clearSessionExpired," },
     // The sdk-unavailable hold ([33-N1d]'s own pin, same site) — the ONE
     // place a raw token question is still the right question: no vendored
     // SDK means isSignedInForApp() cannot even be asked yet.
-    { line: 1377, text: "if (!sdkReady && !hasValidSupabaseSession()) {" },
+    { within: 'applyAuthModeDecision', text: "if (!sdkReady && !hasValidSupabaseSession()) {" },
     // The deps object handed to other modules — a bare reference, never
     // called from here; whatever THAT module does with it is its own
     // concern, not this file's gate logic.
-    { line: 1805, text: "hasValidSupabaseSession," },
+    { within: 'wireSupabaseAdapter', text: "hasValidSupabaseSession," },
     // noIdentityEverProven() — deliberately asks the token question directly
     // (an identity that was never even attempted is a narrower, and correct,
     // question than "is the app-level identity signed in").
@@ -6034,10 +6662,10 @@ console.log('     every gate/release site the security probe reverted reads isSi
   // and doSwitchActiveLeague()'s boolean return all sit above one or more of
   // these sites) — line numbers only, same sites, matched by exact text against
   // the MERGED tree.
-    { line: 5225, text: "try { return isRecoverySession() || (!hasValidSupabaseSession() && !getAccountUserId()); }" },
+    { within: 'noIdentityEverProven', text: "try { return isRecoverySession() || (!hasValidSupabaseSession() && !getAccountUserId()); }" },
     // isSignedInForApp() itself — the ONE place allowed to compose the raw
     // token question into the app-level answer everything else must use.
-    { line: 5247, text: "try { return hasValidSupabaseSession() && !isRecoverySession(); }" },
+    { within: 'isSignedInForApp', text: "try { return hasValidSupabaseSession() && !isRecoverySession(); }" },
     // The expiry classifier — SIGNED_OUT/TOKEN_REFRESHED path, deciding
     // whether THIS payload proves the token is fresh; a narrower question
     // than "is the app signed in," and correctly so.
@@ -6067,7 +6695,10 @@ console.log('     every gate/release site the security probe reverted reads isSi
     // in source order, net +140 lines) — line number only, same site, matched by exact text.
     // Re-derived 2026-09-30 (UN-389 / DI-446 — the Delete Account sheet's imports and section, above every site) — line numbers only, same six sites, matched by exact text.
     // Re-derived 2026-09-30 (v0.28.0 STAMP — the WHATS_NEW v0.28.0 entry and its release comment, net +29 lines, sit above every site) — line numbers only, same sites, same texts, matched by exact text.
-    { line: 27894, text: "|| (AUTH_SESSION_EVENTS.includes(event) && !(payload && hasValidSupabaseSession()) && isSessionExpired());" },
+    // Re-derived 2026-09-30 (SP-56, Standings fit — historyGroupHTML(), the two stand-box templates, the instant-scroll/haptic tap handler and the split obligation helpers, net +155 lines in js/app.js, all above this site) — line number only, same site, same text, matched by exact text.
+    // 2026-10-01 — `within` replaces the line number (see POSITION-INDEPENDENT PINS above); the
+    // SB-14 +4 re-derivation of this entry (fix/sb14-btn-spacing ed32605) is superseded by it.
+    { within: 'refreshAuthUI', text: "|| (AUTH_SESSION_EVENTS.includes(event) && !(payload && hasValidSupabaseSession()) && isSessionExpired());" },
   ];
 
   // SECURITY AUDIT (full-app, 2026-09-26) — the scan used to skip any line
@@ -6081,39 +6712,203 @@ console.log('     every gate/release site the security probe reverted reads isSi
     return src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
       .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
   }
-  function findHvsHits(src) {
+  // Each hit carries `within` (its top-level owner, from the RAW lines — the
+  // comment-stripped copy is only used to decide whether the line holds a
+  // real reference). `line` is for messages only; nothing compares it.
+  // UNION SCAN (2026-10-01, int/batch3, security merge condition S-C2): the
+  // stripper is a regex, not a tokenizer, and it fails OPEN on strings — a
+  // `'image/*'` blanks everything up to the next `*/` (a real call on the
+  // following line vanishes), and a `' // '` blanks the rest of its own line.
+  // So a line is a hit if EITHER view sees the identifier: the comment-stripped
+  // line, OR the raw line when it does not start with a comment marker (the
+  // view rolestest.mjs used before this change, which has the opposite blind
+  // spot — `/* x */ code` — that the stripped view covers). Neither view alone
+  // is trusted; on the shipped tree the two agree line for line.
+  // [35a-strip-glob] / [35a-strip-slashslash] are the teeth.
+  const startsWithCommentMarker = (l) => { const t = l.trimStart(); return t.startsWith('*') || t.startsWith('//') || t.startsWith('/*') || t.startsWith('<!--'); };
+  function findHvsHits(src, { view = 'union' } = {}) {
     const hits = [];
     const re = /\bhasValidSupabaseSession\b/;
     const rawLines = src.split('\n');
     stripCommentsKeepLines(src).split('\n').forEach((codeLine, i) => {
-      if (re.test(codeLine)) hits.push({ line: i + 1, text: rawLines[i].trim() });
+      const strippedSees = re.test(codeLine);
+      const rawSees = !startsWithCommentMarker(rawLines[i]) && re.test(rawLines[i]);
+      const hit = view === 'stripped' ? strippedSees : (strippedSees || rawSees);
+      if (hit) hits.push({ line: i + 1, text: rawLines[i].trim(), within: topLevelOwner(rawLines, i) });
     });
     return hits;
   }
+  const sameHvsSite = (c, h) => c.within === h.within && c.text === h.text;
+  // Everything [35a] asks of one source text, in one place, so the canaries
+  // below ask the SAME questions of a mutated copy.
+  function checkHvsSites(src) {
+    const hits = findHvsHits(src);
+    const offenders = hits.filter((h) => !ENUMERATED_HVS_SITES.some((c) => sameHvsSite(c, h)));
+    const notOnce = ENUMERATED_HVS_SITES
+      .map((c) => ({ within: c.within, text: c.text, foundAt: hits.filter((h) => sameHvsSite(c, h)).map((h) => h.line) }))
+      .filter((p) => p.foundAt.length !== 1);
+    const inListOrder = hits.length === ENUMERATED_HVS_SITES.length
+      && hits.every((h, i) => sameHvsSite(ENUMERATED_HVS_SITES[i], h));
+    return { hits, offenders, notOnce, inListOrder, clean: offenders.length === 0 && notOnce.length === 0 && inListOrder };
+  }
+  const describeHits = (hits) => JSON.stringify(hits.map((h) => `${h.within}@${h.line}`));
 
-  const hitsN1 = findHvsHits(srcN1raw);
-  const offendersN1 = hitsN1.filter((h) => !ENUMERATED_HVS_SITES.some((c) => c.line === h.line && c.text === h.text));
+  const n1 = checkHvsSites(srcN1raw);
+  const hitsN1 = n1.hits;
+  const offendersN1 = n1.offenders;
   assert(offendersN1.length === 0,
-    `[35a] every non-comment 'hasValidSupabaseSession' reference in js/app.js is one of the six enumerated sites (offenders: ${JSON.stringify(offendersN1)})`);
+    `[35a] every non-comment 'hasValidSupabaseSession' reference in js/app.js is one of the six enumerated sites — same exact text, same top-level function (offenders: ${JSON.stringify(offendersN1)})`);
   assert(hitsN1.length === ENUMERATED_HVS_SITES.length,
-    `[35a-canary] the scan finds ALL SIX pinned sites (not fewer — a broken scan that finds zero would make [35a] vacuously pass) (found ${hitsN1.length}: ${JSON.stringify(hitsN1.map(h => h.line))})`);
+    `[35a-canary] the scan finds ALL SIX pinned sites (not fewer — a broken scan that finds zero would make [35a] vacuously pass) (found ${hitsN1.length}: ${describeHits(hitsN1)})`);
+  assert(n1.notOnce.length === 0,
+    `[35a-each] every one of the six pins is found EXACTLY ONCE, in its own function — a deleted site, or a pinned text duplicated inside its function, is reported (not once: ${JSON.stringify(n1.notOnce)})`);
+  assert(n1.inListOrder,
+    `[35a-order] the six sites appear in js/app.js in the list's order (file order: ${describeHits(hitsN1)})`);
 
   // Teeth: prove the scan actually flags an offender when there is one.
   const poisonedN1 = srcN1raw + '\nfunction __n1Canary() { return hasValidSupabaseSession(); }\n';
-  const poisonedHits = findHvsHits(poisonedN1);
-  const poisonedOffenders = poisonedHits.filter((h) => !ENUMERATED_HVS_SITES.some((c) => c.line === h.line && c.text === h.text));
+  const poisonedOffenders = checkHvsSites(poisonedN1).offenders;
   assert(poisonedOffenders.length === 1,
     `[35a-mutation] a NEW hasValidSupabaseSession() reference outside the six pins IS reported (got ${poisonedOffenders.length})`);
   // The security audit's exact bypass shape: a real call on a line that
   // BEGINS with a block comment. Must be reported, not skipped.
   const poisonedBlock = srcN1raw + '\n/* x */ if (hasValidSupabaseSession()) { void 0; }\n';
-  const blockOffenders = findHvsHits(poisonedBlock).filter((h) => !ENUMERATED_HVS_SITES.some((c) => c.line === h.line && c.text === h.text));
+  const blockOffenders = checkHvsSites(poisonedBlock).offenders;
   assert(blockOffenders.length === 1 && /^\/\* x \*\/ if \(hasValidSupabaseSession\(\)\)/.test(blockOffenders[0].text),
     `[35a-block-canary] a call on a line that STARTS with \`/* … */\` IS reported (got ${JSON.stringify(blockOffenders)}) — the pre-fix line-prefix skip let it through`);
   // …while a reference that is genuinely inside a comment still is not.
   const commentOnly = srcN1raw + '\n/* hasValidSupabaseSession() in prose */\n// hasValidSupabaseSession() in prose\n';
   assert(findHvsHits(commentOnly).length === ENUMERATED_HVS_SITES.length,
     '[35a-comment-canary] …and a mention that is ENTIRELY inside a comment is still not counted');
+  // S-C2 teeth (2026-10-01): the two stripper fail-opens. Each canary also
+  // proves the comment-stripped view ALONE misses the line, so it is the union
+  // — not some other check — that catches it.
+  {
+    // (1) a string '/*' opens a fake block comment that the stripper closes
+    // at the next real `*/` — here isSignedInForApp()'s own jsdoc — so the
+    // real call on the next line is blanked out of the stripped view.
+    const lines = srcN1raw.split('\n');
+    const opener = lines.findIndex((l) => /^export function isSignedInForApp\(\) \{/.test(l));
+    let doc = opener; while (doc > 0 && lines[doc].trim() !== '/**') doc--;
+    const callLine = 'if (hasValidSupabaseSession()) { void 0; }';
+    if (opener > -1 && doc > 0) lines.splice(doc, 0, "const _accept = 'image/*';", callLine);
+    const src = lines.join('\n');
+    const union = checkHvsSites(src).offenders.filter((h) => h.text === callLine);
+    const strippedOnly = findHvsHits(src, { view: 'stripped' }).filter((h) => h.text === callLine);
+    assert(opener > -1 && doc > 0 && union.length === 1 && strippedOnly.length === 0,
+      `[35a-strip-glob] a call on the line after a string 'image/*' IS reported (the stripper blanks it to the next */; the stripped view alone sees ${strippedOnly.length}, the union reports ${union.length})`);
+  }
+  {
+    // (2) a string ' // ' — the line-comment strip eats the rest of the line.
+    const line = "const _sep = ' // '; if (hasValidSupabaseSession()) { void 0; }";
+    const src = srcN1raw + '\n' + line + '\n';
+    const union = checkHvsSites(src).offenders.filter((h) => h.text === line);
+    const strippedOnly = findHvsHits(src, { view: 'stripped' }).filter((h) => h.text === line);
+    assert(union.length === 1 && strippedOnly.length === 0,
+      `[35a-strip-slashslash] a call AFTER a string ' // ' on the same line IS reported (the stripped view alone sees ${strippedOnly.length}, the union reports ${union.length})`);
+  }
+  // 2026-10-01 teeth for the position-independent pins. Shift: the reason the
+  // pins changed — 50 blank lines above every site must change nothing. Asked
+  // as INVARIANCE (every verdict identical, every hit the same site 50 lines
+  // further down), so this line stays quiet when [35a] itself is red for some
+  // other reason and only goes red if a verdict starts depending on position.
+  const hvsVerdicts = (r) => JSON.stringify({
+    hits: r.hits.map((h) => [h.within, h.text]), offenders: r.offenders.map((h) => [h.within, h.text]),
+    notOnce: r.notOnce.map((p) => [p.within, p.foundAt.length]), inListOrder: r.inListOrder,
+  });
+  const shiftedN1 = checkHvsSites('\n'.repeat(50) + srcN1raw);
+  assert(hitsN1.length > 0 && hvsVerdicts(shiftedN1) === hvsVerdicts(n1)
+      && shiftedN1.hits.every((h, i) => h.line === hitsN1[i].line + 50),
+    `[35a-shift] 50 blank lines at the top of js/app.js change no [35a] verdict — same hits, same offenders, same pins found, same order; only every line number moves by 50 (shifted file order: ${describeHits(shiftedN1.hits)})`);
+  // Move: lift isSignedInForApp()'s own token read out of isSignedInForApp()
+  // and drop it, text unchanged, into applyAuthModeDecision() (a function
+  // [33-N1] already requires to exist). Same text, wrong function: it must be
+  // an offender AND its pin must go missing.
+  {
+    const lines = srcN1raw.split('\n');
+    const pin = ENUMERATED_HVS_SITES.find((c) => c.within === 'isSignedInForApp');
+    const from = lines.findIndex((l, i) => l.trim() === pin.text && topLevelOwner(lines, i) === 'isSignedInForApp');
+    const [moved] = from > -1 ? lines.splice(from, 1) : [];
+    const into = lines.findIndex((l) => /^async function applyAuthModeDecision\(\) \{/.test(l));
+    if (moved !== undefined && into > -1) lines.splice(into + 1, 0, moved);
+    const movedN1 = checkHvsSites(lines.join('\n'));
+    assert(from > -1 && into > -1
+        && movedN1.offenders.length === n1.offenders.length + 1
+        && movedN1.offenders.some((h) => h.within === 'applyAuthModeDecision' && h.text === pin.text)
+        && movedN1.notOnce.some((p) => p.within === 'isSignedInForApp' && p.foundAt.length === 0),
+      `[35a-move] a pinned site moved into a DIFFERENT function, text unchanged, is reported as an offender and its pin as missing (from@${from + 1}, into@${into + 1}, offenders ${JSON.stringify(movedN1.offenders)}, not-once ${JSON.stringify(movedN1.notOnce)})`);
+  }
+  // R-C1 teeth (2026-10-01): the reviewer's two counterexamples, both of which
+  // the first topLevelOwner() resolved to the PINNED owner (silently green),
+  // plus the two neighbouring shapes the hardening also closes. Each must
+  // make the moved text an offender AND its pin go missing.
+  {
+    const pin = ENUMERATED_HVS_SITES.find((c) => c.within === 'isSignedInForApp');
+    // isSignedInForApp() keeps its opener but loses its token read; its closing
+    // brace is indented, and `tail` (column 0) follows it.
+    const relocate = (tail) => {
+      const lines = srcN1raw.split('\n');
+      const from = lines.findIndex((l, i) => l.trim() === pin.text && topLevelOwner(lines, i) === 'isSignedInForApp');
+      let end = from; while (from > -1 && end < lines.length && !/^\}/.test(lines[end])) end++;
+      if (from < 0 || end >= lines.length) return null;
+      lines[from] = '  try { return false; }';
+      lines[end] = '  }';
+      lines.splice(end + 1, 0, ...tail);
+      return checkHvsSites(lines.join('\n'));
+    };
+    const caught = (r) => !!r && r.offenders.some((h) => h.text === pin.text && h.within === '(module level)')
+      && r.notOnce.some((p) => p.within === 'isSignedInForApp' && p.foundAt.length === 0);
+    const a = relocate(['globalThis.__probe = () => {', '  ' + pin.text, '  catch { return false; }', '};']);
+    assert(caught(a),
+      `[35c-owner] (a) isSignedInForApp()'s closing brace indented, the token read moved into a FOLLOWING column-0 statement: reported as a module-level offender, pin missing (offenders ${JSON.stringify(a && a.offenders)})`);
+    const c = relocate(['/* x */ globalThis.__probe = () => {', '  ' + pin.text, '  catch { return false; }', '};']);
+    assert(caught(c),
+      `[35c-owner] (a') same, the following statement STARTS with a block comment — still a column-0 code line, still caught (offenders ${JSON.stringify(c && c.offenders)})`);
+    const d = relocate([pin.text]);
+    assert(caught(d),
+      `[35c-owner] (a'') same, the pinned text ITSELF on a column-0 line after the indented brace: the line is its own module-level statement, not the function above's (offenders ${JSON.stringify(d && d.offenders)})`);
+  }
+  {
+    // (b) the auth.js import loses hasValidSupabaseSession, which moves into a
+    // NEW `import {…} from './shim.js'` above it whose `} from` is indented.
+    const pin = ENUMERATED_HVS_SITES.find((c) => c.within === 'import from ./auth.js');
+    const lines = srcN1raw.split('\n');
+    const at = lines.findIndex((l) => l.trim() === pin.text);
+    let imp = at; while (imp > 0 && !/^import\b/.test(lines[imp])) imp--;
+    if (at > -1 && imp > 0) {
+      lines[at] = '  isSessionExpired, clearSessionExpired,';
+      lines.splice(imp, 0, 'import {', '  ' + pin.text, "  shimOnly } from './shim.js';");
+    }
+    const r = checkHvsSites(lines.join('\n'));
+    assert(at > -1 && imp > 0
+        && r.offenders.some((h) => h.text === pin.text && h.within === 'import from ./shim.js')
+        && r.notOnce.some((p) => p.within === 'import from ./auth.js' && p.foundAt.length === 0),
+      `[35c-owner] (b) the pinned import line moved into a new import from './shim.js' (indented \`} from\`) above the auth.js import: reported as an offender owned by that import, auth.js pin missing (offenders ${JSON.stringify(r.offenders)})`);
+  }
+  {
+    // (c) reviewer N1 (2026-10-01, v0.29.0 batch 4): an import whose CLOSER is
+    // split across two lines — `}` alone, then `from '…';` — names its OWN
+    // source. Before the fix the forward scan required `}` and `from` on one
+    // line, skipped this import's closer and borrowed the NEXT import's source.
+    // Asked of topLevelOwner() directly, then through checkHvsSites() with the
+    // pinned auth.js import line moved into such an import above the real one.
+    const probe = ['import {', '  a, b,', '}', "  from './split.js';", 'import {', '  c,', "} from './auth.js';"];
+    const direct = [topLevelOwner(probe, 1), topLevelOwner(probe, 5)];
+    const pin = ENUMERATED_HVS_SITES.find((c) => c.within === 'import from ./auth.js');
+    const lines = srcN1raw.split('\n');
+    const at = lines.findIndex((l) => l.trim() === pin.text);
+    let imp = at; while (imp > 0 && !/^import\b/.test(lines[imp])) imp--;
+    if (at > -1 && imp > 0) {
+      lines[at] = '  isSessionExpired, clearSessionExpired,';
+      lines.splice(imp, 0, 'import {', '  ' + pin.text, '  shimOnly', '}', "from './shim.js';");
+    }
+    const r = checkHvsSites(lines.join('\n'));
+    assert(direct[0] === 'import from ./split.js' && direct[1] === 'import from ./auth.js'
+        && at > -1 && imp > 0
+        && r.offenders.some((h) => h.text === pin.text && h.within === 'import from ./shim.js')
+        && r.notOnce.some((p) => p.within === 'import from ./auth.js' && p.foundAt.length === 0),
+      `[35c-owner] (c) reviewer N1 — an import whose closer is split across two lines (\`}\` then \`from '…';\`) names its OWN source: the probe resolves to ${JSON.stringify(direct)}, and the pinned auth.js import line moved into such an import from './shim.js' is an offender owned by it, auth.js pin missing (offenders ${JSON.stringify(r.offenders)})`);
+  }
 
   // The eight gate/release sites the security probe reverted one at a time
   // without any suite going red — pinned by exact line+text, so a FUTURE
@@ -6199,26 +6994,177 @@ console.log('     every gate/release site the security probe reverted reads isSi
   // Re-derived 2026-09-30 (UN-389 / DI-446 — the Delete Account sheet: its imports at the top of app.js and its section above several of these sites) — line numbers only,
   // same eight sites, same texts, matched by exact text.
   // Re-derived 2026-09-30 (v0.28.0 STAMP — the WHATS_NEW v0.28.0 entry and its release comment, net +29 lines, sit above every one of these eight sites) — line numbers only, matched by exact text.
+  // Re-derived 2026-09-30 (SP-56, Standings fit — net +155 lines in js/app.js, all inside renderLeaderboard()/the obligation helpers at ~12.5k–17.5k, above every one of these sites EXCEPT renderLeaguePill()) — line numbers only, same eight sites, same texts, matched by exact text.
+  // POSITION-INDEPENDENT PINS (2026-10-01, int/pins-and-sb14) — same change as
+  // [35a] above, and the "Re-derived" notes here are history for the same
+  // reason. [35b] is a PRESENCE pin, not a fence: isSignedInForApp() is the
+  // app-level question every gate is supposed to ask, so other call sites are
+  // welcome and none is reported. What the line pin guaranteed per site — the
+  // exact text, at that site — is now: the exact text, found EXACTLY ONCE
+  // inside the named top-level function (`within`, by topLevelOwner() above;
+  // `fn` stays the human label). [35b-order] keeps the list's order, and
+  // [35b-shift]/[35b-move] are the teeth. The SB-14 +4 re-derivation of these
+  // eight (fix/sb14-btn-spacing ed32605) is superseded by this change.
   const ENUMERATED_ISFA_SITES = [
-    { line: 6040, fn: 'renderLeaguePill() — league pill', text: "if (!isSignedInForApp() || !hasResolvedMemberships()) { _clearLeaguePill(el); return; }" },
-    { line: 25277, fn: 'armBootIdentityCover() — boot cover arm', text: "try { if (isSignedInForApp()) return; } catch { /* treat as unknown */ }" },
-    { line: 25343, fn: 'releaseBootIdentityCover() — release', text: "if (!isSignedInForApp() && !getAccountUserId()) return false;" },
-    { line: 25394, fn: 'fireSignInGateDeadline() — deadline release', text: "if (isSignedInForApp()) { releaseBootIdentityCover(); return; }" },
+    { within: 'renderLeaguePill', fn: 'renderLeaguePill() — league pill', text: "if (!isSignedInForApp() || !hasResolvedMemberships()) { _clearLeaguePill(el); return; }" },
+    { within: 'armBootIdentityCover', fn: 'armBootIdentityCover() — boot cover arm', text: "try { if (isSignedInForApp()) return; } catch { /* treat as unknown */ }" },
+    { within: 'releaseBootIdentityCover', fn: 'releaseBootIdentityCover() — release', text: "if (!isSignedInForApp() && !getAccountUserId()) return false;" },
+    { within: 'fireSignInGateDeadline', fn: 'fireSignInGateDeadline() — deadline release', text: "if (isSignedInForApp()) { releaseBootIdentityCover(); return; }" },
     // Re-derived, security round 3 N-2 (2026-09-26) — same four sites, only
     // the line numbers moved (see the note on the hasValidSupabaseSession
     // pin above).
     // Re-derived 2026-09-29 (UN-312 / DI-437 — the sign-in gate rebuild above these four sites, net +140
     // lines; the first four sites in this list sit ABOVE it and did not move) — line numbers only, same
     // eight sites, matched by exact text.
-    { line: 27737, fn: 'refreshAuthUI() — MEMBERSHIPS_REFRESHED auto-link', text: "&& isSignedInForApp() && !getMembershipsError()" },
-    { line: 28043, fn: 'needsLeagueFlowScreen()', text: "if (!isSignedInForApp()) return false;      // the sign-in gate owns this state (incl. a recovery session — Security N1)" },
-    { line: 28753, fn: 'linkFlowScreen()', text: "if (!isSignedInForApp()) return '';" },
-    { line: 28783, fn: 'attemptAutoLink()', text: "if (!isSignedInForApp()) return 'idle';" },
+    { within: 'refreshAuthUI', fn: 'refreshAuthUI() — MEMBERSHIPS_REFRESHED auto-link', text: "&& isSignedInForApp() && !getMembershipsError()" },
+    { within: 'needsLeagueFlowScreen', fn: 'needsLeagueFlowScreen()', text: "if (!isSignedInForApp()) return false;      // the sign-in gate owns this state (incl. a recovery session — Security N1)" },
+    { within: 'linkFlowScreen', fn: 'linkFlowScreen()', text: "if (!isSignedInForApp()) return '';" },
+    { within: 'attemptAutoLink', fn: 'attemptAutoLink()', text: "if (!isSignedInForApp()) return 'idle';" },
   ];
-  const linesN1 = srcN1raw.split('\n');
-  const isfaMismatches = ENUMERATED_ISFA_SITES.filter((c) => (linesN1[c.line - 1] || '').trim() !== c.text);
+  // Every line whose raw trimmed text IS the pin's text and whose top-level
+  // owner IS the pin's function. Exactly one each; `line` is reported only.
+  function checkIsfaSites(src) {
+    const lines = src.split('\n');
+    const located = ENUMERATED_ISFA_SITES.map((c) => ({
+      fn: c.fn,
+      foundAt: lines.reduce((acc, l, i) => (l.trim() === c.text && topLevelOwner(lines, i) === c.within ? acc.concat(i + 1) : acc), []),
+    }));
+    const mismatches = located.filter((p) => p.foundAt.length !== 1);
+    const at = located.map((p) => p.foundAt[0]);
+    const inListOrder = mismatches.length === 0 && at.every((n, i) => i === 0 || n > at[i - 1]);
+    return { located, mismatches, inListOrder, clean: mismatches.length === 0 && inListOrder };
+  }
+  const isfa = checkIsfaSites(srcN1raw);
+  const isfaMismatches = isfa.mismatches;
   assert(isfaMismatches.length === 0,
-    `[35b] all eight gate/release sites still read isSignedInForApp() at their pinned line (mismatches: ${JSON.stringify(isfaMismatches.map(m => m.fn))})`);
+    `[35b] all eight gate/release sites still read isSignedInForApp() — each exact text found exactly once inside its named function (mismatches: ${JSON.stringify(isfaMismatches)})`);
+  assert(isfa.inListOrder,
+    `[35b-order] the eight sites appear in js/app.js in the list's order (at: ${JSON.stringify(isfa.located.map((p) => p.foundAt))})`);
+  // Invariance, same reasoning as [35a-shift].
+  const shiftedIsfa = checkIsfaSites('\n'.repeat(50) + srcN1raw);
+  assert(shiftedIsfa.inListOrder === isfa.inListOrder
+      && shiftedIsfa.located.every((p, i) => p.foundAt.length === isfa.located[i].foundAt.length
+        && p.foundAt.every((n, j) => n === isfa.located[i].foundAt[j] + 50)),
+    `[35b-shift] 50 blank lines at the top of js/app.js change no [35b] verdict — every site found the same number of times, 50 lines further down, same order (shifted at: ${JSON.stringify(shiftedIsfa.located.map((p) => p.foundAt))})`);
+  // Move: needsLeagueFlowScreen()'s guard, text unchanged, dropped into
+  // linkFlowScreen() — the guard went missing from the function it gates.
+  {
+    const lines = srcN1raw.split('\n');
+    const pin = ENUMERATED_ISFA_SITES.find((c) => c.within === 'needsLeagueFlowScreen');
+    const from = lines.findIndex((l, i) => l.trim() === pin.text && topLevelOwner(lines, i) === 'needsLeagueFlowScreen');
+    const [moved] = from > -1 ? lines.splice(from, 1) : [];
+    const into = lines.findIndex((l) => /^export function linkFlowScreen\(\) \{/.test(l));
+    if (moved !== undefined && into > -1) lines.splice(into + 1, 0, moved);
+    const movedIsfa = checkIsfaSites(lines.join('\n'));
+    assert(from > -1 && into > -1
+        && movedIsfa.mismatches.length === isfa.mismatches.length + 1
+        && movedIsfa.mismatches.some((p) => p.fn === pin.fn && p.foundAt.length === 0),
+      `[35b-move] a pinned gate moved into a DIFFERENT function, text unchanged, is reported missing from its own (from@${from + 1}, into@${into + 1}, mismatches ${JSON.stringify(movedIsfa.mismatches)})`);
+  }
+
+  // S-O1 (security merge condition, 2026-10-01) — every function a pin names
+  // in `within` has EXACTLY ONE column-0 opener in js/app.js. topLevelOwner()
+  // names the NEAREST opener above a line, so a second, same-name opener — a
+  // decoy `function attemptAutoLink() {}` at column 0 inside some later
+  // function, with the gate moved under it — would adopt the gate and every
+  // check above would pass. Two openers of one name is now red on its own.
+  const PINNED_FNS = [...new Set([...ENUMERATED_HVS_SITES, ...ENUMERATED_ISFA_SITES]
+    .map((c) => c.within).filter((w) => !w.startsWith('import')))];
+  const openerProblems = (src) => {
+    const lines = src.split('\n');
+    return PINNED_FNS.map((n) => ({ fn: n, openers: lines.filter((l) => openerName(l) === n).length }))
+      .filter((p) => p.openers !== 1);
+  };
+  const openersN1 = openerProblems(srcN1raw);
+  assert(PINNED_FNS.length === 12 && openersN1.length === 0,
+    `[35c-openers] each of the ${PINNED_FNS.length} functions the [35a]/[35b] pins name has exactly one column-0 opener in js/app.js (not exactly one: ${JSON.stringify(openersN1)})`);
+  {
+    const decoy = openerProblems(srcN1raw + '\nfunction _laterThing() {\nfunction attemptAutoLink() {}\n  return 0;\n}\n');
+    assert(decoy.length === openersN1.length + 1 && decoy.some((p) => p.fn === 'attemptAutoLink' && p.openers === 2),
+      `[35c-openers-canary] a same-name decoy \`function attemptAutoLink() {}\` at column 0 IS reported (got ${JSON.stringify(decoy)})`);
+  }
+
+  // S-C1 (security merge condition, 2026-10-01) — PREAMBLE COUNTS. For each
+  // gate below: the exact number of CODE lines between its function's
+  // column-0 opener and the gate line. [35b] proves the gate is still written,
+  // in its function; this proves nothing new was put in FRONT of it there — a
+  // dead `if (false)` on the line above the gate, or the gate wrapped in a
+  // nested closure that is never called, keeps the text and the function and
+  // stayed green before this. A line counts if EITHER view sees code in it
+  // (the comment-stripped line, or the raw line when it is not comment-only),
+  // so a string such as '/*' that fools the stripper cannot hide an added line.
+  // A COUNT CHANGE MUST CARRY A DATED NOTE ON THAT ENTRY saying what the new
+  // preamble line does and why it is safe ahead of the gate.
+  // Baseline 2026-10-01 (int/batch3), counted on the merged tree and matching
+  // security's own count line for line.
+  const GATE_PREAMBLES = [
+    { within: 'noIdentityEverProven', count: 0 },
+    { within: 'isSignedInForApp', count: 0 },
+    { within: 'renderLeaguePill', count: 3 },          // the pill element lookup, its missing-element return, the non-supabase clear
+    { within: 'armBootIdentityCover', count: 1 },      // already-armed early return
+    { within: 'releaseBootIdentityCover', count: 9 },  // not-armed return, try {, the auth-hold refusal, the 5-line non-supabase release, the recovery-session refusal
+    { within: 'fireSignInGateDeadline', count: 3 },    // timer reset, try {, the non-supabase return
+    { within: 'needsLeagueFlowScreen', count: 1 },     // the non-supabase return
+    { within: 'linkFlowScreen', count: 2 },            // the non-supabase return, the content-withheld return
+    { within: 'attemptAutoLink', count: 2 },           // the already-attempted return, the non-supabase return
+  ];
+  function preambleProblems(src) {
+    const lines = src.split('\n');
+    const code = stripCommentsKeepLines(src).split('\n');
+    return GATE_PREAMBLES.map((g) => {
+      const pin = [...ENUMERATED_HVS_SITES, ...ENUMERATED_ISFA_SITES].find((c) => c.within === g.within);
+      const at = lines.reduce((acc, l, i) => (l.trim() === pin.text && topLevelOwner(lines, i) === g.within ? acc.concat(i) : acc), []);
+      if (at.length !== 1) return { fn: g.within, expected: g.count, got: null, found: at.length };
+      const opener = topLevelOwnerAt(lines, at[0]).at;
+      const got = lines.slice(opener + 1, at[0])
+        .filter((l, k) => code[opener + 1 + k].trim() !== '' || !isCommentOnlyLine(l)).length;
+      return { fn: g.within, expected: g.count, got, line: at[0] + 1 };
+    }).filter((p) => p.got !== p.expected);
+  }
+  const preambleN1 = preambleProblems(srcN1raw);
+  assert(preambleN1.length === 0,
+    `[35d-preamble] each of the ${GATE_PREAMBLES.length} gates has exactly its recorded number of code lines between its function's opener and the gate (wrong: ${JSON.stringify(preambleN1)})`);
+  {
+    // Teeth: the security probe's own shape — `if (false)` on the line above
+    // attemptAutoLink()'s guard. Text, function and order all still pass.
+    const lines = srcN1raw.split('\n');
+    const pin = ENUMERATED_ISFA_SITES.find((c) => c.within === 'attemptAutoLink');
+    const at = lines.findIndex((l, i) => l.trim() === pin.text && topLevelOwner(lines, i) === 'attemptAutoLink');
+    if (at > -1) lines.splice(at, 0, '  if (false)');
+    const dead = preambleProblems(lines.join('\n'));
+    assert(at > -1 && checkIsfaSites(lines.join('\n')).clean
+        && dead.length === preambleN1.length + 1 && dead.some((p) => p.fn === 'attemptAutoLink' && p.got === 3),
+      `[35d-preamble-canary] \`if (false)\` inserted above attemptAutoLink()'s guard leaves [35b] green and IS reported here (got ${JSON.stringify(dead)})`);
+  }
+
+  // [35e-latch] reviewer N4 (2026-10-01, v0.29.0 batch 4) — attemptAutoLink()'s
+  // once-per-page LATCH is the first of its two counted preamble lines. The
+  // preamble count sees a line added or removed in front of the gate, never a
+  // line REPLACED in place (the first residual above), so the latch is pinned
+  // by TEXT: exactly once, inside attemptAutoLink(). Without it every call
+  // re-runs the auto-link — including after a dispute, which is the one time
+  // the row must not be re-linked.
+  const LATCH = { within: 'attemptAutoLink', text: 'if (_autoLinkAttempted) return _linkFlow.state;' };
+  const latchAt = (src) => {
+    const lines = src.split('\n');
+    return lines.reduce((acc, l, i) => (l.trim() === LATCH.text && topLevelOwner(lines, i) === LATCH.within ? acc.concat(i + 1) : acc), []);
+  };
+  const latchN1 = latchAt(srcN1raw);
+  assert(latchN1.length === 1,
+    `[35e-latch] attemptAutoLink()'s once-per-page latch \`${LATCH.text}\` is found exactly once inside attemptAutoLink() (at: ${JSON.stringify(latchN1)})`);
+  {
+    // Teeth: the residual class this closes, on this one line — the latch
+    // replaced in place by a same-shape dead line. The preamble count and [35b]
+    // both stay green (asserted, so it is THIS pin that catches it); the latch
+    // pin goes red.
+    const lines = srcN1raw.split('\n');
+    const at = lines.findIndex((l, i) => l.trim() === LATCH.text && topLevelOwner(lines, i) === LATCH.within);
+    if (at > -1) lines[at] = '  if (false) return _linkFlow.state;';
+    const src = lines.join('\n');
+    const pre = preambleProblems(src);
+    assert(at > -1 && latchAt(src).length === 0 && pre.length === preambleN1.length && checkIsfaSites(src).clean,
+      `[35e-latch-canary] the latch replaced in place by \`if (false) return _linkFlow.state;\` leaves [35d-preamble] (${JSON.stringify(pre)}) and [35b] green and IS reported by [35e-latch] (found ${latchAt(src).length})`);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

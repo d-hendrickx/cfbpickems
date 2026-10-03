@@ -254,7 +254,7 @@ export function testPushResultCopy(run, { sentAgo = 'just now', serverPushOff = 
   if (mineNoDevice || ((outcome === 'no_subscribers' || outcome === 'created_partial') && pushed === 0)) {
     return {
       tone: 'warn',
-      text: `Sent ${sentAgo}, but the push service has no device registered for your account — open the app on the phone you expect the push on, then tap Reconnect on the 🔔 screen. The message still posted to your Locker Room.`,
+      text: `Sent ${sentAgo}, but the push service has no device registered for your account — open the app on the phone you expect the push on, then tap Turn On or Reconnect in the menu (top left) → Notifications. The message still posted to your Locker Room.`,
     };
   }
   if (pushed > 0) {
@@ -449,10 +449,11 @@ export function reachLine(result, eligibility, nameOf) {
       // notification prompt" only ever appears on a FIRST install; a player who
       // already dismissed it, or whose subscription lapsed, sees no prompt at
       // all and is left re-adding the app to the home screen for nothing. The
-      // 🔔 screen's Reconnect button is the actual repair, and it is one line
-      // short enough to read down a phone call.
+      // Reconnect button on the menu's Notifications row is the actual repair
+      // (the 🔔 bell was retired, DI-307; reworded 2026-10-02), and it is one
+      // line short enough to read down a phone call.
       text: `${name} — no device registered. They won't get any push until they do.`,
-      action: `Tell ${name} to open the app, tap the 🔔 bell, and tap Reconnect if it shows.`,
+      action: `Tell ${name} to open the app, go to the menu (top left) → Notifications, and tap Turn On or Reconnect if one shows.`,
     };
   }
   const kinds = Array.isArray(result.kinds) && result.kinds.length ? result.kinds : [];

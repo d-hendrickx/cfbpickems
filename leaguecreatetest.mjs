@@ -54,7 +54,7 @@ console.log('\n[1] The copy — DI-430\'s words, verbatim, in one frozen table�
   const C = LC.LC_COPY;
   assert(Object.isFrozen(C), '[1a] LC_COPY is frozen — the mockup\'s words are asserted once, here, and cannot drift at a call site');
   const want = {
-    title: 'New League', namePlaceholder: 'e.g. Saturday Crew', nameHelper: 'Your friends will see this name.',
+    title: 'New League', namePlaceholder: 'e.g. Saturday Crew', nameHelper: 'Your friends will see this name. You can change it later.',
     seasons: 'Seasons', tournaments: 'Tournaments',
     sportsHelper: 'Pick at least one season. Tournaments are optional. You can add more any time from your league page.',
     create: 'Create League', creating: 'Creating…', stillWorking: 'Still working…', tryAgain: 'Try Again',
@@ -555,7 +555,17 @@ console.log('\n[11] CSS — token-only, motion tokens, ≥600px modal, Reduce Mo
   const css = src('./css/styles.css');
   const i = css.indexOf('N1 — THE NEW LEAGUE SHEET');
   assert(i > -1, '[11a] fixture: the New League CSS block is present');
-  const block = css.slice(i);
+  // v0.29.0 integration (2026-10-01) — BOUNDED, not sliced to EOF (the accountexittest [12] fix, 1b9a9b6, and the layouttest A10k precedent). This slice used to run
+  // to the literal end of styles.css, so [11] answered for every block appended after N1: the Delete Account sheet (token-only, so it never showed) and then SP-56's
+  // append-only `.stand-*` block, whose one white-on-maroon `color:#fff` (the same declaration `.dashboard-table th` makes) failed [11b] as if the New League sheet had
+  // regressed. N1 ends where the next top-level banner comment begins — either house style, the `/* ═══` box N1 itself opens with (the Delete Account block's) or the
+  // `/* ── ` line an appended block opens with (SP-56's); N1 contains neither internally. Only when N1 is the last block does the slice run to the end of the file.
+  const ends = ['\n/* ═══', '\n/* ── '].map((b) => css.indexOf(b, i + 1)).filter((k) => k > i);
+  const block = css.slice(i, ends.length ? Math.min(...ends) : undefined);
+  assert(block.length > 8000 && block.includes('#league-create-sheet-wrap{position:fixed;inset:0;z-index:8000}') && block.includes('#league-create-sheet-wrap ~ .modal-overlay{z-index:8100}')
+    && (block.match(/\.lc-[a-z-]+\{/g) || []).length >= 40
+    && /@media \(min-width:600px\) and \(prefers-reduced-motion:reduce\)\{\s*#league-create-sheet\{animation:none\}/.test(block),
+    `[11a2] fixture: the bounded block is the WHOLE N1 block — the 8000 / 8100 tiers, its .lc-* rules, through to its last block (the ≥600px Reduce Motion media query) — so a bound cut short could never make [11b]/[11c]/[11i] vacuous (${block.length} chars)`);
   const noComments = block.replace(/\/\*[\s\S]*?\*\//g, '');
   const hexes = noComments.match(/#[0-9a-fA-F]{3,8}\b/g) || [];
   assert(hexes.length === 0, `[11b] no hardcoded hex colour in the block (found ${JSON.stringify(hexes)})`);

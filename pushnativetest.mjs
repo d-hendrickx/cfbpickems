@@ -716,7 +716,7 @@ console.log('\n[14] MUTATION-PROVE — proceedWithWillDisplay omitted ⇒ RED (r
     // authstoragenativetest.mjs's discipline, not notifytest.mjs's [9] (which
     // leaves its /tmp scratch copies behind) — a leaked scratch file per run
     // is exactly the kind of thing that could otherwise get accidentally
-    // committed, and loadtest.mjs's [96] hygiene check holds this to zero.
+    // committed, and loadtest.mjs's [96b] hygiene check holds this to zero.
     await rm(scratchCopy, { force: true });
   }
   assert(mutantCalledProceed === false, '[14b] MUTATION CONFIRMED: with the call removed, proceedWithWillDisplay is never invoked — the banner would silently stop showing forever (Finding 4) — this suite would be RED on this specific assertion');

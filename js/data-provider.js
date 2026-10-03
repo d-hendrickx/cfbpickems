@@ -260,6 +260,9 @@ export async function refreshScoresByEventIds(espnEventIds = [], storedGames = [
     }
     const gamesInSport = bySport.get(sport) || [];
     for (const liveGame of result.games) {
+      // SB-24 — a live event whose id the parser dropped (null) matches
+      // nothing: String(null) is 'null', and "no id" must never be a key.
+      if (liveGame.espnEventId == null) continue;
       const stored = gamesInSport.find(g =>
         String(g.espnEventId) === String(liveGame.espnEventId)
       );
@@ -519,6 +522,33 @@ export function logoOk(u) {
 }
 
 /**
+ * SB-07 dark-surface logo variant (2026-09-30) — THE AD-94 EXCEPTION.
+ * AD-94 says a logo URL is set once at ESPN-parse time and never derived at
+ * render time; this IS a render-time derivation, and it is the ONE that Drew
+ * permitted on 2026-09-30 (SP-52 Q5; dated note in
+ * DESIGN_INPUTS_THEMES_093026.md section 1): rewrite ESPN's `/500/` path to
+ * `/500-dark/` only to paint a logo on a surface whose composited luminance
+ * is below 0.179, fall back to the stored URL on load error, store nothing,
+ * add no field and no migration, probe nothing beyond the <img> request.
+ * Every other AD-94 rule stands. Keep this function exactly as narrow as it
+ * is (host, path, no query string); the caller is app.js's SB-07 block.
+ *
+ * ESPN publishes a second file for every team mark at the same path with
+ * `500` -> `500-dark` (`.../ncaa/500/245.png`, NFL `.../nfl/500/scoreboard/
+ * kc.png`). Those files are light/white REDESIGNS for dark grounds and vanish
+ * on a light surface, so the CALLER chooses by the painted surface under the
+ * logo, never by the theme mode. Returns null for anything that is not
+ * exactly that ESPN shape (another host, an already-dark path, a query
+ * string, anything logoOk() rejects); the caller then keeps the stored
+ * default. Pure, no network.
+ */
+export function darkLogoUrl(u) {
+  if (!logoOk(u)) return null;
+  const m = u.match(/^(https:\/\/a\.espncdn\.com\/i\/teamlogos\/[a-z0-9-]+\/)500(\/(?:scoreboard\/)?[A-Za-z0-9_-]+\.png)$/);
+  return m ? `${m[1]}500-dark${m[2]}` : null;
+}
+
+/**
  * Parse ESPN events into game objects.
  * startDate/endDate: filter games outside requested range.
  */
@@ -701,12 +731,22 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
     // still visible. Four sibling suites (livestatustest, slatetest, tbdtest,
     // oddstest) feed synthetic ids such as `espn_evt_401520000` through this
     // parser; they stay meaningful under this rule.
+    //
+    // SUPERSEDED 2026-10-01 — SB-24, coordinator ruling (option a): DIGITS
+    // ONLY, 1-20, and a dropped id is NULL (never ''). Migration 0040 put a
+    // CHECK on games.espn_event_id that accepts exactly that set, so the
+    // "inert" non-digit id kept above would now make the SERVER refuse the
+    // game row — a hard write failure for the whole games key, which is far
+    // worse than one game going without live scores — and '' would be refused
+    // the same way. ESPN's event ids are digits by definition. The warning
+    // stays, so a real ESPN schema change is still visible on the console.
+    // The same accept set lives in app.js's parseEspnEventIdInput() (the
+    // manual form) and in 0040; xsstest [10g] pins all three together. The
+    // sibling suites named above now feed digit ids.
     const rawEventId = event.id == null ? '' : String(event.id);
-    const espnEventId = /^[A-Za-z0-9_.:-]{1,64}$/.test(rawEventId) ? rawEventId : '';
+    const espnEventId = /^\d{1,20}$/.test(rawEventId) ? rawEventId : null;
     if (rawEventId && !espnEventId) {
-      console.warn('[data-provider] dropped an unsafe espnEventId from the scoreboard payload:', rawEventId.slice(0, 80));
-    } else if (espnEventId && !/^\d+$/.test(espnEventId)) {
-      console.warn('[data-provider] non-numeric espnEventId kept (inert, but ESPN normally sends digits):', espnEventId);
+      console.warn('[data-provider] dropped an espnEventId that is not 1-20 digits from the scoreboard payload:', rawEventId.slice(0, 80));
     }
 
     const parsedGame = createGame('', {

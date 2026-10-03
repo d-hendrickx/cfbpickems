@@ -348,18 +348,21 @@ console.log('\n[7] Quality report counts confirmed times honestly');
 
 // ═════════════════════════════════════════════════════════════════════════════
 console.log('\n[8] Defensive: a payload with no timeValid field must not silently confirm a TBD');
+// SB-24 (2026-10-01) — these two fixtures were 'nf_tbd' / 'nf_real'. ESPN event
+// ids are digits and the parser now drops anything else (to null), so they are
+// ESPN-shaped digit ids: 401990101 = the no-flag TBD, 401990102 = the real 8 PM.
 {
-  const noFlagTbd = espnEvent({ id: 'nf_tbd', date: '2026-09-05T04:00Z', omitTimeValid: true,
+  const noFlagTbd = espnEvent({ id: '401990101', date: '2026-09-05T04:00Z', omitTimeValid: true,
     detail: '9/5 - TBD', shortDetail: 'TBD', home: 'NoFlagHome', away: 'NoFlagAway' });
-  const noFlagReal = espnEvent({ id: 'nf_real', date: '2026-09-05T00:00Z', omitTimeValid: true,
+  const noFlagReal = espnEvent({ id: '401990102', date: '2026-09-05T00:00Z', omitTimeValid: true,
     detail: 'Fri, September 4th at 8:00 PM EDT', shortDetail: '9/4 - 8:00 PM EDT',
     home: 'NoFlagRealH', away: 'NoFlagRealA' });
   const res = await parseFixture([noFlagTbd, noFlagReal], ...WINDOW);
   const byId = new Map(res.games.map(g => [g.espnEventId, g]));
   assert(byId.size === 2, 'fixture check: both no-flag events parsed (non-vacuous)');
-  assert(byId.get('nf_tbd')?.kickoffDateOnly === true,
+  assert(byId.get('401990101')?.kickoffDateOnly === true,
     'with timeValid absent, ESPN\'s own "TBD" text still yields a TBD — a schema change cannot silently fabricate times');
-  assert(byId.get('nf_real')?.kickoffConfirmed === true,
+  assert(byId.get('401990102')?.kickoffConfirmed === true,
     'with timeValid absent, a real 8:00 PM EDT game is still confirmed');
 }
 
@@ -877,20 +880,20 @@ console.log('\n[M] Mutation battery — inversions and deletions, on a tmpdir co
       name: 'DELETE the no-flag fallback — an absent timeValid silently confirms a TBD',
       apply: s => s.replace(String.raw`: /\bTBD\b/i.test(String(tbdText ?? ''));`, `: false;`),
       proveRed: async (mod) => {
-        const noFlagTbd = espnEvent({ id: 'nf_tbd', date: '2026-09-05T04:00Z', omitTimeValid: true,
+        const noFlagTbd = espnEvent({ id: '401990101', date: '2026-09-05T04:00Z', omitTimeValid: true,
           detail: '9/5 - TBD', shortDetail: 'TBD' });
         const r = await parseWith(mod, [noFlagTbd, CONTROL], ...WINDOW);
-        return r.games.find(g => g.espnEventId === 'nf_tbd')?.kickoffDateOnly !== true;
+        return r.games.find(g => g.espnEventId === '401990101')?.kickoffDateOnly !== true;
       },
     },
     {
       name: 'INVERT the no-flag fallback (test -> !test) — absent flag confirms TBDs and TBDs real games',
       apply: s => s.replace(String.raw`: /\bTBD\b/i.test(String(tbdText ?? ''));`, String.raw`: !/\bTBD\b/i.test(String(tbdText ?? ''));`),
       proveRed: async (mod) => {
-        const noFlagTbd = espnEvent({ id: 'nf_tbd', date: '2026-09-05T04:00Z', omitTimeValid: true,
+        const noFlagTbd = espnEvent({ id: '401990101', date: '2026-09-05T04:00Z', omitTimeValid: true,
           detail: '9/5 - TBD', shortDetail: 'TBD' });
         const r = await parseWith(mod, [noFlagTbd, CONTROL], ...WINDOW);
-        return r.games.find(g => g.espnEventId === 'nf_tbd')?.kickoffDateOnly !== true;
+        return r.games.find(g => g.espnEventId === '401990101')?.kickoffDateOnly !== true;
       },
     },
   ];

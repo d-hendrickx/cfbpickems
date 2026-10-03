@@ -340,7 +340,7 @@ export function renderComingSoonCard({ title, subtitle = '', copy, escHtml, extr
   requireEscHtml(escHtml, 'renderComingSoonCard');
   if (!copy) throw new TypeError('renderComingSoonCard() requires copy — the toast text a tap must show');
   const cls = extraClass ? `coming-soon-card ${extraClass}` : 'coming-soon-card';
-  return `<button type="button" class="card ${cls}" data-action="coming-soon" data-coming-soon-copy="${escHtml(copy)}">
+  return `<button type="button" class="card ${escHtml(cls)}" data-action="coming-soon" data-coming-soon-copy="${escHtml(copy)}">
       <span class="coming-soon-card-title">${escHtml(title)}</span>
       ${subtitle ? `<span class="coming-soon-card-subtitle text-muted">${escHtml(subtitle)}</span>` : ''}
     </button>`;
@@ -445,6 +445,9 @@ export function leaguePageBackAffordances({ isNativeShell = false } = {}) {
 }
 
 /**
+ * SP-53 / DI-457 (2026-10-01) — ONE new row, LAST in `.league-page-body` (after League Standings, the empty-state card and the commissioner's "Add new sport" stub): "League Settings",
+ * the same row vocabulary as League Standings (`.league-standings-row`), shown to EVERY member. It pushes the overlay's third view; the Sports block above it is untouched.
+ *
  * League Page (DI-314). `isCommissioner` is the caller's already-resolved
  * `getSession().isAdmin` (this module never reads a raw session object —
  * see the file header). `hasSportChoice` is accepted for forward
@@ -507,6 +510,10 @@ export function renderLeaguePage(league, {
       </button>
       ${emptyState}
       ${isCommissioner ? renderAddSportStubCard({ escHtml }) : ''}
+      <button type="button" class="league-standings-row" data-action="open-league-settings" data-league-id="${escHtml(lg.leagueId || '')}" aria-label="Open League Settings for ${escHtml(lg.leagueName || lg.name || 'this league')}">
+        <span>League Settings</span>
+        <span aria-hidden="true">${icon('chevronRight')}</span>
+      </button>
     </div>`;
 }
 

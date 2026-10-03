@@ -557,10 +557,10 @@ console.log('\n[11] DI-204/205/206/218 — the push self-test client…');
     // for nothing; the 🔔 screen's Reconnect button is the actual repair.
     {
       const zero11 = l({ memberId: 'p2', deviceCount: 0, kinds: [], lookupOk: true }, null);
-      assert(zero11.action === 'Tell Brayden to open the app, tap the 🔔 bell, and tap Reconnect if it shows.',
+      assert(zero11.action === 'Tell Brayden to open the app, go to the menu (top left) → Notifications, and tap Turn On or Reconnect if one shows.',
         `11-30: …with the per-state ACTION line DI-206e requires: what to actually tell that player. Got ${JSON.stringify(zero11.action)}`);
-      assert(/tap the 🔔 bell, and tap Reconnect if it shows\.$/.test(zero11.action),
-        '11-30a: …naming the 🔔 bell and Reconnect — the control that exists, not a first-install prompt a lapsed subscriber will never see');
+      assert(/go to the menu \(top left\) → Notifications, and tap Turn On or Reconnect if one shows\.$/.test(zero11.action) && !/🔔/.test(zero11.action),
+        '11-30a: …naming the menu (top left) → Notifications and BOTH buttons a player can see there (Turn On, Reconnect) — the control that exists (the 🔔 bell was retired, DI-307; reworded 2026-10-02), not a first-install prompt a lapsed subscriber will never see');
       assert(!/notification prompt|home screen/i.test(zero11.action),
         '11-30b: …and no longer sends them to re-add the app to the home screen for nothing');
       assert(zero11.text === "Brayden — no device registered. They won't get any push until they do.",
@@ -1607,6 +1607,161 @@ console.log('\n[12] RG-192 — the external id is never attached, so no player i
       `12m-4: an SDK that does not expose \`token\` AT ALL is unchanged — an absent field never reads as a negative (CONVENTIONS #10), or every device on such a build would be told it is broken. Got ${JSON.stringify(st)}`);
   }
 
+  // ── [12z] THE TURN ON BUTTON THAT DID NOTHING (Drew, live v0.28.0, 2026-10-02) ──
+  // "On my safari web app on the home screen in notifications, I'm clicking
+  // 'turn on' and nothing is happening." The 🔔 header bell was retired with the
+  // UX Revamp (DI-307); since then the ONLY place the priming card renders is the
+  // control center's Settings → Notifications accordion row (#cc-body-notifications).
+  // That row is painted from a resolved HTML string, and bindNotifSettingsBody()
+  // — the one function that gives #notif-priming-btn, #notif-master-toggle and
+  // .notif-cat-toggle their listeners — was only ever called for the retired
+  // modal. So Turn On, Reconnect and both toggles were inert markup: no prompt,
+  // no toast, no write. This drives the REAL drawer binder over that row.
+  {
+    const mkEl = (extra = {}) => {
+      const l = {};
+      const el = { disabled: false, checked: true, dataset: {}, classList: { toggle() {} },
+        addEventListener(t, fn) { (l[t] ||= []).push(fn); }, listeners: l, ...extra };
+      el.fire = async (t) => { for (const fn of (l[t] || [])) await fn({ currentTarget: el, target: el }); };
+      return el;
+    };
+    const btn = mkEl(), master = mkEl(), cat = mkEl({ dataset: { cat: 'chat' } });
+    const ccBody = {
+      id: 'cc-body-notifications',
+      querySelector: (s) => (s === '#notif-priming-btn' ? btn : s === '#notif-master-toggle' ? master : null),
+      querySelectorAll: (s) => (s === '.notif-cat-toggle' ? [cat] : []),
+    };
+    const drawer = { querySelector: (s) => (s === '#cc-body-notifications' ? ccBody : null), querySelectorAll: () => [] };
+    installWorld({ permission: 'default', subscribed: false });
+    Object.assign(globalThis.document, { getElementById: () => null, querySelector: () => null, querySelectorAll: () => [] });
+    push._resetForTest({ sdkReadyMs: 400 });
+    const rowState = { phase: 'open', pane: 'main', settingsOpenRow: 'notifications' };
+    appMod._bindControlCenterBodiesForTest(drawer, rowState);
+    assert((btn.listeners.click || []).length === 1,
+      `12z: THE BUG — the control center's Notifications row gives its Turn On / Reconnect button a click handler (got ${(btn.listeners.click || []).length}). Without one the tap does nothing at all: no permission prompt, no toast.`);
+    assert((master.listeners.change || []).length === 1 && (cat.listeners.change || []).length === 1,
+      `12z-1: …and the master and category toggles in that row are wired too (master ${(master.listeners.change || []).length}, category ${(cat.listeners.change || []).length}) — a checkbox that flips on screen and saves nothing is the same silent failure`);
+    await keepAlive(btn.fire('click'));
+    await settle();
+    assert(CALLS.includes('requestPermission'),
+      `12z-2: …and tapping Turn On in the drawer actually reaches OneSignal.Notifications.requestPermission() — the call that raises iOS's Allow prompt. Got ${JSON.stringify(CALLS)}`);
+    appMod._bindControlCenterBodiesForTest(drawer, rowState);
+    assert((btn.listeners.click || []).length === 1,
+      `12z-3: a second paint pass over the SAME row node never double-binds (two handlers would mean two prompts per tap) — got ${(btn.listeners.click || []).length}`);
+  }
+
+  // ── [12z3]/[12z4] THE ROW'S SAVED COPY (reviewer, 2026-10-02) ─────────────
+  // The drawer paints the Notifications row from ONE saved string, resolved
+  // once per page; closing and re-opening the row re-paints that string. So
+  // after a Turn On tap and after a switch flip, the saved string must be the
+  // NEW state — otherwise a re-open shows the old card / the old switch
+  // position while the saved setting says otherwise.
+  {
+    const mkEl = (extra = {}) => {
+      const l = {};
+      const el = { disabled: false, checked: true, dataset: {}, classList: { toggle() {} },
+        addEventListener(t, fn) { (l[t] ||= []).push(fn); }, listeners: l, ...extra };
+      el.fire = async (t) => { for (const fn of (l[t] || [])) await fn({ currentTarget: el, target: el }); };
+      return el;
+    };
+    const mkDrawer = () => {
+      const btn = mkEl(), master = mkEl(), cat = mkEl({ dataset: { cat: 'chat' } });
+      const ccBody = {
+        querySelector: (s) => (s === '#notif-priming-btn' ? btn : s === '#notif-master-toggle' ? master : null),
+        querySelectorAll: (s) => (s === '.notif-cat-toggle' ? [cat] : []),
+      };
+      return { btn, master, cat, drawer: { querySelector: (s) => (s === '#cc-body-notifications' ? ccBody : null), querySelectorAll: () => [] } };
+    };
+    const rowState = { phase: 'open', pane: 'main', settingsOpenRow: 'notifications' };
+    const reopened = () => appMod._notifSettingsRowCacheForTest?.() || '';
+    const masterOn = (h) => /id="notif-master-toggle"\s+checked/.test(h);
+    const chatOn = (h) => /data-cat="chat"\s+checked/.test(h);
+    const openRow = async (perm) => {
+      installWorld({ permission: perm, subscribed: false });
+      Object.assign(globalThis.document, { getElementById: () => null, querySelector: () => null, querySelectorAll: () => [] });
+      push._resetForTest({ sdkReadyMs: 400 });
+      appMod._resetNotifSettingsRowCacheForTest?.();
+      await keepAlive(push.ensureOneSignalInit());                   // boot has already initialised the SDK by the time a player opens the menu
+      const d = mkDrawer();
+      appMod._bindControlCenterBodiesForTest(d.drawer, rowState);   // opening the row resolves its copy
+      await settle(600);
+      return d;
+    };
+    storage.savePlayer({ playerId: 'pz', displayName: 'Row Tester', active: true, preferences: {} });
+    storage.setSession('pz', false, true);
+
+    // [12z3] Turn On → Allow: the row's saved copy leaves the "Turn On" card.
+    {
+      const d = await openRow('default');
+      sdk.Notifications.requestPermission = async () => { CALLS.push('requestPermission'); globalThis.Notification.permission = 'granted'; };
+      const before = reopened();
+      assert(/>Turn On</.test(before),
+        `12z3 fixture: the opened row shows the Turn On card first (got ${JSON.stringify(before.slice(0, 120))})`);
+      await keepAlive(d.btn.fire('click'));
+      await settle();
+      const after = reopened();
+      assert(!/>Turn On</.test(after) && /id="notif-push-status"/.test(after),
+        `12z3: after Turn On → Allow, re-opening the row shows the device's NEW push status, not the Turn On card it was opened with — the row's own repaint ran (got ${JSON.stringify(after.slice(0, 160))})`);
+    }
+
+    // [12z4] flip a switch → close → re-open: the switch shows the NEW value.
+    {
+      const d = await openRow('granted');
+      assert(masterOn(reopened()) && chatOn(reopened()),
+        `12z4 fixture: the row opens with Push Notifications and Chat both on (got ${JSON.stringify(reopened().slice(0, 300))})`);
+      d.master.checked = false; await keepAlive(d.master.fire('change'));
+      d.cat.checked = false; await keepAlive(d.cat.fire('change'));
+      await settle(20);
+      assert(storage.getNotifyPushMaster() === false && storage.getNotifyCategoryPrefs().chat === false,
+        '12z4 fixture: both flips were saved');
+      assert(!masterOn(reopened()),
+        `12z4: THE BUG — flip Push Notifications off, close the row, re-open it: the switch shows OFF (the saved value), not the ON it was opened with`);
+      assert(!chatOn(reopened()),
+        '12z4-1: …and the same for a category switch (Chat)');
+      assert(d.master.checked === false && d.cat.checked === false,
+        '12z4-2: a save that worked leaves the switch exactly where the player put it');
+      storage.savePlayer({ playerId: 'pz', displayName: 'Row Tester', active: true, preferences: {} });
+    }
+
+    // [12z4-3..] the FAILURE case — the write does not take (no player record
+    // for this session, which is _setPlayerPref()'s silent `return false`).
+    {
+      storage.setSession('pz-unsaved', false, true);
+      const d = await openRow('granted');
+      d.master.checked = false; await keepAlive(d.master.fire('change'));
+      d.cat.checked = false; await keepAlive(d.cat.fire('change'));
+      await settle(20);
+      assert(d.master.checked === true && d.cat.checked === true,
+        `12z4-3: a switch whose save did NOT take snaps back to the real saved state (master ${d.master.checked}, chat ${d.cat.checked}) — never left showing a setting that is not saved`);
+      assert(masterOn(reopened()) && chatOn(reopened()),
+        '12z4-4: …and the re-opened row shows the real state too');
+    }
+    storage.clearSession();
+  }
+
+  // ── [12z2] AFTER A WEB DEPLOY: THE RELOADED PAGE HEALS ITSELF, NO TAP ──────
+  // Drew, 2026-10-02: "I need push to not have to be re-activated with every
+  // update." A deploy reloads the page once (sw-register.js's conditional
+  // controllerchange reload). Whatever the device lost, as long as iOS still
+  // says permission is GRANTED, the reloaded page's boot repair must restore it
+  // with no prompt and no tap — both halves: the subscription and the alias login.
+  for (const [label, world] of [
+    ['subscription lost', { permission: 'granted', subscribed: false }],
+    ['alias login lost', { permission: 'granted', subscribed: true }],
+  ]) {
+    installWorld(world);
+    push._resetForTest({ sdkReadyMs: 400 });
+    appMod._resetAutoOptInForTest();
+    sdk.User.externalId = '';                  // the reloaded page starts with no identity on the SDK
+    const healed = await keepAlive(appMod.maybeAutoOptInPush('p1'));
+    await settle();
+    const st = await keepAlive(push.pushDeviceStatus());
+    assert(healed === true && st.ok === true && CALLS.includes('login(p1)'),
+      `12z2 (${label}): the page that loads after an update re-registers AND re-links this device by itself — ok=${st.ok}, calls ${JSON.stringify(CALLS)}`);
+    assert(!CALLS.includes('requestPermission'),
+      `12z2-1 (${label}): …without ever asking for permission again (it is already granted; a prompt here would be the "re-activate after every update" Drew rejected). Got ${JSON.stringify(CALLS)}`);
+  }
+
   // Restore the suite's own globals — every later section (and any suite that
   // imports this one's modules) must not inherit a push fixture.
   globalThis.document = savedG.document; setNav(savedG.navigator); globalThis.fetch = savedG.fetch;
@@ -1638,6 +1793,8 @@ console.log('\n[13] RG-193 — the copy for "OneSignal has no device for this ac
     '13-2: …and it is not toned or worded as a success');
   assert(/Locker Room/.test(noSub.text),
     '13-3: …while still saying the message DID post, so the rest of the pathway is confirmed short of the phone buzz');
+  assert(/then tap Turn On or Reconnect in the menu \(top left\) → Notifications\./.test(noSub.text) && !/🔔/.test(noSub.text),
+    `13-3a: …and it sends the player to the screen that exists — Turn On or Reconnect in the menu (top left) → Notifications (Drew's card said Turn On) — not the retired 🔔 screen (DI-307; reworded 2026-10-02). Got ${JSON.stringify(noSub.text)}`);
 
   const partial = pst.testPushResultCopy(run({
     recipients: 1, recorded: 1, pushed: 0,
@@ -2953,6 +3110,89 @@ console.log('\n[17] UN-315 — the device follows the ACCOUNT: alias identity, a
   globalThis.matchMedia = saved17.matchMedia; globalThis.Notification = saved17.Notification;
   globalThis.PushSubscriptionOptions = saved17.PushSubscriptionOptions;
   globalThis.OneSignalDeferred = saved17.OneSignalDeferred;
+}
+
+console.log('\n[18] A web deploy does not drop push — the shipped service-worker update path, simulated (Drew 2026-10-02)…');
+// Drew: "I need push to not have to be re-activated with every update." A push
+// subscription belongs to the ServiceWorkerRegistration (scope "/"), not to a
+// worker script; OneSignal's own device record lives in IndexedDB. A deploy
+// bumps CACHE_NAME, so the browser installs a NEW WORKER INTO THE SAME
+// REGISTRATION. This runs the REAL service-worker.js — old CACHE_NAME, then the
+// shipped one — against one shared registration, and checks every way an
+// update could take push down: unregister, unsubscribe, re-subscribe, an
+// IndexedDB wipe, or a new worker that no longer carries OneSignal's handlers.
+{
+  const vm = await import('node:vm');
+  const swSrc = await readFile(new URL('./service-worker.js', import.meta.url), 'utf8');
+  const shippedName = (swSrc.match(/const CACHE_NAME = '([^']+)'/) || [])[1];
+  const LOG = [];
+  const subscription = { endpoint: 'https://web.push.apple.com/drew-iphone', unsubscribe: async () => { LOG.push('unsubscribe'); return true; } };
+  const registration = {
+    scope: 'https://irbfootball.com/',
+    pushManager: { getSubscription: async () => subscription, subscribe: async () => { LOG.push('subscribe'); return subscription; } },
+    unregister: async () => { LOG.push('unregister'); return true; },
+    update: async () => {},
+  };
+  const caches = new Map();
+  const cacheApi = {
+    open: async (k) => { if (!caches.has(k)) caches.set(k, new Set()); return { addAll: async (reqs) => { reqs.forEach(r => caches.get(k).add(String(r.url || r))); } }; },
+    keys: async () => [...caches.keys()],
+    delete: async (k) => { LOG.push('caches.delete:' + k); return caches.delete(k); },
+    match: async () => undefined,
+  };
+  const idb = { deleteDatabase: (n) => { LOG.push('indexedDB.deleteDatabase:' + n); return {}; }, open: () => ({}) };
+  const imported = [];
+  function bootWorker(src) {
+    const handlers = {};
+    const self = {
+      registration, caches: cacheApi, indexedDB: idb,
+      addEventListener: (t, fn) => { (handlers[t] ||= []).push(fn); },
+      skipWaiting: async () => { LOG.push('skipWaiting'); },
+      clients: { claim: async () => { LOG.push('clients.claim'); }, matchAll: async () => [] },
+      location: { origin: 'https://irbfootball.com' },
+    };
+    const ctx = vm.createContext({
+      self, caches: cacheApi, indexedDB: idb, registration, clients: self.clients, console: { warn() {}, log() {}, info() {} },
+      importScripts: (u) => { imported.push(u); },
+      Request: function (u) { this.url = u; }, URL, Promise, fetch: async () => ({ ok: true, clone() { return this; } }),
+    });
+    vm.runInContext(src, ctx, { filename: 'service-worker.js' });
+    const run = async (t) => { const waits = []; for (const fn of (handlers[t] || [])) fn({ waitUntil: (p) => waits.push(p) }); await Promise.all(waits); };
+    return { handlers, run };
+  }
+  const oldSrc = swSrc.replace(/const CACHE_NAME = '[^']+'/, "const CACHE_NAME = 'cfb-pickems-v28-0'");
+  const oldW = bootWorker(oldSrc);
+  await oldW.run('install'); await oldW.run('activate');
+  const subBefore = await registration.pushManager.getSubscription();
+  LOG.length = 0;
+  const importsBeforeUpdate = imported.length;
+  const newW = bootWorker(swSrc);                       // the deploy: same registration, new bytes
+  await newW.run('install'); await newW.run('activate');
+  const subAfter = await registration.pushManager.getSubscription();
+  assert(shippedName && shippedName !== 'cfb-pickems-v28-0' && LOG.includes('skipWaiting') && LOG.includes('clients.claim')
+    && LOG.includes('caches.delete:cfb-pickems-v28-0') && caches.has(shippedName),
+    `18: fixture — the SHIPPED worker (${shippedName}) really installed, took over (skipWaiting + clients.claim) and swept the old shell cache; log ${JSON.stringify(LOG)}`);
+  assert(!LOG.some(e => /^(unregister|unsubscribe|subscribe|indexedDB\.)/.test(e)),
+    `18-1: the update never unregisters the worker, never unsubscribes or re-subscribes push, and never touches IndexedDB (where OneSignal keeps this device's subscription id and alias) — log ${JSON.stringify(LOG)}`);
+  assert(subAfter === subBefore && subAfter.endpoint === 'https://web.push.apple.com/drew-iphone',
+    '18-2: …so the device\'s push subscription after the update is the SAME one it had before');
+  assert(LOG.filter(e => e.startsWith('caches.delete:')).every(e => e === 'caches.delete:cfb-pickems-v28-0'),
+    `18-3: the activate sweep deletes only the old app-shell cache, nothing else (got ${JSON.stringify(LOG.filter(e => e.startsWith('caches.delete:')))})`);
+  assert(imported.length === importsBeforeUpdate + 1 && /cdn\.onesignal\.com\/sdks\/web\/v16\/OneSignalSDK\.sw\.js$/.test(imported[imported.length - 1]),
+    `18-4: the NEW worker still loads OneSignal's push handlers at top level — a worker that receives a push and shows nothing gets its subscription revoked by Safari (got ${JSON.stringify(imported.slice(importsBeforeUpdate))})`);
+  // Page side: the reload after an update re-uses the SAME registration — update(), never unregister/re-register elsewhere.
+  const swReg = await import('./js/sw-register.js');
+  const regCalls = [];
+  const navFake = { serviceWorker: {
+    getRegistration: async () => ({ active: { scriptURL: 'https://irbfootball.com/service-worker.js?appId=x&sdkVersion=160610' }, update: async () => { regCalls.push('update'); }, unregister: async () => { regCalls.push('unregister'); } }),
+    register: async (u, o) => { regCalls.push('register:' + u + ':' + o?.scope); return {}; },
+  } };
+  const out = await swReg.registerServiceWorker({ nav: navFake, scriptUrl: 'service-worker.js?v=29-0', scope: '/' });
+  assert(out.action === 'updated' && regCalls.join() === 'update',
+    `18-5: the page that loads after a deploy calls update() on the existing registration (OneSignal's own URL at scope "/"), never unregister() or a second register() — got ${out.action} ${JSON.stringify(regCalls)}`);
+  const swRegSrc = await readFile(new URL('./js/sw-register.js', import.meta.url), 'utf8');
+  assert(!/\bunregister\s*\(/.test(swSrc) && !/\bunregister\s*\(/.test(swRegSrc) && !/deleteDatabase|indexedDB/.test(swSrc),
+    '18-6: structural — neither service-worker.js nor sw-register.js contains an unregister() call or any IndexedDB access');
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} pushtest: ${pass} passed, ${fail} failed`);

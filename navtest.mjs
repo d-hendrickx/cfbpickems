@@ -145,6 +145,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { inflateSync } from 'node:zlib';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const cssSrc = readFileSync(here + 'css/styles.css', 'utf8');
@@ -155,6 +156,74 @@ function assert(cond, msg) {
   if (cond) { pass++; console.log('  ✅ ' + msg); }
   else { fail++; console.log('  ❌ ' + msg); }
 }
+
+// SB-08 (2026-09-30) — a minimal PNG reader for §7k's PAINTED-pixel check.
+// No dependency: 8-bit RGB/RGBA, non-interlaced (what Chromium's
+// Page.captureScreenshot emits), all five scanline filters. §7k samples what
+// the engine actually PAINTED in the top safe-area band, because the thing
+// under test is a pseudo-element (::before) with pointer-events:none — it is
+// invisible to elementsFromPoint() and has no getBoundingClientRect(), so a
+// DOM-geometry check cannot see it at all. Pixels are the only honest probe.
+function decodePng(buf) {
+  let p = 8, w = 0, h = 0, depth = 0, ctype = 0, interlace = 0;
+  const idat = [];
+  while (p < buf.length) {
+    const len = buf.readUInt32BE(p);
+    const type = buf.toString('ascii', p + 4, p + 8);
+    const data = buf.subarray(p + 8, p + 8 + len);
+    if (type === 'IHDR') { w = data.readUInt32BE(0); h = data.readUInt32BE(4); depth = data[8]; ctype = data[9]; interlace = data[12]; }
+    else if (type === 'IDAT') idat.push(data);
+    else if (type === 'IEND') break;
+    p += 12 + len;
+  }
+  if (depth !== 8 || (ctype !== 6 && ctype !== 2) || interlace !== 0) throw new Error(`decodePng: unsupported PNG (depth ${depth}, color type ${ctype}, interlace ${interlace})`);
+  const bpp = ctype === 6 ? 4 : 3, stride = w * bpp;
+  const raw = inflateSync(Buffer.concat(idat));
+  const out = Buffer.alloc(h * stride);
+  for (let y = 0; y < h; y++) {
+    const ft = raw[y * (stride + 1)], src = y * (stride + 1) + 1, row = y * stride;
+    for (let x = 0; x < stride; x++) {
+      const a = x >= bpp ? out[row + x - bpp] : 0;
+      const b = y > 0 ? out[row - stride + x] : 0;
+      const c = x >= bpp && y > 0 ? out[row - stride + x - bpp] : 0;
+      let v = raw[src + x];
+      if (ft === 1) v += a;
+      else if (ft === 2) v += b;
+      else if (ft === 3) v += (a + b) >> 1;
+      else if (ft === 4) { const pp = a + b - c, pa = Math.abs(pp - a), pb = Math.abs(pp - b), pc = Math.abs(pp - c); v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c; }
+      out[row + x] = v & 255;
+    }
+  }
+  return { w, h, px: (x, y) => { const i = y * stride + x * bpp; return [out[i], out[i + 1], out[i + 2]]; } };
+}
+
+// SB-08 — every colour in a computed value, in order, as [r,g,b,a] (0..255,
+// alpha 0..1). Chromium reports a resolved color-mix() as `color(srgb r g b /
+// a)` with 0..1 channels and plain colours as rgb()/rgba().
+function cssColors(str) {
+  const out = [];
+  const re = /rgba?\(([^)]*)\)|color\(\s*srgb\s+([^)]*)\)/g;
+  let m;
+  while ((m = re.exec(String(str || '')))) {
+    if (m[1] != null) {
+      const p = m[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+      out.push([p[0], p[1], p[2], p[3] ?? 1]);
+    } else {
+      const p = m[2].split(/[\s/]+/).filter(Boolean).map(Number);
+      out.push([p[0] * 255, p[1] * 255, p[2] * 255, p[3] ?? 1]);
+    }
+  }
+  return out;
+}
+// A custom property's computed value is the authored token (#8C1515), not rgb().
+function parseHex(str) {
+  const m = /^#([0-9a-f]{6})$/i.exec(String(str || '').trim());
+  return m ? [0, 2, 4].map(i => parseInt(m[1].slice(i, i + 2), 16)).concat(1) : null;
+}
+// WCAG relative luminance / contrast, for §7l's glyph-legibility sweep.
+const linC = c => { const x = c / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
+const lumOf = ([r, g, b]) => 0.2126 * linC(r) + 0.7152 * linC(g) + 0.0722 * linC(b);
+const contrastOf = (a, b) => { const x = lumOf(a), y = lumOf(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
 
 // ── the calc() validator ────────────────────────────────────────────────────
 // Pull each calc(...) out with balanced-paren scanning (a regex cannot do
@@ -286,8 +355,14 @@ console.log('\n[2] nav clearance — the pill\'s four named tokens + the one com
   assert(/--nav-pill-inset\s*:\s*12px/.test(rootBlock), '--nav-pill-inset is declared as 12px (the left/right inset from the screen edges)');
   assert(/--nav-pill-radius\s*:\s*24px/.test(rootBlock), '--nav-pill-radius is declared as 24px — exactly half of --nav-pill-h, a true capsule');
   const clearanceDecl = (rootBlock.match(/--nav-bar-clearance\s*:\s*([^;]+);/) || [])[1] || '';
-  assert(/var\(--nav-pill-h\)/.test(clearanceDecl) && /var\(--nav-pill-gap\)/.test(clearanceDecl) && /env\(\s*safe-area-inset-bottom\s*,\s*0px\s*\)/.test(clearanceDecl),
-    `--nav-bar-clearance sums pill height + gap + the safe-area inset (with a 0px fallback), computed once — got "${clearanceDecl.trim()}"`);
+  // RE-DERIVED (Home wiring, 2026-10-01; Amendment 3 + 3.1): the clearance is the pill's height plus its own bottom offset, --nav-pill-bottom; THAT token is the shipped gap + the safe-area inset
+  // (with a 0px fallback), floored so the Home disc's collar keeps 8px from the screen edge. The clearance carries no disc term: pages leave no more room (Drew, 56 pt).
+  const pillBottomDecl = (rootBlock.match(/--nav-pill-bottom\s*:\s*([^;]+);/) || [])[1] || '';
+  assert(/var\(--nav-pill-h\)/.test(clearanceDecl) && /var\(--nav-pill-bottom\)/.test(clearanceDecl) && !/--nav-disc/.test(clearanceDecl),
+    `--nav-bar-clearance sums pill height + --nav-pill-bottom and carries NO disc term, computed once — got "${clearanceDecl.trim()}"`);
+  assert(/var\(--nav-pill-gap\)/.test(pillBottomDecl) && /env\(\s*safe-area-inset-bottom\s*,\s*0px\s*\)/.test(pillBottomDecl) && /var\(--nav-disc-reach\)/.test(pillBottomDecl) && /^max\(/.test(pillBottomDecl.trim()),
+    `--nav-pill-bottom = max(gap + the safe-area inset (0px fallback), reach + 8px): the shipped offset with the disc floor — got "${pillBottomDecl.trim()}"`);
+  assert(invalidCalcs(`.p{x:${pillBottomDecl}}`).length === 0, '--nav-pill-bottom\'s own calc() is valid (no unspaced operator)');
   assert(invalidCalcs(`.p{x:${clearanceDecl}}`).length === 0, '--nav-bar-clearance\'s own calc() is valid (no unspaced operator)');
 
   // `.main-content` reads the ONE compound token — no separate installed-app
@@ -306,8 +381,8 @@ console.log('\n[2] nav clearance — the pill\'s four named tokens + the one com
   assert(/left:\s*var\(--nav-pill-inset\)/.test(navBody) && /right:\s*var\(--nav-pill-inset\)/.test(navBody),
     `.bottom-nav is inset from BOTH side edges by --nav-pill-inset, never full-bleed left:0;right:0 (got "${navBody.trim()}")`);
   const navBottom = (navBody.match(/bottom\s*:\s*([^;]+);/) || [])[1] || '';
-  assert(/var\(--nav-pill-gap\)/.test(navBottom) && /env\(\s*safe-area-inset-bottom\s*,\s*0px\s*\)/.test(navBottom),
-    `.bottom-nav floats above the true bottom edge by --nav-pill-gap + the safe-area inset (got "${navBottom.trim()}") — never bottom:0`);
+  assert(/var\(--nav-pill-bottom\)/.test(navBottom),
+    `.bottom-nav floats above the true bottom edge by --nav-pill-bottom (the shipped gap + the safe-area inset, floored for the Home disc; got "${navBottom.trim()}") — never bottom:0`);
   assert(/height\s*:\s*var\(--nav-pill-h\)/.test(navBody), '.bottom-nav\'s own height is exactly --nav-pill-h — no separate installed-app growth rule left');
   assert(/border-radius\s*:\s*var\(--nav-pill-radius\)/.test(navBody), '.bottom-nav is a true capsule (border-radius:var(--nav-pill-radius))');
   assert(invalidCalcs(navBody).length === 0, '.bottom-nav\'s own bottom: calc() is valid');
@@ -675,6 +750,7 @@ console.log('\n[7] ENGINE-MEASURED (Chromium over the DevTools protocol, 393×85
   // 0px) is a bare declaration, unlike the bottom-inset @supports block
   // above), so no GUARD/protect step is needed here.
   const TOPINSET = 59; // Dynamic-Island-class inset (iPhone 15/16/18 Pro family)
+  const SOFT_EDGE = 12; // SB-08 option O2b (Drew's pick, 2026-09-30): the band overhangs the inset by 12px
   const topInsetFile = join(tmp, 'styles-top-inset.css');
   {
     const before = cssSrc;
@@ -700,6 +776,32 @@ console.log('\n[7] ENGINE-MEASURED (Chromium over the DevTools protocol, 393×85
     writeFileSync(topInsetMutatedFile, mutated);
   }
   const topInsetMutatedHref = 'file://' + topInsetMutatedFile;
+  // SB-08 (2026-09-30) — §7k's two mutation sheets, built from the SAME
+  // top-inset substitution, and written so they stay meaningful on EITHER
+  // side of the fix: STRIP-FORCED = any existing body.native-shell::before
+  // rule removed and RG-209's exact backdrop re-injected (the reported bug,
+  // recreated on demand); STRIP-ABSENT = every body.native-shell::before rule
+  // removed and nothing added. §7k's detector must go RED on the first and
+  // GREEN on the second — proof that what it measures is the band paint, not
+  // an artifact of the fixture.
+  const RG209_STRIP = 'body.native-shell::before{content:"";position:fixed;top:0;left:0;right:0;height:' + TOPINSET + 'px;background:var(--maroon);z-index:150;pointer-events:none}';
+  const withoutStrip = readFileSync(topInsetFile, 'utf8').replace(/body\.native-shell::before\{[^}]*\}/g, '');
+  const topInsetStripForcedFile = join(tmp, 'styles-top-inset-strip-forced.css');
+  writeFileSync(topInsetStripForcedFile, withoutStrip + '\n' + RG209_STRIP + '\n');
+  const topInsetStripAbsentFile = join(tmp, 'styles-top-inset-strip-absent.css');
+  writeFileSync(topInsetStripAbsentFile, withoutStrip);
+  // SB-08 fix — §7k-7's mutation sheet: the REAL soft edge, raised from z-index
+  // 90 to RG-209's 150 (above the header). The header at rest must then stop
+  // filling the band — proof that the z-order, not luck, is what keeps the
+  // header's colour under the Dynamic Island while the header is there.
+  const topInsetBandAboveFile = join(tmp, 'styles-top-inset-band-above.css');
+  {
+    const insetSheet = readFileSync(topInsetFile, 'utf8');
+    const bandRule = /body\.native-shell::before\{[^}]*\}/.exec(insetSheet);
+    const raised = bandRule ? insetSheet.replace(bandRule[0], bandRule[0].replace(/z-index:\s*90/, 'z-index:150')) : insetSheet;
+    assert(raised !== insetSheet, 'fixture check: the band-above mutation actually raised the band\'s z-index in the top-inset sheet');
+    writeFileSync(topInsetBandAboveFile, raised);
+  }
 
   const fixtures = {};
   function fixture(name, { tab = 'picks', sectionId = 'page-picks', inner, css = cssHref, bodyClass = '' }) {
@@ -742,6 +844,25 @@ ${navHtml}</div></body></html>`);
     inner: `<div id="games-list">${gameCards(14)}</div>${tiebreaker}${submitBar(14)}` });
   fixture('topInsetWebMutated', { css: topInsetMutatedHref,
     inner: `<div id="games-list">${gameCards(14)}</div>${tiebreaker}${submitBar(14)}` });
+  // SB-08 §7k — the same native 14-game slate against the two mutation sheets.
+  fixture('topInsetNativeStripForced', { css: 'file://' + topInsetStripForcedFile, bodyClass: 'native-shell',
+    inner: `<div id="games-list">${gameCards(14)}</div>${tiebreaker}${submitBar(14)}` });
+  fixture('topInsetNativeStripAbsent', { css: 'file://' + topInsetStripAbsentFile, bodyClass: 'native-shell',
+    inner: `<div id="games-list">${gameCards(14)}</div>${tiebreaker}${submitBar(14)}` });
+  fixture('topInsetNativeBandAbove', { css: 'file://' + topInsetBandAboveFile, bodyClass: 'native-shell',
+    inner: `<div id="games-list">${gameCards(14)}</div>${tiebreaker}${submitBar(14)}` });
+  // SB-08 §7l — the glyph sweep's worst case, after the option renders: a
+  // 46px team-logo disc at the clock's x on every card, cycling dark and light
+  // marks (Notre Dame navy, Aggie maroon, Ink, gold, white, Sooner crimson),
+  // so dark logos pass directly under dark glyphs and light ones under light.
+  const LOGO_DISCS = ['#0C2340', '#500000', '#1C1410', '#C99700', '#FFFFFF', '#9D2235'];
+  const logoCards = n => Array.from({ length: n }, (_, i) =>
+    `<div class="game-card"><div style="padding:14px 16px;display:flex;align-items:center;gap:12px">
+       <div style="width:46px;height:46px;border-radius:50%;background:${LOGO_DISCS[i % LOGO_DISCS.length]};flex:0 0 auto"></div>
+       <div style="flex:1">Team A @ Team B</div></div>
+     <div style="display:flex;gap:8px;padding:0 16px 16px"><button class="pick-btn">Team A</button><button class="pick-btn">Team B</button></div></div>`).join('');
+  fixture('topInsetNativeLogos', { css: topInsetHref, bodyClass: 'native-shell',
+    inner: `<div id="games-list">${logoCards(14)}</div>${tiebreaker}${submitBar(14)}` });
   // the deliberately-too-wide child: the thing overflow-x:hidden was there for
   fixture('wide', { inner: `<div id="games-list">${gameCards(6)}</div>
     <div id="too-wide" style="width:1200px;height:40px;background:#eee">an element 1200px wide, wider than every phone</div>
@@ -749,9 +870,9 @@ ${navHtml}</div></body></html>`);
   // the submitted view: no .submit-bar, and Edit My Picks must stay reachable
   fixture('submitted', { inner: `<div class="tiebreaker-card tiebreaker-submitted"><span class="tiebreaker-label">🎯 Your Tiebreaker Guess</span><span class="tiebreaker-value">52</span></div>
     <div id="submitted-games">${gameCards(14)}</div>
-    <div class="card mt-md text-center" style="padding:16px">
-      <button class="btn btn-secondary mr-sm" id="edit-picks-btn">✏️ Edit My Picks</button>
-      <button class="btn btn-primary" id="go-dash-btn">View Dashboard</button></div>` });
+    <div class="card mt-md" style="padding:16px"><div class="btn-row">
+      <button class="btn btn-secondary" id="edit-picks-btn">✏️ Edit My Picks</button>
+      <button class="btn btn-primary" id="go-dash-btn">View Dashboard</button></div></div>` });
   // other pages that live inside .main-content
   fixture('dashboard', { tab: 'dashboard', sectionId: 'page-dashboard', inner:
     `<div class="card"><div class="dashboard-scroll scroll-fade"><table class="dashboard-table"><thead><tr>
@@ -813,6 +934,8 @@ ${navHtml}</div></body></html>`);
     const out = {viewport:{w:innerWidth,h:innerHeight},
       navPillH: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--nav-pill-h')),
       navPillGap: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--nav-pill-gap')),
+      ...(() => { const pr = document.createElement('div'); pr.style.cssText = 'position:absolute;visibility:hidden;width:var(--nav-disc-reach);height:var(--nav-pill-bottom)'; document.body.appendChild(pr);
+        const cs = getComputedStyle(pr); const o = { discReach: parseFloat(cs.width), pillBottom: parseFloat(cs.height) }; pr.remove(); return o; })(),
       doc:{scrollHeight:se.scrollHeight,scrollWidth:se.scrollWidth,clientWidth:se.clientWidth,clientHeight:se.clientHeight},
       computed:{}, samples:{}};
     for (const sel of (cfg.computed||[])) { const e = document.querySelector(sel);
@@ -871,11 +994,14 @@ ${navHtml}</div></body></html>`);
       `fixture check: the 14-game slate really is much taller than one screen (page scrolls ${long.maxScroll}px) — a bar that "pins" on a page that cannot scroll would prove nothing`);
 
     // ── 7b. THE BUG: pinned above the nav while scrolled, not only at the end ─
-    const pinLine = long.viewport.h - long.navPillH - long.navPillGap - 8;
+    // RE-DERIVED (Home wiring): the pill's offset is --nav-pill-bottom (here, at inset 0, the 16px floor), and the fixed bar carries the disc collar's reach as its disc-specific nudge.
+    assert(long.discReach === 8 && long.pillBottom === Math.max(long.navPillGap, long.discReach + 8),
+      `the engine resolves the disc tokens: reach ${long.discReach}px (56 pt disc: (56 − 48) / 2 + 4 = 8) and --nav-pill-bottom ${long.pillBottom}px = max(gap ${long.navPillGap}, reach + 8) = ${Math.max(long.navPillGap, long.discReach + 8)}px at inset 0`);
+    const pinLine = long.viewport.h - long.navPillH - long.pillBottom - 8 - long.discReach;
     for (const where of ['top', 'mid']) {
       const s = long.samples[where];
       assert(Math.abs(s.bar.bottom - pinLine) <= 1.5,
-        `at scroll ${where} (scrollY ${s.scrollY}) the submit bar is PINNED: its bottom is ${s.bar.bottom}px, the pin line is ${pinLine}px (viewport ${long.viewport.h} − pill height ${long.navPillH} − gap ${long.navPillGap} − 8) — B-c was the bar rendering at its flow position instead, ${Math.round(long.maxScroll)}px down the page`);
+        `at scroll ${where} (scrollY ${s.scrollY}) the submit bar is PINNED: its bottom is ${s.bar.bottom}px, the pin line is ${pinLine}px (viewport ${long.viewport.h} − pill height ${long.navPillH} − pill offset ${long.pillBottom} − 8 − disc reach ${long.discReach}) — B-c was the bar rendering at its flow position instead, ${Math.round(long.maxScroll)}px down the page`);
       assert(s.bar.top >= 0 && s.bar.bottom <= long.viewport.h,
         `at scroll ${where} the whole bar is inside the viewport (top ${s.bar.top}, bottom ${s.bar.bottom} of ${long.viewport.h}) — Submit is on screen without hunting for it`);
       assert(s.bar.bottom <= s.nav.top - 7,
@@ -902,8 +1028,8 @@ ${navHtml}</div></body></html>`);
     for (const where of ['top', 'mid', 'bottom']) {
       const s = long.samples[where];
       const gapBelow = long.viewport.h - s.nav.bottom;
-      assert(Math.abs(gapBelow - long.navPillGap) <= 0.5,
-        `at scroll ${where} the pill floats --nav-pill-gap (${long.navPillGap}px) above the true viewport bottom, not flush to it (measured gap ${gapBelow.toFixed(1)}px, nav bottom ${s.nav.bottom} of viewport ${long.viewport.h})`);
+      assert(Math.abs(gapBelow - long.pillBottom) <= 0.5,
+        `at scroll ${where} the pill floats --nav-pill-bottom (${long.pillBottom}px: the shipped gap, floored for the disc at inset 0) above the true viewport bottom, not flush to it (measured gap ${gapBelow.toFixed(1)}px, nav bottom ${s.nav.bottom} of viewport ${long.viewport.h})`);
       assert(Math.abs(s.nav.h - long.navPillH) <= 0.5,
         `at scroll ${where} the pill's own height is a CONSTANT --nav-pill-h (${long.navPillH}px), never growing (measured ${s.nav.h}px)`);
       assert(s.nav.left > 0 && (long.viewport.w - s.nav.right) > 0,
@@ -942,8 +1068,8 @@ ${navHtml}</div></body></html>`);
     }
 
     // ── 7f. the two deliberate holds, measured ──────────────────────────────
-    assert(long.computed['.submit-bar'].position === 'sticky' && long.computed['.submit-bar'].bottom === `${long.navPillH + long.navPillGap + 8}px`,
-      `the bar's own rule is untouched: position ${long.computed['.submit-bar'].position}, resolved offset ${long.computed['.submit-bar'].bottom} (B-a's calc fix, now doing visible work)`);
+    assert(long.computed['.submit-bar'].position === 'sticky' && long.computed['.submit-bar'].bottom === `${long.navPillH + long.pillBottom + 8 + long.discReach}px`,
+      `the bar's own rule is unchanged but for the disc nudge (clearance + 8 + the collar's reach): position ${long.computed['.submit-bar'].position}, resolved offset ${long.computed['.submit-bar'].bottom} (B-a's calc fix, now doing visible work)`);
     const hdrMid = long.samples.mid.header;
     assert(hdrMid.bottom < 0,
       `.app-header still scrolls away exactly as it does today (its bottom is ${hdrMid.bottom} at scrollY ${long.samples.mid.scrollY}) — RG-188 deliberately does NOT revive its sticky; that is Drew's call and one declaration`);
@@ -998,6 +1124,7 @@ ${navHtml}</div></body></html>`);
         const cs = getComputedStyle(document.body, '::before');
         const header = document.querySelector('.app-header');
         const headerCs = header ? getComputedStyle(header) : null;
+        const bar = document.querySelector('.submit-bar');
         const card = document.querySelector('.game-card');
         window.scrollTo({ top: 200, left: 0, behavior: 'instant' });
         const cardTopScrolled = card ? card.getBoundingClientRect().top : null;
@@ -1005,8 +1132,11 @@ ${navHtml}</div></body></html>`);
         return {
           content: cs.content, height: cs.height, position: cs.position,
           top: cs.top, left: cs.left, right: cs.right, zIndex: cs.zIndex,
-          pointerEvents: cs.pointerEvents, bg: cs.backgroundColor,
+          pointerEvents: cs.pointerEvents, bg: cs.backgroundColor, bgImage: cs.backgroundImage,
           headerBg: headerCs ? headerCs.backgroundColor : null,
+          headerZ: headerCs ? headerCs.zIndex : null,
+          barZ: bar ? getComputedStyle(bar).zIndex : null,
+          pageBg: getComputedStyle(document.body).backgroundColor,
           cardTopScrolled,
         };
       })()`;
@@ -1020,17 +1150,36 @@ ${navHtml}</div></body></html>`);
         return r.result.value;
       };
 
-      // ── native: the strip renders, 59px tall, painted with the header's own
-      //    resolved background color (the SAME --maroon token, not a coincidence).
+      // ── native: the band renders. SB-08 (2026-09-30) CONVERTED [7j-b/c/d]
+      //    from RG-209's strip (inset-tall, z-index 150, painted the header's
+      //    --maroon) to option O2b's soft edge, Drew's pick: inset + 12px tall,
+      //    UNDER the header (z 90 < 100) so the header still covers it at
+      //    rest, above page content and the submit bar (50), painted from the
+      //    PAGE's --bg at 78% → 62% → clear and never from the header's colour.
+      //    The legibility RG-209 bought with paint is now bought by the glyph
+      //    style following the surface (§7l). Each check still detects the
+      //    defect it exists for: a band that is missing, mis-sized, mis-stacked
+      //    or header-coloured fails here.
       const native = await measurePseudo(fixtures.topInsetNative);
       assert(native.content !== 'none',
         `[7j-a] native-shell: the ::before is actually generated (content computed to ${JSON.stringify(native.content)}, not "none")`);
-      assert(native.height === `${TOPINSET}px`,
-        `[7j-b] native-shell: the strip is exactly the substituted inset tall (got ${native.height}, expected ${TOPINSET}px)`);
-      assert(native.position === 'fixed' && native.top === '0px' && native.zIndex === '150' && native.pointerEvents === 'none',
-        `[7j-c] native-shell: position:fixed, top:0, z-index:150, pointer-events:none (got position=${native.position} top=${native.top} zIndex=${native.zIndex} pointerEvents=${native.pointerEvents})`);
-      assert(!!native.bg && native.bg === native.headerBg,
-        `[7j-d] native-shell: the strip's resolved background-color EQUALS .app-header's own resolved background-color (strip=${native.bg}, header=${native.headerBg}) — the same --maroon token, measured, not just textually identical`);
+      assert(native.height === `${TOPINSET + SOFT_EDGE}px`,
+        `[7j-b] native-shell: the soft edge is the substituted inset PLUS its ${SOFT_EDGE}px overhang (got ${native.height}, expected ${TOPINSET + SOFT_EDGE}px)`);
+      assert(native.position === 'fixed' && native.top === '0px' && native.zIndex === '90' && native.pointerEvents === 'none'
+        && Number(native.headerZ) > 90 && Number(native.barZ) < 90,
+        `[7j-c] native-shell: position:fixed, top:0, z-index:90, pointer-events:none, and in the engine's own stacking BELOW the header (${native.headerZ}) and ABOVE the submit bar (${native.barZ}) (got position=${native.position} top=${native.top} zIndex=${native.zIndex} pointerEvents=${native.pointerEvents})`);
+      {
+        const stops = cssColors(native.bgImage);
+        const page = cssColors(native.pageBg)[0];
+        const hdr = cssColors(native.headerBg)[0];
+        const near = (a, b, t = 2) => !!a && !!b && Math.abs(a[0] - b[0]) <= t && Math.abs(a[1] - b[1]) <= t && Math.abs(a[2] - b[2]) <= t;
+        const alphas = stops.map(s => +s[3].toFixed(2));
+        assert(stops.length === 3 && near(stops[0], page) && near(stops[1], page) && alphas[0] === 0.78 && alphas[1] === 0.62 && alphas[2] === 0
+          && cssColors(native.bg)[0]?.[3] === 0,
+          `[7j-d] native-shell: the band is a gradient of the PAGE's own resolved colour (${native.pageBg}) at alpha ${alphas.join(' → ')} (expected 0.78 → 0.62 → 0) on a transparent background-color — read off the engine, not the source (got ${native.bgImage})`);
+        assert(!!hdr && stops.every(s => !near(s, hdr, 8)),
+          `[7j-d2] native-shell: no stop of the band is the HEADER's colour (${native.headerBg}) — SB-08's "all color in the header should scroll up and away", at the source of the paint`);
+      }
       assert(native.cardTopScrolled !== null && native.cardTopScrolled < TOPINSET,
         `[7j-e] fixture check: scrolled, the first game card's own top (${native.cardTopScrolled}px) rises above the ${TOPINSET}px inset band — this is the exact "content slides up underneath" case the strip exists to sit above (proves the scenario is real, not that the strip fixes the card's own position, which it never moves)`);
 
@@ -1043,6 +1192,408 @@ ${navHtml}</div></body></html>`);
       const webMutated = await measurePseudo(fixtures.topInsetWebMutated);
       assert(webMutated.content !== 'none',
         `[7j-g] MUTATION-PROOF: web (no native-shell class) against the MUTATED stylesheet (body.native-shell prefix stripped from the strip rule) DOES now generate the ::before (content computed to ${JSON.stringify(webMutated.content)}) — i.e. [7j-f]'s "no strip on web" assertion goes RED under this mutation, proving [7j-f] is not vacuously true against the real file`);
+    }
+
+    // ── 7k. SB-08 STATUS-BAR-STRIP (Drew, 2026-09-30, iOS/TestFlight):
+    //   "On ios when I scroll up the bottom of the header disappears (intended
+    //    behavior), but there is still a row of color on my iphone just
+    //    underneath the floating island and my camera. All color in the
+    //    header should scroll up and away and you should be able to see the
+    //    page continue to scroll underneath the camera and time/battery/wifi
+    //    icon, etc"
+    // What the engine PAINTS in the top safe-area band [0, TOPINSET) at a
+    // 59px Dynamic-Island inset, sampled from a real screenshot — the band
+    // is exactly where the reported "row of color" sits. The contract, both
+    // front ends:
+    //   k-1/k-2  header at rest: the header's own color fills the whole band
+    //            (the header covers the safe area whenever it is back);
+    //   k-3/k-4  header scrolled away: NO band row is predominantly the
+    //            header's color — it scrolled up and away with the header —
+    //            and page content really is passing under the band;
+    //   k-5/k-6  mutation proof — RG-209's strip forced back in goes RED,
+    //            removed goes GREEN, so the detector measures the paint.
+    // Option-neutral by design: whatever keeps the status glyphs legible
+    // (RG-209's guarantee — see the SB-08 option set) must not paint the
+    // HEADER's color into the band once the header has left it.
+    {
+      const BAND_SHARE = 0.5;   // a row counts as "header-colored" when ≥ half of it is
+      const TOL = 4;            // per-channel tolerance (anti-aliasing / color management)
+      const frames = n => `new Promise(r => { let k = ${n}; const f = () => (--k <= 0 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); })`;
+      const shootBand = async (file, scrollY) => {
+        await viewport(393, 852);
+        const loaded = page.once('Page.loadEventFired');
+        await page.send('Page.navigate', { url: 'file://' + file });
+        await loaded;
+        const r = await page.send('Runtime.evaluate', { awaitPromise: true, returnByValue: true, expression: `(async () => {
+          window.scrollTo({ top: ${scrollY}, left: 0, behavior: 'instant' });
+          await ${frames(3)};
+          const h = document.querySelector('.app-header').getBoundingClientRect();
+          const card = document.querySelector('.game-card').getBoundingClientRect();
+          return { scrollY: Math.round(window.scrollY), headerBottom: h.bottom, cardTop: card.top,
+                   headerBg: getComputedStyle(document.querySelector('.app-header')).backgroundColor };
+        })()` });
+        if (r.exceptionDetails) throw new Error('shootBand threw: ' + JSON.stringify(r.exceptionDetails.exception || r.exceptionDetails));
+        const shot = await page.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        const img = decodePng(Buffer.from(shot.data, 'base64'));
+        const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(r.result.value.headerBg);
+        const hdr = m ? [+m[1], +m[2], +m[3]] : null;
+        let headerRows = 0, rows = 0;
+        for (let y = 0; y < Math.min(TOPINSET, img.h); y += 2) {
+          let hits = 0, n = 0;
+          for (let x = 0; x < img.w; x += 3) {
+            const [pr, pg, pb] = img.px(x, y); n++;
+            if (hdr && Math.abs(pr - hdr[0]) <= TOL && Math.abs(pg - hdr[1]) <= TOL && Math.abs(pb - hdr[2]) <= TOL) hits++;
+          }
+          rows++; if (hits / n >= BAND_SHARE) headerRows++;
+        }
+        return { ...r.result.value, hdr, img: { w: img.w, h: img.h }, headerRows, rows };
+      };
+
+      const SCROLLED = 200;   // > the header's full height, so it has certainly left the band
+      for (const [label, file] of [['native', fixtures.topInsetNative], ['web', fixtures.topInsetWeb]]) {
+        const rest = await shootBand(file, 0);
+        assert(rest.img.w === 393 && rest.img.h === 852 && !!rest.hdr,
+          `[7k-0] ${label}: fixture check — the screenshot is the 393×852 viewport (${rest.img.w}×${rest.img.h}) and the header's resolved color parsed (${rest.headerBg})`);
+        assert(rest.headerRows === rest.rows,
+          `[7k-1/2] ${label}, header AT REST: every sampled row of the ${TOPINSET}px safe-area band is the header's own color (${rest.headerRows}/${rest.rows} rows) — when the header is back it covers the safe area, exactly as today`);
+        const up = await shootBand(file, SCROLLED);
+        assert(up.headerBottom < 0 && up.cardTop < TOPINSET,
+          `[7k-3] ${label}: fixture check — at scrollY ${up.scrollY} the header has fully left the viewport (bottom ${up.headerBottom.toFixed(1)}px) and page content has scrolled up into the band (first card top ${up.cardTop.toFixed(1)}px < ${TOPINSET}px)`);
+        assert(up.headerRows === 0,
+          `[7k-4] ${label}, header SCROLLED AWAY: no row of the ${TOPINSET}px band under the Dynamic Island is still predominantly the header's color (${up.headerRows}/${up.rows} rows are) — SB-08: "all color in the header should scroll up and away"`);
+      }
+
+      // ── mutation proof: the detector measures the band paint, both ways ──
+      const forced = await shootBand(fixtures.topInsetNativeStripForced, SCROLLED);
+      assert(forced.headerRows === forced.rows,
+        `[7k-5] MUTATION-PROOF: with RG-209's strip forced back into the sheet, the scrolled band is header-colored in ${forced.headerRows}/${forced.rows} rows — [7k-4] goes RED on exactly the reported bug`);
+      const absent = await shootBand(fixtures.topInsetNativeStripAbsent, SCROLLED);
+      assert(absent.headerRows === 0,
+        `[7k-6] MUTATION-PROOF: with every body.native-shell::before rule removed, the scrolled band carries no header color (${absent.headerRows}/${absent.rows} rows) — the strip is the ONLY thing that painted it`);
+      // SB-08 fix — the z-order is load-bearing: the same soft edge raised
+      // above the header (RG-209's 150) washes the header at rest.
+      const above = await shootBand(fixtures.topInsetNativeBandAbove, 0);
+      assert(above.headerRows < above.rows,
+        `[7k-7] MUTATION-PROOF: with the soft edge raised to z-index 150 (above the header), the header AT REST no longer fills the band (${above.headerRows}/${above.rows} rows) — [7k-1/2] goes RED, so the real band's z-index 90 is what keeps the header whole while it is there`);
+    }
+
+    // ── 7l. SB-08 — THE GLYPH TRACKER (js/status-bar.js), the real file, in
+    //    the real engine, against the real stylesheet at a 59px inset.
+    //    O2b removes the painted backdrop, so the status glyphs' legibility
+    //    now rests entirely on the STYLE following the surface under them:
+    //      l-1  header at rest   → surface 'chrome', read from --chrome-bg,
+    //           which resolves to the header's OWN colour on every look
+    //           (not frozen to the default crimson — the SB-10 shape);
+    //      l-2  header scrolled away → surface 'page', read from --bg, and
+    //           the style is the one that look's luminance calls for;
+    //      l-3  every frame of a scroll sweep over dark AND light logo discs:
+    //           the chosen glyph colour against what is actually PAINTED in
+    //           the clock and icon boxes, 10th percentile ≥ 3:1 (WCAG for
+    //           large text and graphics; the option renders measured 0 of
+    //           126 frames under it);
+    //      l-4  MUTATION-PROOF: the same frames judged with today's constant
+    //           'DARK' go under 3:1 on every light look — the tracker is
+    //           what makes the soft edge legible, not an accident;
+    //      l-5…7 surfaces other than header/page: an opaque gate wins, a
+    //           translucent scrim does not, the Chat tab's hidden header;
+    //      l-8  the LIVE tracker with a StatusBar stub: one call per flip,
+    //           driven by real scroll events and a real MutationObserver.
+    {
+      const SB_URL = 'data:text/javascript;base64,' + Buffer.from(readFileSync(here + 'js/status-bar.js', 'utf8')).toString('base64');
+      const settle = `new Promise(r => { let k = 3; const f = () => (--k <= 0 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); })`;
+      const GLYPH_BOXES = [[44, 18, 90, 39], [278, 22, 352, 36]];   // CSS px: the clock, and signal/wifi/battery (393pt iPhone)
+      const evalIn = async expr => {
+        const r = await page.send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
+        if (r.exceptionDetails) throw new Error('§7l eval threw: ' + JSON.stringify(r.exceptionDetails.exception || r.exceptionDetails));
+        return r.result.value;
+      };
+      const openLogos = async () => {
+        await viewport(393, 852);
+        const loaded = page.once('Page.loadEventFired');
+        await page.send('Page.navigate', { url: 'file://' + fixtures.topInsetNativeLogos });
+        await loaded;
+        await evalIn(`(async () => { window.__sb = await import(${JSON.stringify(SB_URL)}); return true; })()`);
+      };
+      const setLook = (cls, scheme) => evalIn(`(() => {
+        document.body.className = 'native-shell ' + ${JSON.stringify(cls)};
+        ${scheme ? `document.body.setAttribute('data-color-scheme', ${JSON.stringify(scheme)});` : `document.body.removeAttribute('data-color-scheme');`}
+        document.body.setAttribute('data-tab', 'picks');
+        return true; })()`);
+      const resolveAt = y => evalIn(`(async () => {
+        window.scrollTo({ top: ${y}, left: 0, behavior: 'instant' });
+        await ${settle};
+        const s = window.__sb.resolveGlyphSurface(document, window);
+        return { ...s, style: window.__sb.statusBarStyleFor(s.color), scrollY: Math.round(scrollY),
+          headerBg: getComputedStyle(document.querySelector('.app-header')).backgroundColor,
+          pageBg: getComputedStyle(document.body).backgroundColor };
+      })()`);
+      // CDP's `clip` is in DOCUMENT coordinates: the viewport's top band at
+      // scrollY s is clip y = s (a clip at y 0 on a scrolled page captures the
+      // blank space above the viewport — measured, 2026-09-30).
+      const glyphP10 = async (rgb, scrollY) => {
+        const shot = await page.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false, clip: { x: 0, y: scrollY, width: 393, height: TOPINSET, scale: 1 } });
+        const img = decodePng(Buffer.from(shot.data, 'base64'));
+        const cs = [];
+        for (const [x0, y0, x1, y1] of GLYPH_BOXES) for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) cs.push(contrastOf(rgb, img.px(x, y)));
+        cs.sort((a, b) => a - b);
+        return { p10: cs[Math.floor(cs.length * 0.1)], min: cs[0] };
+      };
+      const GLYPH_RGB = { DARK: [255, 255, 255], LIGHT: [0, 0, 0] };   // Capacitor 'DARK' = light content
+
+      await openLogos();
+      const themeKeys = [...new Set([...cssSrc.matchAll(/body\.theme-([a-z]+)\b/g)].map(m => m[1]))];
+      assert(themeKeys.length >= 7 && themeKeys.includes('neutral'),
+        `[7l-0] fixture check: every look in the stylesheet is swept (${themeKeys.join(', ')}), each on BOTH sides (SP-52: 20 sides) — a sweep of one look would prove nothing about the rest`);
+      // SP-52 (2026-10-01) — OLD: every look on its default side + Munera Night (8 sides). NEW: every look on BOTH sides, pinned (20 sides: the ten looks x Light/Night), because DI-454's
+      // claim is a statement about all of them ("Munera, Paper, Ink, all six schools and Graphite Dark take light glyphs; Graphite Light alone takes dark glyphs").
+      const SIDES = themeKeys.flatMap(k => [['light', 'Light'], ['dark', 'Night']].map(([sch, nm]) => ({ label: `${k} (${nm})`, cls: 'theme-' + k, scheme: sch })));
+      const restLight = [];
+      // 0 … 960px every 24px (the header's exit, then every disc colour under
+      // the clock), plus every 2px across the header's exit (56 … 100px).
+      const SWEEP = [...new Set([...Array.from({ length: 41 }, (_, i) => i * 24), ...Array.from({ length: 23 }, (_, i) => 56 + i * 2)])].sort((a, b) => a - b);
+      // THE STRADDLE. While the header's bottom edge (its 3px gold rule
+      // included) is physically crossing the glyph band, the glyphs sit half
+      // on the header and half on the page and no single glyph colour can
+      // suit both halves. The tracker flips at the glyph MIDLINE, which keeps
+      // the mismatched half smallest, and the plugin cross-fades the flip.
+      // §7l-3 holds every other frame to 3:1; §7l-3t proves the sub-3:1
+      // frames are ONLY these, and that the window is no wider than the band.
+      const BAND_TOP = Math.min(...GLYPH_BOXES.map(b => b[1])), BAND_BOTTOM = Math.max(...GLYPH_BOXES.map(b => b[3]));
+      const RULE = 3;
+      const straddles = headerBottom => headerBottom > BAND_TOP && headerBottom - RULE < BAND_BOTTOM;
+      for (const side of SIDES) {
+        await setLook(side.cls, side.scheme);
+        const rest = await resolveAt(0);
+        const restHdr = cssColors(rest.headerBg)[0], restTok = cssColors(rest.color)[0] || parseHex(rest.color);
+        // [7l-1] RE-DERIVED by SP-52 (2026-10-01, DI-454) — OLD: `rest.style === 'DARK'` (white glyphs) on every look, because every header was crimson. NEW: the style at rest is the
+        // one the HEADER's luminance calls for — white glyphs on every look's header except Graphite Light's white one, which takes dark glyphs (pinned by [7l-1b] below).
+        const wantRest = restHdr && lumOf(restHdr) >= 0.179 ? 'LIGHT' : 'DARK';
+        if (rest.style === 'LIGHT') restLight.push(side.label);
+        assert(rest.surface === 'chrome' && !!restTok && !!restHdr && restTok.slice(0, 3).every((v, i) => Math.abs(v - restHdr[i]) <= 1) && rest.style === wantRest,
+          `[7l-1] ${side.label}, header AT REST: the glyphs sit on the header — surface ${rest.surface}, --chrome-bg ${rest.color} IS the header's own ${rest.headerBg}, style ${rest.style} (want ${wantRest} by the header's luminance: ${wantRest === 'DARK' ? 'white glyphs' : 'dark glyphs'})`);
+        const up = await resolveAt(300);
+        const pageRgb = cssColors(up.pageBg)[0], tok = parseHex(up.color) || cssColors(up.color)[0];
+        const wantStyle = lumOf(pageRgb) >= 0.179 ? 'LIGHT' : 'DARK';
+        assert(up.surface === 'page' && !!tok && tok.slice(0, 3).every((v, i) => Math.abs(v - pageRgb[i]) <= 1) && up.style === wantStyle,
+          `[7l-2] ${side.label}, header SCROLLED AWAY: the glyphs sit on the page under the soft edge — surface ${up.surface}, --bg ${up.color} (page ${up.pageBg}), style ${up.style} (want ${wantStyle} by luminance)`);
+        let below = 0, worst = Infinity, worstMin = Infinity, constBelow = 0, settled = 0;
+        const straddleYs = [], straddleBelow = [], belowOutside = [];
+        for (const y of SWEEP) {
+          const at = await resolveAt(y);
+          const hb = await evalIn(`document.querySelector('.app-header').getBoundingClientRect().bottom`);
+          const { p10, min } = await glyphP10(GLYPH_RGB[at.style], at.scrollY);
+          if (straddles(hb)) {
+            straddleYs.push(at.scrollY);
+            if (p10 < 3) straddleBelow.push(`${at.scrollY}px ${p10.toFixed(2)}:1`);
+            continue;
+          }
+          settled++;
+          if (p10 < 3) { below++; belowOutside.push(`${at.scrollY}px (header bottom ${hb}) ${p10.toFixed(2)}:1`); }
+          worst = Math.min(worst, p10); worstMin = Math.min(worstMin, min);
+          if (at.style !== 'DARK') { if ((await glyphP10(GLYPH_RGB.DARK, at.scrollY)).p10 < 3) constBelow++; }
+          else if (p10 < 3) constBelow++;
+        }
+        assert(below === 0 && settled >= 50,
+          `[7l-3] ${side.label}: over ${settled} scroll frames (0…${SWEEP[SWEEP.length - 1]}px, dark and light logos passing under the clock) where the header's edge is NOT crossing the glyphs, no frame's glyph contrast falls under 3:1 at the 10th percentile (${below} do${belowOutside.length ? ': ' + belowOutside.join(', ') : ''}; worst p10 ${worst.toFixed(2)}:1, worst pixel ${worstMin.toFixed(2)}:1)`);
+        const span = straddleYs.length ? Math.max(...straddleYs) - Math.min(...straddleYs) : 0;
+        assert(straddleYs.length > 0 && span <= (BAND_BOTTOM - BAND_TOP) + RULE,
+          `[7l-3t] ${side.label}: the ONLY frames held out of [7l-3] are the straddle — the header's own edge crossing the ${BAND_TOP}…${BAND_BOTTOM}px glyph band — and that window is ${span}px of scroll (≤ the band plus the rule, ${(BAND_BOTTOM - BAND_TOP) + RULE}px); measured inside it: ${straddleBelow.length ? straddleBelow.join(', ') : 'none under 3:1'} — the flip is at the glyph midline and the plugin cross-fades it (device check)`);
+        if (wantStyle === 'LIGHT') {
+          assert(constBelow > 0,
+            `[7l-4] ${side.label}: MUTATION-PROOF — judged with today's constant 'DARK' (white glyphs), ${constBelow}/${settled} of the same settled frames fall under 3:1, so [7l-3] goes RED without the tracker`);
+        }
+      }
+
+      assert(restLight.length === 1 && restLight[0] === 'graphite (Light)',
+        `[7l-1b] DI-454: across all ${SIDES.length} sides the header AT REST takes dark glyphs on Graphite Light alone (white header) and white glyphs everywhere else — got dark glyphs on: ${restLight.join(', ') || 'none'}`);
+
+      // l-5…7 — the other surfaces, on Munera (light).
+      await setLook('theme-neutral', null);
+      const gate = await evalIn(`(async () => {
+        const g = document.createElement('div'); g.id = 'sb08-gate';
+        g.style.cssText = 'position:fixed;inset:0;z-index:9000;background:#14110E';
+        document.body.appendChild(g);
+        window.scrollTo({ top: 300, left: 0, behavior: 'instant' }); await ${settle};
+        const s = window.__sb.resolveGlyphSurface(document, window); g.remove();
+        return { ...s, style: window.__sb.statusBarStyleFor(s.color) };
+      })()`);
+      assert(gate.surface === 'overlay' && gate.style === 'DARK',
+        `[7l-5] an OPAQUE overlay above the page (the Ink sign-in gate) is what the glyphs sit on, whatever the page beneath is doing — surface ${gate.surface} ${gate.color}, style ${gate.style}`);
+      const scrim = await evalIn(`(async () => {
+        const g = document.createElement('div'); g.className = 'modal-overlay'; g.id = 'sb08-scrim';
+        document.body.appendChild(g);
+        window.scrollTo({ top: 0, left: 0, behavior: 'instant' }); await ${settle};
+        const a = window.__sb.resolveGlyphSurface(document, window);
+        window.scrollTo({ top: 300, left: 0, behavior: 'instant' }); await ${settle};
+        const b = window.__sb.resolveGlyphSurface(document, window); g.remove();
+        return { rest: { ...a, style: window.__sb.statusBarStyleFor(a.color) }, up: { ...b, style: window.__sb.statusBarStyleFor(b.color) } };
+      })()`);
+      assert(scrim.rest.surface === 'chrome' && scrim.rest.style === 'DARK' && scrim.up.surface === 'page' && scrim.up.style === 'LIGHT',
+        `[7l-6] a TRANSLUCENT scrim (.modal-overlay) tints rather than replaces: at rest the glyphs still follow the header (${scrim.rest.surface}/${scrim.rest.style}), scrolled the page (${scrim.up.surface}/${scrim.up.style})`);
+      const chat = await evalIn(`(async () => {
+        document.body.setAttribute('data-tab', 'chat');
+        window.scrollTo({ top: 0, left: 0, behavior: 'instant' }); await ${settle};
+        const s = window.__sb.resolveGlyphSurface(document, window);
+        const hidden = getComputedStyle(document.querySelector('.app-header')).display;
+        document.body.setAttribute('data-tab', 'picks');
+        return { ...s, style: window.__sb.statusBarStyleFor(s.color), hidden };
+      })()`);
+      assert(chat.hidden === 'none' && chat.surface === 'page' && chat.style === 'LIGHT',
+        `[7l-7] the Chat tab hides the header (display ${chat.hidden}), so even at scrollY 0 the glyphs follow the page — surface ${chat.surface}, style ${chat.style}`);
+
+      // l-8 — the LIVE tracker: real scroll events, a real MutationObserver.
+      const live = await evalIn(`(async () => {
+        const calls = [], bgs = [];
+        const plugin = { setStyle: o => calls.push(o.style), setBackgroundColor: o => bgs.push(o.color) };
+        window.scrollTo({ top: 0, left: 0, behavior: 'instant' }); await ${settle};
+        const t = window.__sb.createStatusBarTracker({ doc: document, win: window, isNative: () => true, getPlugin: () => plugin });
+        t.install(); await ${settle};
+        const marks = { install: calls.slice() };
+        for (let y = 20; y <= 400; y += 20) { window.scrollTo({ top: y, left: 0, behavior: 'instant' }); await ${settle}; }
+        marks.scrolled = calls.slice();
+        const g = document.createElement('div'); g.style.cssText = 'position:fixed;inset:0;z-index:9000;background:#14110E';
+        document.body.appendChild(g); await ${settle};
+        marks.gate = calls.slice();
+        g.remove(); await ${settle};
+        marks.ungate = calls.slice();
+        for (let y = 380; y >= 0; y -= 20) { window.scrollTo({ top: y, left: 0, behavior: 'instant' }); await ${settle}; }
+        marks.back = calls.slice();
+        return { marks, bgs };
+      })()`);
+      const m = live.marks;
+      assert(JSON.stringify(m.install) === '["DARK"]' && JSON.stringify(m.scrolled) === '["DARK","LIGHT"]',
+        `[7l-8a] live: installed at rest → ${JSON.stringify(m.install)}; twenty scroll steps down past the header → ${JSON.stringify(m.scrolled)} — ONE bridge call for the one flip, not one per scroll event`);
+      assert(JSON.stringify(m.gate) === '["DARK","LIGHT","DARK"]' && JSON.stringify(m.ungate) === '["DARK","LIGHT","DARK","LIGHT"]',
+        `[7l-8b] live: an opaque gate mounted on <body> flips the glyphs with no scroll at all (${JSON.stringify(m.gate)}), and unmounting it flips them back (${JSON.stringify(m.ungate)}) — the MutationObserver, not a scroll, drove both`);
+      assert(JSON.stringify(m.back) === '["DARK","LIGHT","DARK","LIGHT","DARK"]' && live.bgs.length === 1 && /^#8C1515$/i.test(live.bgs[0]),
+        `[7l-8c] live: scrolling back to the top returns the header's white glyphs (${JSON.stringify(m.back)}); the Android-only background was sent once, from --chrome-bg (${JSON.stringify(live.bgs)})`);
+    }
+
+    // ── 7m. THE HOME DISC (Home wiring, 2026-10-01; DESIGN_NEEDS_HOME Amendment 3 + 3.1, Drew: "vertically centered on the tab bar with an equal overhang on the top and bottom", 56 pt,
+    //        "I don't want pages to leave more room at the bottom"). The REAL index.html nav markup + the REAL styles.css, laid out in the engine at bottom insets 0 / 21 (Face ID landscape) /
+    //        34 (Face ID portrait), Home selected. Everything here is MEASURED, none of it asserted from source.
+    {
+      const sheetAt = (n, f = x => x, tag = n) => { const file = join(tmp, `styles-disc-${tag}.css`); writeFileSync(file, f(cssSrc.replace(/env\(\s*safe-area-inset-bottom\s*(?:,[^)]*)?\)/g, n + 'px'))); return 'file://' + file; };
+      const NOREACH = x => { const y = x.split('+ var(--nav-pill-bottom) + var(--nav-disc-reach)))').join('+ var(--nav-pill-bottom)))'); return y; };
+      const discFix = (name, css) => fixture(name, { tab: 'home', sectionId: 'page-home', css, inner: '<div id="home-root"><p>Home</p></div><div id="auth-banner-stack"><div class="auth-banner">Session expired</div></div><div class="update-available-banner">Update available</div>' });
+      discFix('disc0', cssHref); discFix('disc21', sheetAt(21)); discFix('disc34', sheetAt(34));
+      discFix('discNoReach34', sheetAt(34, NOREACH, '34nr').replace('styles-disc-34nr', 'styles-disc-34nr'));
+      // review N2 (2026-10-02): the SAME fixture with both banners put back at the bare clearance (the shipped rule) — the clearance detector below must see them overlap the collar
+      discFix('discBannerBare34', sheetAt(34, (x) => x.split('bottom:calc(var(--nav-bar-clearance) + var(--nav-disc-reach) + 8px)').join('bottom:var(--nav-bar-clearance)'), '34nb'));
+      const PROBE = `(() => {
+        const R = e => e.getBoundingClientRect();
+        const nav = document.querySelector('.bottom-nav'), disc = document.querySelector('.nav-home-disc'), btn = document.querySelector('.nav-item[data-tab="home"]');
+        const len = v => { const p = document.createElement('div'); p.style.cssText = 'position:absolute;visibility:hidden;height:' + v; document.body.appendChild(p); const h = parseFloat(getComputedStyle(p).height); p.remove(); return h; };
+        const ring = len('var(--nav-disc-ring)'), reach = len('var(--nav-disc-reach)'), clearance = len('var(--nav-bar-clearance)'), pillBottom = len('var(--nav-pill-bottom)');
+        const n = R(nav), d = R(disc), b = R(btn), vh = innerHeight;
+        const cx = (d.left + d.right) / 2, topPt = d.top + 1, botPt = d.bottom - 1;
+        const inBtn = (x, y) => { const e = document.elementFromPoint(x, y); return !!(e && e.closest && e.closest('.nav-item[data-tab="home"]')); };
+        const bR = (sel) => { const e = document.querySelector(sel); return e ? R(e) : null; };
+        const authB = bR('#auth-banner-stack'), updB = bR('.update-available-banner');
+        const out = { vh, ring, reach, clearance, pillBottom,
+          bannerGap: { auth: authB ? (d.top - ring) - authB.bottom : null, update: updB ? (d.top - ring) - updB.bottom : null }, pill: { top: n.top, bottom: n.bottom, h: n.height }, disc: { top: d.top, bottom: d.bottom, h: d.height, w: d.width, left: d.left, right: d.right },
+          overAbove: n.top - d.top, overBelow: d.bottom - n.bottom, dyCenter: (d.top + d.bottom) / 2 - (n.top + n.bottom) / 2, dxCenter: cx - (b.left + b.right) / 2,
+          hitTop: inBtn(cx, topPt), hitBottom: inBtn(cx, botPt), hitCollar: inBtn(cx, d.top - 3), hitFarSide: inBtn(d.right + 2, (d.top + d.bottom) / 2),
+          active: btn.classList.contains('active') && btn.getAttribute('aria-current') === 'page' };
+        const gl = t => { const s = document.querySelector('.nav-item[data-tab="' + t + '"] svg'); return s ? R(s) : null; };
+        const dash = gl('dashboard'), chat = gl('chat');
+        out.gapLeft = dash ? d.left - ring - dash.right : null; out.gapRight = chat ? chat.left - (d.right + ring) : null;
+        out.minTab = Math.min(...[...document.querySelectorAll('.nav-item')].map(e => R(e).width));
+        const roof = document.querySelector('.nav-home-disc .home-roof'), cs = getComputedStyle(disc);
+        out.roofFill = getComputedStyle(roof).fill; out.discColor = cs.color; out.discBg = cs.backgroundColor;
+        out.ringOpacity = getComputedStyle(disc, '::after').opacity;
+        const collarTopAfter = (setup) => { setup(); nav.style.transition = 'none'; void nav.offsetHeight; const dd = R(disc); const t = dd.top - ring; return { collarTop: t, visible: Math.max(0, vh - t) }; };
+        out.hiddenClass = collarTopAfter(() => nav.classList.add('nav-hidden')); nav.classList.remove('nav-hidden');
+        out.hiddenKeyboard = collarTopAfter(() => document.body.setAttribute('data-keyboard-up', '')); document.body.removeAttribute('data-keyboard-up');
+        return out;
+      })()`;
+      const probeAt = async (file, w = 393, h = 852) => {
+        await viewport(w, h);
+        const loaded = page.once('Page.loadEventFired');
+        await page.send('Page.navigate', { url: 'file://' + file });
+        await loaded;
+        const r = await page.send('Runtime.evaluate', { expression: PROBE, returnByValue: true, awaitPromise: true });
+        if (r.exceptionDetails) throw new Error('disc probe threw: ' + JSON.stringify(r.exceptionDetails.exception || r.exceptionDetails));
+        return r.result.value;
+      };
+      for (const [name, inset] of [['disc0', 0], ['disc21', 21], ['disc34', 34]]) {
+        for (const w of [320, 375, 430]) {
+          const m = await probeAt(fixtures[name], w);
+          const tag = `[7m] inset ${inset}, ${w} wide`;
+          assert(m.disc.h === 56 && m.disc.w === 56 && m.reach === 8 && m.ring === 4,
+            `${tag}: the disc is a 56 pt circle (Drew: "prefer 56 pt") with a 4 pt collar ring and an 8 pt reach (measured ${m.disc.w} x ${m.disc.h}, ring ${m.ring}, reach ${m.reach})`);
+          assert(Math.abs(m.overAbove - m.overBelow) <= 0.5 && Math.abs(m.overAbove - 4) <= 0.5,
+            `${tag}: EQUAL overhang above and below the 48 pt pill, each (56 − 48) / 2 = 4 pt (measured ${m.overAbove.toFixed(2)} above, ${m.overBelow.toFixed(2)} below) — Drew's words, "an equal overhang on the top and bottom"`);
+          assert(Math.abs(m.dyCenter) <= 0.5 && Math.abs(m.dxCenter) <= 0.5,
+            `${tag}: the disc is vertically CENTERED on the tab bar (centre off by ${m.dyCenter.toFixed(2)} pt) and centred on its own button (${m.dxCenter.toFixed(2)} pt): flex-centred, never translated`);
+          assert(m.vh - (m.disc.bottom + m.ring) >= 8 - 0.5 && m.vh - m.disc.bottom >= 8 - 0.5,
+            `${tag}: the collar keeps ≥ 8 pt from the screen edge and the fill ≥ 8 pt (measured collar ${(m.vh - m.disc.bottom - m.ring).toFixed(1)}, fill ${(m.vh - m.disc.bottom).toFixed(1)}) — the floor in --nav-pill-bottom (${m.pillBottom})`);
+          assert(m.hitTop && m.hitBottom && !m.hitCollar,
+            `${tag}: a tap on the disc's overhang above and below is the HOME button (it is a descendant), and 3 pt above the fill (the painted collar, outside the pill) is not: the collar is a box-shadow, never hit-testable`);
+          assert(m.gapLeft >= 8 && m.gapRight >= 8 && m.minTab >= 44,
+            `${tag}: the collar is ≥ 8 pt from both neighbouring glyphs (measured ${m.gapLeft && m.gapLeft.toFixed(1)} / ${m.gapRight && m.gapRight.toFixed(1)}) and no tab is under 44 pt wide (narrowest ${m.minTab.toFixed(1)})`);
+          assert(m.bannerGap.auth !== null && m.bannerGap.update !== null && m.bannerGap.auth >= 8 - 0.5 && m.bannerGap.update >= 8 - 0.5,
+            `${tag}: the two fixed banners (#auth-banner-stack, .update-available-banner) sit >= 8 pt ABOVE the disc's collar (measured ${m.bannerGap.auth && m.bannerGap.auth.toFixed(1)} / ${m.bannerGap.update && m.bannerGap.update.toFixed(1)}): they paint above the nav's z-index and used to cover the disc's top 8 pt (review N2)`);
+          assert(m.hiddenClass.visible <= 0.5 && m.hiddenKeyboard.visible <= 0.5,
+            `${tag}: with .nav-hidden, and with the keyboard up, 0 px of the pill OR the disc's collar remains on screen (collar top ${m.hiddenClass.collarTop.toFixed(1)} / ${m.hiddenKeyboard.collarTop.toFixed(1)} of ${m.vh}): no sliver`);
+        }
+        const m = await probeAt(fixtures[name]);
+        assert(m.clearance === 48 + m.pillBottom && (inset >= 8 ? m.clearance === 48 + 8 + inset : m.clearance === 64),
+          `[7m] inset ${inset}: --nav-bar-clearance is ${m.clearance}px = ${inset >= 8 ? 'the SHIPPED 48 + 8 + ' + inset + ' (the disc added NO room at the bottom: Drew, 2026-10-01)' : '48 + the floored pill offset 16 (the pill must not cover the composer where there is no inset)'}`);
+        assert(m.active && /^rgb\(\d+, \d+, \d+\)$/.test(m.discBg) && m.roofFill === m.discColor && Number(m.ringOpacity) === 1,
+          `[7m] inset ${inset}: Home selected: the roof is FILLED with the disc's reversed-out colour (${m.roofFill}) and the 2 px inner ring is fully visible (opacity ${m.ringOpacity}): shapes, not colour alone`);
+      }
+      // ── the CHAT composer vs the collar (Drew M-11 Q2 "lift", 2026-10-02): with the keyboard DOWN the composer's bottom edge sits >= 8 pt clear of the disc's collar on every phone; with the keyboard UP
+      //    the gap above the keyboard is unchanged (8 pt, the nav and its collar are hidden). A chat page fixture: the real #page-chat.active rules, a flex-filling thread and a composer at the bottom.
+      {
+        const chatFix = (name, css) => fixture(name, { tab: 'chat', sectionId: 'page-chat', css, inner: '<div style="flex:1 1 auto;min-height:0;overflow:auto">thread</div><div id="cmp" class="chat-composer" style="flex:none;height:56px">composer</div>' });
+        const CHATGAP = (cur) => cur.replace('#page-chat.active{--chat-nav-gap:calc(8px + var(--nav-disc-reach));', '#page-chat.active{--chat-nav-gap:8px;');
+        const NOKB = (cur) => cur.replace('body[data-keyboard-up] #page-chat.active{--nav-bar-clearance:0px;--chat-nav-gap:8px}', 'body[data-keyboard-up] #page-chat.active{--nav-bar-clearance:0px}');
+        chatFix('chat0', cssHref); chatFix('chat21', sheetAt(21, undefined, '21c')); chatFix('chat34', sheetAt(34, undefined, '34c'));
+        chatFix('chatBare34', sheetAt(34, CHATGAP, '34cb')); chatFix('chatNoKb34', sheetAt(34, NOKB, '34ck'));
+        const CHAT_PROBE = `(() => {
+          const R = (e) => e.getBoundingClientRect();
+          const len = (v) => { const p = document.createElement('div'); p.style.cssText = 'position:absolute;visibility:hidden;height:' + v; document.body.appendChild(p); const h = parseFloat(getComputedStyle(p).height); p.remove(); return h; };
+          const ring = len('var(--nav-disc-ring)'), reach = len('var(--nav-disc-reach)');
+          const d = R(document.querySelector('.nav-home-disc')), c = R(document.getElementById('cmp')), vh = innerHeight;
+          const down = { gap: (d.top - ring) - c.bottom, fromEdge: vh - c.bottom };
+          document.body.setAttribute('data-keyboard-up', ''); void document.body.offsetHeight;
+          const c2 = R(document.getElementById('cmp'));
+          return { ring, reach, vh, down, up: { fromEdge: vh - c2.bottom } };
+        })()`;
+        const chatAt = async (file, w) => {
+          await viewport(w, 852);
+          const loaded = page.once('Page.loadEventFired');
+          await page.send('Page.navigate', { url: 'file://' + file });
+          await loaded;
+          const r = await page.send('Runtime.evaluate', { expression: CHAT_PROBE, returnByValue: true, awaitPromise: true });
+          if (r.exceptionDetails) throw new Error('chat probe threw: ' + JSON.stringify(r.exceptionDetails.exception || r.exceptionDetails));
+          return r.result.value;
+        };
+        for (const [name, inset] of [['chat0', 0], ['chat21', 21], ['chat34', 34]]) {
+          for (const w of [320, 375, 430]) {
+            const m = await chatAt(fixtures[name], w);
+            const tag = `[7m] chat, inset ${inset}, ${w} wide`;
+            assert(m.down.gap >= 8 - 0.5,
+              `${tag}: keyboard DOWN — the composer's bottom edge is >= 8 pt clear of the disc's collar (measured ${m.down.gap.toFixed(1)} pt; the old 8 pt lift measured 0)`);
+            assert(Math.abs(m.up.fromEdge - 8) <= 0.5,
+              `${tag}: keyboard UP — the composer sits 8 pt above the keyboard edge, UNCHANGED (measured ${m.up.fromEdge.toFixed(1)} pt)`);
+          }
+        }
+        const bare = await chatAt(fixtures.chatBare34, 375);
+        assert(bare.down.gap <= 0.5 && bare.down.gap >= -0.5,
+          `[7m] chat mutation: with the bare 8 pt lift the SAME detector measures ${bare.down.gap.toFixed(1)} pt to the collar (touching): the lift detector discriminates`);
+        const nokb = await chatAt(fixtures.chatNoKb34, 375);
+        assert(Math.abs(nokb.up.fromEdge - 16) <= 0.5,
+          `[7m] chat mutation: without the keyboard-up override the SAME detector measures a ${nokb.up.fromEdge.toFixed(1)} pt gap above the keyboard (not 8): the unchanged-gap detector discriminates`);
+      }
+      // MUTATION PROOF (same detector, the shipped distance minus the reach): the collar sliver must be SEEN.
+      const mutB = await probeAt(fixtures.discBannerBare34);
+      assert(mutB.bannerGap.auth <= -7.5 && mutB.bannerGap.update <= -7.5,
+        `[7m] mutation: with both banners back at the bare clearance the SAME detector measures ${mutB.bannerGap.auth.toFixed(1)} / ${mutB.bannerGap.update.toFixed(1)} pt (they overlap the collar by the reach): the banner clearance detector discriminates`);
+      const mut = await probeAt(fixtures.discNoReach34);
+      assert(mut.hiddenClass.visible >= 7.5 && mut.hiddenKeyboard.visible >= 7.5,
+        `[7m] mutation: with the hide distance stopping at the pill (no + var(--nav-disc-reach)) the SAME detector sees ${mut.hiddenClass.visible.toFixed(1)} px of collar left on screen: the sliver test discriminates`);
     }
   } catch (e) {
     assert(false, `the engine section ran to completion (threw: ${e && e.message})`);

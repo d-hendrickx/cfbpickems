@@ -680,6 +680,105 @@ console.log('\n[6] renderRulesPage — Alma Maters section REMOVED (DI-423, UN-3
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[6b] SP-54 / DI-470 (UN-403b, regulatory R-F12) — the built-in "Weekly Ties" section of the Rules page…');
+{
+  const tie = await import('./js/tie-context.js');
+  const { rankWeeklyResults } = await import('./js/scoring.js');
+  const { renderWeeklyTiesRulesHTML } = app;
+  localStorage.clear();
+  el('page-rules');
+  renderRulesPage();
+  const html = el('page-rules').innerHTML;
+  // T-R1 — once; between the league's own sections and Debts & Bylaws; Step 1..5 in sequence; "straight-up" only inside the Step 3 note
+  const iTies = html.indexOf('Weekly Ties — who wins, who loses');
+  assert((html.match(/Weekly Ties — who wins, who loses/g) || []).length === 1 && iTies > -1, 'T-R1: the Weekly Ties heading appears exactly once on the Rules page');
+  const iPrizes = html.indexOf('<h3>Prizes</h3>'), iDebts = html.indexOf('Debts &amp; Bylaws');
+  assert(iPrizes > -1 && iPrizes < iTies && iTies < iDebts, `T-R1: …AFTER the league's own sections (Prizes) and BEFORE Debts & Bylaws (${iPrizes} < ${iTies} < ${iDebts})`);
+  const stepAt = [1, 2, 3, 4, 5].map(n => html.indexOf(`Step ${n} — `, iTies));
+  assert(stepAt.every((i, k) => i > -1 && (k === 0 || i > stepAt[k - 1])), `T-R1: Step 1 to Step 5 lead-ins appear in sequence inside the section (${stepAt.join(' < ')})`);
+  const section = html.slice(iTies, iDebts);
+  const straight = [...section.matchAll(/straight-up/g)].map(m => m.index + iTies);
+  assert(straight.length === 1 && straight[0] > stepAt[2] && straight[0] < stepAt[3] && !html.slice(0, iTies).includes('straight-up') && !html.slice(iDebts).includes('straight-up'),
+    'T-R1: "straight-up" appears only inside the Step 3 note (the Alma Mater Watch distinction), nowhere else on the page');
+  // SC-K2 / A.2: the Step 3 note carries the kickoff sentence AND the snapshot sentence
+  assert(section.includes("Games that kicked off before the week locked don't count.") && section.includes("Your school counts as it was when the week locked, so changing it afterward doesn't change a week that has already locked."),
+    'T-R1 / SC-K2: the Step 3 note says games that kicked off before the lock do not count, and that the school counts as it was at the lock');
+  assert(!/<h3>[^<]*<img|<svg/.test(section.slice(0, section.indexOf('</h3>') + 5)), 'DI-470: no emoji or icon in the new heading (the hard-coded siblings carry some; converting them is a D-1 inventory item)');
+  assert(!/\border(s)?\b/i.test(section.replace(/<[^>]*>/g, ' ')), 'UN-77: the Weekly Ties copy contains no whole word "order" or "orders"');
+  assert(!/Notre Dame|Oklahoma|Texas A&amp;M|USC|Arkansas|Clemson/.test(section), 'blind rule / almatest [6]: the copy names no school (the worked examples use made-up players)');
+  assert(!/\$\{/.test(section) && !/(onclick|href|src)=/.test(section), 'DI-470: the block is static markup — no template residue, no handler, no link');
+
+  // T-R2 — a league that customized its Rules still gets the rule, and its own words are untouched
+  storage.saveSetting('customRules', [{ id: 'c1', section: 'House Rules', items: ['No Venmo, ever.', 'Texas A&M week: bring cash'] }]);
+  renderRulesPage();
+  const htmlC = el('page-rules').innerHTML;
+  assert(htmlC.includes('Weekly Ties — who wins, who loses') && htmlC.includes('House Rules') && htmlC.includes('No Venmo, ever.') && htmlC.includes('Texas A&amp;M week: bring cash'),
+    'T-R2: with customRules set, the page still contains Weekly Ties AND the league\'s own text, unchanged and escaped');
+  assert(htmlC.indexOf('House Rules') < htmlC.indexOf('Weekly Ties — who wins') && htmlC.indexOf('Weekly Ties — who wins') < htmlC.indexOf('Debts &amp; Bylaws'), 'T-R2: …in the same place: the league\'s sections, then Weekly Ties, then Debts & Bylaws');
+  storage.saveSetting('customRules', []);
+  renderRulesPage();
+  assert(el('page-rules').innerHTML.includes('Weekly Ties — who wins, who loses'), 'T-R2: even a league with NO rules text of its own shows the built-in section');
+  storage.saveSetting('customRules', null);
+
+  // T-R3 — copy follows code: the five lead-ins equal TIE_STAGES in count, sequence and label; a sixth stage / a rename must fail
+  const stepsOf = (h) => [...h.matchAll(/<strong>Step (\d) — ([^<]*)\.<\/strong>/g)].map(m => [Number(m[1]), m[2]]);
+  const matches = (h, stages) => { const got = stepsOf(h); return got.length === stages.length && got.every(([n, label], i) => n === i + 1 && label === stages[i].label.replace(/&/g, '&amp;')); };
+  assert(matches(renderWeeklyTiesRulesHTML(), tie.TIE_STAGES), `T-R3: the five step lead-ins equal TIE_STAGES in count, sequence and label (${stepsOf(renderWeeklyTiesRulesHTML()).map(x => x[1]).join(' | ')})`);
+  assert(tie.TIE_STAGES.length === 5 && tie.TIE_STAGES.map(x => x.key).join() === 'picks,tiebreaker,alma,ep,draw', 'T-R3: the stage list is the five stages in the agreed sequence');
+  assert(matches(renderWeeklyTiesRulesHTML(), [...tie.TIE_STAGES, { key: 'x', label: 'A sixth stage' }]) === false
+    && matches(renderWeeklyTiesRulesHTML(), tie.TIE_STAGES.map((x, i) => (i === 3 ? { ...x, label: 'Longest Kick' } : x))) === false
+    && matches(renderWeeklyTiesRulesHTML(), [...tie.TIE_STAGES].reverse()) === false,
+    'T-R3 canaries: a sixth stage, a renamed stage and a reordered list each FAIL the drift guard (it is not vacuous)');
+  assert(['Won the tie', 'Last on the tie', 'the week\'s draw'].every(x => (tie.TIE_COPY.winnerLead + tie.TIE_COPY.loserLead + tie.TIE_COPY.draw + html).includes(x)),
+    'T-R3: the caption vocabulary ("Won the tie", "Last on the tie", "the week\'s draw") comes from the same constants the page names');
+
+  // T-R4 — the sentences the rule makes FALSE are gone, and the Extra Point bullet no longer contradicts the new role
+  assert(!dm.DEFAULT_RULES.some(r => r.items.some(i => /share the rank/i.test(i))) && !/share the rank/i.test(html) && !/share the rank/i.test(htmlC),
+    'T-R4: neither DEFAULT_RULES nor the rendered page says "share the rank" (ranks stay 1 to n)');
+  assert(dm.DEFAULT_RULES.find(r => r.id === 'r3').items.includes('Closest guess wins, over or under. If still tied, Weekly Ties (below) settles it.'), 'C10: DEFAULT_RULES r3 now points at Weekly Ties (what Reset Default shows in the Comm editor)');
+  assert(html.includes("Optional side bet — skipping it means you can't win it, and in a weekly tie that reaches the Extra Point (see Weekly Ties below) you come behind everyone who guessed.") && !html.includes("skipping it just means you can't win it"),
+    'C9 / T-R4: the Extra Point card\'s last bullet mentions Weekly Ties and no longer says skipping "just" means you can\'t win it');
+  assert(html.includes('Tied winning guesses share the win'), 'C9: the SIDE contest\'s own "tied winning guesses share the win" bullet is left alone (it is true for the side contest)');
+  assert(/share the rank/i.test('Closest guess wins. If still tied, players share the rank.') && !/share the rank/i.test(dm.DEFAULT_RULES.map(r => r.items.join(' ')).join(' ')), 'T-R4 canary: the old sentence IS caught by the same regex');
+
+  // T-R5 — the worked examples cannot lie: both run through the REAL ranker with hand-built keys
+  {
+    const row = (pid, cp) => ({ playerId: pid, displayName: pid, correctPicks: cp, incorrectPicks: 0, tiebreakerDelta: 3, rank: 0, isWinner: false, isLoser: false, wonByTiebreaker: false });
+    // Example 1: Alex and Sam, 6 picks, equally close guesses, BOTH schools played, Alex's covered, Sam's didn't -> Alex wins at Step 3 (alma)
+    const e1 = rankWeeklyResults([row('sam', 6), row('alex', 6)], true, { seed: 'w', alma: { alex: { played: true, net: 1 }, sam: { played: true, net: -1 } }, ep: null,
+      facts: { alex: { alma: { team: 'A', cov: 1, mis: 0, psh: 0, src: 'snapshot' } }, sam: { alma: { team: 'S', cov: 0, mis: 1, psh: 0, src: 'snapshot' } } }, degraded: [] });
+    assert(e1[0].playerId === 'alex' && e1[0].tieBreak.stage === 'alma', 'T-R5 (Example 1): both schools played, Alex\'s covered, Sam\'s did not: Alex wins the tie at Step 3 (stage alma)');
+    // Example 2: Sam's school was NOT on the slate, so Step 3 is skipped for both; the longest made field goal was 52: Alex guessed 50 (2 under), Sam 47 (5 under) -> Alex wins at Step 4 (ep)
+    const e2 = rankWeeklyResults([row('sam', 6), row('alex', 6)], true, { seed: 'w', alma: { alex: { played: true, net: 1 }, sam: { played: false, net: 0 } },
+      ep: { byPlayer: { alex: { cls: 0, delta: 2 }, sam: { cls: 0, delta: 5 } } },
+      facts: { alex: { ep: { guess: 50, cls: 0, delta: 2 } }, sam: { ep: { guess: 47, cls: 0, delta: 5 } } }, degraded: [] });
+    assert(e2[0].playerId === 'alex' && e2[0].tieBreak.stage === 'ep', 'T-R5 (Example 2): Sam\'s school off the slate skips Step 3 for both; 50 (2 under) beats 47 (5 under): Alex wins at Step 4 (stage ep)');
+    // …and the copy those examples sit in still says exactly that
+    assert(section.includes('Alex wins the tie at Step 3.') && section.includes('Alex wins the tie at Step 4.') && section.includes('Alex guessed 50 (2 under) and Sam guessed 47 (5 under)'),
+      'T-R5: the page text of both worked examples is what the two runs above just proved');
+  }
+
+  // T-R6 — coupling (R-F12): the ranking code emits descriptors; the page must carry the section that explains them. A partial revert turns this red.
+  {
+    const emits = rankWeeklyResults([{ playerId: 'a', displayName: 'a', correctPicks: 4, incorrectPicks: 0, tiebreakerDelta: null, rank: 0, isWinner: false, isLoser: false, wonByTiebreaker: false },
+      { playerId: 'b', displayName: 'b', correctPicks: 4, incorrectPicks: 0, tiebreakerDelta: null, rank: 0, isWinner: false, isLoser: false, wonByTiebreaker: false }], true,
+      { seed: 'w', alma: null, ep: null, facts: {}, degraded: [] }).some(r => r.tieBreak);
+    assert(emits === true && html.includes('Weekly Ties — who wins, who loses'), 'T-R6: the ranker emits tieBreak descriptors AND the Rules page carries Weekly Ties — the two ship together (R-F12)');
+  }
+
+  // C11 — the Comm note sits above the editor box in the card markup, NOT inside rulesEditorHTML()
+  {
+    const { readFile } = await import('node:fs/promises');
+    const src = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+    const note = '<p class="text-secondary text-xs mb-sm">Weekly Ties, the Extra Point, Chat, Permissions and Debts &amp; Bylaws are built in and always appear on the Rules page. Only the text in this box is yours to edit.</p>';
+    const at = src.indexOf(note), editorCall = src.indexOf('${rulesEditorHTML()}', at);
+    const fnStart = src.indexOf('function rulesEditorHTML()');
+    assert(at > -1 && editorCall > at && editorCall - at < 400 && src.indexOf(note, at + 1) === -1, 'C11: the Comm note is in the League Rules card markup, once, directly above the editor box');
+    assert(fnStart > -1 && !src.slice(fnStart, fnStart + 800).includes('built in and always appear'), 'C11: …and NOT inside rulesEditorHTML() (xsstest [7] is undisturbed)');
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 console.log('\n[7] renderAlmaMaterSettingsCard() — READ-ONLY summary, no add/remove UI…');
 {
   localStorage.clear();
@@ -1098,6 +1197,54 @@ console.log('\n[13] F4 — the Auto-Calc roster freezes at LOCK, mirroring locke
   assert(afterTick.status === WEEK_STATUS.LOCKED, 'fixture check: the auto-lock condition genuinely fired — the week is now LOCKED (not vacuous)');
   assert(JSON.stringify(afterTick.lockedAlmaMaters) === JSON.stringify(rosterAtAutoLock),
     'tickAutoTransition()\'s auto-lock leg ALSO snapshots claimedAlmaMaters() onto lockedAlmaMaters — the same freeze as the manual applyWeekStatusChange() path, not just one of the two ways a week can reach LOCKED');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[13d] SP-54 / DI-465 — the PER-PLAYER half of the lock snapshot (lockedAlmaByPlayer) on BOTH client lock paths…');
+{
+  const { almaByPlayerNow } = app;
+  // almaByPlayerNow() mirrors lock_week's SQL (0038): ACTIVE members, non-blank after trim, keyed by playerId; two members may share a school.
+  localStorage.clear();
+  storage.addPlayer(freshPlayer({ playerId: 'pb1', displayName: 'A', active: true, almaMater: 'Texas A&M' }));
+  storage.addPlayer(freshPlayer({ playerId: 'pb2', displayName: 'B', active: true, almaMater: '  Texas A&M  ' }));       // shares a school, padded
+  storage.addPlayer(freshPlayer({ playerId: 'pb3', displayName: 'C', active: true, almaMater: '' }));                   // no school
+  storage.addPlayer(freshPlayer({ playerId: 'pb4', displayName: 'D', active: false, almaMater: 'Oklahoma' }));          // inactive
+  storage.addPlayer(freshPlayer({ playerId: 'pb5', displayName: 'E', active: true, almaMater: '   ' }));                // whitespace only
+  storage.addPlayer(freshPlayer({ playerId: 'pb6', displayName: 'F', active: true, almaMater: 'Notre Dame' }));
+  const now = almaByPlayerNow();
+  assert(JSON.stringify(Object.keys(now).sort()) === '["pb1","pb2","pb6"]' && now.pb1 === 'Texas A&M' && now.pb2 === 'Texas A&M' && now.pb6 === 'Notre Dame',
+    `DI-465: the snapshot holds ACTIVE players with a non-blank school only (shared school kept, padded value trimmed, blank / whitespace-only / inactive absent): ${JSON.stringify(now)}`);
+  assert(Object.getPrototypeOf(now) === null, 'SC-K1: almaByPlayerNow() returns a null-prototype object (a player id of __proto__ is an ordinary key)');
+  storage.addPlayer(freshPlayer({ playerId: '__proto__', displayName: 'Proto', active: true, almaMater: 'USC' }));
+  assert(Object.keys(almaByPlayerNow()).includes('__proto__') && almaByPlayerNow()['__proto__'] === 'USC', 'SC-K1: …and a hostile id is carried, not silently dropped');
+  storage.savePlayer({ ...storage.getPlayer('__proto__'), active: false });
+
+  // the manual lock path
+  const wm = freshWeek({ weekId: 'bp_manual', status: WEEK_STATUS.OPEN });
+  storage.saveWeek(wm); storage.saveGame(freshGame({ weekId: 'bp_manual', spread: -3 }));
+  const lockedNow = JSON.stringify(almaByPlayerNow());
+  const upd = applyWeekStatusChange(wm, 'locked');
+  assert(JSON.stringify(upd.lockedAlmaByPlayer) === lockedNow && JSON.stringify(storage.getWeek('bp_manual').lockedAlmaByPlayer) === lockedNow && lockedNow !== '{}',
+    'DI-465: applyWeekStatusChange(week, "locked") stamps lockedAlmaByPlayer = almaByPlayerNow() on the returned AND the persisted week, at the same instant as lockedAlmaMaters');
+  storage.savePlayer({ ...storage.getPlayer('pb6'), almaMater: 'Clemson' });                 // an edit AFTER the lock
+  assert(JSON.stringify(storage.getWeek('bp_manual').lockedAlmaByPlayer) === lockedNow && almaByPlayerNow().pb6 === 'Clemson',
+    'DI-465: a school edited AFTER the lock moves the live value and NOT the snapshot (the week still reads Notre Dame for pb6)');
+  const fin = applyWeekStatusChange(storage.getWeek('bp_manual'), 'final');
+  assert(JSON.stringify(fin.lockedAlmaByPlayer) === lockedNow, 'DI-465: locked -> final leaves the snapshot exactly as it was (only the "locked" branch writes it)');
+  storage.savePlayer({ ...storage.getPlayer('pb6'), almaMater: 'Notre Dame' });
+
+  // the auto-lock path
+  const wa = freshWeek({ weekId: 'bp_auto', status: WEEK_STATUS.OPEN, dataSourceMode: 'espn_historical', picksLockAt: new Date(Date.now() - 60 * 1000).toISOString(), autoLiveEnabled: false });
+  storage.saveWeek(wa);
+  storage.saveGame(freshGame({ weekId: 'bp_auto', spread: -3, kickoff: new Date(Date.now() + 60 * 60 * 1000).toISOString() }));
+  storage.setActiveWeekId('bp_auto');
+  const lockedNow2 = JSON.stringify(almaByPlayerNow());
+  tickAutoTransition();
+  const afterTick = storage.getWeek('bp_auto');
+  assert(afterTick.status === WEEK_STATUS.LOCKED && JSON.stringify(afterTick.lockedAlmaByPlayer) === lockedNow2,
+    'DI-465: tickAutoTransition()\'s auto-lock leg stamps lockedAlmaByPlayer identically — the freeze cannot depend on which of the two ways a week locks');
+  // a week that never locked carries no snapshot at all (absent, not null): createWeek() is unchanged
+  assert(!('lockedAlmaByPlayer' in dm.createWeek(2026, 9, '2026-09-05', '2026-09-06')), 'DI-465: createWeek() does NOT add the field (absent until lock; contrast lockedAlmaMaters: null) — old weeks and new drafts read the same');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

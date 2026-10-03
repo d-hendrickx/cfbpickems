@@ -96,7 +96,9 @@ const SLOT_MARKUP = '<div id="picks-head-slot"></div>';
  * the object the binder attached a listener to is the same object the test
  * clicks afterwards.
  */
-const CLICKABLE = ['.section-move-btn', '.layout-reset-btn', '.layout-edit-btn'];
+// SP-56 (2026-09-30): '.ob-action-btn' joins the list so [SF9] can click the REAL payment buttons through the real renderLeaderboard() handler binder.
+// SP-57 (2026-10-01): '.layout-edit-btn' is gone with the button (DI-475); the hidden Move / Reset buttons are still parsed.
+const CLICKABLE = ['.section-move-btn', '.layout-reset-btn', '.ob-action-btn'];
 function parseClickables(html, sel) {
   const cls = sel.slice(1);
   const out = [];
@@ -110,6 +112,10 @@ function parseClickables(html, sel) {
     const handlers = [];
     out.push({
       dataset, disabled: /\bdisabled\b/.test(attrs),
+      // SP-57 (DI-386): focusLayoutTarget() reads attributes and calls focus(); both are recorded so "focus survives the
+      // repaint" is observable here (globalThis.__layoutFocused is the last button that took focus).
+      getAttribute: (n) => { const m = new RegExp('(?:^|\\s)' + n + '="([^"]*)"').exec(attrs); return m ? m[1] : null; },
+      focus() { globalThis.__layoutFocused = this; },
       addEventListener(type, fn) { if (type === 'click') handlers.push(fn); },
       removeEventListener() {},
       click() { handlers.forEach(fn => fn()); },
@@ -745,10 +751,17 @@ console.log('\n[10] COORDINATOR RULING 2 — the head slot is the WEEK RECAP onl
 //    It shouldnt move accidentally scrolling, only with intentionality."
 //   (ruling, 2026-09-12) "a default order with a per-player override"
 //
-// MECHANISM (DI-179a, approved): explicit `⇅ Edit layout` mode + ▲/▼ buttons.
-// NO DRAG — which is also why this suite can exist at all. A touch drag does
-// not emulate in Node or in a desktop browser; a move here is a click on a
-// <button>, so the real handler is drivable end to end.
+// MECHANISM (DI-179a, approved): an explicit edit mode + move buttons. NO DRAG
+// — which is also why this half of the suite can exist at all: a move here is
+// a click on a <button>, so the real handler is drivable end to end in Node.
+// SP-57 (2026-10-01) SUPERSEDED the mechanism: the heading button is gone
+// (Drew, "30 no"), the entry is a 500 ms hold on a section's TITLE row
+// (js/section-drag.js, proven in sectiondragtest.mjs — the engine headless, then
+// the real app in a real browser), and the Move up / Move down buttons became the
+// PERMANENT .sr-only assistive path (DI-386): present with edit mode OFF. The
+// behavioural half of the drag cannot exist here (a touch drag does not emulate
+// in Node), so THIS file keeps owning what Node can prove: the order algorithm,
+// the persisted shape, the markup contract and the source/CSS pins that moved.
 //
 // DISCIPLINE, inherited from ordertest.mjs and from Part B above: order is
 // asserted on the ORDER OF `data-section-id` IN THE EMITTED HTML, driven
@@ -772,7 +785,7 @@ console.log('\n[10] COORDINATOR RULING 2 — the head slot is the WEEK RECAP onl
 //   A10 Tap targets — an explicit ≥44px constraint on the move buttons.
 
 const { getSectionOrder, setSectionOrder, clearSectionOrder, getPlayer } = storage;
-const { DEFAULT_SECTIONS, SECTION_LABELS, effectiveOrder, moveSection, reorderedSections } = app;
+const { DEFAULT_SECTIONS, SECTION_LABELS, effectiveOrder, moveSection, reorderedSections, reorderedSectionsTo } = app;
 
 const DASH_DEF  = DEFAULT_SECTIONS.dashboard;
 const STAND_DEF = DEFAULT_SECTIONS.standings;
@@ -1004,10 +1017,11 @@ console.log('\n[A4] PERSISTENCE — round-trip, and the SECOND player record pro
 
   // Drive the real ▲/▼ handler: bindLayoutEditHandlers() calls exactly this,
   // with exactly the `visible` list the compose pass produced.
-  app.state.layoutEditing = 'dashboard';
+  app.state.layoutEditing = null;
   const before = renderDash({ playerId: 'p1', verified: true });
   const visible = sectionIds(before);
-  assert(has(before, 'section-move-bar'), 'A4a-0: fixture check — edit mode is on, so the move bars rendered');
+  assert(has(before, 'section-move-bar') && app.state.layoutEditing === null,
+    'A4a-0: fixture check — edit mode is OFF and the hidden move bars rendered anyway (DI-386, Q2: the assistive path is permanent, never gated on a mode)');
   moveSection('dashboard', 'dash-alma', 'up', visible);
 
   const saved = getPlayer('p1')?.preferences?.sectionOrder;
@@ -1057,9 +1071,9 @@ console.log('\n[A4] PERSISTENCE — round-trip, and the SECOND player record pro
   // in app.js left this suite at 171/0, because the stub's querySelectorAll
   // returned []. It no longer does (see parseClickables above), so the listener
   // is bound to the parsed button and the click below runs the real code path.
-  app.state.layoutEditing = 'dashboard';
+  app.state.layoutEditing = null;     // SP-57: no mode needed — the buttons are in the page
   const beforeIds = sectionIds(renderDash({ playerId: 'p1', verified: true }));
-  const moveBtns  = els.get('page-dashboard').querySelectorAll('.section-move-btn');
+  const moveBtns  = els.get('page-dashboard').querySelectorAll('.section-move-btn').filter(b => b.dataset.moveDir);
   assert(moveBtns.length >= 2 && moveBtns.some(b => b._bound() > 0),
     `A4h-0: fixture check — the move buttons were found AND a click listener is attached to them (found ${moveBtns.length})`);
   const downTop = moveBtns.find(b => b.dataset.moveId === beforeIds[0] && b.dataset.moveDir === 'down');
@@ -1071,6 +1085,31 @@ console.log('\n[A4] PERSISTENCE — round-trip, and the SECOND player record pro
     `A4i: clicking ▼ on the top section actually moved it down one, through the real listener (${beforeIds.slice(0,2).join(' > ')} -> ${afterIds.slice(0,2).join(' > ')})`);
   assert(sameArr(getSectionOrder('dashboard'), afterIds),
     'A4j: …and the click PERSISTED that order to the player record — the handler writes, it does not merely re-render');
+  // ── A4k..A4n — DI-386: FOCUS SURVIVES THE REPAINT, through the same real click ──
+  // A move repaints the page, which destroys the focused button; without the one-shot `state.layoutFocus` a VoiceOver user
+  // lands at the top of the page after every tap. The stub records focus() (see parseClickables).
+  assert(app.state.layoutFocus === null, 'A4k-0: fixture — the focus one-shot was CONSUMED by the repaint the click caused (it never lingers into the next paint)');
+  const focused1 = globalThis.__layoutFocused;
+  assert(!!focused1 && focused1.dataset.moveId === beforeIds[0] && focused1.dataset.moveDir === 'down',
+    `A4k: after ▼ on the top section its section-and-direction twin holds focus again (the button that was just activated, found anew in the new markup): got ${focused1 ? focused1.dataset.moveId + '/' + focused1.dataset.moveDir : 'nothing'}`);
+  // Move the SECOND-TO-LAST section down: it becomes last, so its Down is now disabled — focus goes to the OTHER button (Up).
+  clearSectionOrder('dashboard');
+  const ids4 = sectionIds(renderDash({ playerId: 'p1', verified: true }));
+  const penult = ids4[ids4.length - 2];
+  globalThis.__layoutFocused = null;
+  els.get('page-dashboard').querySelectorAll('.section-move-btn').find(b => b.dataset.moveId === penult && b.dataset.moveDir === 'down').click();
+  const focused2 = globalThis.__layoutFocused;
+  assert(!!focused2 && focused2.dataset.moveId === penult && focused2.dataset.moveDir === 'up',
+    `A4l: when the activated direction is now DISABLED (it became the last section) focus falls to the OTHER direction of the same section, never to nothing (got ${focused2 ? focused2.dataset.moveId + '/' + focused2.dataset.moveDir : 'nothing'})`);
+  clearSectionOrder('dashboard');
+  const ids5 = sectionIds(renderDash({ playerId: 'p1', verified: true }));
+  globalThis.__layoutFocused = null;
+  els.get('page-dashboard').querySelectorAll('.section-move-btn').find(b => b.dataset.moveId === ids5[1] && b.dataset.moveDir === 'up').click();
+  const focused3 = globalThis.__layoutFocused;
+  assert(!!focused3 && focused3.dataset.moveId === ids5[1] && focused3.dataset.moveDir === 'down',
+    `A4m: …and symmetrically ▲ that lands the section FIRST (its Up is now disabled) focuses its Down (got ${focused3 ? focused3.dataset.moveId + '/' + focused3.dataset.moveDir : 'nothing'})`);
+  // The announcement is the one-shot too, and the move is toast-free (four moves would be four toasts; the repaint is the feedback).
+  assert(app.state.layoutAnnounce === null, 'A4n: the announcement one-shot is consumed by the same repaint — nothing lingers for the next paint');
   app.state.layoutEditing = null;
   clearSectionOrder('dashboard'); clearSectionOrder('standings');
 }
@@ -1091,17 +1130,23 @@ console.log('\n[A5] RESET — per page, and it leaves the other page alone…');
   assert(getSectionOrder('dashboard').length === 0 && getSectionOrder('standings').length === 6,
     'A5c: the storage shape agrees — the dashboard entry is removed, the standings entry is intact');
 
-  // The affordance itself, and the copy, in the rendered markup.
-  app.state.layoutEditing = 'standings';
-  const editing = renderStand({ playerId: 'p1', verified: true });
-  assert(has(editing, '↺ Reset to default'), 'A5d: the ↺ Reset to default control renders — in edit mode');
+  // The affordance itself, and the copy, in the rendered markup. SP-57 (DI-386, DI-475): the Reset is a hidden
+  // per-page TWIN that exists with edit mode OFF; the visible "Reset to default" / "Done" live in the fixed bar on <body>
+  // (js/app.js syncLayoutEditBar()) and are NEVER part of the page markup, in any state.
   app.state.layoutEditing = null;
   const idle = renderStand({ playerId: 'p1', verified: true });
-  assert(!has(idle, '↺ Reset to default'),
-    'A5e: …and ONLY in edit mode — a destructive control has no business on the idle page');
-  assert(has(idle, '⇅ Edit layout') && !has(idle, '✓ Done'), 'A5f: idle shows ⇅ Edit layout');
+  assert(has(idle, 'Reset Standings layout to default') && (idle.match(/layout-reset-btn/g) || []).length === 1,
+    'A5d: the hidden Reset twin renders with edit mode OFF — exactly one per page, named for its page');
+  assert(!has(idle, 'Reset to default') && !has(idle, '↺'),
+    'A5e: …and the page markup carries no VISIBLE "Reset to default" (that label lives in the body-mounted bar) and no glyph');
+  assert(!has(idle, 'Edit layout') && !has(idle, '⇅') && !has(idle, 'layout-edit-btn'),
+    'A5f: idle shows NO Edit layout button (Drew, "30 no") — and none of its glyphs or its class');
   app.state.layoutEditing = 'standings';
-  assert(has(renderStand({ playerId: 'p1', verified: true }), '✓ Done'), 'A5g: editing shows ✓ Done');
+  const editingHtml = renderStand({ playerId: 'p1', verified: true });
+  assert(!/>\s*(✓\s*)?Done\s*</.test(editingHtml) && !has(editingHtml, '✓'),
+    'A5g: even while editing the page markup has no Done — it exists only in the fixed bar on <body>');
+  assert(has(editingHtml, 'section-move-bar') && has(editingHtml, 'Reset Standings layout to default'),
+    'A5g-2: …and the hidden path is identical while editing (it never depended on the mode)');
 
   // ── A5h — THE RESET HANDLER'S ARGUMENT, driven through a real click ──
   // F2 review note (g). `clearSectionOrder(pageKey)` vs `clearSectionOrder('dashboard')`
@@ -1109,11 +1154,11 @@ console.log('\n[A5] RESET — per page, and it leaves the other page alone…');
   // only ever called directly: resetting Standings must not touch the Dashboard.
   setSectionOrder('dashboard', ['dash-tiebreaker', 'dash-summary', 'dash-alma', 'dash-picks']);
   setSectionOrder('standings', ['stand-history', 'stand-season', 'stand-extrapoint', 'stand-alma', 'stand-2025-open', 'stand-2025-record']);
-  app.state.layoutEditing = 'standings';
+  app.state.layoutEditing = null;     // SP-57: the twin works with edit mode OFF
   renderStand({ playerId: 'p1', verified: true });
   const resetBtns = els.get('page-leaderboard').querySelectorAll('.layout-reset-btn');
   assert(resetBtns.length === 1 && resetBtns[0]._bound() > 0,
-    `A5h-0: fixture check — exactly one ↺ Reset control rendered on Standings and it has a click listener (found ${resetBtns.length})`);
+    `A5h-0: fixture check — exactly one hidden Reset twin rendered on Standings and it has a click listener (found ${resetBtns.length})`);
   assert(resetBtns[0].dataset.layoutPage === 'standings',
     'A5h: the emitted data-layout-page names the page this control belongs to');
   resetBtns[0].click();
@@ -1167,8 +1212,8 @@ console.log('\n[A6] BLIND RULE UNDER REORDER — proven, not assumed (DI-179l)�
   const locked = renderDash({ playerId: 'p3', verified: true });
   assert(has(locked, 'Submit Your Picks First'),
     'A6g: a signed-in player who has NOT submitted still hits the 🔒 gate — the gate runs BEFORE any section is composed');
-  assert(sectionIds(locked).length === 0 && !has(locked, '⇅ Edit layout'),
-    'A6h: …so there are no sections and no ⇅ Edit layout button on that screen — there is nothing to reorder');
+  assert(sectionIds(locked).length === 0 && !has(locked, 'Edit layout') && !has(locked, 'section-move-bar') && !has(locked, 'layout-reset-btn'),
+    'A6h: …so there are no sections, no Edit layout button and no hidden Move / Reset buttons on that screen — there is nothing to reorder');
   assert(sameArr(getSectionOrder('dashboard'), ['dash-alma', 'dash-picks', 'dash-summary', 'dash-tiebreaker']),
     'A6i: …and the saved order is untouched by the gate — it reappears the moment they submit');
   clearSectionOrder('dashboard');
@@ -1194,17 +1239,22 @@ console.log('\n[A7] EMPTY SECTION — omitted from the DOM, kept in the order…
   assert(effectiveOrder('dashboard').includes('dash-tiebreaker'),
     'A7c: …while the id STAYS in effectiveOrder() — so it returns to the position the player chose the week a question exists again');
 
-  app.state.layoutEditing = 'dashboard';
+  app.state.layoutEditing = null;     // SP-57: idle — the hidden path needs no mode
   const noTBedit = renderDash({ playerId: 'p1', verified: true });
-  const bars = (noTBedit.match(/section-move-bar/g) || []).length;
-  assert(bars === 3,
-    `A7d: edit mode emits a move bar per VISIBLE section only — three, not four (got ${bars}); an invisible section with ▲/▼ buttons is a phantom control`);
-  // Counted on the BUTTONS, not on the glyph: ▲/▽ are also the matrix's
-  // live covering/trailing arrows, so a bare glyph count would be noise.
-  assert((noTBedit.match(/>▲<\/button>/g) || []).length === 3 &&
-         (noTBedit.match(/>▼<\/button>/g) || []).length === 3 &&
-         (noTBedit.match(/data-move-dir="up"/g) || []).length === 3,
-    'A7e: …three ▲ buttons and three ▼ buttons, one pair per visible section');
+  const barBlocks = [...noTBedit.matchAll(/<div class="section-move-bar sr-only">[\s\S]*?<\/div>/g)].map(m => m[0]);
+  assert(barBlocks.length === 4,
+    `A7d: the hidden path emits a move bar per VISIBLE section only — three — plus the page's ONE Reset twin, not four sections (got ${barBlocks.length} blocks); an invisible section with Move buttons is a phantom control`);
+  // Counted on the BUTTONS, not on a glyph: there is no ▲ / ▼ glyph in the chrome any more — the text IS the accessible name.
+  assert((noTBedit.match(/data-move-dir="down"/g) || []).length === 3 &&
+         (noTBedit.match(/data-move-dir="up"/g) || []).length === 3 &&
+         !/>▲<\/button>|>▼<\/button>/.test(noTBedit),
+    'A7e: …three Up buttons and three Down buttons, one pair per visible section, with text and no glyph');
+  app.state.layoutEditing = 'dashboard';
+  const noTBeditOn = renderDash({ playerId: 'p1', verified: true });
+  const barBlocksOn = [...noTBeditOn.matchAll(/<div class="section-move-bar sr-only">[\s\S]*?<\/div>/g)].map(m => m[0]);
+  assert(barBlocksOn.length === barBlocks.length && barBlocksOn.every((b, i) => b === barBlocks[i]),
+    'A7e-2: …and the hidden path is BYTE-IDENTICAL with edit mode on — the mode neither adds nor removes a button');
+  app.state.layoutEditing = null;
   const upFirst = noTBedit.slice(at(noTBedit, 'data-section-id="dash-picks"'), at(noTBedit, 'data-section-id="dash-alma"'));
   assert(/aria-label="Move All Picks by Game up" disabled/.test(upFirst),
     'A7f: ▲ is DISABLED on the first visible section — disabled, not hidden, because a control that disappears reflows the row under the thumb');
@@ -1233,13 +1283,13 @@ console.log('\n[A8] ANONYMOUS — default order, and no control whatsoever (DI-1
   // passed around pregame would otherwise let whoever held it last re-lay-out
   // the app for the next anonymous viewer. No device-level fallback.
   const d = renderDash({});
-  assert(!has(d, '⇅ Edit layout'), 'A8a: a signed-out viewer gets NO ⇅ Edit layout button on the Dashboard');
-  assert(!has(d, 'section-move-bar') && !has(d, '↺ Reset to default'),
-    'A8b: …and no move bars and no reset, in any state');
+  assert(!has(d, 'Edit layout') && !has(d, '⇅'), 'A8a: a signed-out viewer gets NO Edit layout button on the Dashboard');
+  assert(!has(d, 'section-move-bar') && !has(d, 'layout-reset-btn') && !has(d, 'layout-live') && !has(d, 'data-move-id'),
+    'A8b: …and no hidden Move buttons, no Reset twin and no live region, in any state (DI-179g: the one canCustomizeLayout() gate)');
   assert(sameArr(sectionIds(d), [...DASH_DEF]), 'A8c: …and the league default order');
 
   const s = renderStand({});
-  assert(!has(s, '⇅ Edit layout'), 'A8d: same on Standings — no button');
+  assert(!has(s, 'Edit layout') && !has(s, 'section-move-bar') && !has(s, 'layout-reset-btn'), 'A8d: same on Standings — no button, no hidden path');
   assert(sameArr(sectionIds(s), [...STAND_DEF]), 'A8e: …and the league default order');
 
   // Defense in depth: even if a control were somehow reachable, the storage
@@ -1253,8 +1303,8 @@ console.log('\n[A8] ANONYMOUS — default order, and no control whatsoever (DI-1
 
   // A commissioner is a player here — same control, no extra powers.
   const admin = renderDash({ playerId: 'p1', isAdmin: true, verified: true });
-  assert(has(admin, '⇅ Edit layout'),
-    'A8h: a commissioner gets the identical control — this is a personal preference, not commissioner data');
+  assert(has(admin, 'section-move-bar') && has(admin, 'Reset Dashboard layout to default') && !has(admin, 'Edit layout'),
+    'A8h: a commissioner gets the identical hidden path — this is a personal preference, not commissioner data');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1464,25 +1514,26 @@ console.log('\n[A10] TAP TARGETS + the no-tooltip / no-hex / emoji-only rules…
   assert(mh >= 44 && mw >= 44,
     `A10a: .section-move-btn is at least 44×44 (got ${mh}×${mw}) — CONVENTIONS #17's floor is 40 with 44 the ideal, and these sit directly above body text on a phone, which is exactly where RG-34's undersized targets got missed`);
 
-  const editRule = ruleOf('.layout-edit-btn,.layout-reset-btn');
+  const editRule = ruleOf('.layout-reset-btn');
   const eh = Number((editRule.match(/min-height:\s*(\d+)px/) || [])[1] || 0);
   assert(eh >= 44,
-    `A10b: the ⇅ Edit layout / ↺ Reset buttons carry an explicit min-height ≥44px (got ${eh}px) — .btn-sm's base is 34px, under the floor`);
+    `A10b: the Reset buttons carry an explicit min-height ≥44px (got ${eh}px) — .btn-sm's base is 34px, under the floor`);
   assert(!/^\.btn-sm\{[^}]*min-height:4[4-9]px/m.test(css),
     'A10c: …achieved by a SCOPED override, not by raising .btn-sm globally, which would reflow every compact row in the app');
 
   // No tooltips. They do not fire on touch, and this has bitten twice.
   const appSrc10 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
-  const layoutFns = (appSrc10.match(/function (layoutEditButtonHTML|layoutEditStripHTML|composeSections|bindLayoutEditHandlers)\([\s\S]*?\n\}/g) || []).join('\n');
-  assert(layoutFns.length > 500, 'A10d-0: fixture check — the four layout render/bind functions were located in source');
+  const layoutFns = (appSrc10.match(/function (composeSections|bindLayoutEditHandlers|syncLayoutEditBar|resetLayoutPage|layoutSavedToast|unmountLayoutEditBar|endLayoutEditing)\([\s\S]*?\n\}/g) || []).join('\n');
+  assert(layoutFns.length > 500, 'A10d-0: fixture check — the surviving layout render/bind functions were located in source (SP-57 retired layoutEditButtonHTML and layoutEditStripHTML)');
   assert(!/title=/.test(layoutFns),
     'A10d: no `title` attribute anywhere in the layout controls — tooltips do not fire on touch; every state is carried by visible text or aria-label');
   assert(/aria-label="Move \$\{escHtml\(label\)\} up"/.test(layoutFns) && /aria-label="Move \$\{escHtml\(label\)\} down"/.test(layoutFns),
     'A10e: …and the ▲/▼ buttons carry named aria-labels instead ("Move Alma Mater Watch up")');
-  assert(/aria-live="polite"/.test(layoutFns),
-    'A10f: an aria-live="polite" region exists for the after-move announcement');
-  assert(/moved to position \$\{/.test(appSrc10),
-    'A10g: …and the announcement names the new position ("Alma Mater Watch moved to position 2 of 4.")');
+  const sdSrc10 = await readFile(new URL('./js/section-drag.js', import.meta.url), 'utf8');
+  assert(/el\.setAttribute\('aria-live', 'polite'\)/.test(sdSrc10) && /el\.id = 'layout-live'/.test(sdSrc10) && !/layout-live-region/.test(appSrc10),
+    'A10f: the persistent aria-live="polite" region (#layout-live, on <body>, created once by js/section-drag.js) exists for the after-move announcement, and the retired in-flow #layout-live-region is gone from app.js');
+  assert(/moved to position \$\{/.test(sdSrc10) && /movedAnnouncement\(\{ label: SECTION_LABELS\[id\] \|\| id, n: nowVisible\.indexOf\(id\) \+ 1, m: nowVisible\.length \}\)/.test(appSrc10),
+    'A10g: …and the announcement names the new position over the VISIBLE list ("Alma Mater Watch moved to position 2 of 4.") — one string, built by movedAnnouncement()');
 
   // No individual-move toast (four moves would be four toasts); a toast on
   // Reset, because it is destructive and its result may be off-screen.
@@ -1490,10 +1541,11 @@ console.log('\n[A10] TAP TARGETS + the no-tooltip / no-hex / emoji-only rules…
   // Comment lines stripped — this file explains in prose WHY there is no
   // confirm() on Reset, and a naive grep would match the explanation.
   const bindSrc = bindSrcRaw.split('\n').filter(l => !/^\s*(\/\/|\/\*|\*)/.test(l)).join('\n');
-  const toastCount = (bindSrc.match(/showToast\(/g) || []).length;
-  assert(toastCount === 1,
-    `A10h: exactly ONE toast in the whole edit flow — Reset only (got ${toastCount}); the re-render IS the feedback for a move`);
-  assert(/showToast\('↺ Layout reset/.test(bindSrc), 'A10i: …and it is the Reset toast');
+  assert((bindSrc.match(/showToast\(/g) || []).length === 0,
+    'A10h: NO toast is raised in the bind pass — and in particular none by a hidden Move click (four moves would be four toasts; the re-render IS the feedback for a move)');
+  const resetSrc10 = (appSrc10.match(/function resetLayoutPage\([\s\S]*?\n\}\n/) || [''])[0].split('\n').filter(l => !/^\s*(\/\/|\/\*|\*)/.test(l)).join('\n');
+  assert((resetSrc10.match(/showToast\(/g) || []).length === 1 && /const LAYOUT_RESET_TOAST = '↺ Layout reset to the default';/.test(appSrc10) && /showToast\(LAYOUT_RESET_TOAST, 'success'\)/.test(resetSrc10),
+    'A10i: …Reset raises exactly ONE toast, the existing string (no "order" word, UN-77 / loadtest [8d]); Done raises the save toast in layoutSavedToast()');
   assert(!/confirm\(/.test(bindSrc),
     'A10j: no confirm() on Reset — this app reserves confirm() for money-affecting commissioner actions, and Reset is one tap to undo by hand');
 
@@ -1510,15 +1562,15 @@ console.log('\n[A10] TAP TARGETS + the no-tooltip / no-hex / emoji-only rules…
   // the next dated section's own header comment instead, restoring the
   // test's actual intent: scan UN-179's CSS block, not "everything after
   // it, forever."
-  const un179Start = css.indexOf('FEAT-8a / UN-179');
+  const un179Start = css.indexOf('SP-57 (2026-10-01) — long-press section drag');
   const un179End = css.indexOf('FEAT-3 / DI-200f', un179Start);
   const cssBlock = css.slice(un179Start, un179End > un179Start ? un179End : undefined);
-  assert(cssBlock.length > 800, 'A10k-0: fixture check — the UN-179 CSS block was located');
+  assert(cssBlock.length > 800, 'A10k-0: fixture check — the SP-57 CSS block (the rewritten UN-179 block) was located');
   const codeLines = cssBlock.split('\n').filter(l => !/^\s*(\/\*|\*|\/\/)/.test(l));
   assert(!codeLines.some(l => /#[0-9a-fA-F]{3,8}\b/.test(l)),
     'A10k: no hex colours in the UN-179 CSS — seven themes swap through custom properties (CONVENTIONS #13)');
-  assert(!/<svg|\.svg/.test(layoutFns),
-    'A10l: icons are plain unicode ⇅ ▲ ▼ ↺ ✓ — the bottom nav remains the ONE named SVG exception and is not widened (CONVENTIONS #16)');
+  assert(!/<svg|\.svg/.test(layoutFns) && !/[⇅▲▼✓]/.test(layoutFns),
+    'A10l: no raw <svg> and none of the retired glyphs ⇅ ▲ ▼ ✓ in the layout functions (CONVENTIONS #16 / D-1) — any icon arrives through icon(), and the grip is added by js/section-drag.js from icons.js');
   assert(/@media \(min-width:600px\)/.test(cssBlock),
     'A10m: a min-width:600px enhancement exists — the base styles are the phone (CONVENTIONS #14)');
 
@@ -1532,8 +1584,11 @@ console.log('\n[A10] TAP TARGETS + the no-tooltip / no-hex / emoji-only rules…
 
   // The intentionality gate, structurally: nothing in this feature listens to
   // touch movement at any time. Drew: "It shouldnt move accidentally scrolling."
-  assert(!/touchmove|touchstart|dragstart|dragover/.test(layoutFns),
-    'A10q: THE CONSTRAINT — no touch or drag listener exists anywhere in the layout controls, so "moves while scrolling" is structurally impossible rather than tuned with a threshold');
+  assert(!/touchmove|touchstart|touchend|dragstart|dragover|mousedown|pointerdown/.test(layoutFns),
+    'A10q: THE CONSTRAINT, re-pointed (SP-57), not deleted — composeSections and bindLayoutEditHandlers (and every other layout function in app.js) still register NO touch, mouse or drag listener themselves');
+  const nonImportSrc10 = appSrc10.split('\n').filter(l => !/^\s*(\/\/|\/\*|\*)/.test(l) && !/^import\b|^\s*attachSectionDrag, detachSectionDrag/.test(l)).join('\n');
+  assert((nonImportSrc10.match(/attachSectionDrag\(/g) || []).length === 1 && (nonImportSrc10.match(/detachSectionDrag\(/g) || []).length === 1,
+    "A10q-2: …the ONLY thing that hands a page to the touch engine is ONE attachSectionDrag() call (and its signed-out detach twin) in bindLayoutEditHandlers; js/section-drag.js is the only module that registers the listeners, and AT1-AT7 in sectiondragtest.mjs are the behavioural proof");
   // SIXTH GATE (2026-09-17) — matched by the opening PAREN, not `()`.
   // resyncPlayerPreferences() takes an options object now, and a needle pinned
   // to the empty argument list stopped matching the function at all — which
@@ -1547,6 +1602,8 @@ console.log('\n[A10] TAP TARGETS + the no-tooltip / no-hex / emoji-only rules…
   // with the slate"), so the single path that has just RESTORED a suspended
   // slate — same account, same league, byte-identical tuple — must not have it
   // nulled again one line later. Every other caller passes nothing and clears.
+  assert(/if \(!preserveLayoutEditing\) syncLayoutEditBar\(\);/.test(resyncFn10) && /state\.layoutFocus = null/.test(resyncFn10),
+    'A10r(0): SP-57 — resyncPlayerPreferences() also takes the fixed Rearranging bar down with the mode (syncLayoutEditBar()) and drops the focus one-shot, only on the path that cleared the mode');
   assert(/if \(!preserveLayoutEditing\) state\.layoutEditing = null;/.test(resyncFn10),
     'A10r(ii): …and the clear is unconditional EXCEPT for one named parameter — so the exemption is a thing a reader can find, not a silent early return');
   assert(/preserveLayoutEditing: outcome === 'restored'/.test(appSrc10),
@@ -1594,7 +1651,992 @@ console.log('\n[DI-394] the shared viewing-week card — one function, two pages
     "weekNavCardHTML() no longer returns '' below two weeks (the pre-DI-394 renderPicksWeekNav() did) — only the ARROWS are gated on hasMultiple, so name/badge/date still render for a single-week league");
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// SP-57 (2026-10-01) — LONG-PRESS SECTION DRAG, the pins Node can hold: the pure drop rule, the markup contract, the retired button, the CSS
+// contract (z-index map, the lock, the hidden path's reveal, zero layout shift, tokens, Breathing Room) and the lifecycle's source pins. The
+// BEHAVIOUR (the hold, the lift, the drop, the auto-scroll, the claims) is proven in sectiondragtest.mjs, headless then in a real browser.
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[SP57-a] reorderedSectionsTo() — the drop\'s write: pure, total, and the same hidden-section rule as the ▲/▼ move…');
+{
+  const { reorderedSectionsTo, reorderedSections } = app;
+  const P = (o, v, id, to) => reorderedSectionsTo(o, v, id, to).join('>');
+  const o4 = ['a', 'b', 'c', 'd'];
+  assert(P(o4, o4, 'a', 2) === 'b>c>a>d' && P(o4, o4, 'd', 0) === 'd>a>b>c' && P(o4, o4, 'b', 3) === 'a>c>d>b', 'SP57-a1: a section dropped in slot n lands in slot n (forward, backward, to the end)');
+  assert(P(o4, o4, 'b', 1) === 'a>b>c>d', 'SP57-a2: a drop in the slot it already holds returns the order unchanged (the engine never even calls it: one write per drop, only when something moved)');
+  assert(P(o4, o4, 'a', -5) === 'a>b>c>d' && P(o4, o4, 'a', 99) === 'b>c>d>a' && P(o4, o4, 'a', NaN) === 'a>b>c>d' && P(o4, o4, 'zzz', 1) === 'a>b>c>d' && P(o4, o4, 'c', '0') === 'c>a>b>d',
+    'SP57-a3: out-of-range targets clamp to the first / last slot; NaN and an unknown id change nothing; a numeric string is read as a number (a finger past the end of the list never throws and never drops a section)');
+  // The hidden-section rule: a section with no content this week keeps its OWN slot.
+  const oh = ['a', 'b', 'h', 'c', 'd'];
+  const vh = ['a', 'b', 'c', 'd'];
+  assert(P(oh, vh, 'a', 3) === 'b>c>h>d>a', 'SP57-a4: THE HIDDEN RULE — with a hidden section (h, the empty tiebreaker) between b and c, dragging a to the last visible slot refills the VISIBLE slots in order and h stays at index 2');
+  assert(['a', 'b', 'c', 'd'].every((id) => reorderedSectionsTo(oh, vh, id, 2).indexOf('h') === 2), 'SP57-a5: …h keeps index 2 whichever visible section is dropped wherever');
+  // Property: always a permutation of the input; hidden ids keep their slots; the dropped id is at the requested visible index.
+  let seed = 2026;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+  let propOk = true, propWhy = '';
+  for (let n = 0; n < 400; n++) {
+    const size = 3 + Math.floor(rnd() * 5);
+    const ids = Array.from({ length: size }, (_, i) => 'id' + i).sort(() => rnd() - 0.5);
+    const hidden = new Set(ids.filter(() => rnd() < 0.3));
+    const vis = ids.filter((x) => !hidden.has(x));
+    if (vis.length < 2) continue;
+    const id = vis[Math.floor(rnd() * vis.length)];
+    const to = Math.floor(rnd() * vis.length);
+    const out = reorderedSectionsTo(ids, vis, id, to);
+    const outVis = out.filter((x) => !hidden.has(x));
+    const perm = out.length === ids.length && [...out].sort().join() === [...ids].sort().join();
+    const hiddenStay = ids.every((x, i) => !hidden.has(x) || out[i] === x);
+    const placed = outVis[to] === id;
+    const others = outVis.filter((x) => x !== id).join() === vis.filter((x) => x !== id).join();
+    if (!(perm && hiddenStay && placed && others)) { propOk = false; propWhy = JSON.stringify({ ids, hidden: [...hidden], id, to, out }); break; }
+  }
+  assert(propOk, `SP57-a6: PROPERTY over 400 random layouts with hidden sections: the result is a permutation, hidden sections never move, the dropped section is at the requested visible index and the other visible sections keep their relative order${propWhy ? ' — FAILED ' + propWhy : ''}`);
+  // One rule, two doors: dropping one step away equals the ▲/▼ move.
+  let agree = true;
+  for (const [o, v] of [[o4, o4], [oh, vh], [['a', 'h', 'b', 'c'], ['a', 'b', 'c']]]) {
+    v.forEach((id, i) => {
+      if (i > 0 && reorderedSectionsTo(o, v, id, i - 1).join() !== reorderedSections(o, v, id, 'up').join()) agree = false;
+      if (i < v.length - 1 && reorderedSectionsTo(o, v, id, i + 1).join() !== reorderedSections(o, v, id, 'down').join()) agree = false;
+    });
+  }
+  assert(agree, 'SP57-a7: a drop one slot away produces EXACTLY what the hidden ▲/▼ buttons produce — the drag and the assistive path can never disagree about where a section goes');
+  const input = Object.freeze(['a', 'b', 'c']);
+  assert((() => { try { reorderedSectionsTo(input, Object.freeze(['a', 'b', 'c']), 'a', 2); return true; } catch { return false; } })(), 'SP57-a8: the inputs are never mutated (frozen arrays do not throw)');
+}
+
+console.log('\n[SP57-b] composeSections() — the hidden path obeys canCustomizeLayout() and "two or more visible sections", in every state…');
+{
+  const { _composeSectionsForTest: compose } = app;
+  setSession('p1', false, true);
+  const two = compose('dashboard', { 'dash-picks': '<p>x</p>', 'dash-alma': '<p>y</p>', 'dash-summary': '', 'dash-tiebreaker': '  ' });
+  assert(two.visible.join() === 'dash-picks,dash-alma' && (two.html.match(/section-move-btn/g) || []).length === 5 && has(two.html, 'Reset Dashboard layout to default'),
+    'SP57-b1: two visible sections → both get the pair (4 buttons) and the page gets its one Reset twin; empty parts are not in the DOM (5 .section-move-btn: 4 moves + the twin)');
+  assert(has(two.html, 'aria-label="Move All Picks by Game up" disabled') && has(two.html, 'aria-label="Move Alma Mater Watch down" disabled') && !has(two.html, 'aria-label="Move All Picks by Game down" disabled'),
+    'SP57-b2: …the first section\'s Up and the last\'s Down are disabled; nothing else is');
+  const one = compose('dashboard', { 'dash-picks': '<p>x</p>', 'dash-alma': '', 'dash-summary': '', 'dash-tiebreaker': '' });
+  assert(one.visible.join() === 'dash-picks' && !has(one.html, 'section-move-bar') && !has(one.html, 'layout-reset-btn') && has(one.html, 'data-section-id="dash-picks"'),
+    'SP57-b3: FEWER THAN TWO visible sections → no Move buttons and no Reset twin (nothing to rearrange); the section itself still renders');
+  const none = compose('standings', {});
+  assert(none.html === '' && none.visible.length === 0, 'SP57-b4: no sections at all → nothing');
+  setSession(null, false, false);
+  const anon = compose('dashboard', { 'dash-picks': '<p>x</p>', 'dash-alma': '<p>y</p>' });
+  assert(!has(anon.html, 'section-move-bar') && !has(anon.html, 'layout-reset-btn') && has(anon.html, 'data-section-id="dash-alma"'), 'SP57-b5: SIGNED OUT → no hidden path at all (DI-179g), the sections render in default order');
+  setSession('p1', false, true);
+  const xss = compose('dashboard', { 'dash-picks': '<p>x</p>', 'dash-alma': '<p>y</p>' });
+  assert(!/<script/i.test(xss.html) && /aria-label="Move [^"<>]+ (up|down)"/.test(xss.html), 'SP57-b6: every label goes through escHtml (a static label today, the same sink as every other string); no markup in an attribute');
+}
+
+console.log('\n[SP57-c] the ten title rows, the plain headings, and the retired button — in the emitted markup and the source…');
+{
+  setSession('p1', false, true);
+  clearSectionOrder('dashboard'); clearSectionOrder('standings');
+  for (const [label, html] of [['Dashboard', renderDash({ playerId: 'p1', verified: true })], ['Standings', renderStand({ playerId: 'p1', verified: true })]]) {
+    const chunks = html.split('<section class="layout-section"').slice(1).map((c) => c.split('</section>')[0]);
+    assert(chunks.length >= 4 && chunks.every((c) => (c.match(/data-section-header/g) || []).length === 1),
+      `SP57-c1 (${label}): EVERY .layout-section carries EXACTLY ONE data-section-header (${chunks.length} sections, counts ${chunks.map((c) => (c.match(/data-section-header/g) || []).length).join(',')}) — the engine's one handle`);
+  }
+  const src = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+  const markers = src.split('\n').filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l) && /data-section-header/.test(l));
+  assert(markers.length === 10, `SP57-c2: exactly TEN data-section-header attributes are written in app.js — one per registered section (found ${markers.length})`);
+  assert(markers.some((l) => /id="obligations-section" data-section-header/.test(l)), 'SP57-c3: the #obligations-section deep-link target still sits on the Weekly History title row (the id travels with the element)');
+  const d = renderDash({ playerId: 'p1', verified: true });
+  const s = renderStand({ playerId: 'p1', verified: true });
+  assert(has(d, '<div class="section-header"><h2>Dashboard</h2></div>') && has(s, '<div class="section-header"><h2>Standings</h2><div class="subtitle">Season ') && !has(d, 'section-header-layout') && !has(s, 'section-header-layout'),
+    'SP57-c4: BOTH page headings are the plain .section-header again (the Rules page\'s own) — not the flex row that carried the button');
+  // AT16, source: the retired names are gone from every shipped file, with a canary proving the scan can see one.
+  const RETIRED = /layoutEditButtonHTML|layoutEditStripHTML|layout-edit-btn|layout-edit-strip|layout-edit-hint|layout-live-region|Edit layout|⇅/;
+  assert(RETIRED.test('const x = layoutEditButtonHTML(\'dashboard\');') && RETIRED.test('<button class="layout-edit-btn">⇅ Edit layout</button>'), 'SP57-c6: canary — the retired-name scan finds each of them when one is present (the scan is not vacuous)');
+  // v0.29.0 release cut (2026-10-02): the What's New entry tells players "It replaces Edit layout." (SP-57 Q5 copy). The release-notes
+  // block (WHATS_NEW_RELEASES plus its doc comment directly above) is history written for players, so it alone is exempt; it must be found
+  // and bounded, and every other line of app.js is still scanned.
+  const srcLines = src.split('\n');
+  const relStart = srcLines.findIndex((l) => /^const WHATS_NEW_RELEASES = \[$/.test(l));
+  let relEnd = relStart; while (relEnd >= 0 && relEnd < srcLines.length && !/^\];/.test(srcLines[relEnd])) relEnd++;
+  let docStart = relStart; while (docStart > 0 && /^\s*\/\//.test(srcLines[docStart - 1])) docStart--;
+  assert(relStart > 0 && relEnd > relStart && relEnd < srcLines.length && relEnd - relStart < 600 && docStart <= relStart,
+    `SP57-c7a: fixture — the release-notes block (the one place the retired name may appear, as history) is found and bounded (lines ${docStart + 1}-${relEnd + 1})`);
+  const appHits = srcLines.map((l, i) => [i + 1, l]).filter(([n, l]) => !(n - 1 >= docStart && n - 1 <= relEnd) && RETIRED.test(l)).map(([n]) => n);
+  assert(appHits.length === 0, `SP57-c7: AT16 — js/app.js contains NONE of layoutEditButtonHTML / layoutEditStripHTML / .layout-edit-btn / .layout-edit-strip / .layout-live-region / "Edit layout" / ⇅, not even in a comment (hit lines: ${appHits.join(',') || 'none'})`);
+  const idx = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+  assert(!RETIRED.test(idx), 'SP57-c8: …nor index.html');
+  assert(!/[▲▼]/.test((src.match(/function (composeSections|bindLayoutEditHandlers|syncLayoutEditBar)\([\s\S]*?\n\}/g) || []).join('\n')), 'SP57-c9: the ▲ / ▼ glyphs left the layout chrome (the hidden buttons carry text)');
+}
+
+console.log('\n[SP57-d] the lifecycle\'s source pins: where the mode is cleared, mounted, guarded and derived…');
+{
+  const src = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+  const nav = (src.match(/function navigateTo\(tab\) \{[\s\S]*?\n\}\n/) || [''])[0];
+  assert(/if \(tab !== _priorTab && state\.layoutEditing\) \{[\s\S]{0,260}endLayoutEditing\(\);/.test(nav) && /cancelSectionDrag\('tab-change'\)/.test(nav),
+    'SP57-d1: navigateTo() ends the mode ONLY on a real tab change (tab !== _priorTab) — a same-tab Realtime repaint must not — and cancels a live lift first');
+  assert(/\[tab\]\?\.\(\);\n  \}\n  \/\/ SP-57[\s\S]{0,260}\n  syncLayoutEditBar\(\);/.test(nav), 'SP57-d2: …and syncLayoutEditBar() runs right after the page dispatch, so the bar follows whichever page is showing (and a repaint into an empty state clears the mode)');
+  assert(/export function renderLeaderboard\(\) \{\n[\s\S]{0,700}?if \(deferRenderWhileWeekSwiping\('leaderboard', renderLeaderboard\)\) return;\n  const c=document\.getElementById\('page-leaderboard'\)/.test(src),
+    'SP57-d3: renderLeaderboard()\'s FIRST statement is the repaint deferral (C11) — the Standings half of "never by accident"');
+  assert(/renderMaintenanceBannerIfNeeded\('leaderboard'\);\n  syncLayoutEditBar\(\);/.test(src) && /renderMaintenanceBannerIfNeeded\('dashboard'\);[\s\S]{0,260}syncLayoutEditBar\(\);\n\}\n\nfunction renderDashboardInner/.test(src),
+    'SP57-d4: both renderers end with syncLayoutEditBar() (the wrapper\'s tail covers renderDashboardInner()\'s early-return empty states)');
+  const sync = (src.match(/function syncLayoutEditBar\(\) \{[\s\S]*?\n\}\n/) || [''])[0];
+  assert(/function _layoutBarTopCSS\(\) \{\n  return `max\(\$\{_layoutBarTopPx\(\)\}px, env\(safe-area-inset-top, 0px\)\)`;\n\}/.test(src) && /bar\.style\.top = _layoutBarTopCSS\(\);/.test(sync) && /if \(bar\) bar\.style\.top = _layoutBarTopCSS\(\);/.test(src),
+    'SP57-d5b: the bar\'s top is max(the measured header bottom, env(safe-area-inset-top)) — at the mount AND on every scroll re-measure — so once the header has scrolled away the bar sits UNDER the status-bar band, not behind it');
+  assert(/sections < 2/.test(sync) && /host\.classList\.remove\('layout-editing'\)/.test(sync) && /state\.layoutEditing = null/.test(sync) && /canCustomizeLayout\(\)/.test(sync) && /document\.body\.appendChild\(bar\)/.test(sync),
+    'SP57-d5: syncLayoutEditBar() mounts on <body> iff the mode is set, the page is showing, it holds two or more sections and the viewer may customise; fewer than two clears the mode (no ghost mode)');
+  assert(/function _layoutBarTopPx\(\)[\s\S]*?Math\.max\(0, Math\.round\(bottom\)\)/.test(src) && /addEventListener\('scroll', _layoutBarTrack, \{ passive: true \}\)/.test(src) && /_trackLayoutBar\(true\);/.test(sync) && /_trackLayoutBar\(false\);/.test(src.match(/function unmountLayoutEditBar\(\) \{[\s\S]*?\n\}\n/)[0]),
+    'SP57-d6: the bar\'s top is the MEASURED header bottom clamped at 0 and re-measured on every (passive) scroll — the header is position:relative here, not sticky — and the tracker is switched ON by the mount and OFF by the unmount (mutation M14: a mount that never starts it)');
+  const bind = (src.match(/function bindLayoutEditHandlers\([\s\S]*?\n\}\n/) || [''])[0];
+  assert(/setEditing: \(pk\) => \{ state\.layoutEditing = pk; syncLayoutEditBar\(\); \}/.test(bind) && !/setEditing:[^\n]*rerender/.test(bind),
+    'SP57-d7: the engine\'s setEditing() sets the state and mounts the bar and NEVER repaints (a repaint at the lift would detach the node under the finger)');
+  assert(/onDone: \(moved\) => \{\n\s+state\.layoutEditing = null;\n\s+unmountLayoutEditBar\(\);\n\s+rerender\(\);[\s\S]{0,160}if \(moved\) layoutSavedToast\(\);/.test(bind),
+    'SP57-d8: Done = clear the state, unmount the bar, ONE repaint, then the save toast only if something moved');
+  const toast = (src.match(/function layoutSavedToast\(\) \{[\s\S]*?\n\}\n/) || [''])[0];
+  assert(/Layout saved to your account\./.test(toast) && /Layout saved on this device only\. Sync is off\./.test(toast) && /isBackendConfigured\(\) && banner && banner\.style\.display !== 'none'/.test(toast),
+    'SP57-d9: the save toast is HONEST (C10): "Layout saved to your account." normally, "Layout saved on this device only. Sync is off." under the same predicate submitPicks() uses for the red banner');
+  const code = [toast, bind, sync, (src.match(/function composeSections\([\s\S]*?\n\}\n/) || [''])[0], (src.match(/function resetLayoutPage\([\s\S]*?\n\}\n/) || [''])[0]]
+    .join('\n').split('\n').filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join('\n');
+  const lits = [...code.matchAll(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g)].map((m) => m[0]).filter((t) => /\s/.test(t));
+  assert(lits.length >= 6 && !lits.some((t) => /\border/i.test(t)), `SP57-d10: no user-facing string literal in the layout functions contains the word "order" (UN-77 / loadtest [8d]) — ${lits.length} literals checked`);
+  const lbl = src.match(/^\s*function resyncPlayerPreferences[\s\S]*?\n\}/m);
+  assert(!!lbl && /state\.layoutFocus = null/.test(lbl[0]), 'SP57-d11: resyncPlayerPreferences() drops the one-shot focus target with the announcement');
+}
+
+console.log('\n[SP57-e] the stylesheet\'s contract: the z-index map, the lock, the reveal, zero layout shift, tokens, motion and Breathing Room…');
+{
+  const css = await readFile(new URL('./css/styles.css', import.meta.url), 'utf8');
+  const rule = (sel) => { const re = new RegExp('(^|\\n)' + sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}'); const m = re.exec(css); return m ? m[2] : null; };
+  const num = (body, prop) => { const m = new RegExp('(?:^|[;\\s])' + prop + ':\\s*(-?\\d+)').exec(body || ''); return m ? Number(m[1]) : null; };
+  // z-index map
+  const zBar = num(rule('#layout-edit-bar'), 'z-index');
+  const zHdr = num(rule('.app-header'), 'z-index');
+  const zModal = num(rule('.modal-overlay'), 'z-index');
+  const zCC = num(rule('#control-center'), 'z-index');
+  assert(zBar === 99 && zHdr === 100 && zModal === 200 && zCC === 501 && zBar < zHdr && zHdr < zModal && zModal < zCC,
+    `SP57-e1: the z-index map — bar ${zBar} < app header ${zHdr} < modals ${zModal} < control center ${zCC}: under the header and under every overlay, never above one`);
+  const bar = rule('#layout-edit-bar') || '';
+  assert(/position:fixed/.test(bar) && num(bar, 'height') === 52 && /var\(--bg-card\)/.test(bar) && /var\(--shadow-card\)/.test(bar), 'SP57-e2: #layout-edit-bar is position:fixed, 52 pt tall, on the card surface token with the card shadow token');
+  assert(/top:env\(safe-area-inset-top,0px\)/.test(bar), 'SP57-e2b: the bar\'s own `top` is the TOP SAFE-AREA INSET (the fallback before the first measure) — never 0, which on the Munera shell and an installed PWA is behind the clock and the Dynamic Island');
+  // the lock, touch only
+  const lockBlock = (css.match(/@media \(hover:none\) and \(pointer:coarse\)\{\s*html:has\(\.layout-section\[data-lifted\]\)\{overflow:hidden\}[\s\S]*?\n\}/) || [''])[0];
+  assert(lockBlock.length > 0 && /overscroll-behavior:none/.test(lockBlock), 'SP57-e3: the page lock (overflow:hidden + overscroll-behavior:none while a section is lifted) exists ONLY inside @media (hover:none) and (pointer:coarse) — a mouse drag does not need it, and hiding the root scrollbar on desktop shifts the content');
+  assert(!/(^|\n)html:has\(\.layout-section\[data-lifted\]\)\s*\{/.test(css.replace(lockBlock, '')), 'SP57-e3b: …and there is no unconditional copy of it anywhere else');
+  // the reveal
+  const reveal = (css.match(/\.section-move-bar\.sr-only:focus-within\s*\{([^}]*)\}/) || [])[1] || '';
+  const props = ['position', 'width', 'height', 'margin', 'overflow', 'clip', 'white-space', 'display'];
+  assert(props.every((p) => new RegExp(p + ':[^;]*!important').test(reveal)), `SP57-e4: the focus reveal restates EVERY property .sr-only forces, each with !important (missing: ${props.filter((p) => !new RegExp(p + ':[^;]*!important').test(reveal)).join(',') || 'none'}) — otherwise the utility's !important would win and a keyboard user would tab to an invisible button`);
+  const hiddenRules = [...css.matchAll(/(^|\n)([^{}\n]*\.section-move-(?:bar|btn)[^{]*)\{([^}]*)\}/g)].filter(([, , , b]) => /display:\s*none|visibility:\s*hidden/.test(b)).map(([, , sel]) => sel.trim());
+  assert(hiddenRules.length === 0, `SP57-e5: NO rule hides the hidden path with display:none or visibility:hidden — it is .sr-only, in the accessibility tree (offenders: ${hiddenRules.join(' | ') || 'none'})`);
+  const btn = rule('.section-move-btn') || '';
+  assert(num(btn, 'min-width') >= 44 && num(btn, 'min-height') >= 44 && /:disabled\{opacity:\.5/.test(css.replace(/\s+/g, '')) , 'SP57-e6: the revealed buttons keep the 44 pt floor and a clearly reduced disabled state');
+  // zero layout shift
+  const outline = rule('.layout-editing .layout-section') || '';
+  assert(/outline:2px dashed var\(--maroon-light\)/.test(outline) && !/margin|padding|border:|height|display/.test(outline), 'SP57-e7: the edit-mode outline adds NO margin, padding, border or height (the old 12 → 18 px margin bump is gone): entering the mode shifts nothing under the finger');
+  assert(/visibility:hidden/.test(rule('.layout-editing .layout-toggle') || '') && !/display:\s*none/.test(rule('.layout-editing .layout-toggle') || ''), 'SP57-e8: the density toggle is hidden with visibility:hidden — it keeps its space, so the title row does not change height when the mode begins');
+  // tokens
+  // RE-DERIVED by themes DI A1.11 (coordinator, 2026-10-01; v0.29.0 batch-5b integration). OLD: "--shadow-lift is declared in :root and in BOTH dark blocks" —
+  // exactly 3 declarations, the one Dark block release had under its two triggers. SP-52 splits Dark into Block A, Paper Dark's page block and Graphite Dark,
+  // so NEW: EVERY Dark block that declares --shadow-btn also declares --shadow-lift with SP-57's byte-identical dark value; the light default is unchanged;
+  // and Paper's paper-surface scope never declares it (themetest [T10] forbids any shadow there).
+  const SP57_LIFT_LIGHT = '0 14px 32px rgba(20,17,14,.28)', SP57_LIFT_DARK = '0 14px 32px rgba(0,0,0,.5)';
+  const rootTok = /(^|\n)\s*--shadow-lift:([^;]*);/.exec(css);
+  const darkToks = [...css.matchAll(/\n\s*--shadow-lift:([^;]*);/g)].map((m) => m[1].trim());
+  const liftBlocks = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(([, sel, body]) => ({ sel: sel.replace(/\s+/g, ' ').trim(), body }));
+  const declOf = (body, tok) => { const m = new RegExp('(?:^|[;{\\s])' + tok + ':([^;]*);').exec(body); return m ? m[1].trim() : null; };
+  const isDarkBlock = (sel) => sel.split(',').every((p) => /^body\./.test(p.trim()) && /\[data-color-scheme="dark"\]|:not\(\[data-color-scheme="light"\]\)/.test(p));
+  const darkBtn = liftBlocks.filter((b) => isDarkBlock(b.sel) && declOf(b.body, '--shadow-btn') !== null);
+  const coversBoth = (re) => ['[data-color-scheme="dark"]', ':not([data-color-scheme="light"])'].every((trig) => darkBtn.some((b) => re.test(b.sel) && b.sel.includes(trig)));
+  assert(darkBtn.length >= 6 && coversBoth(/theme-neutral/) && coversBoth(/theme-paper/) && coversBoth(/theme-graphite/),
+    `SP57-e9 fixture: the scan finds the Dark blocks that declare --shadow-btn — Block A, Paper Dark's page block and Graphite Dark, under BOTH triggers (${darkBtn.length} found)`);
+  const missingLift = darkBtn.filter((b) => declOf(b.body, '--shadow-lift') !== SP57_LIFT_DARK).map((b) => b.sel.slice(0, 70));
+  assert(missingLift.length === 0, `SP57-e9: EVERY Dark block that declares --shadow-btn also declares --shadow-lift with SP-57's byte-identical dark value ${SP57_LIFT_DARK} (A1.11)${missingLift.length ? ' — MISSING or DIFFERENT in: ' + missingLift.join(' | ') : ''}`);
+  assert(!!rootTok && rootTok[2].trim() === SP57_LIFT_LIGHT && darkToks.slice(1).every((t) => t === SP57_LIFT_DARK) && darkToks.length === 1 + darkBtn.length,
+    `SP57-e9: the light default on :root is unchanged (${rootTok ? rootTok[2].trim() : 'missing'}) and every other declaration is the one dark value, each beside a Dark --shadow-btn (${darkToks.length} declarations, ${darkBtn.length} Dark --shadow-btn blocks)`);
+  const scopeLift = liftBlocks.filter((b) => /^:where\(body\.theme-paper/.test(b.sel) && declOf(b.body, '--shadow-lift') !== null).map((b) => b.sel.slice(0, 70));
+  assert(scopeLift.length === 0, `SP57-e9: Paper's paper-surface scope never declares --shadow-lift (A1.11)${scopeLift.length ? ' — found in: ' + scopeLift.join(' | ') : ''}`);
+  assert(!!rootTok && !/var\(/.test(darkToks.join('')) && !/#[0-9a-fA-F]{3,8}\b/.test(darkToks.join('')), 'SP57-e9b: …and it is a LITERAL shadow, no var() and no hex: a :root alias that var()s a token a school theme re-declares on <body> goes stale (DI-448 R1 / RG-273, schoolthemetest [3a])');
+  assert(/\.layout-section\[data-lifted\],\.layout-section\[data-settling\]\{[^}]*box-shadow:var\(--shadow-lift\),0 0 0 1px var\(--border-strong\)/.test(css), 'SP57-e9c: the lifted and settling section composes the hairline ring in the theme\'s own --border-strong AT THE USE SITE (where it resolves on the element, per theme), after the token');
+  // A1.4: the grip takes NO space, so it can never change a title row's line count at any width (reviewer B1, 2026-10-01).
+  const gripRule = rule('.layout-grip') || '';
+  assert(/position:absolute/.test(gripRule) && /right:0/.test(gripRule) && /width:44px/.test(gripRule) && !/flex:\s*0 0 44px|margin-left:auto|align-self/.test(gripRule) && /\n\[data-section-header\]\{position:relative;/.test(css),
+    'SP57-e10a: the grip is OUT OF FLOW (A1.4) — .layout-grip is position:absolute at the row\'s right end with no flex-item sizing, and [data-section-header] is its positioning context: entering edit mode cannot change a title row\'s line count');
+  assert(/\.tiebreaker-label\[data-section-header\]\{[^}]*padding-right:44px/.test(css), 'SP57-e10b: the tiebreaker label (the one title that is the player\'s own words) keeps the grip\'s 44 px slot clear ALWAYS, at rest too, so a long question never runs under the grip and its wrap is identical in both states');
+  assert(/\.layout-editing \.layout-toggle-btn\{transition:none\}/.test(css), 'SP57-e10c: the density toggle\'s buttons hide WITH their toggle (transition:none) — their own transition:all otherwise holds an inherited visibility:hidden at visible for 160 ms, under the grip');
+  assert(/\.admin-section-title \.layout-grip svg/.test(css) && /(^|\n)\.admin-section-title\[data-section-header\]\{display:flex;align-items:center;gap:6px\}/.test(css), 'SP57-e10: the grip\'s 22 px rule is scoped under .admin-section-title (specificity beats the 14 px icon rule) and the Standings title rows are flex rows with a 6 px icon gap');
+  // motion: only the Principles' tokens
+  const block = css.slice(css.indexOf('SP-57 (2026-10-01) — long-press section drag'), css.indexOf('FEAT-3 / DI-200f'));
+  const literalMs = [...block.matchAll(/transition:[^;}]*?(\d+(?:\.\d+)?m?s)\b/g)].filter(([m]) => !/var\(--motion-/.test(m) && !/none/.test(m)).map(([m]) => m);
+  assert(literalMs.length === 0, `SP57-e11: every transition and animation in the SP-57 block names a --motion-* token (150 / 260 ms), never a literal duration (found: ${literalMs.join(' | ') || 'none'})`);
+  assert(/@media \(prefers-reduced-motion:reduce\)\{[^}]*#layout-edit-bar\{animation:none\}/.test(block.replace(/\s+/g, ' ').replace(/ \{/g, '{').replace(/\{ /g, '{')) || /prefers-reduced-motion:reduce\)\s*\{\s*#layout-edit-bar\s*\{\s*animation:none/.test(block),
+    'SP57-e12: Reduce Motion drops the bar\'s fade and every title-row / lift transition');
+  // Breathing Room (Drew, 2026-09-30)
+  const inner = rule('.layout-edit-bar-inner') || '';
+  const actions = rule('.layout-edit-bar-actions') || '';
+  const abtn = rule('.layout-edit-bar-actions .btn') || '';
+  assert(/gap:16px/.test(inner) && /gap:8px/.test(actions) && /max\(var\(--page-pad\)/.test(inner), 'SP57-e13: Breathing Room — 16 pt between the text and the buttons, 8 pt between the two buttons, 16 pt from the screen edges (and the safe-area insets): all container padding / gap');
+  assert(!/margin/.test(abtn) && !/margin/.test(actions), 'SP57-e14: …space comes from the container gap, never a margin on one button (a hidden button cannot leave the group off-centre)');
+  assert(num(abtn, 'min-height') === 36 && /inset:-4px/.test(rule('.layout-edit-bar-actions .btn::after') || '') && (52 - 36) / 2 >= 8,
+    'SP57-e15: the bar\'s buttons are 36 pt faces — 8 pt from the bar\'s divider and top edge inside the 52 pt bar — with a 4 pt pseudo-element halo that keeps the TAP target at 44 pt (36 + 4 + 4)');
+  assert(/\.card-header\[data-section-header\]\{margin-top:-4px;margin-bottom:8px\}/.test(css) && /\.tiebreaker-label\[data-section-header\]\{margin-top:-8px\}/.test(css),
+    'SP57-e16: the height-budget margins (DI-475 Q4): card headers 8 pt below and pulled 4 pt, the tiebreaker label 8 pt, into their cards\' 16 pt padding — in 4 pt steps, never below 8 pt under, the 44 pt row itself untouched');
+  // contrastscan's rule: a pale background names its own colour
+  const pressing = rule('[data-section-header].section-pressing') || '';
+  assert(/background:var\(--maroon-tint\)/.test(pressing) && /(^|;)color:var\(--maroon-text\)/.test(pressing), 'SP57-e17: the pending tint is the brand tint and names its own text colour (contrastscan: any pale background rule must)');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SP-56 (2026-09-30) — STANDINGS FIT. Season Summary + Weekly History fit one
+// iPhone screen wide. DI-471…DI-474 + Amendment 1 (Drew: "undo com only").
+// Every [SFn] block below drives the REAL renderLeaderboard() (or the real
+// exported obligation function) and reads the EMITTED HTML — never a source
+// window (the UN-124 lesson this file's own header records).
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SF fixture + shared helpers ([SF1]–[SF7], [SF9]–[SF12]).
+// Everything the earlier sections created is RETIRED first (weeks → demo, players
+// → inactive) so the rows asserted below are the only ones on Standings.
+// ═════════════════════════════════════════════════════════════════════════════
+const dm = await import('./js/data-model.js');
+const PO = await import('./js/pilot-only.js');
+const h2025 = await import('./js/history-2025.js');
+const sfAppSrc = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+const sfCssSrc = await readFile(new URL('./css/styles.css', import.meta.url), 'utf8');
+
+storage.getWeeks().forEach(w => saveWeek({ ...w, dataSourceMode: 'demo' }));
+storage.getPlayers().forEach(p => storage.savePlayer({ ...p, active: false }));
+
+const SF_V = {                       // [playerId, isAdmin, verified]
+  admin:     ['sf_e', true,  true],  // the commissioner (isAdmin wins the role)
+  payerB:    ['sf_b', false, true],  // pays Week 41 (unpaid); is owed Week 51 (unpaid)
+  creditorA: ['sf_a', false, true],  // is owed Week 41 (unpaid) and Week 43 (paid); pays Week 51
+  payerD:    ['sf_d', false, true],  // pays Weeks 42 and 52 (pending)
+  creditorC: ['sf_c', false, true],  // is owed Weeks 42 and 52 (pending)
+  bystander: ['sf_e', false, true],  // involved in nothing
+  anon:      [null,    false, false],
+};
+const sfRender = ([pid, adm, ver]) => {
+  setSession(pid, adm, ver);
+  els.get('page-leaderboard')._html = '';
+  app.renderLeaderboard();
+  return els.get('page-leaderboard')._html;
+};
+const sfSection = (html, id) => (html.split(`data-section-id="${id}"`)[1] || '').split('data-section-id=')[0];
+const sfSeason = html => sfSection(html, 'stand-season');
+const sfHist = html => sfSection(html, 'stand-history');
+const sfTable = (sec, cls) => (new RegExp(`<table class="stand-table ${cls}"[^>]*>([\\s\\S]*?)</table>`).exec(sec) || [, ''])[1];
+const sfGroups = html => sfTable(sfHist(html), 'stand-table-history').split('<tbody class="stand-wk-group">').slice(1).map(g => g.split('</tbody>')[0]);
+const sfWkName = g => (/class="stand-wk-name" id="stand-wk-\d+">([^<]*)</.exec(g) || [, ''])[1];
+const sfGroup = (html, name) => sfGroups(html).find(g => sfWkName(g) === name);
+const sfBtns = g => [...(g || '').matchAll(/<button\b[^>]*data-ob-action="(\w+)"/g)].map(m => m[1]);
+
+// The Standings sections as the SIGNED-OUT visitor sees them with NOTHING in the league yet.
+const sfEmptyHtml = sfRender(SF_V.anon);
+
+[['sf_a', 'Ann'], ['sf_b', 'Bob'], ['sf_c', 'Cat'], ['sf_d', 'Dan'], ['sf_e', 'Eve']]
+  .forEach(([id, n]) => addPlayer({ playerId: id, displayName: n, active: true, preferences: {} }));
+const sfWeek = (n, over = {}) => saveWeek(mkWeek({ weekId: 'sfw' + n, weekNumber: n, name: 'Week ' + n, status: 'final', blurb: '',
+  startDate: '2026-09-24', endDate: '2026-09-26', ...over }));
+const SFR = (weekId, pid, name, cp, ip, cc, ic, flags = {}) => ({ weekId, playerId: pid, displayName: name, rank: 2,
+  correctPicks: cp, incorrectPicks: ip, correctCount: cc, incorrectCount: ic, noDecisions: 0, isWinner: false, isLoser: false, wonByTiebreaker: false, ...flags });
+const SFO = (id, weekId, payer, recipient, status, extra = {}) => ({ obligationId: id, type: 'weekly', weekId, payerPlayerId: payer,
+  recipientPlayerId: recipient, amountOrPrize: 'a drink', status, createdAt: '2026-09-20T00:00:00Z', paidAt: status === 'paid' ? '2026-09-21T00:00:00Z' : null, ...extra });
+
+sfWeek(41);                                                         // unpaid; Ann beat Bob
+sfWeek(42, { startDate: '2026-09-30', endDate: '2026-10-02' });     // pending; Cat beat Dan ON THE TIEBREAKER; spans two months
+sfWeek(43, { startDate: '2026-10-08', endDate: '2026-10-10' });     // paid; Ann beat Cat
+sfWeek(44, { startDate: '2026-10-15', endDate: '2026-10-17' });     // waived; Bob beat Dan
+sfWeek(45, { startDate: '2026-10-22', endDate: '2026-10-24' });     // FINAL, no result rows, no obligation (hidden/legacy)
+sfWeek(46, { status: 'open',   startDate: '2026-10-29', endDate: '2026-11-01' });
+sfWeek(47, { status: 'locked', startDate: '2026-11-05', endDate: '2026-11-07' });
+sfWeek(48, { status: 'live',   startDate: '2026-11-12', endDate: '2026-11-14' });
+sfWeek(49, { groupId: 'sfw49', startDate: '2026-11-19', endDate: '2026-11-21' });                  // part 1 of a group: FINAL…
+sfWeek(50, { groupId: 'sfw49', status: 'locked', startDate: '2026-11-26', endDate: '2026-11-28' }); // …part 2 NOT final → the group is in progress
+sfWeek(51, { startDate: '2026-12-03', endDate: '2026-12-05' });     // FINAL, an obligation but NO result rows (UN-126 stale singleton)
+sfWeek(52, { status: 'locked', startDate: '2026-12-10', endDate: '2026-12-12' }); // NOT final, yet a money record exists
+sfWeek(53, { startDate: '2026-12-17', endDate: '2026-12-19' });     // two ACTIVE obligations → conflicted (UN-126/UN-135)
+sfWeek(54, { startDate: '2026-12-24', endDate: '2026-12-26' });     // results, NO obligation
+
+const sfSave = (weekId, rows) => storage.saveAllWeeklyResults(weekId, rows);
+sfSave('sfw41', [SFR('sfw41', 'sf_a', 'Ann', 4, 1, 3, 2, { isWinner: true, rank: 1 }), SFR('sfw41', 'sf_b', 'Bob', 1, 4, 1, 4, { isLoser: true, rank: 4 }), SFR('sfw41', 'sf_c', 'Cat', 2, 3, 2, 3), SFR('sfw41', 'sf_d', 'Dan', 2, 3, 2, 3)]);
+sfSave('sfw42', [SFR('sfw42', 'sf_b', 'Bob', 3, 2, 3, 2), SFR('sfw42', 'sf_c', 'Cat', 5, 0, 5, 0, { isWinner: true, rank: 1, wonByTiebreaker: true }), SFR('sfw42', 'sf_d', 'Dan', 0, 5, 0, 5, { isLoser: true, rank: 3 })]);
+sfSave('sfw43', [SFR('sfw43', 'sf_a', 'Ann', 2, 1, 1, 2, { isWinner: true, rank: 1 }), SFR('sfw43', 'sf_b', 'Bob', 1, 2, 1, 2), SFR('sfw43', 'sf_c', 'Cat', 0, 3, 0, 3, { isLoser: true, rank: 3 })]);
+sfSave('sfw44', [SFR('sfw44', 'sf_b', 'Bob', 4, 0, 4, 0, { isWinner: true, rank: 1 }), SFR('sfw44', 'sf_c', 'Cat', 2, 2, 2, 2), SFR('sfw44', 'sf_d', 'Dan', 0, 4, 0, 4, { isLoser: true, rank: 3 })]);
+// Part 1 of the group carries PER-PART isWinner/isLoser flags (Bob/Dan) — the group row must never show them while part 2 is not final.
+sfSave('sfw49', [SFR('sfw49', 'sf_b', 'Bob', 4, 0, 4, 0, { isWinner: true, rank: 1 }), SFR('sfw49', 'sf_c', 'Cat', 2, 2, 2, 2), SFR('sfw49', 'sf_d', 'Dan', 0, 4, 0, 4, { isLoser: true, rank: 3 })]);
+sfSave('sfw53', [SFR('sfw53', 'sf_b', 'Bob', 2, 3, 2, 3), SFR('sfw53', 'sf_c', 'Cat', 4, 1, 4, 1, { isWinner: true, rank: 1 }), SFR('sfw53', 'sf_d', 'Dan', 1, 4, 1, 4, { isLoser: true, rank: 3 })]);
+sfSave('sfw54', [SFR('sfw54', 'sf_b', 'Bob', 3, 2, 3, 2, { isWinner: true, rank: 1 }), SFR('sfw54', 'sf_d', 'Dan', 1, 4, 1, 4, { isLoser: true, rank: 3 })]);
+
+const SF_OB = {                      // display name -> the ONE active obligation for that week
+  'Week 41': SFO('sfo41', 'sfw41', 'sf_b', 'sf_a', 'unpaid'),
+  'Week 42': SFO('sfo42', 'sfw42', 'sf_d', 'sf_c', 'pending'),
+  'Week 43': SFO('sfo43', 'sfw43', 'sf_c', 'sf_a', 'paid'),
+  'Week 44': SFO('sfo44', 'sfw44', 'sf_d', 'sf_b', 'waived'),
+  'Week 51': SFO('sfo51', 'sfw51', 'sf_a', 'sf_b', 'unpaid'),
+  'Week 52': SFO('sfo52', 'sfw52', 'sf_d', 'sf_c', 'pending'),
+};
+Object.values(SF_OB).forEach(o => storage.saveObligation(o));
+storage.saveObligation(SFO('sfo53a', 'sfw53', 'sf_d', 'sf_c', 'unpaid'));
+storage.saveObligation(SFO('sfo53b', 'sfw53', 'sf_c', 'sf_d', 'unpaid'));
+
+// Picks exist for OTHER players on the in-progress weeks, so the blind rule is a real test and not an empty one.
+for (const n of [46, 47, 48]) saveGame(mkGame('sfw' + n, 'g1', `SF${n} HOME`, `SF${n} AWAY`, FUTURE));
+storage.saveAllPicks([...storage.getPicks(),
+  ...[46, 47, 48].flatMap(n => [
+    { pickId: `sfpk${n}a`, weekId: 'sfw' + n, gameId: `sfw${n}_g1`, playerId: 'sf_a', selectedTeam: `SF${n} HOME`, submittedAt: '2026-10-01T00:00:00Z' },
+    { pickId: `sfpk${n}b`, weekId: 'sfw' + n, gameId: `sfw${n}_g1`, playerId: 'sf_b', selectedTeam: `SF${n} AWAY`, submittedAt: '2026-10-01T00:00:00Z' },
+  ])]);
+
+// ── CSS block, comment-stripped, parsed into rules (base vs the >=600px media block) ─────────────────
+// v0.29.0 integration (2026-10-01) — BOUNDED at the next top-level banner, not sliced to EOF (the leaguecreatetest [11] fix eea7eff; accountexittest [12], 1b9a9b6).
+// SP-56's block is the last one in styles.css today, so an EOF slice was harmless only until the next thread appends its own block: SF1u ("exactly one hex rule")
+// would then answer for that block's colours as if SP-56 had regressed. The block ends where the next banner comment begins, in either house style ('/* ═══' or
+// '/* ── '; SP-56 opens with the latter and contains neither internally). While SP-56 is the last block, that is the end of the file. SF1-0b proves the bound
+// still reaches SP-56's last rule.
+const sfCssFrom = (() => {
+  const i = sfCssSrc.indexOf('SP-56 STANDINGS-FIT');
+  if (i < 0) return '';
+  const ends = ['\n/* ═══', '\n/* ── '].map((b) => sfCssSrc.indexOf(b, i + 1)).filter((k) => k > i);
+  return sfCssSrc.slice(sfCssSrc.lastIndexOf('/*', i), ends.length ? Math.min(...ends) : undefined);
+})();
+const sfCss = sfCssFrom.replace(/\/\*[\s\S]*?\*\//g, '');
+const sfWideAt = sfCss.indexOf('@media (min-width:600px)');
+const sfRules = [...sfCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m => ({ sel: m[1].trim(), body: m[2], wide: sfWideAt >= 0 && m.index > sfWideAt }));
+const sfDecl = (rule, prop) => { const m = rule && new RegExp('(?:^|;)\\s*' + prop + '\\s*:\\s*([^;]+)').exec(rule.body); return m ? m[1].trim() : null; };
+const sfRule = (sel, wide = false) => sfRules.find(r => r.wide === wide && r.sel.split(',').map(s => s.trim()).includes(sel));
+const sfNum = v => (v == null ? NaN : parseFloat(v));
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[SF1] DI-474 SF1 — the structural fit proxy (node has no layout engine: CSS + emitted markup)…');
+// ═════════════════════════════════════════════════════════════════════════════
+{
+  const html = sfRender(SF_V.admin);
+  const season = sfTable(sfSeason(html), 'stand-table-season');
+  const hist = sfTable(sfHist(html), 'stand-table-history');
+  assert(season.length > 0 && hist.length > 0 && sfRules.length > 20,
+    `SF1-0: fixture check — both tables were extracted from the real render, and the SP-56 CSS block was located (${sfRules.length} rules)`);
+  assert(sfRules.length > 30 && !!sfRule('.stand-box') && !!sfRule('.stand-table th') && !!sfRule('.stand-table-history .stand-c-st', true),
+    `SF1-0b: fixture check — the bounded SP-56 block is the WHOLE block, from .stand-box through its last rule (the ≥600px Weekly History status width), so a bound cut short could never make SF1d/SF1u vacuous (${sfRules.length} rules)`);
+
+  // Neither section sits in a sideways scroller.
+  assert(/Season Summary<\/div>\s*<div class="stand-box/.test(sfSeason(html)) && /Weekly History<\/div>\s*<div class="stand-box mb-md/.test(sfHist(html)),
+    'SF1a: each title is followed DIRECTLY by a .stand-box (not a .dashboard-scroll) — the sideways scroller is gone from both sections');
+  assert(!/dashboard-scroll|overflow-x|min-width/.test(sfSeason(html) + sfHist(html)),
+    'SF1b: neither section\'s emitted markup mentions dashboard-scroll, overflow-x or min-width');
+
+  // The stylesheet: fixed layout, and no .stand-* rule may ever be a scroller or carry a positive min-width.
+  const tbl = sfRule('.stand-table');
+  assert(sfDecl(tbl, 'table-layout') === 'fixed' && sfDecl(tbl, 'width') === '100%', 'SF1c: .stand-table is table-layout:fixed at width:100% (the <colgroup> widths rule)');
+  const standRules = sfRules.filter(r => /\.stand-/.test(r.sel));
+  const bad = standRules.filter(r => /(^|;)\s*overflow-x\s*:\s*(auto|scroll)/.test(r.body) || /(^|;)\s*overflow\s*:\s*(auto|scroll)/.test(r.body)
+    || /(^|;)\s*min-width\s*:\s*(?!0(px|rem|em)?\s*(;|$))/.test(r.body));
+  assert(standRules.length > 20 && bad.length === 0,
+    `SF1d: no .stand-* rule declares overflow-x:auto|scroll or a positive min-width — min-width:0 (the flex-ellipsis reset) is the only allowed value (offending: ${bad.map(r => r.sel).join(' | ') || 'none'})`);
+  assert(sfDecl(sfRule('.stand-box'), 'overflow') === 'hidden',
+    'SF1e: .stand-box clips (overflow:hidden) — which is exactly why the DevTools check reads scrollWidth, never the eye (DI-473 trap 4)');
+
+  // <col> count equals <th> count, and every body row's colspans sum to the column count (the T5 class: colspan="8" on a 7-column table).
+  const cols = t => (t.match(/<col\b/g) || []).length;
+  const ths = t => (t.match(/<th\b/g) || []).length;
+  assert(cols(season) === 5 && ths(season) === 5, `SF1f: Season Summary has 5 <col> and 5 <th> (got ${cols(season)}/${ths(season)})`);
+  assert(cols(hist) === 4 && ths(hist) === 4, `SF1g: Weekly History has 4 <col> and 4 <th> (got ${cols(hist)}/${ths(hist)})`);
+  const rowSums = t => [...t.slice(Math.max(0, t.indexOf('<tbody'))).matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)]
+    .map(m => [...m[1].matchAll(/<td\b([^>]*)>/g)].reduce((s, c) => s + Number((/colspan="(\d+)"/.exec(c[1]) || [, 1])[1]), 0));
+  const sSums = rowSums(season), hSums = rowSums(hist);
+  assert(sSums.length >= 5 && sSums.every(n => n === 5), `SF1h: EVERY Season Summary body row sums to 5 columns (rows ${sSums.length}: ${[...new Set(sSums)].join(',')})`);
+  assert(hSums.length >= 15 && hSums.every(n => n === 4), `SF1i: EVERY Weekly History body row — week rows, merged in-progress rows, action rows — sums to 4 columns (rows ${hSums.length}: ${[...new Set(hSums)].join(',')})`);
+  assert(/<td colspan="5" class="stand-empty">No finalized weeks yet\.<\/td>/.test(sfEmptyHtml),
+    'SF1j: the empty Season row spans colspan="5" — the 5-column table (it was colspan="8" on a 7-column table, T5)');
+
+  // The width budget, derived from the CSS itself (so the next edit to a column cannot silently starve the name).
+  const W = (sel) => sfNum(sfDecl(sfRule(sel), 'width'));
+  const seasonFixed = ['.stand-table-season .stand-c-rank', '.stand-table-season .stand-c-picks', '.stand-table-season .stand-c-pct', '.stand-table-season .stand-c-weeks'].map(W);
+  const histFixed = ['.stand-table-history .stand-c-wk', '.stand-table-history .stand-c-st'].map(W);
+  assert([...seasonFixed, ...histFixed].every(Number.isFinite), `SF1k: every fixed column width was parsed (${seasonFixed.concat(histFixed).join(', ')})`);
+  const sF = seasonFixed.reduce((a, b) => a + b, 0), hF = histFixed.reduce((a, b) => a + b, 0);
+  const AVAIL375 = 375 - 2 * 14 - 2, AVAIL320 = 320 - 2 * 14 - 2;   // page padding 14 each side + the box's 1px borders (DI-471)
+  assert(AVAIL375 - sF >= 96, `SF1l: at 375pt the Season name column keeps >= 96px (${AVAIL375} - ${sF} fixed = ${AVAIL375 - sF})`);
+  assert((AVAIL375 - hF) / 2 >= 80, `SF1m: at 375pt each Weekly History Winner/Loser column keeps >= 80px ((${AVAIL375} - ${hF}) / 2 = ${(AVAIL375 - hF) / 2})`);
+  assert(AVAIL320 - sF >= 0 && AVAIL320 - hF >= 0, `SF1n: at 320pt both budgets stay non-negative (truncation by ellipsis only, never overflow): ${AVAIL320 - sF} / ${AVAIL320 - hF}`);
+
+  // Type, tap-target and row-height floors, parsed from the CSS.
+  assert(sfNum(sfDecl(sfRule('.stand-table td'), 'font-size')) >= 0.875, 'SF1o: data cells are >= .875rem (14px; today 13.6)');
+  assert(sfNum(sfDecl(sfRule('.stand-table th'), 'font-size')) >= 0.72, 'SF1p: column headers are >= .72rem — today\'s size, never smaller (UN-S3)');
+  assert(sfNum(sfDecl(sfRule('.stand-sub'), 'font-size')) >= 0.6875, 'SF1q: the smallest type (date caption, "by tiebreaker") is >= .6875rem (11px, Apple\'s caption-2 floor)');
+  assert(sfNum(sfDecl(sfRule('.stand-act-row .btn'), 'min-height')) >= 44, 'SF1r: payment buttons carry a scoped min-height >= 44px (a global .btn-sm change would reflow every compact row in the app)');
+  assert(sfNum(sfDecl(sfRule('.stand-table td'), 'height')) >= 48, 'SF1s: rows are >= 48px tall');
+  assert(!/^\.btn-sm\{[^}]*min-height:4[4-9]px/m.test(sfCssSrc), 'SF1t: …and .btn-sm itself was NOT raised globally');
+  // Tokens only. RE-DERIVED (SP-52 DI-448 C2, 2026-10-01): the ONE literal colour this block used to carry — the #fff on the maroon header, "the SAME
+  // declaration .dashboard-table th already makes" — is a token now, because that very declaration is what the on-accent sweep retargets (white on every
+  // look except Graphite Dark, whose accent is near-white). So the block holds NO hex at all, and the header label reads var(--on-accent) exactly as
+  // .dashboard-table th does (the pairing is still "the same declaration", the declaration just changed value for both).
+  const hexRules = sfRules.filter(r => /#[0-9a-fA-F]{3,8}\b/.test(r.body));
+  const stTh = sfRule('.stand-table th');
+  assert(hexRules.length === 0 && /color\s*:\s*var\(--on-accent\)/.test(stTh.body || '') && /background\s*:\s*var\(--maroon\)/.test(stTh.body || ''),
+    `SF1u: no hex in the SP-56 block at all (rules with a hex: ${hexRules.map(r => r.sel).join(' | ') || 'none'}); the maroon header's label reads var(--on-accent) — every colour is a token`);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[SF2] DI-474 SF2 — payment actions live ONLY in .stand-act-row, only for the viewer who has one, and never beyond what the state machine allows…');
+// ═════════════════════════════════════════════════════════════════════════════
+{
+  const mismatches = [], statusButtons = [], strays = [], rowMism = [];
+  let checked = 0;
+  for (const [vname, v] of Object.entries(SF_V)) {
+    const html = sfRender(v);
+    const sess = { isAdmin: v[1], playerId: v[0], playerVerified: v[2] };
+    const tableHtml = sfTable(sfHist(html), 'stand-table-history');
+    // every <button> must sit inside a .stand-act-row (strip those out, nothing may remain) and none inside a Status cell
+    const withoutActRows = tableHtml.replace(/<div class="btn-row stand-act-row"[\s\S]*?<\/div>/g, '');
+    if (/<button/.test(withoutActRows)) strays.push(vname);
+    for (const m of tableHtml.matchAll(/<td class="stand-st">([\s\S]*?)<\/td>/g)) if (/<button/.test(m[1])) statusButtons.push(vname);
+    for (const [name, ob] of Object.entries(SF_OB)) {
+      const g = sfGroup(html, name);
+      const role = dm.obligationRole(sess, ob);
+      const allowed = ['mark', 'confirm', 'deny'].filter(a => dm.obligationNextStatus(ob.status, role, a)).sort();
+      const rendered = sfBtns(g).sort();
+      const waitText = ob.status === 'pending' && role === 'payer';
+      const wantsRow = allowed.length > 0 || waitText;
+      checked++;
+      if (JSON.stringify(rendered) !== JSON.stringify(allowed)) mismatches.push(`${vname}/${name}: rendered [${rendered}] vs machine [${allowed}]`);
+      const hasRow = /<tr class="stand-act">/.test(g || '');
+      const firstRowHasAct = /<tr class="stand-row has-act">/.test(g || '');
+      if (hasRow !== wantsRow || firstRowHasAct !== wantsRow) rowMism.push(`${vname}/${name}: actRow=${hasRow} has-act=${firstRowHasAct} wanted=${wantsRow}`);
+    }
+  }
+  assert(checked === Object.keys(SF_V).length * Object.keys(SF_OB).length && checked >= 40, `SF2-0: fixture check — ${checked} viewer x week cells examined`);
+  assert(strays.length === 0, `SF2a: every <button> in Weekly History sits inside a .stand-act-row (strays for: ${strays.join(', ') || 'none'})`);
+  assert(statusButtons.length === 0, `SF2b: NO <button> in any Status cell for any viewer — today's wrapped 54px buttons are gone (found for: ${statusButtons.join(', ') || 'none'})`);
+  assert(mismatches.length === 0, `SF2c: the buttons rendered are EXACTLY the actions obligationNextStatus() allows that viewer — the UI never shows a button the machine refuses, and never hides one it grants (Undo is excluded on Standings: Amendment 1) (${mismatches.join(' ; ') || 'none'})`);
+  assert(rowMism.length === 0, `SF2d: an action row (and the has-act join on the week row) exists ONLY where the viewer has an action or the payer's wait text (${rowMism.join(' ; ') || 'none'})`);
+  const bystander = sfRender(SF_V.bystander), anon = sfRender(SF_V.anon);
+  assert(!/<button|stand-act/.test(sfTable(sfHist(bystander), 'stand-table-history')) && !/<button|stand-act/.test(sfTable(sfHist(anon), 'stand-table-history')),
+    'SF2e: a bystander and a signed-out visitor get no <button> and no action row anywhere in Weekly History');
+  // Amendment 1: the commissioner's PAID week is byte-identical to a bystander's.
+  const adminPaid = sfGroup(sfRender(SF_V.admin), 'Week 43'), byPaid = sfGroup(bystander, 'Week 43');
+  assert(!!adminPaid && adminPaid === byPaid && !/<button|stand-act/.test(adminPaid),
+    'SF2f: Amendment 1 — the commissioner\'s PAID week renders byte-identically to a bystander\'s: "Paid ✓", no Undo, no action row');
+  const payerWait = sfGroup(sfRender(SF_V.payerD), 'Week 42');
+  assert(/<div class="btn-row stand-act-row" role="group" aria-labelledby="stand-wk-\d+"><span class="text-muted text-xs">Waiting on Cat to confirm\.<\/span><\/div>/.test(payerWait),
+    'SF2g: the payer of a pending debt sees "Waiting on Cat to confirm." as text in the action group (no button), labelled by the visible week name');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[SF3] DI-474 SF3 — BOTH tallies survive: Picks is the WEIGHTED pair, Win % the RAW ratio, and a zero prints as 0…');
+// ═════════════════════════════════════════════════════════════════════════════
+{
+  const html = sfRender(SF_V.bystander);
+  const seasonHtml = sfTable(sfSeason(html), 'stand-table-season');
+  const rows = [...seasonHtml.slice(seasonHtml.indexOf('<tbody')).matchAll(/<tr class="([^"]*)">([\s\S]*?)<\/tr>/g)].map(m => {
+    const cells = [...m[2].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(c => c[1].replace(/<[^>]+>/g, '').trim());
+    return { cls: m[1], rank: cells[0], name: cells[1].replace(/[\u{1F451}\u{1F921}]/gu, '').trim(), picks: cells[2], pct: cells[3], weeks: cells[4] };
+  });
+  const truth = app.seasonStandingsRows();
+  assert(rows.length === 5 && truth.length === 5, `SF3-0: five players, five rows (got ${rows.length} / ${truth.length})`);
+  const wrong = [];
+  truth.forEach((s, i) => {
+    const r = rows[i];
+    if (!r || r.name !== s.displayName || r.rank !== String(s.currentRank) || r.picks !== `${s.totalCorrect}–${s.totalIncorrect}` || r.pct !== `${s.winPct}%` || r.weeks !== `${s.weeklyWins}–${s.weeklyLosses}`)
+      wrong.push(`${s.displayName}: rendered ${JSON.stringify(r)} vs ${s.totalCorrect}–${s.totalIncorrect} / ${s.winPct}% / ${s.weeklyWins}–${s.weeklyLosses}`);
+  });
+  assert(wrong.length === 0, `SF3a: every row is rank / name / totalCorrect–totalIncorrect / winPct% / weeklyWins–weeklyLosses straight from seasonStandingsRows(), in ITS order (${wrong.join(' ; ') || 'none'})`);
+  const ann = rows.find(r => r.name === 'Ann');
+  const annTruth = truth.find(s => s.displayName === 'Ann');
+  assert(annTruth.totalCorrect === 6 && annTruth.totalIncorrect === 2 && annTruth.totalCorrectCount === 4 && annTruth.totalIncorrectCount === 4,
+    `SF3b: fixture check — Ann's WEIGHTED tally (6 right / 2 wrong) deliberately differs from her RAW tally (4 / 4) — a 2x game (got ${annTruth.totalCorrect}/${annTruth.totalIncorrect} weighted, ${annTruth.totalCorrectCount}/${annTruth.totalIncorrectCount} raw)`);
+  assert(ann.picks === '6–2' && ann.pct === '50%',
+    `SF3c: Ann's Picks cell reads the WEIGHTED 6–2 and her Win % reads the RAW 4/(4+4) = 50% — never 6/8 = 75% (got ${ann.picks} / ${ann.pct})`);
+  assert(ann.weeks === '2–0', `SF3d: Weeks reads her weekly wins–losses, 2–0 (got ${ann.weeks})`);
+  const eve = rows.find(r => r.name === 'Eve');
+  assert(eve.picks === '0–0' && eve.pct === '0%' && eve.weeks === '0–0',
+    `SF3e: a player with NO results prints 0–0, 0%, 0–0 — a zero must never go blank (the escHtml(0) trap; got ${eve.picks} / ${eve.pct} / ${eve.weeks})`);
+  assert(/<th scope="col" aria-label="Picks won and lost, weighted by game multiplier">Picks<\/th>/.test(seasonHtml)
+      && /<th scope="col" aria-label="Win percentage, every pick counted once">Win %<\/th>/.test(seasonHtml)
+      && /<th scope="col" aria-label="Weeks won and lost">Weeks<\/th>/.test(seasonHtml),
+    'SF3f: the three stat headers carry the accessible names that stop a screen reader fusing "37–16" next to "68%" into one ratio');
+  assert(/<p class="stand-foot">Picks count each game’s multiplier\. Win % counts every pick once\.<\/p>/.test(sfSeason(html)),
+    'SF3g: the one-line footnote is present (typographic apostrophe) — weighted vs raw, said once');
+  assert(rows[0].cls === 'winner-row' && rows[rows.length - 1].cls === 'loser-row' && rows.slice(1, -1).every(r => r.cls === ''),
+    'SF3h: the leader row keeps .winner-row and the last-place row .loser-row (the tints are unchanged); crown/clown markers: ' + (/stand-mark">\u{1F451}/u.test(seasonHtml) && /stand-mark">\u{1F921}/u.test(seasonHtml) ? 'both present' : 'MISSING'));
+  assert(!/Extra Point|extraPoint|\bEP\b|tiebreak/i.test(seasonHtml), 'SF3i: no Extra Point column and no tiebreaker value anywhere in Season Summary (AD-33; tiebreakers are never multiplied or shown here)');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[SF4] DI-474 SF4 — BLIND RULE: an unfinished week or group renders ONLY "In progress", identically for everyone…');
+// ═════════════════════════════════════════════════════════════════════════════
+{
+  const names = ['Week 46', 'Week 47', 'Week 48', 'Week 49 + Week 50'];
+  const views = { bystander: sfRender(SF_V.bystander), payerB: sfRender(SF_V.payerB), admin: sfRender(SF_V.admin) };
+  for (const name of names) {
+    const per = Object.fromEntries(Object.entries(views).map(([k, h]) => [k, sfGroup(h, name)]));
+    assert(Object.values(per).every(Boolean), `SF4-0 (${name}): the row exists for a bystander, a player and the commissioner`);
+    const g = per.bystander;
+    assert(/>In progress<\/td>/.test(g) && /colspan="3"/.test(g),
+      `SF4a (${name}): it reads one merged "In progress" cell (colspan 3)`);
+    assert(!/Ann|Bob|Cat|Dan|Eve/.test(g.replace(/Week \d+/g, '')) && !/by tiebreaker|class="badge|<button|stand-act|player-name-cell/.test(g),
+      `SF4b (${name}): no player name, no "by tiebreaker", no badge, no button, no action row — nothing a player could not learn from the week record itself`);
+    assert(per.bystander === per.payerB && per.payerB === per.admin,
+      `SF4c (${name}): the <tbody> is BYTE-IDENTICAL for a bystander, a player and the commissioner`);
+  }
+  // …including the case the per-part flags make dangerous: part 1 is final and flags Bob the winner, part 2 is not final.
+  const grp = sfGroup(views.bystander, 'Week 49 + Week 50');
+  assert(storage.getWeeklyResults('sfw49').some(r => r.isWinner && r.displayName === 'Bob') && !/Bob/.test(grp),
+    'SF4d: the group\'s final part really DOES carry a per-part winner (Bob) — and the group row still never names him (extends loadtest [53b])');
+  assert((grp.match(/Week 49 \+ Week 50/g) || []).length === 1 && !/stand-sub/.test(grp.split('<td class="stand-inprog"')[0]),
+    'SF4e: the group label appears ONCE and carries no date line (a group label never had dates)');
+  // A finalized week shows its names (so the assertions above are not passing on an empty table).
+  assert(/player-name-cell">Ann<\/span>/.test(sfGroup(views.bystander, 'Week 41')) && /player-name-cell">Bob<\/span>/.test(sfGroup(views.bystander, 'Week 41')),
+    'SF4f: control — the FINAL Week 41 does name its winner and loser');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[SF5] DI-474 SF5 — every row of the state tables…');
+// ═════════════════════════════════════════════════════════════════════════════
+{
+  // empty states (captured BEFORE the fixture was seeded)
+  assert(/<td colspan="5" class="stand-empty">No finalized weeks yet\.<\/td>/.test(sfEmptyHtml) && !/stand-foot/.test(sfEmptyHtml),
+    'SF5a: no active players → one empty Season row, colspan 5, "No finalized weeks yet.", and NO footnote');
+  assert(/<div class="stand-box mb-md">/.test(sfSeason(sfEmptyHtml)) && !/class="stand-box"/.test(sfSeason(sfEmptyHtml)),
+    'SF5b: …and the box carries its own bottom margin (the footnote that normally supplies it is absent)');
+  assert(/<p class="text-muted text-sm mb-md">Weekly history appears after weeks are finalized\.<\/p>/.test(sfHist(sfEmptyHtml)) && !/stand-table-history/.test(sfHist(sfEmptyHtml)),
+    'SF5c: no weeks at all → the existing "Weekly history appears after weeks are finalized." paragraph (and no empty table)');
+
+  const html = sfRender(SF_V.admin);
+  const g45 = sfGroup(html, 'Week 45'), g51 = sfGroup(html, 'Week 51'), g52 = sfGroup(html, 'Week 52'), g53 = sfGroup(html, 'Week 53'), g54 = sfGroup(html, 'Week 54'), g44 = sfGroup(html, 'Week 44'), g41 = sfGroup(html, 'Week 41');
+  assert(/colspan="3"><span class="text-muted">—<\/span><\/td>/.test(g45) && !/In progress/.test(g45),
+    'SF5d: a FINAL week with no result rows (hidden/legacy) is one merged cell with the muted dash — it does NOT claim "In progress" because it is not');
+  assert(/colspan="2"><span class="text-muted">—<\/span><\/td><td class="stand-st"><span class="badge badge-locked">Unpaid<\/span><\/td>/.test(g51),
+    'SF5e: a FINAL week with a money record but no results: a merged colspan="2" cell (muted dash) THEN the record\'s badge — a debt never disappears from the screen');
+  assert(/colspan="2">In progress<\/td><td class="stand-st"><span class="badge badge-nd"[^>]*>Pending<\/span><\/td>/.test(g52) && sfBtns(g52).sort().join() === 'confirm,deny',
+    'SF5f: an UNFINISHED week with a money record: "In progress" in a colspan="2" cell, the Pending badge, and the commissioner\'s Confirm + Deny still offered');
+  assert(/<td class="stand-st"><span class="badge badge-locked">Unpaid<\/span><\/td>/.test(g53) && !/Needs review|<button|stand-act|title=/.test(g53),
+    'SF5g: a CONFLICTED group (two active obligations) renders the plain Unpaid badge — no diagnostic text, no title, no action, even for the commissioner (UN-126/UN-135)');
+  assert(/<td class="stand-st"><span class="text-muted text-xs">—<\/span><\/td>/.test(g54) && !/<button|stand-act/.test(g54),
+    'SF5h: a FINAL week with results but NO obligation: both names, and a muted dash in the Status cell');
+  assert(/<td class="stand-st"><span class="badge badge-final">Waived<\/span><\/td>/.test(g44) && !/<button|stand-act/.test(g44),
+    'SF5i: a WAIVED week is the Waived badge and nothing else, for the commissioner too');
+  assert(sfBtns(g41).join() === 'mark' && /Mark Paid<\/button>/.test(g41),
+    'SF5j: an UNPAID week shows the commissioner "Mark Paid" in its own action row');
+  assert(/<span class="stand-sub">by tiebreaker<\/span>/.test(sfGroup(html, 'Week 42')) && !/by tiebreaker/.test(g41) && !/\(TB\)/.test(html),
+    'SF5k: "by tiebreaker" sits under the winner of a week won on the tiebreaker (wonByTiebreaker) and nowhere else; "(TB)" is gone');
+  const noMoney = sfRender(SF_V.anon);
+  assert(/Week 53/.test(noMoney) && !/<button/.test(noMoney), 'SF5l: signed out — every row still renders and not one <button> exists');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[SF6] DI-474 SF6 — the two-line week cell, one label per row, and the SP-54 seam…');
+// ═════════════════════════════════════════════════════════════════════════════
+{
+  const html = sfRender(SF_V.bystander);
+  const g41 = sfGroup(html, 'Week 41'), g42 = sfGroup(html, 'Week 42'), grp = sfGroup(html, 'Week 49 + Week 50');
+  assert(/<td class="stand-wk"><span class="stand-wk-name" id="stand-wk-\d+">Week 41<\/span><span class="stand-sub">Sep 24–26<\/span><\/td>/.test(g41),
+    'SF6a: a singleton week is the name over the compact date: <span class="stand-wk-name">Week 41</span><span class="stand-sub">Sep 24–26</span>');
+  assert(/<span class="stand-sub">Sep 30–Oct 2<\/span>/.test(g42), 'SF6b: a week spanning two months reads "Sep 30–Oct 2"');
+  assert(/<td class="stand-wk"><span class="stand-wk-name" id="stand-wk-\d+">Week 49 \+ Week 50<\/span><\/td>/.test(grp),
+    'SF6c: a multi-part group is its group name with NO date span (no empty element claiming height)');
+  const singles = ['Week 41', 'Week 42', 'Week 43', 'Week 44', 'Week 45', 'Week 46', 'Week 47', 'Week 48', 'Week 51', 'Week 52', 'Week 53', 'Week 54'];
+  const drift = singles.filter(n => !dm.formatWeekLabel(storage.getWeek('sfw' + n.slice(5))).startsWith(sfWkName(sfGroup(html, n))));
+  assert(drift.length === 0, `SF6d: the rendered name is always the START of formatWeekLabel() for every singleton — the two can never drift apart (drifted: ${drift.join(', ') || 'none'})`);
+  const onceMore = sfGroups(html).filter(g => (g.match(/Week 4[1-9]|Week 5\d/g) || []).length > 1 && !/Week 49 \+ Week 50/.test(g));
+  assert(onceMore.length === 0, 'SF6e: the week label is written ONCE per row — never repeated in a title or aria-label (the group uses aria-labelledby the visible name)');
+  assert(sfGroups(sfRender(SF_V.admin)).every(g => !/aria-label="[^"]*Week/.test(g) && !/title="[^"]*Week/.test(g)) && /role="group" aria-labelledby="stand-wk-\d+"/.test(sfRender(SF_V.admin)),
+    'SF6f: …and the action group names itself with aria-labelledby, not a second copy of the label');
+  assert(/\$\{weekCell\}\$\{cells\}<\/tr>\$\{noteRow\}\$\{hasAct/.test(sfAppSrc) && /const noteRow = noteLines\.length/.test(sfAppSrc) && /<tr class="stand-note\$\{hasAct\?' has-act':''\}"><td colspan="4">/.test(sfAppSrc),
+    'SF6g: the SP-54 note row (DI-468) is emitted AFTER the week row and BEFORE the action row, inside the same <tbody>, as a full-width tr.stand-note (colspan 4) — the seam SP-56 left is now filled (re-derived 2026-10-01; behaviour proven by [SP54-L] below)');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[SF10] DI-474 SF10 — no comment in renderLeaderboard still says the two sections are a sideways scroller…');
+// ═════════════════════════════════════════════════════════════════════════════
+{
+  const start = sfAppSrc.indexOf('export function renderLeaderboard()');
+  const end = sfAppSrc.indexOf('export function renderAlmaMaterRankings()');
+  const body = sfAppSrc.slice(start, end);
+  assert(start > 0 && end > start && body.length > 3000, 'SF10-0: fixture check — renderLeaderboard()\'s source was located');
+  // comment paragraphs: consecutive // lines, and /* … */ blocks
+  const paras = [];
+  let cur = [];
+  for (const line of body.split('\n')) {
+    if (/^\s*\/\//.test(line)) cur.push(line.replace(/^\s*\/\/\s?/, ''));
+    else { if (cur.length) paras.push(cur.join(' ')); cur = []; }
+  }
+  if (cur.length) paras.push(cur.join(' '));
+  for (const m of body.matchAll(/\/\*[\s\S]*?\*\//g)) paras.push(m[0]);
+  const stale = paras.filter(p => /dashboard-scroll/.test(p) && !/2K25|2025|SP-56/.test(p));
+  assert(stale.length === 0, `SF10a: every comment in renderLeaderboard that mentions .dashboard-scroll either names the embedded 2K25 tables or carries the dated SP-56 note — a comment that lies about a sideways scroller is a defect (stale: ${stale.map(s => s.slice(0, 60)).join(' | ') || 'none'})`);
+  assert(!paras.some(p => /SIBLING \.dashboard-scroll/.test(p)) && paras.some(p => /SP-56/.test(p) && /\.stand-box/.test(p)),
+    'SF10b: the "sibling .dashboard-scroll wrapper" wording is gone and a dated SP-56 note names the .stand-box that replaced it');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[SF7] DI-474 SF7 — XSS: names and labels are escaped in BOTH sections, figures go through numHtml…');
+// ═════════════════════════════════════════════════════════════════════════════
+{
+  const evil = '<img src=x onerror=1>';
+  addPlayer({ playerId: 'sf_x', displayName: evil, active: true, preferences: {} });
+  sfWeek(55, { roundLabel: '<b>boom</b>', startDate: '2026-12-31', endDate: '2027-01-02' });
+  sfSave('sfw55', [SFR('sfw55', 'sf_x', evil, 9, 0, 9, 0, { isWinner: true, rank: 1 }), SFR('sfw55', 'sf_d', 'Dan', 0, 9, 0, 9, { isLoser: true, rank: 2 })]);
+  const html = sfRender(SF_V.bystander);
+  assert(!/<img src=x/.test(html) && !/<b>boom<\/b>/.test(html), 'SF7a: neither the player name nor the week label reaches the page as live markup');
+  assert(/stand-name-text player-name-cell">&lt;img src=x onerror=1&gt;<\/span>/.test(sfSeason(html)), 'SF7b: Season Summary escapes the player name');
+  assert(/player-name-cell">&lt;img src=x onerror=1&gt;<\/span>/.test(sfHist(html)) && /Week 55, &lt;b&gt;boom&lt;\/b&gt;/.test(sfHist(html)), 'SF7c: Weekly History escapes the winner name AND the week label');
+  assert(/<span class="stand-sub">Dec 31–Jan 2<\/span>/.test(sfGroup(html, 'Week 55, &lt;b&gt;boom&lt;/b&gt;') || ''), 'SF7d: …and a cross-YEAR range prints "Dec 31–Jan 2" with no year');
+  const nums = [...sfTable(sfSeason(html), 'stand-table-season').matchAll(/<td class="stand-num">([\s\S]*?)<\/td>/g)].map(m => m[1].replace(/<[^>]+>/g, ''));
+  assert(nums.length >= 6 && nums.every(t => /^[\d.]+(–[\d.]+|%)?$/.test(t)), `SF7e: every stat cell holds only digits, the en dash, a point or % — numHtml() coerced them (${nums.length} cells)`);
+  // retire the evil player/week so nothing after this section sees them
+  storage.savePlayer({ ...storage.getPlayers().find(p => p.playerId === 'sf_x'), active: false });
+  saveWeek({ ...storage.getWeek('sfw55'), dataSourceMode: 'demo' });
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[SF8] DI-472/DI-474 SF8 — obligationActionsHTML() is BYTE-IDENTICAL: golden literals captured from main BEFORE the badge/actions split…');
+// ═════════════════════════════════════════════════════════════════════════════
+const SF8_GOLDEN = {
+    "ob-action|unpaid|payer|plain": "<span class=\"badge badge-locked\">Unpaid</span><button class=\"btn btn-win btn-sm ob-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"mark\">Mark Paid</button>",
+    "ob-action|unpaid|payer|denied": "<span class=\"badge badge-locked\" title=\"Denied: No funds &amp; &quot;late&quot;\">Unpaid</span><button class=\"btn btn-win btn-sm ob-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"mark\">Mark Paid</button>",
+    "ob-action|unpaid|creditor|plain": "<span class=\"badge badge-locked\">Unpaid</span><button class=\"btn btn-win btn-sm ob-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"mark\">Confirm Paid</button>",
+    "ob-action|unpaid|creditor|denied": "<span class=\"badge badge-locked\" title=\"Denied: No funds &amp; &quot;late&quot;\">Unpaid</span><button class=\"btn btn-win btn-sm ob-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"mark\">Confirm Paid</button>",
+    "ob-action|unpaid|admin|plain": "<span class=\"badge badge-locked\">Unpaid</span><button class=\"btn btn-win btn-sm ob-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"mark\">Mark Paid</button>",
+    "ob-action|unpaid|admin|denied": "<span class=\"badge badge-locked\" title=\"Denied: No funds &amp; &quot;late&quot;\">Unpaid</span><button class=\"btn btn-win btn-sm ob-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"mark\">Mark Paid</button>",
+    "ob-action|unpaid|bystander|plain": "<span class=\"badge badge-locked\">Unpaid</span>",
+    "ob-action|unpaid|bystander|denied": "<span class=\"badge badge-locked\" title=\"Denied: No funds &amp; &quot;late&quot;\">Unpaid</span>",
+    "ob-action|unpaid|nosession|plain": "<span class=\"badge badge-locked\">Unpaid</span>",
+    "ob-action|unpaid|nosession|denied": "<span class=\"badge badge-locked\" title=\"Denied: No funds &amp; &quot;late&quot;\">Unpaid</span>",
+    "ob-action|pending|payer|plain": "<span class=\"badge badge-nd\" title=\"Pending confirmation from Rae &amp; Co or the commissioner\">Pending</span><span class=\"text-muted text-xs\">Waiting on Rae &amp; Co to confirm.</span>",
+    "ob-action|pending|creditor|plain": "<span class=\"badge badge-nd\" title=\"Pending confirmation from Rae &amp; Co or the commissioner\">Pending</span><button class=\"btn btn-win btn-sm ob-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"confirm\">Confirm</button><button class=\"btn btn-danger btn-sm ob-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"deny\">Deny</button>",
+    "ob-action|pending|admin|plain": "<span class=\"badge badge-nd\" title=\"Pending confirmation from Rae &amp; Co or the commissioner\">Pending</span><button class=\"btn btn-win btn-sm ob-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"confirm\">Confirm</button><button class=\"btn btn-danger btn-sm ob-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"deny\">Deny</button>",
+    "ob-action|pending|bystander|plain": "<span class=\"badge badge-nd\" title=\"Pending confirmation from Rae &amp; Co or the commissioner\">Pending</span>",
+    "ob-action|pending|nosession|plain": "<span class=\"badge badge-nd\" title=\"Pending confirmation from Rae &amp; Co or the commissioner\">Pending</span>",
+    "ob-action|paid|payer|plain": "<span class=\"badge badge-open\">Paid ✓</span>",
+    "ob-action|paid|creditor|plain": "<span class=\"badge badge-open\">Paid ✓</span>",
+    "ob-action|paid|admin|plain": "<span class=\"badge badge-open\">Paid ✓</span><button class=\"btn btn-ghost btn-sm ob-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"undo\">Undo</button>",
+    "ob-action|paid|bystander|plain": "<span class=\"badge badge-open\">Paid ✓</span>",
+    "ob-action|paid|nosession|plain": "<span class=\"badge badge-open\">Paid ✓</span>",
+    "ob-action|waived|payer|plain": "<span class=\"badge badge-final\">Waived</span>",
+    "ob-action|waived|creditor|plain": "<span class=\"badge badge-final\">Waived</span>",
+    "ob-action|waived|admin|plain": "<span class=\"badge badge-final\">Waived</span>",
+    "ob-action|waived|bystander|plain": "<span class=\"badge badge-final\">Waived</span>",
+    "ob-action|waived|nosession|plain": "<span class=\"badge badge-final\">Waived</span>",
+    "ob2025-action|unpaid|payer|plain": "<span class=\"badge badge-locked\">Unpaid</span><button class=\"btn btn-win btn-sm ob2025-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"mark\">Mark Paid</button>",
+    "ob2025-action|unpaid|payer|denied": "<span class=\"badge badge-locked\" title=\"Denied: No funds &amp; &quot;late&quot;\">Unpaid</span><button class=\"btn btn-win btn-sm ob2025-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"mark\">Mark Paid</button>",
+    "ob2025-action|unpaid|creditor|plain": "<span class=\"badge badge-locked\">Unpaid</span><button class=\"btn btn-win btn-sm ob2025-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"mark\">Confirm Paid</button>",
+    "ob2025-action|unpaid|creditor|denied": "<span class=\"badge badge-locked\" title=\"Denied: No funds &amp; &quot;late&quot;\">Unpaid</span><button class=\"btn btn-win btn-sm ob2025-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"mark\">Confirm Paid</button>",
+    "ob2025-action|unpaid|admin|plain": "<span class=\"badge badge-locked\">Unpaid</span><button class=\"btn btn-win btn-sm ob2025-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"mark\">Mark Paid</button>",
+    "ob2025-action|unpaid|admin|denied": "<span class=\"badge badge-locked\" title=\"Denied: No funds &amp; &quot;late&quot;\">Unpaid</span><button class=\"btn btn-win btn-sm ob2025-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"mark\">Mark Paid</button>",
+    "ob2025-action|unpaid|bystander|plain": "<span class=\"badge badge-locked\">Unpaid</span>",
+    "ob2025-action|unpaid|bystander|denied": "<span class=\"badge badge-locked\" title=\"Denied: No funds &amp; &quot;late&quot;\">Unpaid</span>",
+    "ob2025-action|unpaid|nosession|plain": "<span class=\"badge badge-locked\">Unpaid</span>",
+    "ob2025-action|unpaid|nosession|denied": "<span class=\"badge badge-locked\" title=\"Denied: No funds &amp; &quot;late&quot;\">Unpaid</span>",
+    "ob2025-action|pending|payer|plain": "<span class=\"badge badge-nd\" title=\"Pending confirmation from Rae &amp; Co or the commissioner\">Pending</span><span class=\"text-muted text-xs\">Waiting on Rae &amp; Co to confirm.</span>",
+    "ob2025-action|pending|creditor|plain": "<span class=\"badge badge-nd\" title=\"Pending confirmation from Rae &amp; Co or the commissioner\">Pending</span><button class=\"btn btn-win btn-sm ob2025-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"confirm\">Confirm</button><button class=\"btn btn-danger btn-sm ob2025-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"deny\">Deny</button>",
+    "ob2025-action|pending|admin|plain": "<span class=\"badge badge-nd\" title=\"Pending confirmation from Rae &amp; Co or the commissioner\">Pending</span><button class=\"btn btn-win btn-sm ob2025-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"confirm\">Confirm</button><button class=\"btn btn-danger btn-sm ob2025-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"deny\">Deny</button>",
+    "ob2025-action|pending|bystander|plain": "<span class=\"badge badge-nd\" title=\"Pending confirmation from Rae &amp; Co or the commissioner\">Pending</span>",
+    "ob2025-action|pending|nosession|plain": "<span class=\"badge badge-nd\" title=\"Pending confirmation from Rae &amp; Co or the commissioner\">Pending</span>",
+    "ob2025-action|paid|payer|plain": "<span class=\"badge badge-open\">Paid ✓</span>",
+    "ob2025-action|paid|creditor|plain": "<span class=\"badge badge-open\">Paid ✓</span>",
+    "ob2025-action|paid|admin|plain": "<span class=\"badge badge-open\">Paid ✓</span><button class=\"btn btn-ghost btn-sm ob2025-action-btn\" data-ob-id=\"ob_golden_1\" data-ob-action=\"undo\">Undo</button>",
+    "ob2025-action|paid|bystander|plain": "<span class=\"badge badge-open\">Paid ✓</span>",
+    "ob2025-action|paid|nosession|plain": "<span class=\"badge badge-open\">Paid ✓</span>",
+    "ob2025-action|waived|payer|plain": "<span class=\"badge badge-final\">Waived</span>",
+    "ob2025-action|waived|creditor|plain": "<span class=\"badge badge-final\">Waived</span>",
+    "ob2025-action|waived|admin|plain": "<span class=\"badge badge-final\">Waived</span>",
+    "ob2025-action|waived|bystander|plain": "<span class=\"badge badge-final\">Waived</span>",
+    "ob2025-action|waived|nosession|plain": "<span class=\"badge badge-final\">Waived</span>",
+};
+const SF8_SESS = {
+  payer:     { isAdmin: false, playerId: 'pay', playerVerified: true },
+  creditor:  { isAdmin: false, playerId: 'rec', playerVerified: true },
+  admin:     { isAdmin: true,  playerId: 'adm', playerVerified: true },
+  bystander: { isAdmin: false, playerId: 'zzz', playerVerified: true },
+  nosession: { isAdmin: false, playerId: null,  playerVerified: false },
+};
+const sf8Parse = key => {
+  const [obClass, status, role, denied] = key.split('|');
+  return {
+    obClass, status, role,
+    ob: { obligationId: 'ob_golden_1', payerPlayerId: 'pay', recipientPlayerId: 'rec', status,
+          ...(denied === 'denied' ? { deniedReason: 'No funds & "late"' } : {}) },
+    sess: SF8_SESS[role],
+    opts: { payerName: 'Pat <P>', recipientName: 'Rae & Co', obClass },
+  };
+};
+{
+  const keys = Object.keys(SF8_GOLDEN);
+  assert(keys.length === 50,
+    `SF8-0: the golden matrix is complete — 2 obClass x (unpaid 2 + pending/paid/waived 1 each = 5) x 5 viewers (payer, creditor, admin, bystander, no session) = 50 (got ${keys.length})`);
+  assert(typeof app.obligationActionsHTML === 'function',
+    'SF8-1: obligationActionsHTML is EXPORTED (DI-472 commit 1) — the golden has to call the real function, not a copy');
+  const bad = [];
+  for (const key of keys) {
+    const { status, ob, sess, opts } = sf8Parse(key);
+    if (app.obligationActionsHTML(status, ob, sess, opts) !== SF8_GOLDEN[key]) bad.push(key);
+  }
+  assert(bad.length === 0,
+    `SF8a: obligationActionsHTML() returns, for every status x role x denied x obClass cell, the EXACT string main returned before the split — Comm's lists and the 2K25 card depend on it (differing cells: ${bad.join(', ') || 'none'})`);
+
+  // ── commit 2: the sibling split. { badge, actions } must recombine to the SAME golden string.
+  assert(typeof app.obligationBadgeAndActions === 'function',
+    'SF8-2: obligationBadgeAndActions() is exported — the Standings row seats the badge and the buttons separately');
+  const badSplit = [], badBadge = [];
+  for (const key of keys) {
+    const { status, ob, sess, opts } = sf8Parse(key);
+    const { badge, actions } = app.obligationBadgeAndActions(status, ob, sess, opts);
+    if (badge + actions !== SF8_GOLDEN[key]) badSplit.push(key);
+    if (!/^<span class="badge [^"]*"[^>]*>[^<]*<\/span>$/.test(badge) || /<button/.test(badge)) badBadge.push(key);
+  }
+  assert(badSplit.length === 0,
+    `SF8b: badge + actions from obligationBadgeAndActions() equals the golden for every cell, both obClass values (differing: ${badSplit.join(', ') || 'none'}) — one function decides which button each viewer sees; the sibling never forks it`);
+  assert(badBadge.length === 0,
+    `SF8c: the badge half is exactly one <span class="badge …"> and never carries a button, in every cell (differing: ${badBadge.join(', ') || 'none'}) — the Status cell can never hold a <button> because the badge cannot`);
+
+  // ── Amendment 1 ("undo com only"): withUndo.
+  const undoCells = keys.filter(k => /data-ob-action="undo"/.test(SF8_GOLDEN[k]));
+  assert(undoCells.length === 2 && undoCells.every(k => k.split('|')[1] === 'paid' && k.split('|')[2] === 'admin'),
+    `SF8d: in the golden, Undo exists ONLY for paid x admin (one per obClass) — got ${undoCells.join(', ') || 'none'}`);
+  const badUndo = [], badDefault = [];
+  for (const key of keys) {
+    const { status, ob, sess, opts } = sf8Parse(key);
+    const def = app.obligationBadgeAndActions(status, ob, sess, opts);
+    const explicitTrue = app.obligationBadgeAndActions(status, ob, sess, { ...opts, withUndo: true });
+    const noUndo = app.obligationBadgeAndActions(status, ob, sess, { ...opts, withUndo: false });
+    if (def.badge !== explicitTrue.badge || def.actions !== explicitTrue.actions) badDefault.push(key);
+    const isPaidAdmin = status === 'paid' && sf8Parse(key).role === 'admin';
+    // withUndo:false: the badge never changes, and the actions change ONLY for paid x admin (where they become '').
+    const expectedActions = isPaidAdmin ? '' : def.actions;
+    if (noUndo.badge !== def.badge || noUndo.actions !== expectedActions) badUndo.push(key);
+  }
+  assert(badDefault.length === 0,
+    `SF8e: withUndo defaults to TRUE — omitting it equals withUndo:true in every cell, so Comm's two lists (which never name it) keep Undo (differing: ${badDefault.join(', ') || 'none'})`);
+  assert(badUndo.length === 0,
+    `SF8f: withUndo:false changes EXACTLY one cell per obClass — paid x admin becomes badge-only ("Paid ✓", no action) — and every other cell is byte-identical to its default (differing: ${badUndo.join(', ') || 'none'})`);
+  const paidAdminNoUndo = app.obligationBadgeAndActions('paid', sf8Parse('ob-action|paid|admin|plain').ob, SF8_SESS.admin, { ...sf8Parse('ob-action|paid|admin|plain').opts, withUndo: false });
+  assert(paidAdminNoUndo.actions === '' && /Paid ✓/.test(paidAdminNoUndo.badge),
+    'SF8g: the concrete case — a commissioner on a paid week with withUndo:false gets the "Paid ✓" badge and an EMPTY actions string (so the Standings row has no second row at all)');
+  // The wrapper forwards the option too (the 2K25 Outstanding card calls the wrapper with withUndo:false).
+  const wrapNoUndo = app.obligationActionsHTML('paid', sf8Parse('ob-action|paid|admin|plain').ob, SF8_SESS.admin, { ...sf8Parse('ob-action|paid|admin|plain').opts, withUndo: false });
+  assert(!/<button/.test(wrapNoUndo) && /Paid ✓/.test(wrapNoUndo),
+    'SF8h: obligationActionsHTML() forwards withUndo:false (the 2K25 Outstanding card on Standings uses the wrapper) — no <button> for a commissioner on a paid row');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[SF9] DI-474 SF9 — the payment tap: re-render, keep the scroll position INSTANTLY, one medium haptic only on a SUCCESSFUL mark/confirm, native only…');
+// ═════════════════════════════════════════════════════════════════════════════
+{
+  const lbStart = sfAppSrc.indexOf('export function renderLeaderboard()');
+  const lbBody = sfAppSrc.slice(lbStart, sfAppSrc.indexOf('export function renderAlmaMaterRankings()'))
+    .split('\n').filter(l => !/^\s*(\/\/|\/\*|\*)/.test(l)).join('\n');
+  assert(/handleObligationAction\(id, act\);\s*renderLeaderboard\(\);\s*if \(typeof window\.scrollTo==='function'\) window\.scrollTo\(\{ top:y, left:0, behavior:'instant' \}\);/.test(lbBody),
+    'SF9a: structural — the handler re-renders, THEN restores window.scrollY with behavior:\'instant\' (html{scroll-behavior:smooth} would otherwise turn it into a visible slide)');
+  assert((lbBody.match(/haptic\(/g) || []).length === 1 && /if \(\(act==='mark'\|\|act==='confirm'\) && obStatus\(id\)!==before\) haptic\('medium'\);/.test(lbBody),
+    'SF9b: structural — haptic() is called exactly ONCE in renderLeaderboard, only for mark/confirm, and only when the status actually changed (never deny, never undo, never a refused action)');
+
+  // Behavioural: fresh money-only weeks (final, no result rows), each with its own obligation.
+  for (const [n, payer, rec, st] of [[60, 'sf_b', 'sf_a', 'unpaid'], [61, 'sf_d', 'sf_c', 'pending'], [62, 'sf_d', 'sf_c', 'pending'], [63, 'sf_d', 'sf_c', 'pending'], [64, 'sf_b', 'sf_a', 'unpaid'], [66, 'sf_b', 'sf_a', 'unpaid']]) {
+    sfWeek(n, { startDate: '2027-01-0' + (n - 59), endDate: '2027-01-0' + (n - 59) });
+    storage.saveObligation(SFO('sfo' + n, 'sfw' + n, payer, rec, st));
+  }
+  const realScrollTo = globalThis.scrollTo, realPrompt = globalThis.prompt;
+  const scrolls = [], buzz = [];
+  globalThis.scrollTo = o => scrolls.push(o);
+  globalThis.scrollY = 321;
+  globalThis.Capacitor = { isNativePlatform: () => true, Plugins: { Haptics: { impact: o => buzz.push(o) } } };
+  const status = id => storage.getObligations().find(o => o.obligationId === id)?.status;
+  const button = (viewer, id, act) => {
+    sfRender(viewer);
+    return els.get('page-leaderboard').querySelectorAll('.ob-action-btn').find(x => x.dataset.obId === id && x.dataset.obAction === act);
+  };
+  try {
+    // 1) NATIVE: the payer marks paid -> pending. One MEDIUM impact; the scroll position survives, instantly.
+    let b = button(SF_V.payerB, 'sfo60', 'mark');
+    assert(!!b && b._bound() === 1, 'SF9c: fixture — the payer sees a real "Mark Paid" button with exactly one click handler bound by renderLeaderboard()');
+    b.click();
+    assert(status('sfo60') === 'pending', 'SF9d: the tap went through the real handler (unpaid → pending)');
+    assert(scrolls.length === 1 && scrolls[0].top === 321 && scrolls[0].left === 0 && scrolls[0].behavior === 'instant',
+      `SF9e: scrollTo({ top:321, left:0, behavior:'instant' }) ran exactly once after the re-render (got ${JSON.stringify(scrolls)})`);
+    assert(/Pending/.test(sfGroup(els.get('page-leaderboard')._html, 'Week 60') || '') && !/Mark Paid/.test(sfGroup(els.get('page-leaderboard')._html, 'Week 60') || ''),
+      'SF9f: …and the page was genuinely re-rendered — the row now reads Pending and the button is gone');
+    assert(buzz.length === 1 && buzz[0].style === 'MEDIUM', `SF9g: native — ONE medium impact for the successful Mark Paid (got ${JSON.stringify(buzz)})`);
+
+    // 2) NATIVE: the creditor confirms a pending debt -> paid. A second medium impact.
+    button(SF_V.creditorC, 'sfo61', 'confirm').click();
+    assert(status('sfo61') === 'paid' && buzz.length === 2, `SF9h: native — Confirm on a pending debt is the second medium impact (status ${status('sfo61')}, ${buzz.length} impacts)`);
+
+    // 3) NATIVE: Deny — no haptic, whether the prompt is cancelled or answered.
+    globalThis.prompt = () => null;
+    button(SF_V.creditorC, 'sfo62', 'deny').click();
+    assert(status('sfo62') === 'pending' && buzz.length === 2, 'SF9i: Deny with the prompt CANCELLED changes nothing and buzzes nothing');
+    globalThis.prompt = () => 'not this week';
+    button(SF_V.creditorC, 'sfo63', 'deny').click();
+    assert(status('sfo63') === 'unpaid' && buzz.length === 2, 'SF9j: Deny that SUCCEEDS (pending → unpaid) still buzzes nothing — haptics are for the primary action only');
+
+    // 4) NATIVE: a REFUSED action. The button was rendered for the payer; the session changes before the tap (a DOM-injected / stale button).
+    const stale = button(SF_V.payerB, 'sfo64', 'mark');
+    setSession('sf_e', false, true);                      // a bystander now
+    stale.click();
+    assert(status('sfo64') === 'unpaid' && buzz.length === 2, 'SF9k: a REFUSED action ("You don\'t have permission") changes nothing and buzzes nothing — the haptic follows the status change, not the tap');
+
+    // 5) WEB: no Capacitor bridge at all — the same successful tap restores scroll and re-renders, with ZERO haptics.
+    delete globalThis.Capacitor;
+    const before = buzz.length, scrollsBefore = scrolls.length;
+    button(SF_V.payerB, 'sfo66', 'mark').click();
+    assert(status('sfo66') === 'pending' && buzz.length === before, `SF9l: web — the identical tap works and fires NO haptic (PARITY-BY-DESIGN: the toast is the web feedback; ${buzz.length - before} impacts)`);
+    assert(scrolls.length > scrollsBefore && scrolls.at(-1).behavior === 'instant', 'SF9m: …and still restores the scroll position instantly');
+  } finally {
+    globalThis.scrollTo = realScrollTo; globalThis.prompt = realPrompt;
+    delete globalThis.scrollY; delete globalThis.Capacitor;
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[SF11] Amendment 1 ("undo com only") — Undo is offered in Comm and NEVER on Standings…');
+// ═════════════════════════════════════════════════════════════════════════════
+{
+  // The 2K25 sections belong to the pilot league; let them render so the Standings 2K25 card is covered too.
+  PO.setPilotOnlyLeagueResolver(() => ({ pilot: true }));
+  const rows2025 = h2025.season2025Obligations();
+  assert(rows2025.length >= 3, `SF11-0: fixture check — the baked 2K25 ledger has rows to mark paid (${rows2025.length})`);
+  storage.saveSetting('ob2025', { [rows2025[0].obligationId]: 'paid' });
+  // a PAID current-season obligation exists (Week 43) and so does a paid 2K25 one.
+  assert(storage.getObligations().some(o => o.status === 'paid'), 'SF11-1: fixture check — a paid current-season obligation exists (Week 43)');
+  const undoAnywhere = [];
+  for (const [vname, v] of Object.entries(SF_V)) {
+    const html = sfRender(v);
+    if (/data-ob-action="undo"/.test(html)) undoAnywhere.push(vname);
+  }
+  assert(/2K25 Outstanding Balances/.test(sfRender(SF_V.admin)), 'SF11a-0: fixture check — the Standings 2K25 Outstanding card renders (so "no Undo" covers it, not just Weekly History)');
+  assert(undoAnywhere.length === 0,
+    `SF11a: renderLeaderboard() contains ZERO data-ob-action="undo" for every viewer — commissioner included — across Weekly History and the 2K25 Outstanding card (found for: ${undoAnywhere.join(', ') || 'none'})`);
+  assert(/obClass: 'ob-action',\s*withUndo: false,/.test(sfAppSrc) && /obClass: 'ob2025-action', withUndo: false \}\)/.test(sfAppSrc),
+    'SF11a2: structural — both Standings call sites pass withUndo:false (Weekly History via historyGroupHTML, and the 2K25 Outstanding card), so "no Undo on Standings" is true by construction, not by what data happens to be listed');
+
+  // The twin controls: the capability MOVED, it was not deleted.
+  setSession('sf_e', true, true);
+  const comm = app.renderObligationsAdmin();
+  assert(/data-ob-action="undo"/.test(comm) && /ob-action-btn/.test(comm.match(/<button[^>]*data-ob-action="undo"[^>]*>/)?.[0] || ''),
+    'SF11b: Comm → Players → Obligations (renderObligationsAdmin) STILL offers Undo on a paid obligation to the commissioner');
+  const comm2025 = app.renderSeason2025ObligationsAdmin();
+  assert(/data-ob-action="undo"/.test(comm2025) && /ob2025-action-btn/.test(comm2025.match(/<button[^>]*data-ob-action="undo"[^>]*>/)?.[0] || ''),
+    'SF11c: …and so does Comm\'s 2K25 carryover list, for a paid 2K25 row');
+  setSession('sf_a', false, true);
+  assert(!/data-ob-action="undo"/.test(app.renderObligationsAdmin()), 'SF11c2: …and only to the commissioner — a payer/creditor never sees Undo in that list either');
+  assert(dm.obligationNextStatus('paid', 'admin', 'undo') === 'unpaid' && dm.obligationNextStatus('paid', 'creditor', 'undo') === null && dm.obligationNextStatus('paid', 'payer', 'undo') === null && dm.obligationNextStatus('paid', 'bystander', 'undo') === null,
+    'SF11d: the permission boundary is untouched — the state machine still returns a paid obligation to unpaid for the commissioner and for nobody else');
+  PO.setPilotOnlyLeagueResolver(null);
+  storage.saveSetting('ob2025', {});
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[SF12] Breathing Room (Drew, 2026-09-30; consolidated into .btn-row 2026-10-01) — the payment-action row is a centred group with a container gap, never a margin on one button…');
+// ═════════════════════════════════════════════════════════════════════════════
+{
+  // 2026-10-01 sweep: the row IS the shared `.btn-row` primitive (SB-14). The flex/wrap/centre/gap contract is read from `.btn-row`; `.stand-act-row` keeps only the 44pt line + the scoped child rules.
+  // sfRules is the SP-56 slice of the sheet; `.btn-row` lives in the shared-components section, so read it from the whole sheet (comments stripped).
+  const row = [...sfCssSrc.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m => ({ sel: m[1].trim(), body: m[2] }))
+    .find(r => r.sel.split(',').map(s => s.trim()).includes('.btn-row'));
+  assert(sfDecl(row, 'display') === 'flex' && sfDecl(row, 'flex-wrap') === 'wrap',
+    'SF12a: the group is a wrapping flex row (.btn-row) — a row that does not fit WRAPS into a stack instead of overflowing');
+  assert(sfNum(sfDecl(row, 'gap')) >= 8, `SF12b: the space between buttons is the container's gap, >= 8px (got ${sfDecl(row, 'gap')}) — and it is kept when the row wraps`);
+  assert(sfDecl(row, 'justify-content') === 'center' && sfDecl(row, 'align-items') === 'center',
+    'SF12c: the group is centred horizontally AND vertically in its row (equal space above and below; a missing button never leaves it off-centre)');
+  assert(sfNum(sfDecl(sfRule('.stand-act-row'), 'min-height')) >= 44, 'SF12d: every action row is at least 44px tall, so the payer\'s wait text is centred in the same line height as a button row');
+  const pad = (sfDecl(sfRule('.stand-table .stand-act td'), 'padding') || '').split(/\s+/).map(sfNum);
+  assert(pad[0] >= 8 && pad[1] >= 16, `SF12e: the row keeps >= 8px between a button and a divider and >= 16px between a button and the card edge (padding ${pad.join('/')}px)`);
+  // The sweep removed `.ml-sm` from the SHARED markup (not just from this row), so no surface's buttons depend on a margin any more.
+  // Read the LIVE output of the real function for every cell (not just the golden literals), so a regression in the markup is caught even if the golden were edited to match.
+  const withMargin = Object.keys(SF8_GOLDEN).filter(k => { const { status, ob, sess, opts } = sf8Parse(k); return /\bml-sm\b/.test(app.obligationActionsHTML(status, ob, sess, opts)); });
+  assert(withMargin.length === 0 && !Object.values(SF8_GOLDEN).some(h => /\bml-sm\b/.test(h)),
+    `SF12f: no obligation button or wait line in any of the ${Object.keys(SF8_GOLDEN).length} cells (live output AND golden) carries .ml-sm — the container's gap spaces every surface (live cells still carrying it: ${withMargin.join(', ') || 'none'})`);
+  assert(!sfRules.some(r => /\.stand-act-row\s+\.ml-sm/.test(r.sel)),
+    'SF12f2: …so the old `.stand-act-row .ml-sm{margin-left:0}` zeroing rule is deleted, not left behind as dead CSS');
+  assert(!sfRules.some(r => /\.stand-act-row/.test(r.sel) && /(^|;)\s*margin/.test(r.body)),
+    'SF12g: no rule puts a margin on anything inside the action group');
+  const sar = sfRule('.stand-act-row');
+  assert(!!sar && !/(^|;)\s*(display|flex-wrap|gap|justify-content|align-items)\s*:/.test(sar.body),
+    `SF12g2: consolidation — .stand-act-row declares NO flex/wrap/gap/centring of its own (it all comes from .btn-row; body: "${sar && sar.body}")`);
+  const g = sfGroup(sfRender(SF_V.admin), 'Week 52') || '';
+  assert(/<div class="btn-row stand-act-row" role="group" aria-labelledby="stand-wk-\d+"><button[^>]*>Confirm<\/button><button[^>]*>Deny<\/button><\/div>/.test(g),
+    'SF12h: markup — Confirm and Deny are adjacent siblings directly inside the .btn-row group: no spacer element, no wrapper margin');
+}
+
 // ── Result ───────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// [SP54-L] DI-468 — the tie-reason note under a week in Weekly History, through the REAL renderLeaderboard() (SP-54, 2026-10-01).
+// The note is a full-width `tr.stand-note` (colspan 4) INSIDE the week's own <tbody>, between the week row and the payment-action row, so a full sentence never
+// has to fit the 90 px winner/loser cell and the 44 pt payment button keeps its own row directly under the week. Fixture: a clean slate (the SF weeks are retired
+// to demo first), five final weeks with STORED descriptors (the singleton path reads stored rows), one in-progress week, one conflicted week.
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[SP54-L] DI-468 — the Weekly History note row: placement, columns, states, escaping…');
+{
+  storage.getWeeks().forEach(w => saveWeek({ ...w, dataSourceMode: 'demo' }));
+  storage.getPlayers().forEach(p => storage.savePlayer({ ...p, active: false }));
+  const HOST = '<img src=x onerror=1>';
+  [['tn_a', 'Kevin'], ['tn_b', 'Koby'], ['tn_c', HOST], ['tn_d', 'Jacob']].forEach(([id, n]) => addPlayer({ playerId: id, displayName: n, active: true, preferences: {} }));
+  const wk = (n, over = {}) => saveWeek(mkWeek({ weekId: 'tnw' + n, weekNumber: 70 + n, name: 'Week ' + (70 + n), status: 'final', blurb: '', startDate: '2026-09-24', endDate: '2026-09-26', ...over }));
+  const R = (weekId, pid, name, cp, flags = {}) => ({ weekId, playerId: pid, displayName: name, rank: 2, correctPicks: cp, incorrectPicks: 6 - cp, correctCount: cp, incorrectCount: 6 - cp,
+    noDecisions: 0, isWinner: false, isLoser: false, wonByTiebreaker: false, ...flags });
+  const O = (id, weekId, payer, recipient, status) => ({ obligationId: id, type: 'weekly', weekId, payerPlayerId: payer, recipientPlayerId: recipient, amountOrPrize: 'a drink', status,
+    createdAt: '2026-09-20T00:00:00Z', paidAt: null });
+  const A = (team, cov, mis, psh = 0) => ({ team, cov, mis, psh, src: 'snapshot' });
+  const alma = (end, vs, me, other, src = 'snapshot') => ({ v: 1, end, stage: 'alma', vs, me, other, src });
+  // 71: Kevin won on his alma mater, Koby is last on the Extra Point; Koby owes Kevin (a payer sees an action row)
+  wk(1); storage.saveAllWeeklyResults('tnw1', [
+    R('tnw1', 'tn_a', 'Kevin', 5, { isWinner: true, rank: 1, tieBreak: alma('winner', 'tn_d', A('Notre Dame', 1, 0), A('USC', 0, 1)) }),
+    R('tnw1', 'tn_d', 'Jacob', 5), R('tnw1', 'tn_c', HOST, 3),
+    R('tnw1', 'tn_b', 'Koby', 1, { isLoser: true, rank: 4, tieBreak: { v: 1, end: 'loser', stage: 'ep', vs: 'tn_c', me: { cls: 1, guess: 57, delta: 5 }, other: { cls: 0, guess: 50, delta: 2 } } })]);
+  storage.saveObligation(O('tno1', 'tnw1', 'tn_b', 'tn_a', 'unpaid'));
+  // 72: a two-player-style draw: both ends name the same two players -> ONE line
+  wk(2); storage.saveAllWeeklyResults('tnw2', [
+    R('tnw2', 'tn_a', 'Kevin', 3, { isWinner: true, rank: 1, tieBreak: { v: 1, end: 'winner', stage: 'draw', vs: 'tn_b', me: null, other: null } }),
+    R('tnw2', 'tn_b', 'Koby', 3, { isLoser: true, rank: 2, tieBreak: { v: 1, end: 'loser', stage: 'draw', vs: 'tn_a', me: null, other: null } })]);
+  // 73: hostile display name on the winner, hostile school in the descriptor
+  wk(3); storage.saveAllWeeklyResults('tnw3', [
+    R('tnw3', 'tn_c', HOST, 5, { isWinner: true, rank: 1, tieBreak: alma('winner', 'tn_a', A(HOST, 1, 0), A(`=HYPERLINK("x")`, 0, 1)) }),
+    R('tnw3', 'tn_a', 'Kevin', 5), R('tnw3', 'tn_d', 'Jacob', 1, { isLoser: true, rank: 3 })]);
+  // 74: no descriptor at all (a week settled before the rule) — wonByTiebreaker keeps today's `by tiebreaker` sub-caption and NO note row
+  wk(4); storage.saveAllWeeklyResults('tnw4', [
+    R('tnw4', 'tn_a', 'Kevin', 5, { isWinner: true, rank: 1, wonByTiebreaker: true }), R('tnw4', 'tn_b', 'Koby', 5), R('tnw4', 'tn_d', 'Jacob', 1, { isLoser: true, rank: 3 })]);
+  // 75: an INVALID descriptor (wrong version) — treated as absent
+  wk(5); storage.saveAllWeeklyResults('tnw5', [
+    R('tnw5', 'tn_a', 'Kevin', 5, { isWinner: true, rank: 1, tieBreak: { v: 9, end: 'winner', stage: 'alma', vs: 'tn_b', me: A('X', 1, 0), other: A('Y', 0, 1) } }), R('tnw5', 'tn_b', 'Koby', 1, { isLoser: true, rank: 2 })]);
+  // 76: CONFLICTED (two active obligations) — a note could contradict the money, so none
+  wk(6); storage.saveAllWeeklyResults('tnw6', [
+    R('tnw6', 'tn_a', 'Kevin', 5, { isWinner: true, rank: 1, tieBreak: alma('winner', 'tn_b', A('Notre Dame', 1, 0), A('USC', 0, 1)) }), R('tnw6', 'tn_b', 'Koby', 1, { isLoser: true, rank: 2 })]);
+  storage.saveObligation(O('tno6a', 'tnw6', 'tn_b', 'tn_a', 'unpaid')); storage.saveObligation(O('tno6b', 'tnw6', 'tn_d', 'tn_a', 'unpaid'));
+  // 77: IN PROGRESS (live) with rows that carry a descriptor — the blind rule: no note, no names
+  wk(7, { status: 'live' }); storage.saveAllWeeklyResults('tnw7', [
+    R('tnw7', 'tn_a', 'Kevin', 5, { isWinner: true, rank: 1, tieBreak: alma('winner', 'tn_b', A('Notre Dame', 1, 0), A('USC', 0, 1)) }), R('tnw7', 'tn_b', 'Koby', 1, { isLoser: true, rank: 2 })]);
+
+  const payer = ['tn_b', false, true], bystander = ['tn_d', false, true], anon = [null, false, false];
+  const html = sfRender(payer);
+  const g = (name, h = html) => sfGroup(h, name);
+  const g1 = g('Week 71'), g2 = g('Week 72'), g3 = g('Week 73'), g4 = g('Week 74'), g5 = g('Week 75'), g6 = g('Week 76'), g7 = g('Week 77');
+  assert([g1, g2, g3, g4, g5, g6, g7].every(Boolean), 'SP54-L0: fixture check — all seven weeks rendered as groups');
+
+  // placement: main row, then the note row, then the action row, inside ONE tbody
+  const order = (grp) => [...grp.matchAll(/<tr class="([^"]*)"/g)].map(m => m[1].split(' ')[0]);
+  assert(order(g1).join() === 'stand-row,stand-note,stand-act', `SP54-L1: a week with a note AND a payment action reads week row, note row, action row, in that order (got ${order(g1).join()})`);
+  assert(order(g2).join() === 'stand-row,stand-note', 'SP54-L1b: a week with a note and NO action is week row then note row');
+  assert(order(g4).join() === 'stand-row' && order(g5).join() === 'stand-row', 'SP54-L1c: no descriptor / an invalid descriptor: no note row at all');
+  // columns: every row of every group sums to 4, the note row is colspan 4
+  const sums = [g1, g2, g3, g4, g5, g6, g7].flatMap(grp => [...grp.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map(m => [...m[1].matchAll(/<td\b([^>]*)>/g)].reduce((s, c) => s + Number((/colspan="(\d+)"/.exec(c[1]) || [, 1])[1]), 0)));
+  assert(sums.length >= 9 && sums.every(n => n === 4), `SP54-L2: EVERY row, the note rows included, sums to 4 columns (rows ${sums.length}: ${[...new Set(sums)].join(',')})`);
+  assert(/<tr class="stand-note has-act"><td colspan="4">/.test(g1) && /<tr class="stand-note"><td colspan="4">/.test(g2), 'SP54-L2b: the note row is a full-width colspan="4" cell; it carries has-act only when an action row follows (the join)');
+  // has-note only when a note exists; has-act stays SP-56's
+  assert(/<tr class="stand-row has-note">/.test(g1) && /<tr class="stand-row has-note">/.test(g2) && !/has-note/.test(g4) && !/has-note/.test(g5), 'SP54-L3: the main row carries has-note ONLY when a note row follows it');
+  // the words
+  assert(/<p class="tie-note">Tie: Kevin won\. Notre Dame covered, USC did not cover<\/p>/.test(g1) && /<p class="tie-note">Tie: Koby is last on the Extra Point\. Busted at 57 yd<\/p>/.test(g1),
+    'SP54-L4: week 71 reads "Tie: Kevin won. Notre Dame covered, USC did not cover" and "Tie: Koby is last on the Extra Point. Busted at 57 yd" (the named form)');
+  assert((g2.match(/class="tie-note"/g) || []).length === 1 && /Tie: Dead heat between Kevin and Koby on every tiebreaker\. Settled by the week's draw\./.test(g2), 'SP54-L4b: a draw whose two ends name the same two players is printed ONCE');
+  assert(/by tiebreaker/.test(g4) && !/tie-note/.test(g4), 'SP54-L4c: a week with no descriptor keeps today\'s `by tiebreaker` sub-caption and gets no note');
+  assert(!/by tiebreaker/.test(g1), 'SP54-L4d: where the note explains the tie, the winner cell keeps no `by tiebreaker` of its own');
+  // the blind rule and the money record
+  assert(!/tie-note/.test(g6), 'SP54-L5: a CONFLICTED row (two active obligations) gets no note');
+  assert(!/tie-note|stand-note/.test(g7) && !/has-note/.test(g7), 'SP54-L5b: an IN-PROGRESS (live) week carries NO note row and no has-note, whatever descriptor its stored rows hold (the note rides "not in progress")');
+  // escaping and constant-led text
+  assert(!/<img/i.test(g3) && /&lt;img/.test(g3) && /<p class="tie-note">Tie: /.test(g3), 'SP54-L6: a hostile display name and a hostile school come out ESCAPED in the note, and the line begins with a fixed constant');
+  assert(!/(title|aria-label|data-[a-z-]+)="[^"]*(Tie:|onerror|HYPERLINK)/i.test(html), 'SP54-L6b: no descriptor field reaches an attribute');
+  // viewers: a bystander sees the same notes; a signed-out visitor too (the reason is public once the week is final); only the payer has an action row
+  const by = sfRender(bystander), out = sfRender(anon);
+  assert(/Tie: Kevin won\./.test(sfGroup(by, 'Week 71')) && /Tie: Kevin won\./.test(sfGroup(out, 'Week 71')), 'SP54-L7: a bystander and a signed-out visitor see the note (a settled week\'s reason is public)');
+  assert(sfBtns(g1).length >= 1 && sfBtns(sfGroup(by, 'Week 71')).length === 0, 'SP54-L7b: the payment action row is still the payer\'s alone, and it is still LAST in the group');
+  // the 44pt payment row is untouched by the note
+  assert(/\.stand-act-row \.btn\{min-height:44px/.test(sfCssSrc) && /\.stand-table \.stand-note td\{height:auto;padding:0 8px 8px;text-align:left\}/.test(sfCssSrc), 'SP54-L8: the 44 pt payment button rule is untouched and the note cell rule is in the stylesheet');
+}
+
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
 // `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS

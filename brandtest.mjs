@@ -256,7 +256,9 @@ console.log('\n[5] DI-213g untouched inventory — every intentionally-hardcoded
   // commit.
   const INVENTORY = [
     ['index.html', '<title>CFB Pickems</title>', 'no address bar/tab strip exists in the native shell for a <title> to appear in'],
-    ['index.html', '<meta name="theme-color" content="#500000" />', 'web-PWA-install-specific metadata; irrelevant once running as a true native shell'],
+    // RE-DERIVED (SP-52 DI-453, 2026-10-01): the static tag was the stale Aggie #500000 first value; it is Munera crimson #8C1515 now (and an inline block
+    // replaces it with the resolved --chrome-bg of the player's look before first paint). The row's INTENT is unchanged: the tag still exists, web-PWA only.
+    ['index.html', '<meta name="theme-color" content="#8C1515" />', 'web-PWA-install-specific metadata; irrelevant once running as a true native shell'],
     ['index.html', '<meta name="apple-mobile-web-app-title" content="Pickems" />', 'same reasoning — no "Add to Home Screen" step exists to read it in the native shell'],
     ['manifest.json', '"name": "CFB Pickems",', 'the native shell has its own app-icon/display-name assets (DI-214) and never reads manifest.json'],
     ['manifest.json', '"short_name": "Pickems",', 'same reasoning — must stay correct for the web PWA install'],
@@ -272,7 +274,9 @@ console.log('\n[5] DI-213g untouched inventory — every intentionally-hardcoded
     // RE-DERIVED at v0.28.0 (round 3b step 5, 2026-09-30): this row pinned the OLD page's date line, "IRB Pick 'Ems (irbfootball.com) · last updated …". Drew approved RD-01 v2.0.0-draft.3
     // ("Approve RD-01 v2.0.0-draft.3", 2026-09-30) and the page now carries that text word for word (privacytest.mjs pins every word), whose own line is "Munera (irbfootball.com and the Munera
     // iPhone app)". The row's INTENT survives: the page deliberately keeps the league's original name where it is history, not shell chrome — it still says "Munera, first built as IRB Pick 'Ems".
-    ['privacy.html', "Munera, first built as IRB Pick 'Ems", "privacy content naming the league's own history and data practices (the approved RD-01 v2.0.0 text, pinned word for word by privacytest.mjs) — true and identical on both shells"],
+    // Re-pinned at v0.29.0 (2026-10-02): the page now carries RD-01 v3.0.0 (Drew, 2026-10-01: "privacy policy approved"), which adds the News sentences and leaves this opening sentence
+    // untouched — so the needle is unchanged and only this reason text names v3.0.0 (PUBLISH_SPEC_RD-01_v3.0.0 §4).
+    ['privacy.html', "Munera, first built as IRB Pick 'Ems", "privacy content naming the league's own history and data practices (the approved RD-01 v3.0.0 text, pinned word for word by privacytest.mjs) — true and identical on both shells"],
     ['js/push-onesignal.js', 'irbfootball.com/OneSignalSDKWorker.js', 'a code comment — never rendered to any user'],
   ];
   for (const [file, needle, why] of INVENTORY) {
@@ -541,8 +545,20 @@ console.log('\n[15] UN-312 — the gate scrolls instead of clipping (safe areas,
 // engine-measured half (actual rendered geometry at a real inset, and the
 // mutation-proof that the guard is load-bearing) lives in navtest.mjs §7j —
 // this file covers what a browser cannot make cheap: exact source shape.
+//
+// SB-08 (2026-09-30) — RE-DERIVED, DELIBERATELY: Drew's iPhone report ("a row
+// of color … underneath the floating island … All color in the header should
+// scroll up and away") reverses RG-209's strip. Option O2b, his pick: the same
+// one native-scoped ::before, now a SOFT EDGE of the PAGE colour — inset +
+// 12px tall, painted from --bg (never --maroon / --chrome-bg), at z-index 90,
+// BELOW the header (the header covers it at rest) and above the submit bar.
+// [16d]/[16e]/[16h]/[16l] are re-pointed to that shape; each still fails on
+// the defect it existed for (a band of the wrong size, the wrong colour source,
+// the wrong stacking). [16a-c], [16f-g], [16i-p] are unchanged. The glyph
+// legibility the strip bought with paint is now js/status-bar.js's job
+// (statusbartest.mjs; navtest §7l measures it).
 // ─────────────────────────────────────────────────────────────────────────────
-console.log('\n[16] UN-212 — the native-only status-bar backdrop strip, source-level…');
+console.log('\n[16] UN-212 / SB-08 — the native-only status-bar soft edge, source-level…');
 {
   const cssSrc = await readFile(path.join(root, 'css', 'styles.css'), 'utf8');
   const stripRule = /body\.native-shell::before\{([^}]*)\}/.exec(cssSrc);
@@ -555,17 +571,17 @@ console.log('\n[16] UN-212 — the native-only status-bar backdrop strip, source
     '[16b] position:fixed — independent of scroll, never shifts with page content');
   assert(/top:0/.test(decl) && /left:0/.test(decl) && /right:0/.test(decl),
     '[16c] pinned to the full width of the viewport top edge (top:0;left:0;right:0)');
-  assert(/height:env\(safe-area-inset-top,\s*0px\)/.test(decl),
-    '[16d] height is env(safe-area-inset-top,0px) — zero on a Safari tab and in landscape, exactly the inset elsewhere (never a hardcoded px)');
-  assert(/background:var\(--maroon\)/.test(decl),
-    '[16e] paints with var(--maroon) — the SAME custom property .app-header itself paints with (styles.css:147) and the same value syncNativeStatusBar() reads off the body (js/app.js) — never a literal hex, so all seven themes resolve automatically');
+  assert(/height:calc\(env\(safe-area-inset-top,\s*0px\) \+ 12px\)/.test(decl),
+    '[16d] height is calc(env(safe-area-inset-top,0px) + 12px) — the inset (zero on a Safari tab and in landscape, never a hardcoded px) plus O2b\'s 12px overhang, the soft edge content fades under (SB-08)');
+  assert(/background:linear-gradient\(/.test(decl) && (decl.match(/var\(--bg\)/g) || []).length === 2 && !/--maroon|--chrome-bg/.test(decl),
+    '[16e] paints a gradient from var(--bg) — the PAGE\'s own token, twice (78% then 62%) — and never --maroon or --chrome-bg, so the header\'s colour can never be painted under the Dynamic Island again (SB-08); still a token, so every look resolves automatically');
   assert(!/#[0-9a-fA-F]{3,8}/.test(decl),
     '[16f] no literal hex color anywhere in the rule — the token is the only color source');
   assert(/pointer-events:none/.test(decl),
     '[16g] pointer-events:none — never intercepts a tap meant for page content beneath it');
   const zMatch = /z-index:(\d+)/.exec(decl);
-  assert(!!zMatch && zMatch[1] === '150',
-    `[16h] z-index:150 (got ${zMatch ? zMatch[1] : 'no z-index declared'})`);
+  assert(!!zMatch && zMatch[1] === '90',
+    `[16h] z-index:90 — under the header, over page content (SB-08; RG-209's strip was 150, over the header) (got ${zMatch ? zMatch[1] : 'no z-index declared'})`);
 
   // [16i] Scoping proof — the selector text itself requires "body.native-shell",
   // not a bare "::before" or any other prefix. This is the literal guard that
@@ -604,10 +620,14 @@ console.log('\n[16] UN-212 — the native-only status-bar backdrop strip, source
   const zGate = zOf(/^\.site-gate\{[^}]*z-index:(\d+)/m, '.site-gate');
   const zLeagueSwitch = zOf(/#league-switch-overlay\{[^}]*z-index:(\d+)/, '#league-switch-overlay');
   const zAuthStack = zOf(/#auth-banner-stack\{[^}]*z-index:(\d+)/, '#auth-banner-stack');
-  const STRIP_Z = 150;
-  for (const [z, label] of [[zHeaderNav, '.app-header'], [zBottomNav, '.bottom-nav'], [zSubmitBar, '.submit-bar']]) {
-    if (z != null) assert(STRIP_Z > z, `[16l] strip (${STRIP_Z}) sits ABOVE ${label} (${z})`);
+  // SB-08: read from the rule itself (no longer a restated constant), and the
+  // header/nav pair moved to the OTHER side — the header now covers the band
+  // at rest; page content and the submit bar still pass beneath it.
+  const STRIP_Z = zMatch ? Number(zMatch[1]) : NaN;
+  for (const [z, label] of [[zHeaderNav, '.app-header'], [zBottomNav, '.bottom-nav']]) {
+    if (z != null) assert(STRIP_Z < z, `[16l] soft edge (${STRIP_Z}) sits BELOW ${label} (${z}) — the header covers it at rest, so the header's own colour fills the safe area while the header is there`);
   }
+  if (zSubmitBar != null) assert(STRIP_Z > zSubmitBar, `[16l] soft edge (${STRIP_Z}) sits ABOVE .submit-bar (${zSubmitBar}) — page content scrolls under it`);
   for (const [z, label] of [[zModal, '.modal-overlay'], [zBackendBanner, '.backend-error-banner'],
       [zToast, '#toast-container'], [zChatToast, '.chat-toast'], [zChatSheet, '#chat-sheet-wrap'],
       [zGateOverlay, '#site-gate-overlay'], [zGate, '.site-gate'], [zLeagueSwitch, '#league-switch-overlay'],

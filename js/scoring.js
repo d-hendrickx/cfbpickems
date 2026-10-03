@@ -153,14 +153,157 @@ function tiebreakerBrokeTie(a, b) {
   return true;
 }
 
-export function rankWeeklyResults(rows, anyFinal) {
-  rows.sort((a,b)=>{
-    const d=b.correctPicks-a.correctPicks; if(d!==0) return d;
-    if(a.tiebreakerDelta===null&&b.tiebreakerDelta===null) return 0;
-    if(a.tiebreakerDelta===null) return 1;
-    if(b.tiebreakerDelta===null) return -1;
-    return a.tiebreakerDelta-b.tiebreakerDelta;
-  });
+// ─── SP-54 (DI-466) — THE WEEKLY TIE-BREAK, AFTER S1 AND S2 ──────────────────────────────────
+//
+// Drew, 2026-09-30: when a FINAL week has two or more players level on weighted correct picks AND level
+// on tiebreaker distance, the order is settled by (S3) each player's alma mater against the spread, then
+// (S4) the Extra Point, then (S5) a seeded draw. Everything below is PURE: it never reads a week, a guess,
+// a game or storage. It is HANDED precomputed keys by the caller (js/tie-context.js builds them), so this
+// file stays structurally ignorant of where they came from (AD-33, amended 2026-09-30: the Extra Point is
+// never a gate, never a scoring input, never aggregated across weeks and never read by the season sort; its
+// only role is the fourth-ranked fallback inside a weekly true tie, handed in as keys).
+//
+//   tie = { seed,                        S5's seed (the week id, or the group id)
+//           alma,  { [playerId]: { played: boolean, net: number } } | null     S3 keys; null = S3 never applies
+//           ep,    { byPlayer: { [playerId]: { cls: 0|1|2, delta: number|null } } } | null     S4 keys
+//           facts, { [playerId]: { alma?: {...}, ep?: {...} } }                display-only echo (descriptor only)
+//           degraded }                   names of halves the builder could not read (the caller toasts it)
+//
+// Absent (`tie === null`, the default) means today's behaviour EXACTLY: the 2-argument forms are
+// byte-identical (tiebreaktest.mjs [T20]). Every key lookup below is an OWN-PROPERTY read (SC-K1): a player
+// id of `constructor` or `__proto__` must never reach Object.prototype.
+
+/** Own-property read of a map keyed by a player id (never the prototype chain). */
+function tieKeyOf(map, playerId) {
+  return map != null && Object.prototype.hasOwnProperty.call(map, playerId) ? map[playerId] : undefined;
+}
+
+/** S1 (weighted correctPicks, higher first) then S2 (tiebreakerDelta, smaller first, null last) — TODAY'S comparator, verbatim. */
+function compareS1S2(a,b){
+  const d=b.correctPicks-a.correctPicks; if(d!==0) return d;
+  if(a.tiebreakerDelta===null&&b.tiebreakerDelta===null) return 0;
+  if(a.tiebreakerDelta===null) return 1;
+  if(b.tiebreakerDelta===null) return -1;
+  return a.tiebreakerDelta-b.tiebreakerDelta;
+}
+
+function fnv1a32(s) { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); } return h >>> 0; }
+function mix32(h) { h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16; return h >>> 0; }
+/** S5 — the week's draw. Identical on every device and every recompute: a pure function of (seed, playerId). */
+export function drawKey(seed, playerId) { return mix32(fnv1a32(String(seed) + '|' + String(playerId))); }
+
+/** A player's S3 key, or null when he has none: `played` must be exactly true for it to count. */
+function almaKeyOf(tie, playerId) {
+  const k = tie ? tieKeyOf(tie.alma, playerId) : undefined;
+  return k && k.played === true ? k : null;
+}
+function almaNetOf(tie, playerId) {
+  const k = almaKeyOf(tie, playerId);
+  return k && Number.isFinite(k.net) ? k.net : 0;
+}
+/** S3 applies to a run only if EVERY member has a graded alma mater game (Drew's Q3: the literal reading). */
+function almaApplies(run, tie) {
+  return !!tie.alma && run.every(r => almaKeyOf(tie, r.playerId) !== null);
+}
+/** A player's S4 key: class 0 (a guess not over the actual; smaller delta is better, exact = 0), class 1 (a bust), class 2 (no entry). A missing or malformed key is class 2. */
+function epKeyOf(tie, playerId) {
+  const k = tie && tie.ep ? tieKeyOf(tie.ep.byPlayer, playerId) : undefined;
+  if (k && k.cls === 0 && Number.isFinite(k.delta)) return { cls: 0, delta: k.delta };
+  if (k && k.cls === 1) return { cls: 1, delta: 0 };
+  return { cls: 2, delta: 0 };
+}
+function compareEp(tie) {
+  return (a, b) => {
+    const ka = epKeyOf(tie, a.playerId), kb = epKeyOf(tie, b.playerId);
+    return ka.cls - kb.cls || ka.delta - kb.delta;
+  };
+}
+function compareAlma(tie) {
+  return (a, b) => almaNetOf(tie, b.playerId) - almaNetOf(tie, a.playerId);
+}
+/** Split `group` into sub-groups of rows equal under `cmp`, best sub-group first (stable). */
+function splitBy(group, cmp) {
+  const sorted = [...group].sort(cmp);
+  const out = [];
+  for (const r of sorted) {
+    const last = out[out.length - 1];
+    if (last && cmp(last[0], r) === 0) last.push(r); else out.push([r]);
+  }
+  return out;
+}
+/** S5 — a total order: smaller drawKey first, ties by playerId. */
+function drawOrder(group, seed) {
+  return [...group].sort((a, b) =>
+    drawKey(seed, a.playerId) - drawKey(seed, b.playerId)
+    || (a.playerId < b.playerId ? -1 : a.playerId > b.playerId ? 1 : 0));
+}
+/** One run (rows equal on S1 and S2) -> a total order: S3 (all-or-nothing), then S4, then S5. */
+function orderRun(run, tie) {
+  let groups = [run];
+  if (almaApplies(run, tie)) groups = splitBy(run, compareAlma(tie));
+  if (tie.ep) groups = groups.flatMap(g => g.length > 1 ? splitBy(g, compareEp(tie)) : [g]);
+  return groups.flatMap(g => g.length > 1 ? drawOrder(g, tie.seed) : g);
+}
+/** Maximal stretches of the (already S1/S2-sorted) rows that compare equal: [[start, end), ...]. */
+function tieRunsOf(rows) {
+  const runs = [];
+  let i = 0;
+  while (i < rows.length) {
+    let j = i + 1;
+    while (j < rows.length && compareS1S2(rows[i], rows[j]) === 0) j++;
+    runs.push([i, j]);
+    i = j;
+  }
+  return runs;
+}
+/** Reorder every run of size >= 2 IN PLACE (every run, not only the top and bottom, so the rank column never reshuffles by accident). */
+function orderTieRuns(rows, tie) {
+  for (const [i, j] of tieRunsOf(rows)) {
+    if (j - i < 2) continue;
+    const ordered = orderRun(rows.slice(i, j), tie);
+    for (let k = 0; k < ordered.length; k++) rows[i + k] = ordered[k];
+  }
+}
+const SRC_RANK = { snapshot: 0, 'locked-roster': 1, live: 2 };
+function copyFact(f) { return f && typeof f === 'object' && !Array.isArray(f) ? { ...f } : null; }
+/**
+ * Stamp `tieBreak` on the winner row and the loser row, only where a tie stage decided that end: the earliest stage at which the
+ * row and its neighbour differ, with the display-only echo (`tie.facts`) COPIED in. This is the ONLY function that reads
+ * `tie.facts`: no ordering function above ever does (tiebreaktest.mjs T-K7 scans for it), so display data can never decide a rank.
+ */
+function attachTieBreak(rows, tie) {
+  const n = rows.length;
+  if (n < 2) return;
+  const runs = tieRunsOf(rows);
+  const describe = (me, other, end) => {
+    if (me.correctPicks !== other.correctPicks) return null;               // S1 alone separates them: nothing to explain
+    const base = { v: 1, end, vs: other.playerId };
+    if (tiebreakerBrokeTie(me, other)) {
+      return { ...base, stage: 'tiebreaker', me: { delta: me.tiebreakerDelta }, other: { delta: other.tiebreakerDelta } };
+    }
+    const at = rows.indexOf(me);
+    const run = runs.find(([i, j]) => at >= i && at < j);
+    const members = run ? rows.slice(run[0], run[1]) : [me, other];
+    if (almaApplies(members, tie) && almaNetOf(tie, me.playerId) !== almaNetOf(tie, other.playerId)) {
+      const fm = copyFact(tieKeyOf(tie.facts, me.playerId)?.alma), fo = copyFact(tieKeyOf(tie.facts, other.playerId)?.alma);
+      const worst = [fm && fm.src, fo && fo.src].filter(x => Object.prototype.hasOwnProperty.call(SRC_RANK, x)).sort((x, y) => SRC_RANK[y] - SRC_RANK[x])[0];
+      return { ...base, stage: 'alma', me: fm, other: fo, ...(worst ? { src: worst } : {}) };
+    }
+    if (tie.ep && compareEp(tie)(me, other) !== 0) {
+      return { ...base, stage: 'ep', me: copyFact(tieKeyOf(tie.facts, me.playerId)?.ep), other: copyFact(tieKeyOf(tie.facts, other.playerId)?.ep) };
+    }
+    return { ...base, stage: 'draw', me: null, other: null };
+  };
+  const w = describe(rows[0], rows[1], 'winner');
+  if (w) rows[0].tieBreak = w;
+  const l = describe(rows[n - 1], rows[n - 2], 'loser');
+  if (l) rows[n - 1].tieBreak = l;
+}
+
+export function rankWeeklyResults(rows, anyFinal, tie = null) {
+  rows.sort(compareS1S2);
+  // S3 to S5 run ONLY on a final week (the blind rule: nothing about a week still open, locked or live is decided here).
+  if (anyFinal && tie && rows.length > 1) orderTieRuns(rows, tie);
 
   rows.forEach((r,i)=>{ r.rank=i+1; });
   if(anyFinal&&rows.length>1){
@@ -176,11 +319,12 @@ export function rankWeeklyResults(rows, anyFinal) {
     const sl=rows[rows.length-2];
     if(sl&&last.correctPicks===sl.correctPicks)
       last.wonByTiebreaker=tiebreakerBrokeTie(last,sl);
+    if(tie) attachTieBreak(rows, tie);
   }
   return rows;
 }
 
-export function calculateWeeklyResults(weekId, players, picks, games, actualTiebreaker=null) {
+export function calculateWeeklyResults(weekId, players, picks, games, actualTiebreaker=null, tie=null) {
   const results = players.map(player => {
     const pp = picks.filter(p=>p.weekId===weekId&&p.playerId===player.playerId);
     // Two parallel tallies:
@@ -216,7 +360,7 @@ export function calculateWeeklyResults(weekId, players, picks, games, actualTieb
   });
 
   const anyFinal=games.some(g=>g.status===GAME_STATUS.FINAL);
-  return rankWeeklyResults(results, anyFinal);
+  return rankWeeklyResults(results, anyFinal, tie);
 }
 
 /**
@@ -245,7 +389,7 @@ export function calculateWeeklyResults(weekId, players, picks, games, actualTieb
  * creation, CSV export, Weekly History) don't need a second concept of "group
  * key" vs "week key."
  */
-export function calculateGroupWeeklyResults(groupWeeks, players, allPicks, allGames) {
+export function calculateGroupWeeklyResults(groupWeeks, players, allPicks, allGames, tie=null) {
   const weeks = groupWeeks || [];
   const gid = weeks.length ? getEffectiveGroupId(weeks[0]) : null;
   const memberWeekIds = new Set(weeks.map(w=>w.weekId));
@@ -279,7 +423,7 @@ export function calculateGroupWeeklyResults(groupWeeks, players, allPicks, allGa
   });
 
   const anyFinal=(allGames||[]).some(g=>memberWeekIds.has(g.weekId)&&g.status===GAME_STATUS.FINAL);
-  return rankWeeklyResults(results, anyFinal);
+  return rankWeeklyResults(results, anyFinal, tie);
 }
 
 /**
@@ -371,7 +515,7 @@ export function calculateAlmaMaterTotal(games, almaMaters, calcMode='selectedSla
  * table. Grouping-safe by construction: weeklyWins/weeklyLosses already fold
  * in UN-118's pooled group win/loss when `weeks` is passed.
  */
-export function calculateSeasonStandings(players, allWeeklyResults, weeks=null) {
+export function calculateSeasonStandings(players, allWeeklyResults, weeks=null, tieContexts=null) {
   const weekById = weeks ? new Map(weeks.map(w=>[w.weekId,w])) : null;
 
   // Map<playerId, {wins,losses}> — populated once, up front, from every
@@ -403,7 +547,7 @@ export function calculateSeasonStandings(players, allWeeklyResults, weeks=null) 
           rank:0, isWinner:false, isLoser:false, wonByTiebreaker:false,
         };
       });
-      rankWeeklyResults(pooled, true);
+      rankWeeklyResults(pooled, true, tieContexts ? (tieContexts.get(gid) ?? null) : null);
       const gWinner = pooled.find(r=>r.isWinner);
       const gLoser  = pooled.find(r=>r.isLoser);
       if (gWinner) groupWinLoss.get(gWinner.playerId).wins++;
@@ -458,6 +602,7 @@ export function calculateSeasonStandings(players, allWeeklyResults, weeks=null) 
     b.totalCorrect-a.totalCorrect
     || (b.weeklyWins-b.weeklyLosses)-(a.weeklyWins-a.weeklyLosses)
     || b.winPct-a.winPct
+    || (a.playerId < b.playerId ? -1 : a.playerId > b.playerId ? 1 : 0)
   );
   standings.forEach((s,i)=>{s.currentRank=i+1;});
   if(standings.length>1){standings[0].isSeasonLeader=true;standings[standings.length-1].isCurrentLastPlace=true;}

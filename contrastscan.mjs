@@ -109,6 +109,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
+import * as R from './themeresolve.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -406,28 +407,25 @@ function scanRules(strippedCss, lightMap, darkMap) {
   return { checked, skipped, failures };
 }
 
-/** Parse a full styles.css source string into { lightMap, darkMap }. */
-export function buildTokenMaps(cssSrc) {
-  const rootVars = extractDeclarations(cssSrc, ':root');
-  const neutralVars = extractDeclarations(cssSrc, 'body\\.theme-neutral');
-  // Both dark triggers — a mismatch between them is brandtokentest.mjs's own
-  // job to catch ([2c-a]/[2c-b]); this file just needs ONE dark map, and
-  // uses the media-query block's own declarations (falling back to the
-  // manual block if the media block is ever restructured) so a single
-  // source of dark values drives the scan either way.
-  const mediaDarkVars = extractDeclarations(cssSrc, 'body\\.theme-neutral:not\\(\\[data-color-scheme="light"\\]\\)');
-  const manualDarkVars = extractDeclarations(cssSrc, 'body\\.theme-neutral\\[data-color-scheme="dark"\\]');
-  const darkOverrides = Object.keys(mediaDarkVars).length > 0 ? mediaDarkVars : manualDarkVars;
-
-  const lightMap = { ...rootVars, ...neutralVars };
-  const darkMap = { ...lightMap, ...darkOverrides };
-  return { lightMap, darkMap, rootVars, neutralVars, darkOverrides };
+/**
+ * Parse a full styles.css source string into { lightMap, darkMap } for ONE theme key.
+ * RE-DERIVED (SP-52 DI-456, 2026-10-01): this used to regex out `:root`, `body.theme-neutral` and the two night blocks of ONE theme — which is
+ * exactly the per-theme gap that hid SB-10 (a `var()` on :root froze at <html>), and which stopped working at all when the Dark blocks became
+ * enumerated selector LISTS (`body.theme-neutral:not(…), body.theme-ink:not(…) {`). It now asks the REAL cascade (themeresolve.mjs: specificity,
+ * order, the media trigger, var() substituted on the declaring element) for the side's custom properties, so any of the TWENTY sides can be scanned.
+ * The `light`/`dark` of a key are its Light side and its Dark side (System trigger; themetest [T3] proves the pinned trigger resolves identically).
+ */
+export function buildTokenMaps(cssSrc, key = 'neutral') {
+  const sheet = R.parseSheet(cssSrc);
+  const names = R.allCustomNames(sheet);
+  const mapOf = (side) => { const r = R.resolveSide(sheet, key, side, 'system'); const out = {}; for (const n of names) { const v = r.get(n); if (v !== undefined) out[n] = v; } return out; };
+  return { lightMap: mapOf('L'), darkMap: mapOf('D') };
 }
 
 /** Full scan of one CSS source string. Returns the scanRules() result plus
  *  the token maps used, for callers that want to inspect specific tokens. */
-export function runScan(cssSrc) {
-  const { lightMap, darkMap } = buildTokenMaps(cssSrc);
+export function runScan(cssSrc, key = 'neutral') {
+  const { lightMap, darkMap } = buildTokenMaps(cssSrc, key);
   // ORDER FIX (reviewer follow-up, 2026-09-27) — comments MUST be stripped
   // BEFORE at-rule blocks are stripped, not after. stripAtRuleBlocks() scans
   // the raw string for the literal substring "@media"/"@supports"/
@@ -600,10 +598,16 @@ if (isMain) {
     // fix in this file, not a genuinely different, larger surface; leaving
     // them light was the bug, not a deliberate scope boundary. All three are
     // fixed (background:#fff -> var(--bg-card)) and removed from this list.
+    // RE-DERIVED (SP-52, 2026-10-01): '.dc-chip-blind .dc-chip-init' LEFT this list — the entry claimed "no text", but the circle carries the player's
+    // initials, and raising Dark --text-muted (its fill) would have left them at 2.33:1; that rule now reads color:var(--bg-card) and passes. Three
+    // entries joined, each reviewed: the knob's ON state (same no-text artifact as its off state), the layout-edit section move button, and .badge-draft.
+    // A1.9 (coordinator, 2026-10-01) CLOSED the last two, so the list SHRANK: '.section-move-btn' (F1: every Dark accent-text value is lifted until it clears 4.5:1 on the
+    // lifted inset #332C25 — advisory 1 is withdrawn) and '.badge-draft' (F3e: it reads var(--bg-card-alt) instead of a hard-coded #F5F3EE, so its dash is no longer
+    // light-on-light on a Dark side). Two assertions below PIN that they stay closed, so the allow-list can never quietly re-admit them.
     const KNOWN_NON_ISSUES = new Set([
       '.google-g-mark',   // Google's OAuth SVG mark, no text, governed by Google's own branding rules
-      '.dc-chip-blind .dc-chip-init', // a plain colored status dot, same shape as the win/loss init dots, no text
       '.cc-row-switch::after', // a toggle switch's circular knob pseudo-element, no text
+      '.cc-row-switch[data-on="true"]::after', // the same knob in its ON state (SP-52: now painted --on-accent so it stays visible on Graphite Dark's near-white track) — no text
     ]);
     for (const f of newDarkOnly) {
       const onList = KNOWN_NON_ISSUES.has(f.selector);
@@ -612,8 +616,37 @@ if (isMain) {
           ? `[live] ${f.selector}'s new dark-only reading (${f.ratio.toFixed(2)}:1 on ${f.bg}) is on the reviewed allow-list (known scanner artifact or an out-of-scope surface, see contrastscan.mjs's own comment) — not a genuine regression`
           : `[live] ${f.selector} is a NEW dark-only contrast failure (${f.ratio.toFixed(2)}:1 on ${f.bg}) NOT on the reviewed allow-list — this is a genuine, unreviewed regression`);
     }
+    assert(!newDarkOnly.some((f) => f.selector === '.section-move-btn') && !newDarkOnly.some((f) => f.selector === '.badge-draft'),
+      `[live] A1.9: '.section-move-btn' and '.badge-draft' are NOT dark-only failures any more (accent text lifted past 4.5:1 on the lifted inset; the badge reads --bg-card-alt) — and they are no longer on the allow-list, so a regression is red`);
+    assert(!/\.badge-draft\{[^}]*background:#/i.test(cssSrc.replace(/\/\*[\s\S]*?\*\//g, '')) && /\.badge-draft\{background:var\(--bg-card-alt\)/.test(cssSrc),
+      "[live] A1.9 F3e: .badge-draft's fill is the theme inset token, never a hard-coded colour");
     assert(newDarkOnly.length <= KNOWN_NON_ISSUES.size,
       `[live] no MORE new dark-only failures than the reviewed allow-list accounts for (got ${newDarkOnly.length} new, allow-list covers ${KNOWN_NON_ISSUES.size}) — a real regression must be named, not hidden by a loose count check`);
+
+    // ── [2a] RE-DERIVED (SP-52 DI-456): every look, both sides — "dark mode must never make something WORSE than light mode already is", generalised
+    //    to "no look may make something WORSE than the default look already is". Each of the TEN themes is scanned on its Light AND Dark side through the
+    //    real cascade; a selector may fail on a look only if it also fails on Munera (the default) in the same mode, or is a named artifact.
+    //    LIMIT, stated: Paper Dark's cards are re-lit by a scoped rule this rule-at-a-time scanner cannot model (it resolves Paper Dark's PAGE tokens);
+    //    themetest [T4]/[T11] prove Paper Dark's paper surfaces.
+    {
+      const KEYS = ['neutral', 'paper', 'ink', 'graphite', 'aggie', 'sooner', 'trojan', 'irish', 'boilermaker', 'razorback'];
+      // NON-TEXT artifacts this rule-at-a-time scanner reads as failures only where a look's accent fill is NEAR-WHITE or its bar is NEAR-BLACK: the rule
+      // paints a fill but carries no text of its own (a 7px dot, a step dot, a switch track, the status strip, a hover state that inherits its base rule's
+      // --on-accent label, and the tab-bar container whose children set their own colours — themetest [T4] measures the tab icons themselves).
+      const ACCENT_FILL_NON_TEXT = ['.live-dot', '.week-wizard-step-dot', '.cc-row-switch', 'body.native-shell::before', '.btn-primary:hover', '.bottom-nav', '.lc-tick-on'];
+      const base = runScan(cssSrc, 'neutral');
+      const key = (f) => f.mode + '|' + f.selector;
+      const baseSet = new Set(base.failures.map(key));
+      let totalChecked = 0;
+      for (const k of KEYS) {
+        const r = runScan(cssSrc, k);
+        totalChecked += r.checked;
+        const worse = r.failures.filter((f) => !baseSet.has(key(f)) && !(k === 'paper' && f.mode === 'dark') && !ACCENT_FILL_NON_TEXT.some((n) => f.selector.includes(n)));
+        assert(worse.length === 0,
+          `[2a] ${k}: both sides scanned through the real cascade (${r.checked} rules) — no rule fails here that does not also fail on Munera in the same mode${worse.length ? ' — WORSE: ' + worse.slice(0, 5).map((f) => `${f.selector} ${f.mode} ${f.ratio.toFixed(2)}:1`).join(' | ') : ''}`);
+      }
+      assert(totalChecked > 1000, `[2a] fixture: ${totalChecked} rule-checks across the ten looks (a vacuous run would check none)`);
+    }
 
     // ── [3] Completeness — item 1's token-retarget audit, source-level ──
     // A rule whose `color:` still reads a BASE crimson/semantic token
@@ -635,7 +668,12 @@ if (isMain) {
     const bareNdColor = (codeOnly.match(/(?<![a-zA-Z-])color:var\(--nd\)/g) || []).length;
     const barePushColor = (codeOnly.match(/(?<![a-zA-Z-])color:var\(--push\)/g) || []).length;
     const bareLiveColor = (codeOnly.match(/(?<![a-zA-Z-])color:var\(--live\)/g) || []).length;
-    assert(bareMaroonColor === 4, `[3a] exactly the FOUR reviewed fixed-background exceptions still read "color:var(--maroon)" directly (got ${bareMaroonColor})`);
+    // RE-DERIVED (SP-52 DI-448 C3, 2026-10-01): of the four reviewed exceptions, THREE paired crimson text with a --gold fill (.header-identity-avatar,
+    // #notif-bell-badge, .cc-avatar) and now read --on-gold (Ink on every side: maroon-on-gold measured 3.96:1 on Munera Dark and 2.13:1 on Graphite Dark).
+    // The fourth, .chat-pill.active .chat-unread-dot, pairs crimson with --on-accent (white; near-ink on Graphite Dark) and keeps reading --maroon.
+    assert(bareMaroonColor === 1, `[3a] exactly ONE reviewed fixed-background exception still reads "color:var(--maroon)" directly — .chat-pill.active .chat-unread-dot (got ${bareMaroonColor})`);
+    assert((codeOnly.match(/color:var\(--on-gold\)/g) || []).length >= 3 && /\.cc-avatar\{[^}]*color:var\(--on-gold\)/.test(codeOnly) && /\.notif-bell-badge[^}]*color:var\(--on-gold\)/.test(codeOnly),
+      '[3a-b] the three gold-filled sites (.header-identity-avatar, .notif-bell-badge, .cc-avatar) read var(--on-gold)');
     assert(bareMaroonMidColor === 0, `[3b] zero remaining "color:var(--maroon-mid)" sites — got ${bareMaroonMidColor}`);
     assert(bareNdColor === 0, `[3c] zero remaining "color:var(--nd)" sites — got ${bareNdColor}`);
     assert(barePushColor === 0, `[3d] zero remaining "color:var(--push)" sites — got ${barePushColor}`);

@@ -1299,13 +1299,19 @@ try {
     if (${JSON.stringify(scheme)} === 'system') delete b.dataset.colorScheme; else b.dataset.colorScheme = ${JSON.stringify(scheme)};
     b.classList.toggle('native-shell', ${!!native});
   })()`);
-  const palettes = [
-    ['neutral', 'system'], ['neutral', 'light'], ['neutral', 'dark'],
-    ['aggie', 'system'], ['sooner', 'system'], ['trojan', 'system'], ['irish', 'system'], ['boilermaker', 'system'], ['razorback', 'system'],
-  ];
+  // RE-DERIVED (SP-52 DI-456, 2026-10-01): TEN themes (Munera, Paper, Ink, Graphite and the six schools), each as System, pinned Light and pinned Dark — thirty palettes — under both
+  // OS emulations, web and native. It was nine palettes: Munera x3 and the six schools on System only, because a school had no Dark side to test. This is the real-engine proof that
+  // the typed text, the placeholder and the caret are readable on every one of the twenty sides, including Paper Dark's paper composer inside an ink page.
+  const THEME_KEYS = ['neutral', 'paper', 'ink', 'graphite', 'aggie', 'sooner', 'trojan', 'irish', 'boilermaker', 'razorback'];
+  const palettes = THEME_KEYS.flatMap((k) => [[k, 'system'], [k, 'light'], [k, 'dark']]);
+  // THE CROSS-FADE (DI-452): flipping the emulated OS scheme while the player is on System fires the app's matchMedia listener, which fades the palette over 260ms
+  // (body.scheme-swap, colour properties only) and settles at 300ms. A computed colour read inside that window is MID-TRANSITION, so the harness waits for the settle
+  // after every OS flip — exactly as a human would not read a contrast figure off a half-faded screen.
+  const SETTLE = () => sleep(450);
   const m13Rows = [];
   for (const os of ['light', 'dark']) {
     await pg.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: os }] });
+    await SETTLE();
     for (const native of [false, true]) {
       for (const [theme, scheme] of palettes) {
         await PAINT(theme, scheme, native);
@@ -1320,6 +1326,7 @@ try {
   // `.chat-input`, inside `.chat-sheet` (outside #page-chat). Proven on the
   // real class chain with a scratch node under the sheet's own wrapper classes.
   await pg.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
+  await SETTLE();
   await PAINT('aggie', 'system', false);
   const sheetRatio = await evaluate(`(() => {
     const wrap = document.createElement('div'); wrap.id = 'm13-scratch'; wrap.innerHTML = '<div class="chat-sheet"><div class="chat-composer"><textarea class="chat-input" id="m13-sheet-input" placeholder="x"></textarea></div></div>';
@@ -1370,8 +1377,12 @@ try {
     return out;
   })()`;
   const b13 = [];
-  for (const [os, theme, scheme] of [['dark', 'aggie', 'system'], ['dark', 'neutral', 'light'], ['light', 'neutral', 'dark'], ['dark', 'neutral', 'system'], ['light', 'razorback', 'system']]) {
+  // RE-DERIVED (SP-52 DI-456): ALL ten themes, each on its Light side (System, OS light), its Dark side (System, OS dark), pinned Light on a DARK phone, and pinned Dark on a LIGHT
+  // phone — 40 combinations x 11 controls = 440 measurements (it was 5 combinations x 11 = 55). The new count REPLACES 55; the floor is not loosened.
+  const M13B_COMBOS = THEME_KEYS.flatMap((k) => [['light', k, 'system'], ['dark', k, 'system'], ['dark', k, 'light'], ['light', k, 'dark']]);
+  for (const [os, theme, scheme] of M13B_COMBOS) {
     await pg.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: os }] });
+    await SETTLE();
     await PAINT(theme, scheme, false);
     const rows = await evaluate(M13B_JS);
     b13.push(...rows.map(r => ({ ...r, os, theme, scheme })));
@@ -1379,7 +1390,7 @@ try {
     assert(bad.length === 0,
       `M13b-${os}-${theme}${scheme === 'system' ? '' : '-' + scheme}: OS ${os}, ${theme}${scheme === 'system' ? '' : ' (' + scheme + ')'} — all ${rows.length} fixed controls paint readable ink (worst ${Math.min(...rows.map(r => r.ratio)).toFixed(2)}:1)${bad.length ? ' — UNREADABLE: ' + bad.map(r => `${r.label} ${r.ink} ${r.ratio.toFixed(2)}:1`).join(', ') : ''}`);
   }
-  assert(b13.length === 55 && b13.every(r => r.ratio >= 4.5), `M13b-all: ${b13.length} control × palette × OS combinations measured, every one ≥ 4.5:1 (worst ${Math.min(...b13.map(r => r.ratio)).toFixed(2)}:1)`);
+  assert(b13.length === 440 && b13.every(r => r.ratio >= 4.5), `M13b-all: ${b13.length} control × palette × OS combinations measured, every one ≥ 4.5:1 (worst ${Math.min(...b13.map(r => r.ratio)).toFixed(2)}:1)`);
   await pg.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
   await PAINT('neutral', 'system', false);
   await pg.send('Emulation.setEmulatedMedia', { features: [] });
@@ -1437,11 +1448,12 @@ try {
     `M1-A1f: the composer loses its margin-top, radius, shadow and own background (${JSON.stringify({ mt: s1.compCss?.mt, rad: s1.compCss?.rad, shadow: s1.compCss?.shadow, bg: s1.compCss?.bg })})`);
   assert(!!s1.compCss && s1.compCss.btw === '1px' && s1.compCss.bts === 'solid' && s1.compCss.btc !== 'rgba(0, 0, 0, 0)' && s1.compCss.bbw === '0px' && s1.compCss.blw === '0px',
     `M1-A1g: …and gains a 1px hairline top border in the theme's --border (${s1.compCss?.btw} ${s1.compCss?.bts} ${s1.compCss?.btc}; other sides ${s1.compCss?.bbw}/${s1.compCss?.blw})`);
-  assert(s1.pagePadB === '8px' && s1.surf && Math.abs(s1.surf.b - (s1.page.b - 8)) <= 1,
-    `M1-A2a: the lift is one 8-pt step — #page-chat padding-bottom ${s1.pagePadB}, the surface ends ${s1.surf ? (s1.page.b - s1.surf.b).toFixed(1) : '?'}px above the page's bottom edge`);
+  // RE-DERIVED (Home wiring, 2026-10-02, Drew M-11 Q2 "lift"): keyboard DOWN the lift is 8px + the Home disc collar's reach (8px at the 56pt disc) = 16px, so the composer clears the collar by 8px.
+  assert(s1.pagePadB === '16px' && s1.surf && Math.abs(s1.surf.b - (s1.page.b - 16)) <= 1,
+    `M1-A2a: the lift is 8px + the disc collar's reach (16px) — #page-chat padding-bottom ${s1.pagePadB}, the surface ends ${s1.surf ? (s1.page.b - s1.surf.b).toFixed(1) : '?'}px above the page's bottom edge`);
   console.log('   ' + sbSeen(s1, 'keyboard down, no inset') + `, nav pill resting top ${s1.navNat.toFixed(1)}, jump ${s1.jumpShown}`);
-  assert(!!s1.surf && Math.abs((s1.navNat - s1.surf.b) - 8) <= 1,
-    `M1-A2b: THE BUG — keyboard down, the surface ends 8px above the tab bar (pill resting top ${s1.navNat.toFixed(1)} − surface bottom ${s1.surf?.b?.toFixed(1)} = ${s1.surf ? (s1.navNat - s1.surf.b).toFixed(1) : '?'}px; before: 0 — the composer sat on the pill)`);
+  assert(!!s1.surf && Math.abs((s1.navNat - s1.surf.b) - 16) <= 1,
+    `M1-A2b: THE BUG — keyboard down, the surface ends 16px above the tab bar's top edge (8px clear of the disc's 8px collar) (pill resting top ${s1.navNat.toFixed(1)} − surface bottom ${s1.surf?.b?.toFixed(1)} = ${s1.surf ? (s1.navNat - s1.surf.b).toFixed(1) : '?'}px; before: 0 — the composer sat on the pill)`);
 
   // A2 again with a home-indicator device (34px bottom inset) — the gap is
   // measured to the pill, whose own position already includes the inset.
@@ -1451,8 +1463,8 @@ try {
   await evaluate(`window.navigateTo('picks')`); await sleep(200);
   await evaluate(`window.navigateTo('chat')`); await sleep(500);
   const s2 = await evaluate(M1_JS);
-  assert(!!s2.surf && Math.abs((s2.navNat - s2.surf.b) - 8) <= 1,
-    `M1-A2c: with a 34px safe area the surface still ends 8px above the tab bar (pill resting top ${s2.navNat.toFixed(1)} − surface bottom ${s2.surf?.b?.toFixed(1)} = ${s2.surf ? (s2.navNat - s2.surf.b).toFixed(1) : '?'}px; vh ${s2.vh})`);
+  assert(!!s2.surf && Math.abs((s2.navNat - s2.surf.b) - 16) <= 1,
+    `M1-A2c: with a 34px safe area the surface still ends 16px above the tab bar's top edge (pill resting top ${s2.navNat.toFixed(1)} − surface bottom ${s2.surf?.b?.toFixed(1)} = ${s2.surf ? (s2.navNat - s2.surf.b).toFixed(1) : '?'}px; vh ${s2.vh})`);
   await pg.send('Emulation.setSafeAreaInsetsOverride', { insets: {} }).catch(() => {});
   await evaluate(`window.navigateTo('picks')`); await sleep(200);
   await evaluate(`window.navigateTo('chat')`); await sleep(500);
@@ -1526,8 +1538,8 @@ try {
   const s6 = await evaluate(M1_JS);
   assert(!!s6.surf && s6.inSurf.comp && s6.inSurf.input && !!s6.compCss && s6.compCss.btw === '1px' && parseFloat(s6.compCss.mt) === 0 && s6.compCss.rad === '0px/0px' && s6.compCss.shadow === 'none' && s6.compCss.blw === '0px',
     `M1-A6a: signed out, the login prompt is inside the surface, flush, hairline-topped, no margin/radius/shadow/side border (${JSON.stringify(s6.compCss)})`);
-  assert(!!s6.surf && Math.abs((s6.navNat - s6.surf.b) - 8) <= 1 && Math.abs((s6.comp.t - s6.th.b)) <= 1,
-    `M1-A6b: …and the same 8px lift and zero thread gap hold signed out (lift ${s6.surf ? (s6.navNat - s6.surf.b).toFixed(1) : '?'}px, gap ${s6.comp && s6.th ? (s6.comp.t - s6.th.b).toFixed(1) : '?'}px)`);
+  assert(!!s6.surf && Math.abs((s6.navNat - s6.surf.b) - 16) <= 1 && Math.abs((s6.comp.t - s6.th.b)) <= 1,
+    `M1-A6b: …and the same 16px lift and zero thread gap hold signed out (lift ${s6.surf ? (s6.navNat - s6.surf.b).toFixed(1) : '?'}px, gap ${s6.comp && s6.th ? (s6.comp.t - s6.th.b).toFixed(1) : '?'}px)`);
   await evaluate(`(async () => { const st = await import('./js/storage.js'); st.setSession('p1', false, true); (await import('./js/chat-ui.js')).renderChatPage(); })()`);
   await sleep(300);
   const sheet = await evaluate(`(() => {

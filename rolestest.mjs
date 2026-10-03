@@ -203,14 +203,212 @@ console.log('\n── canOperateCard() — DI-320 per-card operability table ─
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════
+// POSITION-INDEPENDENT SITE PINS (2026-10-01, int/pins-and-sb14, Social Platform release
+// v0.29.0 integration) — shared by section 5 (F13) and section 11 (DI-344 §Render paths).
+//
+// Both allow-lists used to pin each enumerated call site by { file, LINE, text }. Every
+// branch that added lines anywhere above a site turned the suite red, and someone re-typed
+// the number by matching the exact text — the dozens of "Re-derived" notes in both blocks
+// are that history (SP-56 +155 and SB-14 +4 were the last two; two branches each doing it
+// is a guaranteed merge conflict). What the line pin guaranteed, and what it is now:
+//   * no unlisted hit             -> unchanged: a hit outside the allow-listed files that
+//                                    matches no pin is an offender;
+//   * each site's exact text      -> unchanged: the raw trimmed line, compared whole;
+//   * WHERE the site lives        -> `within`: the top-level function the line sits in
+//                                    (topLevelOwner() below). The two identical
+//                                    `isPlatformAdmin: getIsPlatformAdmin(),` lines
+//                                    (buildControlCenterCtx / composeAdminViewer) stay two
+//                                    distinct pins, and a site moved into another function
+//                                    is an offender;
+//   * a pin that matches nothing  -> NEW, and required by the change: "-each" asserts every
+//                                    pin is found EXACTLY ONCE. With line pins a stale entry
+//                                    could almost never re-match by accident; with text +
+//                                    function it could, so a deleted site now goes red;
+//   * order                       -> "-order": the pinned hits appear in each file in the
+//                                    list's order.
+// Line numbers are still reported in every message, never compared. "-shift" proves 50
+// blank lines at the top of app.js change nothing; "-move" proves a relocated site is still
+// caught. A site moved WITHIN its own top-level function is the one thing text + function
+// cannot see; for the two renderAdminPage() fetch gates, "F13-preamble" (section 5) and
+// "DI-344-preamble" (section 11) close the part of that which matters — something new put in
+// FRONT of the gate.
+//
+// topLevelOwner() reads the formatting convention rather than parsing JavaScript: every
+// top-level function / const / class / import opens at column 0, and its body is indented
+// under it. Walk up to the nearest column-0 opener. Same helper as boottest.mjs [35].
+// HARDENED 2026-10-01 (int/batch3, reviewer merge condition R-C1) — the first version
+// stopped only at a column-0 `}`, `]` or `)`, and both of the reviewer's counterexamples
+// resolved a moved site to the WRONG pinned owner, silently green (boottest [35c-owner] and
+// "owner-canary" here re-run them):
+//   (a) ANY column-0 code line met on the way up that is not an opener ends the walk as
+//       module level (comment-only lines are skipped; `/* x */ code` is code);
+//   (b) the line itself, when it starts at column 0 and is not an opener or a closer, is its
+//       own module-level statement, never the function above's;
+//   (c) a multi-line import's source is the first `} from '…'` at ANY indentation —
+//       WIDENED 2026-10-01 (v0.29.0 batch 4, reviewer N1): the first `from '…'` after the
+//       opener in the code-only view, so a closer split across two lines (`}` then
+//       `from './x.js';`) names its OWN source instead of borrowing the next import's
+//       ("owner-canary (split import)" is the teeth; boottest [35c-owner] (c) the same).
+// Where the convention is broken in a way (a)–(c) do not describe (template-literal text at
+// column 0 inside a function), the owner comes out as module level: a pin there goes RED.
+//
+// WHAT THESE PINS STILL DO NOT SEE (stated 2026-10-01, int/batch3, after R-C1 and security's
+// S-O1/S-C1/S-C2; this replaces the first version's "never silently green", which both
+// reviews disproved). Checked: the union hit set (two views, findIdentifierHits), exact
+// text, enclosing function, list order, one column-0 opener per pinned function
+// ("-openers"), and the exact preamble of renderAdminPage()'s two fetch gates
+// ("-preamble"). Still open, all silent:
+//   * any count-preserving preamble edit — a preamble line replaced in place, or one line
+//     added and another removed — keeps its count; only a NET change in the number of code
+//     lines moves it;
+//   * the pinned sites with no preamble count (the two composed-viewer flags in
+//     buildControlCenterCtx()/composeAdminViewer(), renderAdminPage()'s
+//     `if (viewer.isSuperAdmin) {` and its bindSuperAdminControls() line, the auth.js
+//     exceptions): something put in front of one of them inside its own function;
+//   * a reference that never spells the bare identifier (a computed key such as
+//     `v['isSuper' + 'Admin']`) — no text scan sees that; this fence is about the spelled
+//     identifier;
+//   * a line BOTH views miss (added 2026-10-01, v0.29.0 batch 4, security F1): a `/*`
+//     inside a string or inside a `//` comment opens a fake block comment for the stripper,
+//     which blanks everything to the next real `*/`; a code line inside that span that
+//     STARTS with `*` and carries the identifier — e.g. a continued product
+//     `* (viewer.isSuperAdmin ? 1 : 0)` — is skipped by the raw view as a comment
+//     continuation. The union closes each view's blind spot alone, not the two together;
+//   * a NEW PATH to the gated action (added 2026-10-01, v0.29.0 batch 4, security F1):
+//     these pins prove each gate is still written, once, in its own function — not that
+//     the action it guards is reached ONLY through it. A new function that calls
+//     refreshPlatformKvCache() or refreshUsersAcrossLeaguesCache() directly bypasses
+//     renderAdminPage()'s two fetch gates, and nothing here looks at those callers. (The
+//     same residual in boottest: a new caller of linkMemberByEmail() bypassing
+//     attemptAutoLink()'s guards.)
+// ════════════════════════════════════════════════════════════════════════════════════════
+const OPENER_FN = /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(/;
+const OPENER_DECL = /^(?:export\s+)?(?:const|let|var|class)\s+([A-Za-z_$][\w$]*)/;
+const openerName = (l) => { const m = OPENER_FN.exec(l) || OPENER_DECL.exec(l); return m ? m[1] : null; };
+// One line, judged on its own: nothing but comment text (and whitespace)? `/* x */ code` and
+// `*/ code` are code; a lone `/*` (block comment opens) and a `* …` continuation are comment.
+function isCommentOnlyLine(l) {
+  let r = l.trim();
+  if (r.startsWith('*/')) r = r.slice(2).trim();
+  else if (r.startsWith('*')) { const e = r.indexOf('*/'); if (e < 0) return true; r = r.slice(e + 2).trim(); }
+  for (;;) {
+    if (r === '' || r.startsWith('//')) return true;
+    if (!r.startsWith('/*')) return false;
+    const e = r.indexOf('*/', 2);
+    if (e < 0) return true;
+    r = r.slice(e + 2).trim();
+  }
+}
+const lineCodeOnly = (l) => l.replace(/\/\*.*?\*\//g, ' ').replace(/(^|\s)\/\/.*$/, '$1');
+// Returns the owner's name AND the index of its opener line (-1 at module level) — the
+// "-preamble" checks count from that opener.
+function topLevelOwnerAt(lines, idx) {
+  for (let j = idx; j >= 0; j--) {
+    const l = lines[j];
+    const name = openerName(l);
+    if (name) return { name, at: j };
+    if (/^import\b/.test(l)) {
+      const own = /\bfrom\s+(['"])([^'"]+)\1/.exec(lineCodeOnly(l));
+      if (own) return { name: `import from ${own[2]}`, at: j };
+      for (let k = j + 1; k < lines.length; k++) {
+        const f = /\bfrom\s+(['"])([^'"]+)\1/.exec(lineCodeOnly(lines[k]));   // reviewer N1: the first `from '…'`, `}` on this line or not
+        if (f) return { name: `import from ${f[2]}`, at: j };
+      }
+      return { name: 'import', at: j };
+    }
+    if (l === '' || /^\s/.test(l) || isCommentOnlyLine(l)) continue;
+    if (j === idx && /^[}\])]/.test(l)) continue; // the line closes a construct opened above it
+    return { name: '(module level)', at: -1 };
+  }
+  return { name: '(module level)', at: -1 };
+}
+function topLevelOwner(lines, idx) { return topLevelOwnerAt(lines, idx).name; }
+
+// UNION SCAN (2026-10-01, int/batch3, security merge condition S-C2). The scan used to skip
+// every line whose text STARTS with `*`, `//`, `/*` or `<!--` — so real code on a line that
+// merely begins with a comment (`/* DI-344 */ if (…) { … isSuperAdmin … }`, `*/ const x =
+// { isPlatformAdmin: true };`) or with a `*` continuation (`* (window.isPlatformAdmin ? 1 :
+// 0)`) was never seen (the reviewer's "/*" bypass). A comment-stripped view alone has the
+// opposite blind spot: the stripper is a regex, so a string '/*' or ' // ' blanks real code.
+// A line is now a hit if EITHER view sees the identifier: the raw line when it does not start
+// with a comment marker, OR the comment-stripped line (block, line and `<!-- -->` comments
+// blanked, newlines kept so line numbers hold). On the shipped tree the two agree line for
+// line. The "-union" canaries in sections 5 and 11 are the teeth.
+function stripCommentsKeepLines(src) {
+  const blankOut = (m) => m.replace(/[^\n]/g, ' ');
+  return src.replace(/<!--[\s\S]*?-->/g, blankOut).replace(/\/\*[\s\S]*?\*\//g, blankOut)
+    .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+}
+const startsWithCommentMarker = (l) => { const t = l.trimStart(); return t.startsWith('*') || t.startsWith('//') || t.startsWith('/*') || t.startsWith('<!--'); };
+function findUnionHits(src, ident, { view = 'union' } = {}) {
+  const hits = [];
+  const re = new RegExp(`\\b${ident}\\b`); // no 'g' — a sticky lastIndex across lines would skip hits (reviewer note, 2026-09-25)
+  const rawLines = src.split('\n');
+  const codeLines = stripCommentsKeepLines(src).split('\n');
+  rawLines.forEach((rawLine, i) => {
+    const rawSees = !startsWithCommentMarker(rawLine) && re.test(rawLine);
+    const strippedSees = re.test(codeLines[i] || '');
+    const hit = view === 'raw' ? rawSees : view === 'stripped' ? strippedSees : (rawSees || strippedSees);
+    if (hit) hits.push({ line: i + 1, text: rawLine.trim(), within: topLevelOwner(rawLines, i) });
+  });
+  return hits;
+}
+// S-O1 (security merge condition, 2026-10-01) — every function a pin names in `within` has
+// EXACTLY ONE column-0 opener in its file. topLevelOwner() names the NEAREST opener above a
+// line, so a same-name decoy opener at column 0 (inside some later function, with a pinned
+// line moved under it) would adopt the line and every other check would pass.
+function openerProblems(src, names) {
+  const lines = src.split('\n');
+  return names.map((n) => ({ fn: n, openers: lines.filter((l) => openerName(l) === n).length }))
+    .filter((p) => p.openers !== 1);
+}
+// S-C1 (security merge condition, 2026-10-01) — the number of CODE lines between a pinned
+// line's function opener and the line itself. A line counts if EITHER view sees code in it,
+// so a string such as '/*' that fools the stripper cannot hide an added line.
+function preambleCount(src, pin) {
+  const lines = src.split('\n');
+  const code = stripCommentsKeepLines(src).split('\n');
+  const at = lines.reduce((acc, l, i) => (l.trim() === pin.text && topLevelOwner(lines, i) === pin.within ? acc.concat(i) : acc), []);
+  if (at.length !== 1) return { found: at.length, got: null };
+  const opener = topLevelOwnerAt(lines, at[0]).at;
+  const got = lines.slice(opener + 1, at[0]).filter((l, k) => code[opener + 1 + k].trim() !== '' || !isCommentOnlyLine(l)).length;
+  return { found: 1, got, line: at[0] + 1 };
+}
+const samePinnedSite = (c, h) => c.file === h.file && c.within === h.within && c.text === h.text;
+// "-shift" asks INVARIANCE, not "green": with 50 blank lines on top, every verdict is identical
+// and every hit is the same site 50 lines further down. So it stays quiet when the main check is
+// red for some other reason, and goes red only if a verdict starts depending on position.
+const siteVerdicts = (r) => JSON.stringify({
+  offenders: r.offenders.map((h) => [h.within, h.text]),
+  notOnce: r.notOnce.map((p) => [p.within, p.text, p.foundAt.length]), inListOrder: r.inListOrder,
+});
+const shiftedBy50 = (shifted, base) => siteVerdicts(shifted) === siteVerdicts(base)
+  && shifted.hits.length === base.hits.length && shifted.hits.length > 0
+  && shifted.hits.every((h, i) => h.within === base.hits[i].within && h.text === base.hits[i].text && h.line === base.hits[i].line + 50);
+// For one pin list and the hits in the file(s) it covers: which pins are not found exactly
+// once, and whether the hits that ARE pins appear in the list's order.
+function pinnedSiteProblems(hits, pins) {
+  const notOnce = pins
+    .map((c) => ({ file: c.file, within: c.within, text: c.text, foundAt: hits.filter((h) => samePinnedSite(c, h)).map((h) => h.line) }))
+    .filter((p) => p.foundAt.length !== 1);
+  const order = hits.map((h) => pins.findIndex((c) => samePinnedSite(c, h))).filter((k) => k > -1);
+  const inListOrder = order.length === pins.length && order.every((k, i) => k === i);
+  return { notOnce, inListOrder, order };
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════
 // 5. Whole-tree isPlatformAdmin allow-list scan (§2b.11 / F13)
 // ════════════════════════════════════════════════════════════════════════════════════════
 console.log('\n── whole-tree isPlatformAdmin allow-list scan (F13) ──');
 {
   const jsDir = join(__dirname, 'js');
-  const jsFiles = (await readdir(jsDir)).filter((f) => f.endsWith('.js')).sort();
+  // 2026-10-01 (int/batch3, security S-C2 follow-up) — recursive: js/sports/*.js is part of
+  // the shipped client too, and a flat readdir never looked inside it.
+  const jsFiles = (await readdir(jsDir, { recursive: true })).filter((f) => f.endsWith('.js')).sort();
   assert(jsFiles.length >= 20,
     `fixture check — the app-wide scan really enumerated js/*.js (found ${jsFiles.length} files); a broken/empty readdir would make every assertion below pass vacuously`);
+  assert(jsFiles.some((f) => f.startsWith('sports/')),
+    `fixture check — the scan recurses into js/ subdirectories (js/sports/*.js is scanned: ${JSON.stringify(jsFiles.filter((f) => f.includes('/')))})`);
 
   // The enumerated chrome-gating call-site allow-list, §2b.11's own words: "an explicitly
   // enumerated array of chrome-gating call sites (bottom-nav icon render, control-center
@@ -322,9 +520,12 @@ console.log('\n── whole-tree isPlatformAdmin allow-list scan (F13) ──');
     // Re-derived 2026-09-30 (UN-315 / DI-436 — the multi-league push client: routeToLeague(), the banked
     // league deep link, the switch-cover fade and the alias-first identity call sites all sit above one or
     // more of these sites) — line numbers only, same sites, matched by exact text.
+    // Re-derived 2026-09-30 (SP-56, Standings fit — renderLeaderboard()/historyGroupHTML() net +109 lines in js/app.js, above every site except the two at 3916/3917) — line numbers only, same sites, matched by exact text.
     // Re-derived 2026-09-30 (v0.28.0 STAMP — the WHATS_NEW v0.28.0 entry and its release comment, net +29 lines, sit above every app.js site) — line numbers only, same sites, matched by exact text.
-    { file: 'app.js', line: 3916, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
-    { file: 'app.js', line: 13904, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
+    // 2026-10-01 — `within` replaces the line number (POSITION-INDEPENDENT SITE PINS, above section 5);
+    // the SB-14 +4 re-derivation of these three (fix/sb14-btn-spacing ed32605) is superseded by it.
+    { file: 'app.js', within: 'buildControlCenterCtx', text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
+    { file: 'app.js', within: 'composeAdminViewer', text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
     // UX Revamp wiring pass 3a (2026-09-25) — renderAdminPage()'s own
     // cross-league users-read gate (WIRING_CHECKLIST_B_092526.md
     // §Window(b)): only fetch listUsersAcrossLeagues() when the composed
@@ -338,19 +539,14 @@ console.log('\n── whole-tree isPlatformAdmin allow-list scan (F13) ──');
   // and doSwitchActiveLeague()'s boolean return all sit above one or more of
   // these sites) — line numbers only, same sites, matched by exact text against
   // the MERGED tree.
-    { file: 'app.js', line: 14436, text: 'if (viewer.isPlatformAdmin && !_usersAcrossLeaguesCache.attempted && !_usersAcrossLeaguesCache.loading) {' },
+    { file: 'app.js', within: 'renderAdminPage', text: 'if (viewer.isPlatformAdmin && !_usersAcrossLeaguesCache.attempted && !_usersAcrossLeaguesCache.loading) {' },
   ];
 
-  function findIdentifierHits(src, ident) {
-    const hits = [];
-    const re = new RegExp(`\\b${ident}\\b`); // no 'g' — a sticky lastIndex across lines would skip hits (reviewer note, 2026-09-25)
-    src.split('\n').forEach((rawLine, i) => {
-      const t = rawLine.trimStart();
-      if (t.startsWith('*') || t.startsWith('//') || t.startsWith('/*') || t.startsWith('<!--')) return; // prose, not code — jsdoc/comments/HTML comments may name the identifier while documenting the fence
-      if (re.test(rawLine)) hits.push({ line: i + 1, text: rawLine.trim() });
-    });
-    return hits;
-  }
+  // 2026-10-01 — each hit also carries `within`, its top-level owner (see above section 5).
+  // 2026-10-01 (int/batch3, S-C2) — the UNION scan (see above section 5): prose inside a
+  // comment still names the identifier freely; code on a line that merely STARTS with a
+  // comment marker no longer hides.
+  const findIdentifierHits = (src, ident, opts) => findUnionHits(src, ident, opts);
 
   // REVIEW ROUND 1, SHOULD-FIX (5) — the scan also covers `index.html` at the repo root: DI-320
   // §Entry point 2 puts the bottom-nav Comm icon's `isPlatformAdmin`-only conditional render
@@ -369,7 +565,7 @@ console.log('\n── whole-tree isPlatformAdmin allow-list scan (F13) ──');
   }
   findIdentifierHits(indexHtmlSrc, 'isPlatformAdmin').forEach((h) => allHits.push({ file: 'index.html', ...h }));
 
-  const offenders = allHits.filter((h) => {
+  const isF13Offender = (h) => {
     if (h.file === 'roles.js') return false; // the module itself
     if (h.file === 'auth.js') return false;  // ALLOWED, but see the targeted assertion below —
                                               // there is no `_recomputeSynthesizedSession()` wiring
@@ -384,11 +580,124 @@ console.log('\n── whole-tree isPlatformAdmin allow-list scan (F13) ──');
     // legitimate. Excluded by file name, the same shape admin-panel.js already gets above,
     // rather than pinning exact lines a sibling thread may still move.
     if (h.file === 'control-center.js') return false;
-    return !ENUMERATED_CALL_SITES.some((c) => c.file === h.file && c.line === h.line && c.text === h.text);
-  });
+    return !ENUMERATED_CALL_SITES.some((c) => samePinnedSite(c, h));
+  };
+  const offenders = allHits.filter(isF13Offender);
   assert(offenders.length === 0,
-    `F13 — every 'isPlatformAdmin' hit in js/*.js AND index.html is inside the allow-list (roles.js, auth.js's _recomputeSynthesizedSession, admin-panel.js, or an enumerated call site)`,
+    `F13 — every 'isPlatformAdmin' hit in js/*.js AND index.html is inside the allow-list (roles.js, auth.js's _recomputeSynthesizedSession, admin-panel.js, or an enumerated call site — same exact text, same top-level function)`,
     JSON.stringify(offenders));
+
+  // 2026-10-01 — the position-independent pins' own guarantees and teeth (see above section 5).
+  const appHitsF13 = allHits.filter((h) => h.file === 'app.js');
+  const f13Pins = pinnedSiteProblems(appHitsF13, ENUMERATED_CALL_SITES);
+  assert(f13Pins.notOnce.length === 0,
+    'F13-each — every enumerated app.js call site is found EXACTLY ONCE, in its own function (a deleted site, or a pinned text duplicated inside its function, is reported)',
+    JSON.stringify(f13Pins.notOnce));
+  assert(f13Pins.inListOrder,
+    "F13-order — the enumerated app.js call sites appear in js/app.js in the list's order",
+    JSON.stringify(appHitsF13.map((h) => `${h.within}@${h.line}`)));
+  const appSrcF13 = await readFile(join(jsDir, 'app.js'), 'utf8');
+  const f13Check = (src) => {
+    const hits = findIdentifierHits(src, 'isPlatformAdmin').map((h) => ({ file: 'app.js', ...h }));
+    return { hits, offenders: hits.filter(isF13Offender), ...pinnedSiteProblems(hits, ENUMERATED_CALL_SITES) };
+  };
+  const baseF13 = f13Check(appSrcF13);
+  const shiftedF13 = f13Check('\n'.repeat(50) + appSrcF13);
+  assert(shiftedBy50(shiftedF13, baseF13),
+    'F13-shift — 50 blank lines at the top of js/app.js change no F13 verdict (same hits, offenders, pins found and order; every line number moves by exactly 50)',
+    JSON.stringify({ base: siteVerdicts(baseF13), shifted: siteVerdicts(shiftedF13) }));
+  {
+    // Move: composeAdminViewer()'s line, text unchanged, into renderAdminPage() — wrong function.
+    const lines = appSrcF13.split('\n');
+    const from = lines.findIndex((l, i) => l.trim() === 'isPlatformAdmin: getIsPlatformAdmin(),' && topLevelOwner(lines, i) === 'composeAdminViewer');
+    const [moved] = from > -1 ? lines.splice(from, 1) : [];
+    const into = lines.findIndex((l) => /^export function renderAdminPage\(\) \{/.test(l));
+    if (moved !== undefined && into > -1) lines.splice(into + 1, 0, moved);
+    const movedF13 = f13Check(lines.join('\n'));
+    assert(from > -1 && into > -1
+        && movedF13.offenders.length === baseF13.offenders.length + 1
+        && movedF13.offenders.some((h) => h.within === 'renderAdminPage' && h.text === 'isPlatformAdmin: getIsPlatformAdmin(),')
+        && movedF13.notOnce.some((p) => p.within === 'composeAdminViewer' && p.foundAt.length === 0),
+      'F13-move — an enumerated call site moved into a DIFFERENT function, text unchanged, is reported as an offender and its pin as missing',
+      JSON.stringify({ from: from + 1, into: into + 1, offenders: movedF13.offenders, notOnce: movedF13.notOnce }));
+  }
+  // S-C2 teeth (2026-10-01): two comment-shaped hiding places for a real isPlatformAdmin, each
+  // inserted at the top of buildControlCenterCtx(). Each must be an offender under the union,
+  // AND be invisible to the old prefix-skip view alone (so it is the union that catches it).
+  {
+    const insertIntoCtx = (extra) => {
+      const lines = appSrcF13.split('\n');
+      const o = lines.findIndex((l) => /^function buildControlCenterCtx\(\) \{/.test(l));
+      if (o > -1) lines.splice(o + 1, 0, ...extra);
+      return o > -1 ? lines.join('\n') : null;
+    };
+    for (const [label, extra, leak] of [
+      ['F13-union (comment close) — `*/ const _leak = { isPlatformAdmin: true };` after a two-line comment',
+        ['  /* note', '   */ const _leak = { isPlatformAdmin: true };'], '*/ const _leak = { isPlatformAdmin: true };'],
+      ['F13-union (star continuation) — `* (window.isPlatformAdmin ? 1 : 0);` continuing an expression',
+        ['  const _n = 1', '    * (window.isPlatformAdmin ? 1 : 0);'], '* (window.isPlatformAdmin ? 1 : 0);'],
+    ]) {
+      const src = insertIntoCtx(extra);
+      const r = src && f13Check(src);
+      const rawOnly = src ? findIdentifierHits(src, 'isPlatformAdmin', { view: 'raw' }).filter((h) => h.text === leak) : [];
+      assert(!!r && r.offenders.length === baseF13.offenders.length + 1
+          && r.offenders.some((h) => h.text === leak && h.within === 'buildControlCenterCtx') && rawOnly.length === 0,
+        `${label} IS reported as an offender (the old prefix-skip view alone saw ${rawOnly.length})`,
+        JSON.stringify(r && r.offenders));
+    }
+  }
+  // R-C1 teeth (2026-10-01): the reviewer's counterexample (a) on this fence — composeAdminViewer()'s
+  // closing brace indented and its isPlatformAdmin line moved into a FOLLOWING column-0
+  // statement. The first topLevelOwner() still named composeAdminViewer (silently green).
+  {
+    const lines = appSrcF13.split('\n');
+    const text = 'isPlatformAdmin: getIsPlatformAdmin(),';
+    const from = lines.findIndex((l, i) => l.trim() === text && topLevelOwner(lines, i) === 'composeAdminViewer');
+    let end = from; while (from > -1 && end < lines.length && !/^\}/.test(lines[end])) end++;
+    if (from > -1 && end < lines.length) {
+      lines.splice(from, 1); end--;
+      lines[end] = '  }';
+      lines.splice(end + 1, 0, 'globalThis.__probe = {', '  ' + text, '};');
+    }
+    const r = f13Check(lines.join('\n'));
+    assert(from > -1 && r.offenders.some((h) => h.text === text && h.within === '(module level)')
+        && r.notOnce.some((p) => p.within === 'composeAdminViewer' && p.foundAt.length === 0),
+      'F13-owner-canary — an indented closing brace followed by a column-0 statement holding the pinned text: reported as a module-level offender, pin missing',
+      JSON.stringify({ offenders: r.offenders, notOnce: r.notOnce }));
+  }
+  // S-O1 (2026-10-01) — one column-0 opener per function the F13 pins name, in its own file.
+  {
+    const appFns = [...new Set(ENUMERATED_CALL_SITES.map((c) => c.within))];
+    const appOpeners = openerProblems(appSrcF13, appFns);
+    assert(appFns.length === 3 && appOpeners.length === 0,
+      `F13-openers — each of the ${appFns.length} app.js functions the F13 pins name has exactly one column-0 opener`,
+      JSON.stringify(appOpeners));
+    const decoy = openerProblems(appSrcF13 + '\nfunction _laterThing() {\nfunction composeAdminViewer() {}\n  return 0;\n}\n', appFns);
+    assert(decoy.length === 1 && decoy[0].fn === 'composeAdminViewer' && decoy[0].openers === 2,
+      'F13-openers-canary — a same-name decoy `function composeAdminViewer() {}` at column 0 IS reported',
+      JSON.stringify(decoy));
+  }
+  // S-C1 (2026-10-01) — PREAMBLE COUNT for renderAdminPage()'s cross-league users-read gate:
+  // the exact number of code lines between `export function renderAdminPage() {` and the gate.
+  // A COUNT CHANGE MUST CARRY A DATED NOTE HERE saying what the new preamble line does.
+  // Baseline 2026-10-01 (int/batch3, counted on the merged tree): 19 — the page element
+  // lookup and its guard (one line), the composed viewer, the three active-league /
+  // memberships / membership reads, the 4-line `league` derivation, `let leagues;` and its
+  // 8-line if/else (Super Admin branch, member-scoped else), then the isSuperAdmin
+  // platform_kv gate (section 11's "-preamble", 18) directly above this one.
+  const USERS_GATE_PREAMBLE = 19;
+  {
+    const pin = ENUMERATED_CALL_SITES.find((c) => c.within === 'renderAdminPage');
+    const p = preambleCount(appSrcF13, pin);
+    assert(p.got === USERS_GATE_PREAMBLE,
+      `F13-preamble — renderAdminPage()'s isPlatformAdmin users-read gate has exactly ${USERS_GATE_PREAMBLE} code lines in front of it inside the function (got ${p.got}, found ${p.found}${p.line ? ' @' + p.line : ''})`);
+    const lines = appSrcF13.split('\n');
+    const at = lines.findIndex((l, i) => l.trim() === pin.text && topLevelOwner(lines, i) === pin.within);
+    if (at > -1) lines.splice(at, 0, '  if (false)');
+    const dead = preambleCount(lines.join('\n'), pin);
+    assert(at > -1 && dead.got === USERS_GATE_PREAMBLE + 1 && f13Check(lines.join('\n')).notOnce.length === 0,
+      `F13-preamble-canary — \`if (false)\` inserted above that gate leaves F13-each green and IS reported here (got ${dead.got})`);
+  }
 
   // Teeth: prove the scan finds something when there IS something to find, so "zero offenders"
   // above is a real finding and not a broken/vacuous scan.
@@ -447,14 +756,28 @@ console.log('\n── whole-tree isPlatformAdmin allow-list scan (F13) ──');
   // false }`, sibling to the existing `isPlatformAdmin: !!admin,` return a few
   // lines later in the same function. Re-derived 2026-09-28 (merge round 2).
   const AUTH_JS_ENUMERATED_HITS = [
-    { line: 1892, text: 'return { isPlatformAdmin: false, isSuperAdmin: false };' },
-    { line: 3323, text: 'isPlatformAdmin: !!admin,' },
+    // 2026-10-01 — `file` + `within` replace the line number, same change as ENUMERATED_CALL_SITES.
+    { file: 'auth.js', within: 'refreshPlatformAdminFlags', text: 'return { isPlatformAdmin: false, isSuperAdmin: false };' },
+    { file: 'auth.js', within: 'listUsersAcrossLeagues', text: 'isPlatformAdmin: !!admin,' },
   ];
   const authHits = allHits.filter((h) => h.file === 'auth.js'
-    && !AUTH_JS_ENUMERATED_HITS.some((c) => c.line === h.line && c.text === h.text));
+    && !AUTH_JS_ENUMERATED_HITS.some((c) => samePinnedSite(c, h)));
   assert(authHits.length === 0,
     'auth.js carries ZERO literal isPlatformAdmin hits beyond the one enumerated data-field exception — the real derivation lives in _recomputeSynthesizedSession()/_refreshPlatformAdminFlags(), exposed via getIsPlatformAdmin() (a differently-spelled identifier, by design, so it never has to be on this allow-list)',
     JSON.stringify(authHits));
+  const authPinsF13 = pinnedSiteProblems(allHits.filter((h) => h.file === 'auth.js'), AUTH_JS_ENUMERATED_HITS);
+  assert(authPinsF13.notOnce.length === 0 && authPinsF13.inListOrder,
+    "F13-auth-each — each enumerated auth.js exception is found EXACTLY ONCE, in its own function, in the list's order (2026-10-01: a stale exception can no longer linger)",
+    JSON.stringify(authPinsF13));
+  {
+    // S-O1 (2026-10-01) — the auth.js exceptions' functions (this list and section 11's
+    // AUTH_JS_ENUMERATED_SUPER_HITS name the same two) each have exactly one column-0 opener.
+    const authFns = [...new Set(AUTH_JS_ENUMERATED_HITS.map((c) => c.within))];
+    const authOpeners = openerProblems(await readFile(join(jsDir, 'auth.js'), 'utf8'), authFns);
+    assert(authFns.length === 2 && authOpeners.length === 0,
+      `F13-auth-openers — each of the ${authFns.length} auth.js functions the exceptions name has exactly one column-0 opener`,
+      JSON.stringify(authOpeners));
+  }
 
   // Today's specific expectation for index.html, named the same way: the bottom-nav Comm icon's
   // admin-only branch (DI-320 §Entry point 2) is not wired yet this wave, so this should be
@@ -560,7 +883,15 @@ console.log('\n── claim-code trio (F12) ──');
 console.log('\n── get_member_contacts cross-league render-path scan (N6) ──');
 {
   const jsDir = join(__dirname, 'js');
-  const jsFiles = (await readdir(jsDir)).filter((f) => f.endsWith('.js')).sort();
+  // 2026-10-01 (v0.29.0 batch 4, security F2) — recursive, same as sections 5 and 11: this was
+  // the last flat readdir over js/, so a get_member_contacts caller in js/sports/*.js (shipped
+  // client code) was never read. Subdirectory hits are reported by their relative path
+  // ('sports/x.js'), which no known-caller name matches, so one there is an unexpected caller.
+  const jsFiles = (await readdir(jsDir, { recursive: true })).filter((f) => f.endsWith('.js')).sort();
+  assert(jsFiles.length >= 20,
+    `N6 fixture check — the scan really enumerated js/*.js (found ${jsFiles.length} files); a broken/empty readdir would make every assertion below pass vacuously`);
+  assert(jsFiles.some((f) => f.startsWith('sports/')),
+    `N6 fixture check (canary) — the get_member_contacts scan recurses into js/ subdirectories (js/sports/*.js is scanned: ${JSON.stringify(jsFiles.filter((f) => f.includes('/')))})`);
   const hits = [];
   for (const f of jsFiles) {
     const src = await readFile(join(jsDir, f), 'utf8');
@@ -924,6 +1255,126 @@ console.log('\n── SQL drafts: both GUC escapes are bounded by their SET list
         'R-c/0035 — the alias delete still deletes only the CALLER\'s alias row (keyed on auth.uid())');
     }
   }
+
+  // ── SP-53 (2026-09-30) — 0037 ADDS A SECOND ARMER OF app.account_anonymize (leave_league) AND REDEFINES admin_set_member_role() ──
+  // R-c above said "each escape is armed by exactly one function". With 0037 `app.account_anonymize` is armed by exactly TWO named functions — anonymize_own_account()
+  // (0035) and leave_league() (0037) — and EACH is scanned. What R-c protects is unchanged and is asserted per list: the escape opens the whole commissioner-only
+  // column set in the guard, so each function's own `update … set` lists are the real boundary, and neither may assign `role`, `phone_verified`, `created_at` or
+  // (for leave_league) `linked_at`. leave_league has TWO lists — an ordinary seat (`active = false`) and a KEPT seat (role and active untouched; the dispute stamp) —
+  // and exactly one of them contains `active = false`. Both refusals precede either GUC; both GUCs are transaction-local and reset after the update. Nothing is
+  // loosened: the 0029 and 0035 scans above stand as they are. And admin_set_member_role()'s SET-list scan is RE-POINTED to its LATEST body (0037's redefinition),
+  // which must still pass it — the 0026 scan above stays as the history.
+  {
+    let sql0037 = '';
+    try { sql0037 = await readFile(join(__dirname, 'supabase', 'migrations', '0037_sp53_league_settings.sql'), 'utf8'); }
+    catch (e) { fail++; console.error('  ❌ Migration 0037 not found —', e.message); }
+    if (sql0037) {
+      const strip = (t) => t.split('\n').map((l) => l.replace(/--.*$/, '')).join('\n');
+      const m = /^create or replace function public\.leave_league\([^)]*\)[\s\S]*?\$\$([\s\S]*?)\$\$;/m.exec(sql0037);
+      assert(!!m, 'R-c/0037 — leave_league() found in migration 0037 (fixture check)');
+      const body = strip(m ? m[1] : '');
+      const lists = [...body.matchAll(/update\s+public\.league_members\s+set\s+([\s\S]*?)\s+where\s/gi)].map((x) => x[1]);
+      assert(lists.length === 2,
+        `R-c/0037 — the scan isolates EVERY \`update public.league_members set … where …\` in leave_league: exactly TWO (the KEPT seat, then the ordinary seat) — a third would be a write surface under the escape GUC that nobody scanned (found ${lists.length})`);
+      assert(lists.length === 2 && lists.every((l) => /\buser_id\s*=\s*null/.test(l) && /\bemail\s*=\s*null/.test(l) && /\bphone\s*=\s*''/.test(l)),
+        'R-c/0037 — BOTH lists really are the leave ones (user_id and email nulled, phone reset to empty) — a non-vacuity check on the capture');
+      assert(lists.length === 2 && lists.every((l) => !/\brole\b/.test(l) && !/\bphone_verified\b/.test(l) && !/\bcreated_at\b/.test(l) && !/\blinked_at\b/.test(l)),
+        'R-c/0037 — NEITHER list assigns `role`, `phone_verified`, `created_at` or `linked_at`: the escape opens the whole commissioner-only column set, so the caller must never be able to self-promote or rewrite a verification fact on the way out, and linked_at is KEPT (it is how the roster tells "(left)" from "(removed)")');
+      assert(lists.length === 2 && lists.filter((l) => /\bactive\s*=\s*false/.test(l)).length === 1 && !/\bactive\b/.test(lists[0]) && /\bactive\s*=\s*false/.test(lists[1])
+          && /\blink_disputed_at\s*=\s*now\(\)/.test(lists[0]) && !/link_disputed_at/.test(lists[1]),
+        'R-c/0037 — EXACTLY ONE list contains `active = false` (the ordinary seat, second); the KEPT-seat list (first) never names `active` (a kept seat keeps role AND active, or both last-commissioner triggers refuse it) and is the one that stamps link_disputed_at (a vacant kept seat stays unclaimable; leaving an ordinary seat is not a dispute)');
+      const iNotAuth = body.indexOf("raise exception 'not_authenticated'");
+      const iBlocks = body.indexOf("raise exception 'last_commissioner'");
+      const iConsent = body.indexOf("raise exception 'archive_confirm_required'");
+      const iWeek = body.indexOf("raise exception 'week_in_progress'");
+      const iArmLink = body.indexOf("set_config('app.member_link', '1', true)");
+      const iArmAnon = body.indexOf("set_config('app.account_anonymize', '1', true)");
+      const iUpdate = body.indexOf('update public.league_members');
+      assert(iNotAuth > -1 && iBlocks > -1 && iConsent > -1 && iWeek > -1 && [iNotAuth, iBlocks, iConsent, iWeek].every((i) => i < iArmLink && i < iArmAnon) && iArmAnon > -1 && iUpdate > iArmAnon,
+        'R-c/0037 — EVERY refusal (not_authenticated, week_in_progress, last_commissioner, archive_confirm_required) is raised BEFORE either escape GUC is armed: a refused caller never holds the escape, and no write precedes the arming');
+      assert(/set_config\('app\.account_anonymize', '1', true\)/.test(body) && /set_config\('app\.member_link', '1', true\)/.test(body)
+          && body.lastIndexOf("set_config('app.account_anonymize', '', true)") > body.lastIndexOf('update public.league_members')
+          && body.lastIndexOf("set_config('app.member_link', '', true)") > body.lastIndexOf('update public.league_members'),
+        'R-c/0037 — …both GUCs are armed transaction-locally (`true`) and RESET to \'\' after the last update, so the escape does not outlive the one statement it was opened for');
+      assert(!/set_config\('app\.role_change'/.test(body) && !/set_config\('app\.league_status_change'/.test(body) && !/anonymize_own_account|push/i.test(m ? m[0] : 'x'),
+        'R-c/0037 — leave_league arms NEITHER app.role_change NOR app.league_status_change, and names neither the account-deletion function nor any push call (it is independent of both)');
+      // The census: every migration function that arms app.account_anonymize, scanned once more from THIS suite's side.
+      const migDir37 = join(__dirname, 'supabase', 'migrations');
+      const armers = [];
+      for (const f of (await readdir(migDir37)).filter((x) => /^\d{4}_.*\.sql$/.test(x)).sort()) {
+        const t = await readFile(join(migDir37, f), 'utf8');
+        for (const fm of t.matchAll(/^create or replace function public\.(\w+)\([\s\S]*?\$\$([\s\S]*?)\$\$;/gm)) {
+          if (/set_config\(\s*'app\.account_anonymize'\s*,\s*'1'/.test(strip(fm[2]))) armers.push(`${f.slice(0, 4)}:${fm[1]}`);
+        }
+      }
+      // RE-DERIVED 2026-10-01 (SP-53 release gates, 0042): the F3 redefinition HAS landed — 0042 re-creates anonymize_own_account (0035's body + the SC-L1 lock) and leave_league (0037's body + the G-6
+      // bound) — so the census grows by exactly those two, in file order, and each is scanned in the R-c/0042 block below. Any further armer is still a deliberate, reviewed edit to this list.
+      assert(JSON.stringify(armers) === JSON.stringify(['0029:anonymize_own_account', '0035:anonymize_own_account', '0037:leave_league', '0042:leave_league', '0042:anonymize_own_account']),
+        `R-c/0037 — app.account_anonymize is armed by exactly {0029 anonymize_own_account, 0035 anonymize_own_account (superseded by 0042's), 0037 leave_league (superseded by 0042's), 0042 leave_league, 0042 anonymize_own_account}; a further armer is a deliberate, reviewed edit to this list — and must be scanned here too (found ${JSON.stringify(armers)})`);
+
+      // admin_set_member_role — RE-POINTED to the latest body (0037), the same scan as the 0026 one above.
+      const a = /^create or replace function public\.admin_set_member_role\([\s\S]*?\$\$([\s\S]*?)\$\$;/m.exec(sql0037);
+      assert(!!a, 'R-c/0037 — admin_set_member_role() found in migration 0037 (fixture check: the LATEST body)');
+      const ab = strip(a ? a[1] : '');
+      // NOTE: the 0026 scan above tests `/set\s+active\s*=/` against the body WITH ITS COMMENTS, and the body's own F3 comment contains the words `set active = `, so that one assertion
+      // passes through the comment (the real UPDATE reads `set role = p_role, active = active`). This re-pointed scan strips the comments first and pins the REAL shape.
+      assert(/update\s+public\.league_members\s+set\s+role\s*=\s*p_role\s*,\s*active\s*=\s*active\s+where\s/i.test(ab) && !/set\s+email\s*=/.test(ab) && !/set\s+phone_verified\s*=/.test(ab) && !/set\s+created_at\s*=/.test(ab)
+          && [...ab.matchAll(/update\s+public\.league_members\s+set\s+([\s\S]*?)\s+where\s/gi)].length === 1,
+        "F8/F3 (latest body, comments stripped) — admin_set_member_role's ONE UPDATE of league_members is `set role = p_role, active = active` — exactly {role, active} — and never `set email`, `set phone_verified` or `set created_at`, after the SC-L2 lock was added");
+      assert(/is_platform_admin\(\)\s+or\s+public\.is_commissioner\(p_league\)/.test(ab) && /if not found then raise exception 'not_found'; end if;/.test(ab.replace(/\s+/g, ' ')) && !/v_found/.test(ab)
+          && /if p_role = 'commissioner' and v_user_id is not null and v_user_id = auth\.uid\(\) then/.test(ab) && /v_user_id is null and p_role = 'commissioner' and exists \(/.test(ab),
+        'F6/B-3/MUST-FIX (1)/(2) (latest body) — the authorization gate, the `found` idiom and both self-promotion refusals (conditioned on p_role = \'commissioner\') are all still there in the redefinition');
+      assert(ab.replace(/\s+/g, ' ').indexOf('for no key update') > ab.replace(/\s+/g, ' ').indexOf("raise exception 'not_authorized'")
+          && ab.replace(/\s+/g, ' ').indexOf('for no key update') < ab.replace(/\s+/g, ' ').indexOf("set_config('app.role_change'")
+          && (ab.match(/for no key update/g) || []).length === 1,
+        'SC-L2 — the league-row lock comes AFTER the first authorization check and BEFORE `app.role_change` is armed (serialization with every other membership-changing function)');
+    }
+  }
+
+  // ── SP-53 release gates (2026-10-01) — 0042 RE-CREATES THE TWO ARMERS: leave_league (+ the G-6 time bound) and anonymize_own_account (+ the G-2 / SC-L1 lock) ──
+  // The 0037 and 0035 scans above stand as the history; the LATEST bodies are 0042's, so the same boundary — each function's own `update … set` lists — is scanned on THEM. The escape
+  // `app.account_anonymize` opens the whole commissioner-only column set in the guard, so neither list may ever assign `role`, `phone_verified`, `created_at` (or, for leave_league, `linked_at`).
+  // The lock is the new statement in both: it comes straight after `not_authenticated` and BEFORE either refusal-bearing read, either GUC and every write.
+  {
+    let sql0042 = '';
+    try { sql0042 = await readFile(join(__dirname, 'supabase', 'migrations', '0042_sp53_release_gates.sql'), 'utf8'); }
+    catch (e) { fail++; console.error('  ❌ Migration 0042 not found —', e.message); }
+    if (sql0042) {
+      const strip = (t) => t.split('\n').map((l) => l.replace(/--.*$/, '')).join('\n');
+      const bodyOf = (name) => { const m = new RegExp(`^create or replace function public\\.${name}\\([\\s\\S]*?\\$\\$([\\s\\S]*?)\\$\\$;`, 'm').exec(sql0042); return m ? strip(m[1]) : ''; };
+      const listsOf = (body) => [...body.matchAll(/update\s+public\.league_members\s+set\s+([\s\S]*?)\s+where\s/gi)].map((x) => x[1]);
+      const LOCK = /perform 1 from public\.leagues where id in \(select league_id from public\.league_members where user_id = auth\.uid\(\) and active\) order by id for no key update;/;
+      const lv = bodyOf('leave_league');
+      const an = bodyOf('anonymize_own_account');
+      assert(!!lv && !!an, 'R-c/0042 — leave_league() and anonymize_own_account() found in migration 0042 (fixture check)');
+      const lvLists = listsOf(lv);
+      const anLists = listsOf(an);
+      assert(lvLists.length === 2 && anLists.length === 2,
+        `R-c/0042 — the scan isolates EVERY \`update public.league_members set … where …\` in the re-created leave_league (TWO: kept seat, ordinary seat) and anonymize_own_account (TWO: kept seats, every other seat): a third would be a write surface under the escape GUC that nobody scanned (found ${lvLists.length} and ${anLists.length})`);
+      assert([...lvLists, ...anLists].every((l) => /\buser_id\s*=\s*null/.test(l) && /\bemail\s*=\s*null/.test(l) && /\bphone\s*=\s*''/.test(l)),
+        'R-c/0042 — all four lists really are the unlink ones (user_id and email nulled, phone reset to empty) — a non-vacuity check on the capture');
+      assert([...lvLists, ...anLists].every((l) => !/\brole\b/.test(l) && !/\bphone_verified\b/.test(l) && !/\bcreated_at\b/.test(l)) && lvLists.every((l) => !/\blinked_at\b/.test(l)),
+        'R-c/0042 — NONE of the four lists assigns `role`, `phone_verified` or `created_at`, and leave_league\'s never assigns `linked_at` either: the escape opens the whole commissioner-only column set, so the caller must never be able to self-promote or rewrite a verification fact on the way out');
+      assert(lvLists.filter((l) => /\bactive\s*=\s*false/.test(l)).length === 1 && !/\bactive\b/.test(lvLists[0]) && /\bactive\s*=\s*false/.test(lvLists[1])
+          && anLists.filter((l) => /\bactive\s*=\s*false/.test(l)).length === 1 && !/\bactive\b/.test(anLists[0]) && /\bactive\s*=\s*false/.test(anLists[1]),
+        'R-c/0042 — in EACH function exactly one list contains `active = false` (the ordinary seat, second); the KEPT-seat list (first) never names `active` (a kept seat keeps role AND active, or both last-commissioner triggers refuse it)');
+      const flat = (t) => t.replace(/\s+/g, ' ');
+      assert(LOCK.test(flat(lv)) && LOCK.test(flat(an)) && (lv.match(/for no key update/g) || []).length === 1 && (an.match(/for no key update/g) || []).length === 1,
+        'G-2 / SC-L1 — BOTH re-created functions carry the SAME lock-set statement, verbatim, exactly once (every league the caller holds an active seat in, ascending id, one statement)');
+      assert(lv.indexOf("raise exception 'not_authenticated'") > -1 && lv.indexOf("raise exception 'not_authenticated'") < lv.indexOf('for no key update') && lv.indexOf('for no key update') < lv.indexOf('account_exit_leagues')
+          && lv.indexOf('for no key update') < lv.indexOf("set_config('app.account_anonymize', '1'") && lv.indexOf('for no key update') < lv.indexOf('update public.league_members')
+          && an.indexOf("raise exception 'not_authenticated'") > -1 && an.indexOf("raise exception 'not_authenticated'") < an.indexOf('for no key update') && an.indexOf('for no key update') < an.indexOf('account_exit_leagues')
+          && an.indexOf('for no key update') < an.indexOf("set_config('app.account_anonymize', '1'") && an.indexOf('for no key update') < an.indexOf('update public.league_members'),
+        'G-2 / SC-L1 — in BOTH functions the lock comes AFTER `not_authenticated` and BEFORE the first account_exit_leagues() read, the escape GUC and the first write (an unauthenticated caller locks nothing; a stale read cannot slip in before the lock)');
+      assert(["raise exception 'not_authenticated'", "raise exception 'not_a_member'", "raise exception 'week_in_progress'", "raise exception 'last_commissioner'", "raise exception 'archive_confirm_required'"]
+          .every((r) => lv.indexOf(r) > -1 && lv.indexOf(r) < lv.indexOf("set_config('app.member_link', '1', true)") && lv.indexOf(r) < lv.indexOf("set_config('app.account_anonymize', '1', true)"))
+          && lv.lastIndexOf("set_config('app.account_anonymize', '', true)") > lv.lastIndexOf('update public.league_members') && lv.lastIndexOf("set_config('app.member_link', '', true)") > lv.lastIndexOf('update public.league_members')
+          && an.indexOf("raise exception 'not_authenticated'") < an.indexOf("set_config('app.account_anonymize', '1'") && an.indexOf("raise exception 'last_commissioner'") < an.indexOf("set_config('app.account_anonymize', '1'"),
+        'R-c/0042 — every refusal of leave_league (incl. the G-6-bounded week_in_progress) and both refusals of anonymize_own_account precede the escape GUC, and leave_league resets both GUCs after its last update: a refused caller never holds the escape');
+      assert(!/set_config\('app\.role_change'/.test(lv + an) && !/set_config\('app\.league_status_change'/.test(lv + an) && !/anonymize_own_account|push/i.test((/^create or replace function public\.leave_league\([\s\S]*?\$\$;/m.exec(sql0042) || ['x'])[0]),
+        'R-c/0042 — neither function arms app.role_change or app.league_status_change, and leave_league (raw text, comments included) names neither the account-deletion function nor any push call');
+    }
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════
@@ -957,9 +1408,12 @@ console.log('\n── isLeaguePaused() ──');
 console.log('\n── whole-tree isSuperAdmin allow-list scan (DI-344 §Render paths) ──');
 {
   const jsDir = join(__dirname, 'js');
-  const jsFiles = (await readdir(jsDir)).filter((f) => f.endsWith('.js')).sort();
+  // 2026-10-01 (int/batch3) — recursive, same as section 5: js/sports/*.js is scanned too.
+  const jsFiles = (await readdir(jsDir, { recursive: true })).filter((f) => f.endsWith('.js')).sort();
   assert(jsFiles.length >= 20,
     `fixture check — the app-wide scan really enumerated js/*.js (found ${jsFiles.length} files)`);
+  assert(jsFiles.some((f) => f.startsWith('sports/')),
+    'fixture check — the isSuperAdmin scan recurses into js/ subdirectories (js/sports/*.js is scanned)');
 
   // DISCOVERED DURING BUILD (2026-09-25) — a concurrent thread (group A1, js/control-center.js)
   // has ALREADY landed the "enumerated control-center gating call site" DI-344 §Render paths
@@ -1068,25 +1522,20 @@ console.log('\n── whole-tree isSuperAdmin allow-list scan (DI-344 §Render p
   // Re-derived 2026-09-30 (v0.28.0 STAMP — the WHATS_NEW v0.28.0 entry and its release comment, net +29 lines, sit above every app.js site; the auth.js sites are untouched) — line numbers only, matched by exact text.
   // Re-derived 2026-09-29 (RG-TBD-N15 — the logo-toggle repaint (+8) and the sweep's repaints (+22) in buildControlCenterCtx() sit above every site but 3841) — line numbers only, matched byexact text.
   const ENUMERATED_SUPER_CALL_SITES = [
-    { file: 'app.js', line: 3917, text: 'isSuperAdmin: getIsSuperAdmin(),' },
-    { file: 'app.js', line: 13905, text: 'isSuperAdmin: getIsSuperAdmin(),' },
-    { file: 'app.js', line: 14413, text: 'if (viewer.isSuperAdmin) {' },
+    // 2026-10-01 — `within` replaces the line number (POSITION-INDEPENDENT SITE PINS, above section 5);
+    // the SB-14 +4 re-derivation of these five (fix/sb14-btn-spacing ed32605) is superseded by it.
+    { file: 'app.js', within: 'buildControlCenterCtx', text: 'isSuperAdmin: getIsSuperAdmin(),' },
+    { file: 'app.js', within: 'composeAdminViewer', text: 'isSuperAdmin: getIsSuperAdmin(),' },
+    { file: 'app.js', within: 'renderAdminPage', text: 'if (viewer.isSuperAdmin) {' },
     // Text updated, wiring pass 3a-bis (BLOCK 2's `attempted` guard replaces
     // `loaded`/`loading`-only).
-    { file: 'app.js', line: 14428, text: 'if (viewer.isSuperAdmin && !_platformKvCache.attempted && !_platformKvCache.loading) refreshPlatformKvCache();' },
-    { file: 'app.js', line: 14629, text: 'if (viewer.isSuperAdmin) bindSuperAdminControls();' },
+    { file: 'app.js', within: 'renderAdminPage', text: 'if (viewer.isSuperAdmin && !_platformKvCache.attempted && !_platformKvCache.loading) refreshPlatformKvCache();' },
+    { file: 'app.js', within: 'renderAdminPage', text: 'if (viewer.isSuperAdmin) bindSuperAdminControls();' },
   ];
 
-  function findIdentifierHitsLocal(src, ident) {
-    const hits = [];
-    const re = new RegExp(`\\b${ident}\\b`);
-    src.split('\n').forEach((rawLine, i) => {
-      const t = rawLine.trimStart();
-      if (t.startsWith('*') || t.startsWith('//') || t.startsWith('/*') || t.startsWith('<!--')) return;
-      if (re.test(rawLine)) hits.push({ line: i + 1, text: rawLine.trim() });
-    });
-    return hits;
-  }
+  // 2026-10-01 — each hit also carries `within`, its top-level owner (see above section 5).
+  // 2026-10-01 (int/batch3, S-C2) — the UNION scan, same as section 5 (see above section 5).
+  const findIdentifierHitsLocal = (src, ident, opts) => findUnionHits(src, ident, opts);
 
   const indexHtmlSrc2 = await readFile(join(__dirname, 'index.html'), 'utf8');
   const allSuperHits = [];
@@ -1097,13 +1546,126 @@ console.log('\n── whole-tree isSuperAdmin allow-list scan (DI-344 §Render p
   findIdentifierHitsLocal(indexHtmlSrc2, 'isSuperAdmin').forEach((h) => allSuperHits.push({ file: 'index.html', ...h }));
 
   const SUPER_ALLOWED_FILES = ['roles.js', 'auth.js', 'admin-panel.js', 'control-center.js'];
-  const superOffenders = allSuperHits.filter((h) => {
+  const isSuperOffender = (h) => {
     if (SUPER_ALLOWED_FILES.includes(h.file)) return false;
-    return !ENUMERATED_SUPER_CALL_SITES.some((c) => c.file === h.file && c.line === h.line && c.text === h.text);
-  });
+    return !ENUMERATED_SUPER_CALL_SITES.some((c) => samePinnedSite(c, h));
+  };
+  const superOffenders = allSuperHits.filter(isSuperOffender);
   assert(superOffenders.length === 0,
-    "DI-344 §Render paths — every 'isSuperAdmin' hit in js/*.js AND index.html is inside the allow-list (roles.js, auth.js's _recomputeSynthesizedSession, admin-panel.js, the control-center gating call site, or an enumerated call site)",
+    "DI-344 §Render paths — every 'isSuperAdmin' hit in js/*.js AND index.html is inside the allow-list (roles.js, auth.js's _recomputeSynthesizedSession, admin-panel.js, the control-center gating call site, or an enumerated call site — same exact text, same top-level function)",
     JSON.stringify(superOffenders));
+
+  // 2026-10-01 — the position-independent pins' own guarantees and teeth (see above section 5).
+  const appSuperHits = allSuperHits.filter((h) => h.file === 'app.js');
+  const superPins = pinnedSiteProblems(appSuperHits, ENUMERATED_SUPER_CALL_SITES);
+  assert(superPins.notOnce.length === 0,
+    'DI-344-each — every enumerated app.js isSuperAdmin site is found EXACTLY ONCE, in its own function (a deleted site, or a pinned text duplicated inside its function, is reported)',
+    JSON.stringify(superPins.notOnce));
+  assert(superPins.inListOrder,
+    "DI-344-order — the enumerated app.js isSuperAdmin sites appear in js/app.js in the list's order",
+    JSON.stringify(appSuperHits.map((h) => `${h.within}@${h.line}`)));
+  const appSrcSuper = await readFile(join(jsDir, 'app.js'), 'utf8');
+  const superCheck = (src) => {
+    const hits = findIdentifierHitsLocal(src, 'isSuperAdmin').map((h) => ({ file: 'app.js', ...h }));
+    return { hits, offenders: hits.filter(isSuperOffender), ...pinnedSiteProblems(hits, ENUMERATED_SUPER_CALL_SITES) };
+  };
+  const baseSuper = superCheck(appSrcSuper);
+  const shiftedSuper = superCheck('\n'.repeat(50) + appSrcSuper);
+  assert(shiftedBy50(shiftedSuper, baseSuper),
+    'DI-344-shift — 50 blank lines at the top of js/app.js change no DI-344 verdict (same hits, offenders, pins found and order; every line number moves by exactly 50)',
+    JSON.stringify({ base: siteVerdicts(baseSuper), shifted: siteVerdicts(shiftedSuper) }));
+  {
+    // Move: renderAdminPage()'s Super Admin bind, text unchanged, into buildControlCenterCtx().
+    const lines = appSrcSuper.split('\n');
+    const from = lines.findIndex((l, i) => l.trim() === 'if (viewer.isSuperAdmin) bindSuperAdminControls();' && topLevelOwner(lines, i) === 'renderAdminPage');
+    const [moved] = from > -1 ? lines.splice(from, 1) : [];
+    const into = lines.findIndex((l) => /^function buildControlCenterCtx\(\) \{/.test(l));
+    if (moved !== undefined && into > -1) lines.splice(into + 1, 0, moved);
+    const movedSuper = superCheck(lines.join('\n'));
+    assert(from > -1 && into > -1
+        && movedSuper.offenders.length === baseSuper.offenders.length + 1
+        && movedSuper.offenders.some((h) => h.within === 'buildControlCenterCtx' && h.text === 'if (viewer.isSuperAdmin) bindSuperAdminControls();')
+        && movedSuper.notOnce.some((p) => p.within === 'renderAdminPage' && p.text === 'if (viewer.isSuperAdmin) bindSuperAdminControls();' && p.foundAt.length === 0),
+      'DI-344-move — an enumerated isSuperAdmin site moved into a DIFFERENT function, text unchanged, is reported as an offender and its pin as missing',
+      JSON.stringify({ from: from + 1, into: into + 1, offenders: movedSuper.offenders, notOnce: movedSuper.notOnce }));
+  }
+  // S-C2 teeth (2026-10-01): the security probe's two isSuperAdmin hiding places. Each must be an
+  // offender under the union AND invisible to the old prefix-skip view alone.
+  {
+    const leak = '/* DI-344 */ if (ctxIsSuper()) { const _v = { isSuperAdmin: true }; }';
+    const lines = appSrcSuper.split('\n');
+    const o = lines.findIndex((l) => /^function buildControlCenterCtx\(\) \{/.test(l));
+    if (o > -1) lines.splice(o + 1, 0, '  ' + leak);
+    const src = lines.join('\n');
+    const r = superCheck(src);
+    const rawOnly = findIdentifierHitsLocal(src, 'isSuperAdmin', { view: 'raw' }).filter((h) => h.text === leak);
+    assert(o > -1 && r.offenders.length === baseSuper.offenders.length + 1
+        && r.offenders.some((h) => h.text === leak && h.within === 'buildControlCenterCtx') && rawOnly.length === 0,
+      `DI-344-union (comment prefix) — \`${leak}\` inside buildControlCenterCtx() IS reported as an offender (the old prefix-skip view alone saw ${rawOnly.length})`,
+      JSON.stringify(r.offenders));
+  }
+  {
+    // A file outside the allow-list (a copy of js/chat-ui.js, in memory) gains one exported
+    // line that starts with a block comment.
+    const leak = '/* x */ export const _leak = (v) => v.isSuperAdmin;';
+    const chatSrc = await readFile(join(jsDir, 'chat-ui.js'), 'utf8');
+    const before = findIdentifierHitsLocal(chatSrc, 'isSuperAdmin').map((h) => ({ file: 'chat-ui.js', ...h })).filter(isSuperOffender);
+    const after = findIdentifierHitsLocal(chatSrc + '\n' + leak + '\n', 'isSuperAdmin').map((h) => ({ file: 'chat-ui.js', ...h })).filter(isSuperOffender);
+    const rawOnly = findIdentifierHitsLocal(chatSrc + '\n' + leak + '\n', 'isSuperAdmin', { view: 'raw' }).filter((h) => h.text === leak);
+    assert(before.length === 0 && after.length === 1 && after[0].text === leak && rawOnly.length === 0,
+      `DI-344-union (other file) — \`${leak}\` appended to a copy of js/chat-ui.js IS reported as an offender (before ${before.length}, after ${after.length}; the old prefix-skip view alone saw ${rawOnly.length})`,
+      JSON.stringify(after));
+  }
+  // S-O1 (2026-10-01) — one column-0 opener per function the DI-344 pins name, in its own file.
+  {
+    const appFns = [...new Set(ENUMERATED_SUPER_CALL_SITES.map((c) => c.within))];
+    const appOpeners = openerProblems(appSrcSuper, appFns);
+    assert(appFns.length === 3 && appOpeners.length === 0,
+      `DI-344-openers — each of the ${appFns.length} app.js functions the DI-344 pins name has exactly one column-0 opener`,
+      JSON.stringify(appOpeners));
+    const decoy = openerProblems(appSrcSuper + '\nfunction _laterThing() {\nexport function renderAdminPage() {}\n  return 0;\n}\n', appFns);
+    assert(decoy.length === 1 && decoy[0].fn === 'renderAdminPage' && decoy[0].openers === 2,
+      'DI-344-openers-canary — a same-name decoy `export function renderAdminPage() {}` at column 0 IS reported',
+      JSON.stringify(decoy));
+  }
+  // S-C1 (2026-10-01) — PREAMBLE COUNT for renderAdminPage()'s isSuperAdmin platform_kv gate:
+  // the exact number of code lines between `export function renderAdminPage() {` and the gate.
+  // A COUNT CHANGE MUST CARRY A DATED NOTE HERE saying what the new preamble line does.
+  // Baseline 2026-10-01 (int/batch3, counted on the merged tree): 18 — the same lines as
+  // section 5's F13-preamble (19) minus this gate itself.
+  const KV_GATE_PREAMBLE = 18;
+  {
+    const pin = ENUMERATED_SUPER_CALL_SITES.find((c) => /_platformKvCache/.test(c.text));
+    const p = preambleCount(appSrcSuper, pin);
+    assert(p.got === KV_GATE_PREAMBLE,
+      `DI-344-preamble — renderAdminPage()'s isSuperAdmin platform_kv gate has exactly ${KV_GATE_PREAMBLE} code lines in front of it inside the function (got ${p.got}, found ${p.found}${p.line ? ' @' + p.line : ''})`);
+    const lines = appSrcSuper.split('\n');
+    const at = lines.findIndex((l, i) => l.trim() === pin.text && topLevelOwner(lines, i) === pin.within);
+    if (at > -1) lines.splice(at, 0, '  if (false)');
+    const dead = preambleCount(lines.join('\n'), pin);
+    assert(at > -1 && dead.got === KV_GATE_PREAMBLE + 1 && superCheck(lines.join('\n')).notOnce.length === 0,
+      `DI-344-preamble-canary — \`if (false)\` inserted above that gate leaves DI-344-each green and IS reported here (got ${dead.got})`);
+  }
+  // R-C1 teeth (2026-10-01): the reviewer's counterexample (b) on an import — not reachable
+  // through this fence's own pins (none is an import; boottest [35c-owner] (b) runs it against
+  // the real auth.js import), so it is asked of topLevelOwner() directly: an import whose
+  // `} from` is indented names ITS OWN source, not the next import's.
+  {
+    const probe = ['import {', '  a, b,', "  c } from './shim.js';", 'import {', '  d,', "} from './auth.js';"];
+    assert(topLevelOwner(probe, 1) === 'import from ./shim.js' && topLevelOwner(probe, 4) === 'import from ./auth.js',
+      "owner-canary (import) — a multi-line import with an indented `} from` names its own source ('./shim.js'), not the following import's ('./auth.js')",
+      JSON.stringify([topLevelOwner(probe, 1), topLevelOwner(probe, 4)]));
+  }
+  // Reviewer N1 (2026-10-01, v0.29.0 batch 4): the closer SPLIT across two lines — `}` alone,
+  // then `from '…';` (indented or at column 0). Before the fix the forward scan wanted `}` and
+  // `from` on one line, skipped this import's closer and borrowed the NEXT import's source.
+  {
+    const probe = ['import {', '  a, b,', '}', "  from './split.js';", 'import {', '  c,', '}', "from './split0.js';", 'import {', '  d,', "} from './auth.js';"];
+    const got = [topLevelOwner(probe, 1), topLevelOwner(probe, 5), topLevelOwner(probe, 9)];
+    assert(JSON.stringify(got) === JSON.stringify(['import from ./split.js', 'import from ./split0.js', 'import from ./auth.js']),
+      "owner-canary (split import) — an import whose closer is split across two lines (`}` then `from '…';`, indented or at column 0) names its OWN source, not the following import's",
+      JSON.stringify(got));
+  }
 
   const superRoleHits = allSuperHits.filter((h) => h.file === 'roles.js');
   assert(superRoleHits.length > 0, 'canary — the scan DOES find isSuperAdmin inside roles.js itself (a broken scan would report zero everywhere)');
@@ -1128,13 +1690,18 @@ console.log('\n── whole-tree isSuperAdmin allow-list scan (DI-344 §Render p
   // auth.js line had ever legitimately carried the literal `isSuperAdmin`
   // text before; it now needs the identical one-line allow-list shape.
   const AUTH_JS_ENUMERATED_SUPER_HITS = [
-    { line: 1892, text: 'return { isPlatformAdmin: false, isSuperAdmin: false };' },
+    // 2026-10-01 — `file` + `within` replace the line number, same change as ENUMERATED_SUPER_CALL_SITES.
+    { file: 'auth.js', within: 'refreshPlatformAdminFlags', text: 'return { isPlatformAdmin: false, isSuperAdmin: false };' },
   ];
   const superAuthHits = allSuperHits.filter((h) => h.file === 'auth.js'
-    && !AUTH_JS_ENUMERATED_SUPER_HITS.some((c) => c.line === h.line && c.text === h.text));
+    && !AUTH_JS_ENUMERATED_SUPER_HITS.some((c) => samePinnedSite(c, h)));
   assert(superAuthHits.length === 0,
     'auth.js carries ZERO literal isSuperAdmin hits beyond the one enumerated fail-closed-return exception — the real derivation lives in _recomputeSynthesizedSession()/_refreshPlatformAdminFlags(), exposed via getIsSuperAdmin() (by design, never on this allow-list)',
     JSON.stringify(superAuthHits));
+  const authPinsSuper = pinnedSiteProblems(allSuperHits.filter((h) => h.file === 'auth.js'), AUTH_JS_ENUMERATED_SUPER_HITS);
+  assert(authPinsSuper.notOnce.length === 0 && authPinsSuper.inListOrder,
+    'DI-344-auth-each — the enumerated auth.js exception is found EXACTLY ONCE, in its own function (2026-10-01: a stale exception can no longer linger)',
+    JSON.stringify(authPinsSuper));
 
   // admin-panel.js and control-center.js — DISCOVERED DURING BUILD, NOT built by this pass: a
   // concurrent thread already landed placeholder-shaped isSuperAdmin gates in both files (both

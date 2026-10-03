@@ -45,6 +45,8 @@
  *      [54]) but triggers it via the NEW entry point.
  *   8  [additional, beyond the required 7] DI-E — the manual Finalize
  *      button's confirm() gate, mutation-tested against weekHasUnresolvedTie().
+ *      (SP-54 / DI-469: [8a] gains the exact tb-missing-draw text, [8c] is
+ *      re-derived for the Extra Point-disabled dead heat, [8c2]/[8c3] are new.)
  *   9  [additional, beyond the required 7] DI-H end to end — the Data-tab
  *      "Recalculate All Finalized Weeks" button.
  */
@@ -377,8 +379,20 @@ console.log('\n[4] DI-A + UN-118 — a grouped week\'s pooled win/loss breaks a 
 // 5. [structural] TRIPWIRE — calculateSeasonStandings() never reads
 //    tiebreakerDelta / tiebreakerGuess / actualTiebreakerValue, so a
 //    season-level aggregate cannot be silently reintroduced later.
+//
+//    AMENDED 2026-10-01 (SP-54 / DI-466, Drew's AD-33 amendment of 2026-09-30):
+//    "Extra Point is never a gate, never a scoring input, never aggregated
+//    across weeks, and never read by the season sort; its only role is the
+//    fourth-ranked fallback inside a weekly true tie, handed to scoring.js as
+//    precomputed keys." The tripwire is RE-DERIVED, not dodged: FORBIDDEN gains
+//    `.ep`, `.alma`, `drawKey` and `tieContexts`, so "never read by the season
+//    sort" is now the assertion itself, and ALLOWLISTED_LINES gains EXACTLY
+//    TWO line-exact entries: the function declaration (it must accept the
+//    per-group contexts) and the one pass-through that hands a group's context
+//    to the SAME ranker the finalize and History paths use. Nothing else in the
+//    season function may mention any of them.
 // ─────────────────────────────────────────────────────────────────────────────
-console.log('\n[5] [structural] calculateSeasonStandings() never reads a tiebreaker field…');
+console.log('\n[5] [structural] calculateSeasonStandings() never reads a tiebreaker field, an alma mater key, an Extra Point key or the draw…');
 {
   /** Declaration-to-declaration boundary — same principle as loadtest.mjs
    *  [64]'s regionsOf(): every top-level export in scoring.js sits at
@@ -429,8 +443,11 @@ console.log('\n[5] [structural] calculateSeasonStandings() never reads a tiebrea
    */
   const ALLOWLISTED_LINES = [
     'tiebreakerDelta: tbRow ? (tbRow.tiebreakerDelta ?? null) : null,',
+    // SP-54 / DI-466 — the TWO lines the amended AD-33 admits (see the section header):
+    'export function calculateSeasonStandings(players, allWeeklyResults, weeks=null, tieContexts=null) {',
+    'rankWeeklyResults(pooled, true, tieContexts ? (tieContexts.get(gid) ?? null) : null);',
   ];
-  const FORBIDDEN = ['tiebreakerDelta', 'tiebreakerGuess', 'actualTiebreakerValue'];
+  const FORBIDDEN = ['tiebreakerDelta', 'tiebreakerGuess', 'actualTiebreakerValue', '.ep', '.alma', 'drawKey', 'tieContexts'];
 
   /** Every line in `functionBody` mentioning a forbidden field, split into
    *  ALLOWED (exact match to an allowlisted line, after trim) and VIOLATION
@@ -566,6 +583,51 @@ export function calculateSeasonStandings(players, allWeeklyResults, weeks=null) 
   const scanReformatted = scanWholeFunction(extractExportedFunction(CANARY_REFORMATTED, 'calculateSeasonStandings'));
   assert(scanReformatted.violations.length === 1,
     'canary D: a COSMETICALLY reformatted copy of the legitimate line (parens removed) is FLAGGED, not silently allowed — "line-exact" is exact, not fuzzy');
+
+  // ── SP-54 / DI-466 — THE AMENDED TRIPWIRE'S OWN PROOFS ───────────────────────────────────────
+  // (1) the real body mentions the new tokens on EXACTLY the two allowlisted lines, and the real
+  //     declaration is the allowlisted one, character for character.
+  const realLines = body === null ? [] : body.split('\n').map(l => l.trim());
+  assert(realLines.filter(l => l.includes('tieContexts')).length === 2
+    && realLines.filter(l => l.includes('tieContexts')).every(l => ALLOWLISTED_LINES.includes(l)),
+    'SP-54: `tieContexts` appears in calculateSeasonStandings() on EXACTLY the two allowlisted lines (the declaration and the pass-through), nowhere else');
+  assert(realLines.filter(l => l.includes('.ep') || l.includes('.alma') || l.includes('drawKey')).length === 0,
+    'SP-54: the season function never reads an Extra Point key, an alma mater key or the draw (`.ep`, `.alma`, `drawKey`)');
+  assert(ALLOWLISTED_LINES.length === 3 && scan.matchedAllowlist.size === 3,
+    'SP-54: the allowlist is exactly the three known lines and all three are present right now (the stale-entry check above covers the two new ones)');
+
+  // (2) PERMANENT CANARIES (SC-K7 2): four injected bodies, scanned EVERY time, each must be flagged. A scan that stops
+  //     catching any of them fails the suite.
+  const wrap = (inner) => `
+export function calculateSeasonStandings(players, allWeeklyResults, weeks=null, tieContexts=null) {
+${inner}
+  return players;
+}
+export function getPickStatusLabel(result) { return result; }
+`;
+  const canaryEp = scanWholeFunction(extractExportedFunction(wrap('  const standings = players.map(p => ({ p })).sort((a, b) => a.p.tie.ep.byPlayer[a.p.playerId] - b.p.tie.ep.byPlayer[b.p.playerId]);'), 'calculateSeasonStandings'));
+  assert(canaryEp.violations.length === 1, 'canary E1: an `.ep` read injected into the season comparator is FLAGGED');
+  const canaryCtx = scanWholeFunction(extractExportedFunction(wrap('  const dbg = tieContexts ? tieContexts.size : 0;'), 'calculateSeasonStandings'));
+  assert(canaryCtx.violations.length === 1, 'canary E2: a `tieContexts` mention on a NON-allowlisted line is FLAGGED');
+  const canaryDraw = scanWholeFunction(extractExportedFunction(wrap('  const k = players.map(p => drawKey("s", p.playerId));'), 'calculateSeasonStandings'));
+  assert(canaryDraw.violations.length === 1, 'canary E3: a `drawKey` call in the season body is FLAGGED');
+  const canaryAlma = scanWholeFunction(extractExportedFunction(wrap('  const n = players.map(p => p.tie.alma[p.playerId]);'), 'calculateSeasonStandings'));
+  assert(canaryAlma.violations.length === 1, 'canary E3b: an `.alma` read in the season body is FLAGGED');
+  // E4: an allowlisted line reformatted — the stale-allowlist check must fail (the allowlist cannot be talked into a fuzzy permission)
+  const reformatted = wrap('').replace('weeks=null, tieContexts=null) {', 'weeks = null, tieContexts = null) {');
+  const scanE4 = scanWholeFunction(extractExportedFunction(reformatted, 'calculateSeasonStandings'));
+  const staleE4 = ALLOWLISTED_LINES.filter(l => !scanE4.matchedAllowlist.has(l) && l.startsWith('export function calculateSeasonStandings'));
+  assert(scanE4.violations.length === 1 && staleE4.length === 1,
+    'canary E4: the DECLARATION allowlist line reformatted (spaces around `=`) is FLAGGED as a violation AND leaves its allowlist entry stale — the hygiene check would fail loud');
+  // the allowlisted lines verbatim in a synthetic body are NOT flagged (the guard does not block the real code)
+  const okBody = scanWholeFunction(extractExportedFunction(`
+export function calculateSeasonStandings(players, allWeeklyResults, weeks=null, tieContexts=null) {
+      rankWeeklyResults(pooled, true, tieContexts ? (tieContexts.get(gid) ?? null) : null);
+  return players;
+}
+export function getPickStatusLabel(result) { return result; }
+`, 'calculateSeasonStandings'));
+  assert(okBody.violations.length === 0 && okBody.matchedAllowlist.size === 2, 'canary E5: the two new allowlisted lines, verbatim, are NOT flagged');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -624,6 +686,11 @@ const activeWeeklyObs = wid => storage.getActiveObligations(wid).filter(o => o.t
 //    that entry point reaches the same guarantee.
 // ─────────────────────────────────────────────────────────────────────────────
 console.log('\n[7] DI-D — tiebreaker saved AFTER finalization, through the real button, recomputes and flags (never rewrites)…');
+// RE-DERIVED 2026-10-01 (SP-54 / DI-466, DESIGN section 8): this fixture used to encode the ACCIDENT — a first finalize with no tiebreaker, tied 1-1, decided
+// by stable-sort insertion order (Xena, added first, "won"). Under the weekly tie-break that first outcome is a DEFINED one: neither school played (no alma
+// games, no schools), the Extra Point is not entered, so the week's DRAW decides it (seed `r7_w1`: drawKey('r7_w1','r7_x') = 3667571276 vs
+// 'r7_y' = 3271450168, so Yusuf, NOT the insertion-first Xena). The late tiebreaker is therefore aimed at the draw's LOSER so it still flips the outcome, and every
+// other assertion — the flip, the second obligation, needsReview on both, nothing rewritten, the toast — is kept and now also proves the toast is a WARNING.
 {
   // Full isolation — DI-H's [9] loop below scans EVERY final week in
   // storage, so any week left over from an earlier section would silently
@@ -656,31 +723,37 @@ console.log('\n[7] DI-D — tiebreaker saved AFTER finalization, through the rea
     'fixture check: Xena and Yusuf are genuinely tied 1-1 with no tiebreaker entered');
 
   // ── FIRST finalize (existing path — applyWeekStatusChange) — with no
-  //    actualTiebreakerValue, both deltas are null, the comparator ties, and
-  //    stable sort keeps insertion order: Xena (added first) wins arbitrarily.
+  //    actualTiebreakerValue, both deltas are null, S2 is level; neither school
+  //    played and there is no Extra Point, so S3 and S4 are skipped and the
+  //    week's DRAW (S5, seed = the weekId) decides: a DEFINED outcome, derived
+  //    here from drawKey() itself — never from insertion order.
+  const drawWinner7 = scoring.drawKey('r7_w1', 'r7_x') < scoring.drawKey('r7_w1', 'r7_y') ? 'r7_x' : 'r7_y';
+  const drawLoser7 = drawWinner7 === 'r7_x' ? 'r7_y' : 'r7_x';
+  assert(scoring.drawKey('r7_w1', 'r7_x') === 3667571276 && scoring.drawKey('r7_w1', 'r7_y') === 3271450168 && drawWinner7 === 'r7_y',
+    'fixture check: the draw for seed r7_w1 is pinned (3667571276 vs 3271450168) and gives YUSUF — not the insertion-first Xena — so this fixture cannot pass by the old stable-sort accident');
   applyWeekStatusChange(storage.getWeek('r7_w1'), 'final');
   const before7 = storage.getWeeklyResults('r7_w1');
   const arbWinner = before7.find(r => r.isWinner)?.playerId;
   const arbLoser = before7.find(r => r.isLoser)?.playerId;
-  assert(arbWinner === 'r7_x' && arbLoser === 'r7_y',
-    `fixture check: the ARBITRARY first finalize (no tiebreaker, tied) picked Xena as winner by stable-sort/insertion order, not merit (got winner=${arbWinner}, loser=${arbLoser})`);
+  assert(arbWinner === drawWinner7 && arbLoser === drawLoser7 && before7.find(r => r.isWinner)?.tieBreak?.stage === 'draw',
+    `fixture check: the first finalize (no tiebreaker, tied) was decided by THE WEEK'S DRAW, stage "draw", not by merit or insertion order (got winner=${arbWinner}, loser=${arbLoser})`);
   const obsBefore7 = activeWeeklyObs('r7_w1');
-  assert(obsBefore7.length === 1 && obsBefore7[0].payerPlayerId === 'r7_y' && obsBefore7[0].recipientPlayerId === 'r7_x',
-    'fixture check: exactly one obligation on record, naming Yusuf (loser) owing Xena (winner) off the arbitrary outcome');
+  assert(obsBefore7.length === 1 && obsBefore7[0].payerPlayerId === drawLoser7 && obsBefore7[0].recipientPlayerId === drawWinner7,
+    'fixture check: exactly one obligation on record, the draw\'s loser owing the draw\'s winner');
   const staleObligationId = obsBefore7[0].obligationId;
   const staleCreatedAt = obsBefore7[0].createdAt;
 
-  // Guesses submitted earlier (during the OPEN week) — Yusuf's is far closer
-  // to the actual value that's about to be entered, so recomputing MUST flip
-  // the outcome.
-  storage.setTiebreakerGuess('r7_w1', 'r7_x', 50);
-  storage.setTiebreakerGuess('r7_w1', 'r7_y', 10);
+  // Guesses submitted earlier (during the OPEN week) — the draw LOSER's is far
+  // closer to the actual value that's about to be entered, so recomputing MUST
+  // flip the outcome.
+  storage.setTiebreakerGuess('r7_w1', drawWinner7, 50);
+  storage.setTiebreakerGuess('r7_w1', drawLoser7, 10);
 
   // ── THE NEW ENTRY POINT — drive the REAL save-tb-btn click handler.
   resetDom();
   armToastCapture();
   el('tb-question').value = 'Total points?';
-  el('tb-actual').value = '12'; // Xena delta=38, Yusuf delta=2 → Yusuf now wins
+  el('tb-actual').value = '12'; // the draw's winner is delta=38, the draw's loser delta=2 → the draw's loser now wins
   el('save-tb-btn');
   bindComm(storage.getWeek('r7_w1'), storage.getGames('r7_w1'));
   el('save-tb-btn')._fire('click');
@@ -692,8 +765,10 @@ console.log('\n[7] DI-D — tiebreaker saved AFTER finalization, through the rea
   const after7 = storage.getWeeklyResults('r7_w1');
   const newWinner = after7.find(r => r.isWinner)?.playerId;
   const newLoser = after7.find(r => r.isLoser)?.playerId;
-  assert(newWinner === 'r7_y' && newLoser === 'r7_x',
-    `THE RECOMPUTE FIRED — persisted results now show Yusuf as winner (closer to the actual tiebreaker), Xena as loser: got winner=${newWinner}, loser=${newLoser}`);
+  assert(newWinner === drawLoser7 && newLoser === drawWinner7,
+    `THE RECOMPUTE FIRED — persisted results now show the draw's former LOSER as winner (closer to the actual tiebreaker) and the former winner as loser: got winner=${newWinner}, loser=${newLoser}`);
+  assert(after7.find(r => r.isWinner)?.wonByTiebreaker === true && after7.find(r => r.isWinner)?.tieBreak?.stage === 'tiebreaker',
+    'and the NEW winner\'s descriptor says the tiebreaker decided it (stage "tiebreaker", wonByTiebreaker true) — the draw no longer applies');
   assert(JSON.stringify(before7) !== JSON.stringify(after7),
     'the persisted weekly-result snapshot genuinely changed — Season Summary/Weekly History/CSV all read this same snapshot');
 
@@ -702,10 +777,10 @@ console.log('\n[7] DI-D — tiebreaker saved AFTER finalization, through the rea
   assert(obsAfter7.length === 2,
     `a conflicting recomputed outcome creates a SECOND obligation record rather than silently rewriting the first (got ${obsAfter7.length} active records)`);
   const stale7 = obsAfter7.find(o => o.obligationId === staleObligationId);
-  assert(!!stale7 && stale7.createdAt === staleCreatedAt && stale7.payerPlayerId === 'r7_y' && stale7.recipientPlayerId === 'r7_x',
+  assert(!!stale7 && stale7.createdAt === staleCreatedAt && stale7.payerPlayerId === drawLoser7 && stale7.recipientPlayerId === drawWinner7,
     'the ORIGINAL (now-stale) obligation is UNTOUCHED — same id, same createdAt, same payer/recipient — never rewritten in place');
   const fresh7 = obsAfter7.find(o => o.obligationId !== staleObligationId);
-  assert(!!fresh7 && fresh7.payerPlayerId === 'r7_x' && fresh7.recipientPlayerId === 'r7_y',
+  assert(!!fresh7 && fresh7.payerPlayerId === drawWinner7 && fresh7.recipientPlayerId === drawLoser7,
     'a NEW obligation exists naming the freshly recomputed (correct) payer/recipient — never silently dropped');
   assert(stale7.needsReview === true && fresh7.needsReview === true,
     'BOTH records are flagged needsReview — surfaced for a human to resolve via Data → Obligation Corrections, never auto-resolved either way (DI-F, achieved entirely by DI-D)');
@@ -717,6 +792,8 @@ console.log('\n[7] DI-D — tiebreaker saved AFTER finalization, through the rea
     `the already-final recompute branch's copy fired: "${capturedToasts[0]?.text}"`);
   assert(capturedToasts[0].text.includes('⚠️ Recorded outcome changed') && capturedToasts[0].text.includes('Obligation Corrections'),
     'AND the "recorded outcome changed" warning is appended, because the winner/loser genuinely flipped');
+  assert(capturedToasts[0].className.includes('warning') && !capturedToasts[0].className.includes('success'),
+    'SP-54 (touched-screen audit A3): a recorded outcome that MOVED is a WARNING toast, never softened into a success');
 
   // ── 7b. CONTRAST — a NOT-YET-FINAL week's tiebreaker save must NOT
   //    recompute anything and must NOT change the base toast copy.
@@ -795,6 +872,11 @@ console.log('\n[8] DI-E — manual Finalize confirm() gate…');
   assert(confirmCalls.length === 1, `confirm() was called exactly once for a tied, no-tiebreaker week (got ${confirmCalls.length})`);
   assert(confirmCalls[0].includes('tie in correct picks') && confirmCalls[0].includes('Enter the tiebreaker first (Cancel)') && confirmCalls[0].includes('finalize anyway'),
     `confirm() carried DI-E's exact copy: "${confirmCalls[0]}"`);
+  // SP-54 / DI-469: the false sentence is gone and the dialog names what ACTUALLY decides. This fixture is tied 1-1 with no schools and no Extra Point, so the
+  // preview reaches the draw: the `tb-missing-draw` notice, exact.
+  assert(!/arbitrar/i.test(confirmCalls[0]), 'SP-54 [8a]: the dialog never says "arbitrarily"');
+  assert(confirmCalls[0] === "This week has a tie in correct picks and no tiebreaker value entered, and as it stands it would end at the week's draw. Enter the tiebreaker first (Cancel), or finalize anyway and fix it later; entering the tiebreaker or the Extra Point afterward recalculates the week (OK).",
+    `SP-54 [8a]: the exact tb-missing-draw text (a tie that would end at the week's draw): "${confirmCalls[0]}"`);
   assert(storage.getWeek('r8_w1').status === 'live', 'Cancel on the confirm() → the week did NOT finalize (still live)');
 
   // ── 8b. TIED, no tiebreaker, OK → week finalizes anyway.
@@ -805,14 +887,38 @@ console.log('\n[8] DI-E — manual Finalize confirm() gate…');
   assert(storage.getWeek('r8_w2').status === 'final', 'OK on the confirm() → the week DID finalize');
 
   // ── 8c. A tiebreaker is ALREADY on file (even though the games would
-  //    still tie) → confirm() must NOT fire. Trigger is deliberately narrow:
-  //    actualTiebreakerValue == null AND a tie.
+  //    still tie) → the NO-TIEBREAKER notice must NOT fire. Trigger is
+  //    deliberately narrow: actualTiebreakerValue == null AND a tie.
+  //    RE-DERIVED 2026-10-01 (SP-54 / DI-469, J2): the claim stays true for that
+  //    notice, so the fixture now disables the Extra Point (a dead heat: the
+  //    draw decides, nothing is actionable, silent as before). With the Extra
+  //    Point ENABLED and empty a SEPARATE notice fires — [8c2] — and once it is
+  //    entered the dialog is silent again — [8c3].
   const W8c = tiedWeek('r8_w3');
-  storage.saveWeek({ ...W8c, actualTiebreakerValue: 12, tiebreakerFinalized: true });
+  storage.saveWeek({ ...W8c, actualTiebreakerValue: 12, tiebreakerFinalized: true, extraPointEnabled: false });
   confirmCalls = []; confirmQueue = [];
   fireFinalize('r8_w3');
-  assert(confirmCalls.length === 0, 'a tiebreaker already on file suppresses the confirm() entirely, even though the games themselves still tie');
+  assert(confirmCalls.length === 0, 'a tiebreaker already on file suppresses the NO-TIEBREAKER confirm() entirely (Extra Point disabled: a dead heat is silent), even though the games themselves still tie');
   assert(storage.getWeek('r8_w3').status === 'final', 'and the week finalizes directly, exactly like today, with no interruption');
+
+  // ── 8c2. A tiebreaker on file, the tie would still reach the draw, the Extra Point is ENABLED and has no result: the ep-missing notice fires.
+  const W8c2 = tiedWeek('r8_w5');
+  storage.saveWeek({ ...W8c2, actualTiebreakerValue: 12, tiebreakerFinalized: true, extraPointEnabled: true, extraPointActual: null });
+  confirmCalls = []; confirmQueue = [false];                       // Cancel
+  fireFinalize('r8_w5');
+  assert(confirmCalls.length === 1 && confirmCalls[0] === "This tie would be settled by the Extra Point, and no longest field goal is entered yet. Enter it first (Cancel), or finalize anyway and let the week's draw decide; entering it afterward recalculates the week (OK).",
+    `SP-54 [8c2]: with the Extra Point enabled and empty the ep-missing notice fires, exact: "${confirmCalls[0]}"`);
+  assert(storage.getWeek('r8_w5').status === 'live', 'SP-54 [8c2]: Cancel blocks the finalize');
+  confirmCalls = []; confirmQueue = [true];                        // OK
+  fireFinalize('r8_w5');
+  assert(confirmCalls.length === 1 && storage.getWeek('r8_w5').status === 'final', 'SP-54 [8c2]: OK finalizes it (the week\'s draw decides)');
+
+  // ── 8c3. …and once the Extra Point is entered, the same tie is a true dead heat: silent.
+  const W8c3 = tiedWeek('r8_w6');
+  storage.saveWeek({ ...W8c3, actualTiebreakerValue: 12, tiebreakerFinalized: true, extraPointEnabled: true, extraPointActual: 52 });
+  confirmCalls = []; confirmQueue = [];
+  fireFinalize('r8_w6');
+  assert(confirmCalls.length === 0 && storage.getWeek('r8_w6').status === 'final', 'SP-54 [8c3]: with the Extra Point entered a tie that still ends at the draw is a true dead heat: NO dialog, the week finalizes');
 
   // ── 8d. A CLEAR winner (no tie) → confirm() must NOT fire.
   const weekIdClear = 'r8_w4';
@@ -950,8 +1056,23 @@ console.log('\n[9] DI-H — the Data-tab bulk recompute button…');
     'and the week record itself is untouched — still open, not silently advanced');
 
   const html9 = renderRecalculateFinalizedWeeksAdminSectionHTML();
-  assert(html9.includes('data-comm-tab="data"') && html9.includes('id="recalc-all-weeks-btn"'),
-    'the card markup itself carries the data-comm-tab="data" wrapper (RG-10) and the button id');
+  // RG-10 (a card without a tab attribute renders on EVERY tab of its panel) — RE-DERIVED 2026-10-01 (SP-54 BM-1). This assertion used to read the body function's markup for
+  // `data-comm-tab="data"`, which was true while the card lived in the Comm panel. DI-320 (2026-09-25) moved it to the Admin panel's Data tab and made js/admin-panel.js's cardShell()
+  // the ONE wrapper (`.admin-section[data-admin-tab][data-admin-card]`); the body returns INNER content only, and a second wrapper inside it would double-wrap (the CARD SHELL CONTRACT).
+  // The rule is unchanged; it is now proven where the wrapper lives: the card id maps to the Data tab, and the REAL admin panel renders the body inside a data-admin-tab="data" section.
+  const adminPanel9 = await import('./js/admin-panel.js');
+  const viewer9 = { playerId: 'p-drew', isAdmin: true, playerVerified: true, userId: 'drew', isPlatformAdmin: true, isSuperAdmin: false, activeLeagueId: 'L1', memberships: [{ leagueId: 'L1', role: 'commissioner', active: true }] };
+  const panel9 = adminPanel9.renderAdminPanel({ viewer: viewer9, league: { id: 'L1', name: 'Test League', pilot: false }, leagues: [{ id: 'L1', name: 'Test League', pilot: false }], users: [],
+    escHtml: (x) => String(x), icon: () => '', bodies: { 'recalculate-finalized-weeks': () => renderRecalculateFinalizedWeeksAdminSectionHTML() } });
+  const sectionAt9 = panel9.indexOf('data-admin-card="recalculate-finalized-weeks"');
+  const nextCard9 = sectionAt9 > -1 ? panel9.indexOf('data-admin-card=', sectionAt9 + 10) : -1;
+  const section9 = sectionAt9 > -1 ? panel9.slice(panel9.lastIndexOf('<div class="admin-section"', sectionAt9), nextCard9 > -1 ? nextCard9 : undefined) : '';
+  assert(html9.includes('id="recalc-all-weeks-btn"') && !/data-(comm|admin)-tab=/.test(html9),
+    'the card BODY carries the button id and NO wrapper of its own (the shell is the single wrapper: a second one would double-wrap)');
+  assert(adminPanel9.adminTabFor('recalculate-finalized-weeks') === 'data' && adminPanel9.ADMIN_TABS.some(t => t.key === 'data'),
+    'RG-10: the card id maps to the admin panel\'s Data tab, and Data is one of the five admin tabs');
+  assert(/<div class="admin-section" data-admin-tab="data" data-admin-card="recalculate-finalized-weeks">/.test(section9) && section9.includes('id="recalc-all-weeks-btn"'),
+    `RG-10: the REAL admin panel renders the card inside a data-admin-tab="data" section that contains the button (so it shows on the Data tab only, never on every tab)`);
   assert(html9.includes('Week 1') && html9.includes('winner changed from Xena to Yusuf'),
     `the results panel now renders the persistent per-week change line: contains expected substrings? ${html9.includes('winner changed from Xena to Yusuf')}`);
 
@@ -969,6 +1090,230 @@ console.log('\n[9] DI-H — the Data-tab bulk recompute button…');
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. SP-54 / DI-467 part 4 + N-1 — an EXTRA POINT saved AFTER the week is final recomputes it (the Extra Point can now decide a
+//     weekly winner, so a late result that silently failed to apply would be a money defect), driven through the REAL ep-save-btn
+//     click handler, in BOTH modes. A moved outcome is flagged needsReview, NEVER overwritten, and the toast is a WARNING.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n[10] SP-54 — Extra Point saved after finalize: recompute + flag (local), tell the truth and write nothing (shared)…');
+{
+  localStorage.clear();
+  storage.getPlayers().forEach(p => { if (p.active) storage.savePlayer({ ...p, active: false }); });
+  storage.addPlayer({ playerId: 'r10_x', displayName: 'Xena', active: true });
+  storage.addPlayer({ playerId: 'r10_y', displayName: 'Yusuf', active: true });
+
+  const tiedPicks = (w) => [
+    { pickId: `${w}_pk_x1`, weekId: w, gameId: `${w}_g1`, playerId: 'r10_x', selectedTeam: 'Home1' }, // correct
+    { pickId: `${w}_pk_x2`, weekId: w, gameId: `${w}_g2`, playerId: 'r10_x', selectedTeam: 'Home2' }, // wrong
+    { pickId: `${w}_pk_y1`, weekId: w, gameId: `${w}_g1`, playerId: 'r10_y', selectedTeam: 'Away1' }, // wrong
+    { pickId: `${w}_pk_y2`, weekId: w, gameId: `${w}_g2`, playerId: 'r10_y', selectedTeam: 'Away2' }, // correct
+  ];
+  const mkTied = (weekId, over = {}) => {
+    storage.saveWeek({ weekId, weekNumber: 1, season: 2026, status: 'live', dataSourceMode: 'manual', picksOpenAt: null, picksLockAt: null, lockedAt: null, finalizedAt: null,
+      actualTiebreakerValue: null, tiebreakerFinalized: false, blurb: '', recap: '', groupId: null, isGroupTiebreaker: false, extraPointEnabled: true, extraPointActual: null, ...over });
+    storage.saveGame(mkGame(weekId, `${weekId}_g1`, 'Home1', 'Away1', 24, 20));
+    storage.saveGame(mkGame(weekId, `${weekId}_g2`, 'Home2', 'Away2', 10, 24));
+    storage.saveAllPicks([...storage.getPicks().filter(p => p.weekId !== weekId), ...tiedPicks(weekId)]);
+  };
+  // The ep-save-btn handler is bound inside renderCommExtrasV16() (a closure that needs the whole Comm page to run), so its BODY is extracted as the exported
+  // saveExtraPointActual() — the applyWeekStatusChange precedent — and driven here; the click handler is parse, call, toast, repaint. `toast` is what it shows.
+  let toast = null;
+  const saveEp = (weekId, value, opts) => { toast = app.saveExtraPointActual(weekId, value, opts); };
+
+  // ── (a) LOCAL, final, a tie that reached the DRAW: the late Extra Point moves the outcome ──
+  mkTied('r10_w1');
+  const dw = scoring.drawKey('r10_w1', 'r10_x') < scoring.drawKey('r10_w1', 'r10_y') ? 'r10_x' : 'r10_y';
+  const dl = dw === 'r10_x' ? 'r10_y' : 'r10_x';
+  applyWeekStatusChange(storage.getWeek('r10_w1'), 'final');
+  const before = storage.getWeeklyResults('r10_w1');
+  assert(before.find(r => r.isWinner)?.playerId === dw && before.find(r => r.isWinner)?.tieBreak?.stage === 'draw', 'fixture check: with no Extra Point result the week finalized on THE DRAW');
+  const obs0 = activeWeeklyObs('r10_w1');
+  assert(obs0.length === 1 && obs0[0].payerPlayerId === dl && obs0[0].recipientPlayerId === dw, 'fixture check: one obligation, the draw\'s loser owing the draw\'s winner');
+  storage.setExtraPointGuess('r10_w1', dl, 50);          // actual 52: the draw's LOSER is 2 under…
+  storage.setExtraPointGuess('r10_w1', dw, 40);          // …the draw's winner 12 under
+  saveEp('r10_w1', 52);
+  const after = storage.getWeeklyResults('r10_w1');
+  assert(storage.getWeek('r10_w1').extraPointActual === 52, 'the Extra Point actual itself was persisted (unchanged base behaviour)');
+  assert(after.find(r => r.isWinner)?.playerId === dl && after.find(r => r.isLoser)?.playerId === dw && after.find(r => r.isWinner)?.tieBreak?.stage === 'ep',
+    `THE RECOMPUTE FIRED — the Extra Point now decides: the closer guess wins and the descriptor says stage "ep" (winner ${after.find(r => r.isWinner)?.playerId})`);
+  const obs1 = activeWeeklyObs('r10_w1');
+  const stale = obs1.find(o => o.obligationId === obs0[0].obligationId), fresh = obs1.find(o => o.obligationId !== obs0[0].obligationId);
+  assert(obs1.length === 2 && !!stale && stale.createdAt === obs0[0].createdAt && stale.payerPlayerId === dl && stale.recipientPlayerId === dw,
+    'the ORIGINAL obligation is untouched (same id, createdAt, payer, recipient) — never rewritten in place');
+  assert(!!fresh && fresh.payerPlayerId === dw && fresh.recipientPlayerId === dl && stale.needsReview === true && fresh.needsReview === true,
+    'a NEW obligation names the recomputed payer and recipient and BOTH are flagged needsReview — surfaced for a human, never auto-resolved');
+  assert(toast.msg.includes('Extra Point saved — week results recalculated') && toast.msg.includes('⚠️ Recorded outcome changed')
+    && toast.msg.includes('Obligation Corrections'), `the toast says the week recalculated AND that the recorded outcome changed: "${toast.msg}"`);
+  assert(toast.type === 'warning', 'a MOVED outcome is a WARNING toast, never softened into a success');
+
+  // ── (b) LOCAL, final, an Extra Point that changes nothing: the recalculated toast, a SUCCESS ──
+  const clear = 'r10_w2';
+  storage.saveWeek({ weekId: clear, weekNumber: 2, season: 2026, status: 'live', dataSourceMode: 'manual', blurb: '', recap: '', groupId: null, isGroupTiebreaker: false, extraPointEnabled: true, extraPointActual: null, actualTiebreakerValue: null });
+  storage.saveGame(mkGame(clear, `${clear}_g1`, 'Home1', 'Away1', 24, 20));
+  storage.saveAllPicks([...storage.getPicks(), { pickId: `${clear}_pk_x`, weekId: clear, gameId: `${clear}_g1`, playerId: 'r10_x', selectedTeam: 'Home1' }, { pickId: `${clear}_pk_y`, weekId: clear, gameId: `${clear}_g1`, playerId: 'r10_y', selectedTeam: 'Away1' }]);
+  applyWeekStatusChange(storage.getWeek(clear), 'final');
+  saveEp(clear, 50);
+  assert(toast.msg === '🎯 Extra Point saved — week results recalculated ✅' && toast.type === 'success' && !toast.msg.includes('changed'),
+    `a week decided on picks alone: recalculated, nothing moved, a plain success: "${toast.msg}"`);
+
+  // ── (c) NOT final: nothing recomputes, the toast is exactly the one it always was ──
+  mkTied('r10_w3', { status: 'open' });
+  saveEp('r10_w3', 52);
+  assert(storage.getWeeklyResults('r10_w3').length === 0 && toast.msg === '✅ Extra Point actual saved & graded' && toast.type === 'success',
+    `a NOT-FINAL week: no results written, the toast is unchanged: "${toast.msg}"`);
+
+  // ── (d) SHARED league, final: re-finalizing a FINAL week is refused there (results_outside_finalize), so this does NOT attempt it ──
+  // The shared flag is the mode seam the handler body takes (`shared`, defaulting to isSupabaseDataMode()): flipping the real auth mode would make the storage
+  // seam refuse every write in this harness (no Supabase adapter is registered), which is the loud-fail working as designed and not what is under test.
+  mkTied('r10_w4');
+  applyWeekStatusChange(storage.getWeek('r10_w4'), 'final');
+  const sharedBefore = JSON.stringify(storage.getWeeklyResults('r10_w4'));
+  const sharedObs = activeWeeklyObs('r10_w4').length;
+  storage.setExtraPointGuess('r10_w4', 'r10_x', 50); storage.setExtraPointGuess('r10_w4', 'r10_y', 40);
+  const r4 = app.recomputeFinalWeekAfterEdit(storage.getWeek('r10_w4'), { shared: true });
+  assert(r4.blocked === true && r4.recomputed === false && r4.changed === false, 'recomputeFinalWeekAfterEdit(): in a shared league it returns { blocked: true } and recomputes nothing');
+  saveEp('r10_w4', 52, { shared: true });
+  assert(JSON.stringify(storage.getWeeklyResults('r10_w4')) === sharedBefore && activeWeeklyObs('r10_w4').length === sharedObs,
+    'SHARED: the stored results and the obligations are BYTE-IDENTICAL after the save — no finalizeWeek, no saveAllWeeklyResults, no refused write, no "Still unsaved" banner');
+  assert(storage.getWeek('r10_w4').extraPointActual === 52, 'SHARED: the Extra Point actual itself was still saved');
+  assert(toast.msg === 'Extra Point saved. This week is already final, so its results were not recalculated. Move it back to live and finalize it again to apply it.' && toast.type === 'warning',
+    `SHARED: the (warning) toast tells the truth and says what to do: "${toast.msg}"`);
+  // …and the SAME save with the default mode (local here) recomputes: the flag is the only difference
+  assert(app.saveExtraPointActual('r10_w4', 52, { shared: false }).msg.includes('week results recalculated'), 'the same save in LOCAL mode recomputes (the shared flag is the only difference)');
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. N-1 (coordinator, approved inline as part of DI-469, 2026-10-01) — in a SHARED league the tiebreaker save on a FINAL week and the Data-tab "Recalculate All
+//     Finalized Weeks" button ATTEMPT NOTHING and tell the truth: `results` is written only by finalize_week() on a live-to-final move, so the old paths produced a
+//     refused write and a red "Still unsaved" banner (adaptertest [A-RECALC] proves the refusal, even for a byte-identical recompute). Local mode is unchanged.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n[11] N-1 — shared league: tiebreaker save and Recalculate attempt nothing and say so; local mode unchanged…');
+{
+  const authMod = await import('./js/auth.js');
+  const tieCtx = await import('./js/tie-context.js');
+  const { TIE_COPY } = tieCtx;
+  localStorage.clear();
+  storage.getPlayers().forEach(p => { if (p.active) storage.savePlayer({ ...p, active: false }); });
+  storage.addPlayer({ playerId: 'n1_x', displayName: 'Xena', active: true });
+  storage.addPlayer({ playerId: 'n1_y', displayName: 'Yusuf', active: true });
+  const mkFinal = (weekId, over = {}) => {
+    storage.saveWeek({ weekId, weekNumber: 1, season: 2026, status: 'live', dataSourceMode: 'manual', picksOpenAt: null, picksLockAt: null, lockedAt: null, finalizedAt: null,
+      actualTiebreakerValue: null, tiebreakerFinalized: false, blurb: '', recap: '', groupId: null, isGroupTiebreaker: false, extraPointEnabled: false, ...over });
+    storage.saveGame(mkGame(weekId, `${weekId}_g1`, 'Home1', 'Away1', 24, 20));
+    storage.saveGame(mkGame(weekId, `${weekId}_g2`, 'Home2', 'Away2', 10, 24));
+    storage.saveAllPicks([...storage.getPicks().filter(p => p.weekId !== weekId),
+      { pickId: `${weekId}_pk_x1`, weekId, gameId: `${weekId}_g1`, playerId: 'n1_x', selectedTeam: 'Home1' }, { pickId: `${weekId}_pk_x2`, weekId, gameId: `${weekId}_g2`, playerId: 'n1_x', selectedTeam: 'Home2' },
+      { pickId: `${weekId}_pk_y1`, weekId, gameId: `${weekId}_g1`, playerId: 'n1_y', selectedTeam: 'Away1' }, { pickId: `${weekId}_pk_y2`, weekId, gameId: `${weekId}_g2`, playerId: 'n1_y', selectedTeam: 'Away2' }]);
+    applyWeekStatusChange(storage.getWeek(weekId), 'final');
+  };
+  // the draw's loser gets the guess closest to the actual (52), so a tiebreaker saved AFTER the finalize would flip the outcome if it were recomputed
+  const aim = (weekId) => {
+    const dw = scoring.drawKey(weekId, 'n1_x') < scoring.drawKey(weekId, 'n1_y') ? 'n1_x' : 'n1_y', dl = dw === 'n1_x' ? 'n1_y' : 'n1_x';
+    storage.setTiebreakerGuess(weekId, dl, 51); storage.setTiebreakerGuess(weekId, dw, 20);
+    return { dw, dl };
+  };
+  const snap = (weekId) => JSON.stringify([storage.getWeeklyResults(weekId), storage.getActiveObligations(weekId)]);
+
+  // ── (a) SHARED: the tiebreaker is saved, and NOTHING is recomputed or written ──
+  mkFinal('n1_w1');
+  const { dw, dl } = aim('n1_w1');
+  assert(storage.getWeeklyResults('n1_w1').find(r => r.isWinner)?.playerId === dw && storage.getWeeklyResults('n1_w1').find(r => r.isWinner)?.tieBreak?.stage === 'draw', 'fixture check: the week finalized on THE DRAW');
+  const before = snap('n1_w1');
+  const t1 = app.saveTiebreakerActual(storage.getWeek('n1_w1'), { question: 'Total points?', actual: 52 }, { shared: true });
+  assert(storage.getWeek('n1_w1').actualTiebreakerValue === 52 && storage.getWeek('n1_w1').tiebreakerFinalized === true && storage.getWeek('n1_w1').tiebreakerQuestion === 'Total points?',
+    'SHARED: the tiebreaker value and question themselves are SAVED (only the recompute is withheld)');
+  assert(snap('n1_w1') === before, 'SHARED: the stored results and the obligations are BYTE-IDENTICAL after the save: no finalizeWeek, no saveAllWeeklyResults, so no refused write and no "Still unsaved" banner');
+  assert(t1.msg === TIE_COPY.tbSavedSharedFinal && t1.type === 'warning' && t1.msg === 'Tiebreaker saved. This week is already final, so its results were not recalculated. Move it back to live and finalize it again to apply it.',
+    `SHARED: the (warning) toast tells the truth and says what to do: "${t1.msg}"`);
+  // ── (b) LOCAL: the same save recomputes and flags — the flag is the ONLY difference ──
+  const t2 = app.saveTiebreakerActual(storage.getWeek('n1_w1'), { question: 'Total points?', actual: 52 }, { shared: false });
+  assert(storage.getWeeklyResults('n1_w1').find(r => r.isWinner)?.playerId === dl && t2.type === 'warning' && t2.msg.includes('week results recalculated') && t2.msg.includes('Recorded outcome changed'),
+    `LOCAL: the same save recomputes (the closer guess, the draw's loser, now wins) and the toast is a WARNING naming where to look: "${t2.msg}"`);
+  assert(storage.getActiveObligations('n1_w1').filter(o => o.type === 'weekly').length === 2 && storage.getActiveObligations('n1_w1').every(o => o.needsReview === true),
+    'LOCAL: the moved outcome is flagged needsReview on both obligations, never overwritten (unchanged DI-D behaviour)');
+  // the default mode is the data mode (local here), so the unflagged call recomputes too
+  assert(app.saveTiebreakerActual(storage.getWeek('n1_w1'), { question: 'Total points?', actual: 52 }).msg.includes('week results recalculated'), 'the default (no flag) follows the data mode: local here, so it recomputes');
+  // ── (c) NOT final: the toast is exactly the one it always was, in both modes ──
+  mkFinal('n1_w3'); storage.saveWeek({ ...storage.getWeek('n1_w3'), status: 'live', finalizedAt: null });
+  assert(['true', 'false'].every(f => { const t = app.saveTiebreakerActual(storage.getWeek('n1_w3'), { question: '', actual: 40 }, { shared: f === 'true' }); return t.msg === 'Tiebreaker saved ✅' && t.type === 'success'; }),
+    'a NOT-FINAL week: "Tiebreaker saved ✅", a success, in a shared AND a local league (nothing to recompute)');
+
+  // ── (d) the REAL save-tb-btn click still drives it end to end in local mode (the thin handler) ──
+  mkFinal('n1_w4'); aim('n1_w4');
+  resetDom(); armToastCapture();
+  el('tb-question').value = 'Total points?'; el('tb-actual').value = '52'; el('save-tb-btn');
+  bindComm(storage.getWeek('n1_w4'), storage.getGames('n1_w4'));
+  el('save-tb-btn')._fire('click');
+  assert(capturedToasts.length === 1 && capturedToasts[0].text.includes('Tiebreaker saved — week results recalculated') && capturedToasts[0].className.includes('warning'),
+    `the real save-tb-btn click in LOCAL mode still recomputes through the extracted body: "${capturedToasts[0]?.text}"`);
+
+  // ── (d2) THE HANDLER ITSELF, in a SHARED league (reviewer delta condition C2): saveTiebreakerActual() was proven with an explicit `{shared:true}`, but a handler that FORCED
+  //     `{shared:false}` (the old hard-coded flag) survived every suite. This is a real click with the data mode flipped to shared (and the write interlock told the data layer is
+  //     serving, so the tiebreaker value itself saves), the handler's own default deciding. ──
+  mkFinal('n1_w5'); aim('n1_w5');
+  const before5 = snap('n1_w5');
+  resetDom(); armToastCapture();
+  el('tb-question').value = 'Total points?'; el('tb-actual').value = '52'; el('save-tb-btn');
+  bindComm(storage.getWeek('n1_w5'), storage.getGames('n1_w5'));
+  let tbClickThrew = null;
+  authMod.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true });
+  authMod._setHasSupabaseDataBackendForTest(true);
+  try {
+    assert(authMod.isSupabaseDataMode() === true, 'fixture check: the data mode is SHARED for the click');
+    try { el('save-tb-btn')._fire('click'); } catch (e) { tbClickThrew = e; }
+  } finally {
+    authMod._setHasSupabaseDataBackendForTest(null);
+    authMod.configureAuth({ authMode: 'pins', dataMode: 'sheets', authModeKnown: true });
+  }
+  assert(authMod.isSupabaseDataMode() === false, 'fixture check: the data mode is back to local');
+  assert(tbClickThrew === null, `SHARED real click on save-tb-btn does not throw${tbClickThrew ? ' — ' + tbClickThrew.message : ''}`);
+  assert(storage.getWeek('n1_w5').actualTiebreakerValue === 52 && storage.getWeek('n1_w5').tiebreakerFinalized === true, 'SHARED real click: the tiebreaker value itself was SAVED (only the recompute is withheld)');
+  assert(snap('n1_w5') === before5, 'SHARED real click: the stored results and obligations are BYTE-IDENTICAL — the HANDLER did not force a recompute (a hard-coded {shared:false} would rewrite them)');
+  assert(capturedToasts.length === 1 && capturedToasts[0].text === TIE_COPY.tbSavedSharedFinal && capturedToasts[0].className.includes('warning') && !capturedToasts[0].className.includes('success'),
+    `SHARED real click: ONE warning toast with the honest sentence: "${capturedToasts[0]?.text}"`);
+
+  // ── (e) Recalculate All Finalized Weeks: refuses UP FRONT in a shared league ──
+  assert(app.recalcAllFinalizedWeeksRefusal({ shared: false }) === null && app.recalcAllFinalizedWeeksRefusal() === null, 'recalcAllFinalizedWeeksRefusal(): null in a local league (the default follows the data mode)');
+  const refusal = app.recalcAllFinalizedWeeksRefusal({ shared: true });
+  assert(refusal && refusal.type === 'warning' && refusal.msg === TIE_COPY.recalcSharedRefused && refusal.msg === "Nothing was recalculated. A week that's already final can't be recalculated here. To apply a correction, move that week back to live and finalize it again.",
+    `recalcAllFinalizedWeeksRefusal({shared:true}): a warning with the honest sentence and the next action: "${refusal?.msg}"`);
+  resetDom(); armToastCapture();
+  el('recalc-all-weeks-btn');
+  bindComm(storage.getWeek('n1_w1'), storage.getGames('n1_w1'));
+  const beforeAll = ['n1_w1', 'n1_w3', 'n1_w4'].map(snap).join('|');
+  let clickThrew = null;
+  confirmCalls = []; confirmQueue = [true];
+  authMod.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true });
+  try {
+    assert(authMod.isSupabaseDataMode() === true, 'fixture check: the data mode is now SHARED');
+    try { el('recalc-all-weeks-btn')._fire('click'); } catch (e) { clickThrew = e; }
+  } finally {
+    authMod.configureAuth({ authMode: 'pins', dataMode: 'sheets', authModeKnown: true });
+  }
+  assert(authMod.isSupabaseDataMode() === false, 'fixture check: the data mode is back to local');
+  assert(clickThrew === null, `SHARED: the click does not throw (a shared league's storage refuses the write the old path attempted)${clickThrew ? ' — ' + clickThrew.message : ''}`);
+  assert(confirmCalls.length === 0, 'SHARED: the click refuses BEFORE the confirm() — the commissioner is never asked to approve a recalculation that cannot happen');
+  assert(capturedToasts.length === 1 && capturedToasts[0].text === TIE_COPY.recalcSharedRefused && capturedToasts[0].className.includes('warning') && !capturedToasts[0].className.includes('success'),
+    `SHARED: one WARNING toast with the honest sentence: "${capturedToasts[0]?.text}"`);
+  assert(['n1_w1', 'n1_w3', 'n1_w4'].map(snap).join('|') === beforeAll, 'SHARED: every stored result and obligation is BYTE-IDENTICAL — finalizeWeek() was never called, so no write was attempted and nothing can be refused');
+  assert(!/No results changed|Recalculated \d+ week/.test(renderRecalculateFinalizedWeeksAdminSectionHTML()), 'SHARED: no results panel was produced (state.recalcAllResult untouched)');
+  // …and the same click in LOCAL mode runs exactly as before (confirm, then the loop)
+  resetDom(); armToastCapture();
+  el('recalc-all-weeks-btn');
+  bindComm(storage.getWeek('n1_w1'), storage.getGames('n1_w1'));
+  confirmCalls = []; confirmQueue = [true];
+  el('recalc-all-weeks-btn')._fire('click');
+  assert(confirmCalls.length === 1 && confirmCalls[0].includes("Recalculate every finalized week's results") && capturedToasts.length === 1 && capturedToasts[0].text.includes('Recalculated'),
+    `LOCAL: the same click asks for the confirm and recalculates as before: "${capturedToasts[0]?.text}"`);
+  // the order is pinned in the source: the refusal precedes the confirm and the loop
+  const appSrc11 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+  const h = appSrc11.indexOf("document.getElementById('recalc-all-weeks-btn')?.addEventListener('click'");
+  const iRef = appSrc11.indexOf('recalcAllFinalizedWeeksRefusal()', h), iConf = appSrc11.indexOf('if(!confirm("Recalculate every finalized week', h), iLoop = appSrc11.indexOf('finalizeWeek(w);', h);
+  assert(h > -1 && iRef > h && iRef < iConf && iConf < iLoop, 'source order: the shared-league refusal comes before the confirm() and before any finalizeWeek() in the handler');
+}
+
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
 // `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS

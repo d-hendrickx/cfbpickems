@@ -159,7 +159,11 @@ export function renderWeekRecapCardHTML(prev) {
     // byline, a false claim about who led at a named point in time
     // ("Season chart after Week 1, Part 1: Kevin leads" while Drew won it
     // 5-4). Found by reviewer, 2026-09-02, alongside fb_1788306484896_1owwx.
-    return w && w.season === season && w.status === 'final' && w.showInHistory !== false && compareWeekOrder(w, prev) <= 0;
+    // SB-04 (2026-10-01) — `dataSourceMode !== 'demo'`: the Standings page never
+    // counts a demo week (seasonStandingsRows), and this line speaks for it
+    // under SCRIBE's byline. Every other exclusion here already matched it.
+    return w && w.season === season && w.status === 'final' && w.showInHistory !== false
+      && w.dataSourceMode !== 'demo' && compareWeekOrder(w, prev) <= 0;
   });
   // UN-118/UN-125 — DELIBERATELY NOT widened for grouping. Drew's explicit
   // scope ruling held the SCRIBE recap card (this file) until real

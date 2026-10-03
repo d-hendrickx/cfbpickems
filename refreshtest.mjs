@@ -853,7 +853,10 @@ console.log('\n[8] Security F1 — a player device\'s refresh never sends logo f
     refreshableGame({ gameId: 'rg_f1_set', espnEventId: '401520302', status: GAME_STATUS.LIVE, homeScore: 0, awayScore: 0, homeLogo: 'https://irbfootball.example/h.png', awayLogo: 'https://irbfootball.example/a.png' }),
   ]);
   const fakeClient8 = () => {
-    const thenable = () => ({ select() { return this; }, eq() { return this; }, then(res) { return res({ data: [], error: null }); } });
+    // SB-01 / RG-265 — hydrate() pages every read (order, limit, keyset gt past page one). Every table
+    // here is empty, and an empty first page ends the read (rule 3): still ONE request per table.
+    const thenable = () => ({ select() { return this; }, eq() { return this; }, order() { return this; }, limit() { return this; }, gt() { return this; },
+      then(res) { return res({ data: [], error: null }); } });
     return { from: () => thenable(), rpc: async () => ({ data: [], error: null }) };
   };
 
@@ -1048,7 +1051,9 @@ console.log('\n[9] RG-292 — the display-only poll (server switch ON) backfills
     refreshableGame({ gameId: 'rg_292_set', espnEventId: '401520902', status: GAME_STATUS.LIVE, homeScore: 0, awayScore: 0, lastUpdated: '2026-09-08T18:30:00.000Z', updatedAt: '2026-09-08T18:30:00.000Z', homeLogo: 'https://irbfootball.example/h9.png', awayLogo: 'https://irbfootball.example/a9.png' }),
   ]);
   const fakeClient9 = () => {
-    const thenable = () => ({ select() { return this; }, eq() { return this; }, then(res) { return res({ data: [], error: null }); } });
+    // SB-01 / RG-265 — the paging surface hydrate() uses; see fakeClient8.
+    const thenable = () => ({ select() { return this; }, eq() { return this; }, order() { return this; }, limit() { return this; }, gt() { return this; },
+      then(res) { return res({ data: [], error: null }); } });
     return { from: () => thenable(), rpc: async () => ({ data: [], error: null }) };
   };
 

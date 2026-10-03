@@ -56,6 +56,8 @@
  *   4  Game modal Save — lockedSpread must govern, not the live line
  *   5  Agreement: every entry path grades a given game identically
  *   6  [structural] no second implementation of the comparison in app.js
+ *   7  DI-415 — the game editor's field locks
+ *   8  SB-24 — the manual form's ESPN event ID is digits or nothing (= 0040's CHECK)
  */
 
 import { readFile } from 'node:fs/promises';
@@ -88,6 +90,11 @@ function makeEl(id) {
       listeners.get(type).push(fn);
     },
     removeEventListener() {},
+    // SB-24 [8]: the game modal's inline field error sets/clears aria-invalid.
+    _attrs: {},
+    setAttribute(k, v) { e._attrs[k] = String(v); },
+    removeAttribute(k) { delete e._attrs[k]; },
+    getAttribute(k) { return Object.prototype.hasOwnProperty.call(e._attrs, k) ? e._attrs[k] : null; },
     appendChild() {}, removeChild() {}, remove() {}, focus() {}, scrollTo() {},
     insertAdjacentHTML() {},
     querySelector: sel => bySelector(sel),
@@ -880,6 +887,173 @@ function poisonAllFields() {
   const created = storage.getGames(week.weekId).find(x => x.homeTeam === 'BRAND NEW HOME');
   assert(!!created, '7e: a brand-new game (week open, not draft) is created — creation is never locked, per DI-415\'s "no game" case');
   assert(created?.venue === 'Brand New Venue', '7e: …and every field on it, including ones that WOULD be static-locked on an EXISTING game, is editable at creation time');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 8. SB-24 — THE MANUAL GAME FORM: AN ESPN EVENT ID IS DIGITS, OR NOTHING.
+//    The save handler took the field's text and, when it was neither a bare
+//    6+-digit id nor a gamecast URL, KEPT IT RAW (`espnEventId = m ? m[1] :
+//    raw`). That value is game.espnEventId, which the platform admin's Data
+//    Proof card printed unescaped (xsstest [10f]) — so any commissioner could
+//    plant script that ran in the platform admin's session. The form now
+//    refuses anything that is not digits, inline under the field (never a
+//    toast), and stores only the digits it extracted. The SERVER refuses the
+//    same set (migration 0040's CHECK, pinned by static.check SB-24); [8m]
+//    proves the two agree on every probe below.
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[8] SB-24 — manual game form: the ESPN event ID is digits or nothing…');
+{
+  const HOSTILE = '<img src=x onerror=alert(1)>';
+  const week = { weekId: 'gt_w_sb24', weekNumber: 95, status: 'draft', season: 2026 };
+  const saved = [], refused = [];
+
+  /** Add Game → a manual NFL game with `rawId` typed into the ESPN event ID
+   *  field → Save Game. Returns the created game (or null) and the field/error stubs. */
+  const addManual = (rawId) => {
+    resetDom();
+    localStorage.clear();
+    storage.saveWeek(week);
+    el('add-manual-game-btn');
+    bindCommEventListeners(week, storage.getGames(week.weekId), [], [], storage.getSettings(), [week]);
+    el('m-home').value = 'SB24 HOME'; el('m-away').value = 'SB24 AWAY';
+    el('m-home-mascot').value = ''; el('m-away-mascot').value = '';
+    el('m-kickoff').value = '2026-11-26T12:30';
+    el('m-venue').value = ''; el('m-hconf').value = ''; el('m-aconf').value = '';
+    el('m-hrank').value = ''; el('m-arank').value = '';
+    el('m-spread-fav').value = ''; el('m-spread-margin').value = '';
+    el('m-mult-preset').value = '1';
+    el('m-is-manual').checked = true;
+    el('m-league-label').value = 'NFL';
+    el('m-espn-sport').value = 'nfl';
+    el('m-espn-eventid').value = rawId;
+    el('m-espn-eventid-error');
+    el('m-save');
+    el('add-manual-game-btn')._fire('click');
+    el('m-save')._fire('click');
+    const created = storage.getGames(week.weekId).find(x => x.homeTeam === 'SB24 HOME') || null;
+    (created ? saved : refused).push({ rawId, stored: created ? created.espnEventId : undefined });
+    return { created, err: el('m-espn-eventid-error'), field: el('m-espn-eventid') };
+  };
+
+  // 8a — the reproduction: markup typed into the field is REFUSED, not stored.
+  {
+    const r = addManual(HOSTILE);
+    assert(r.created === null, `8a: a hostile ESPN event ID is refused — no game is saved (got ${JSON.stringify(r.created && r.created.espnEventId)})`);
+    assert(!JSON.stringify(storage.getGames(week.weekId)).includes('<img'), '8a: …and the raw markup is nowhere in the stored games');
+    assert(/digits/i.test(r.err.textContent || ''), `8a: the refusal is an honest INLINE message under the field (got ${JSON.stringify(r.err.textContent)})`);
+    // Reviewer F1 (SB-24 review, 2026-10-01) — .form-field-error reserves TWO lines
+    // (DI-404: the rows below never move). At 375pt in this modal that is about 64
+    // characters; the first copy (~110) wrapped to three and pushed the mode pill.
+    // A proxy for a browser measurement, which only a device can confirm.
+    assert((r.err.textContent || '').length <= 64,
+      `8a: the message fits the two reserved lines at 375pt (<= 64 characters; got ${(r.err.textContent || '').length})`);
+    assert(r.field.getAttribute('aria-invalid') === 'true', '8a: …and the field is marked aria-invalid');
+  }
+  // 8b-8d — the three accepted shapes: bare digits, a gamecast URL, a ?gameId= link.
+  {
+    const r = addManual('401671626');
+    assert(r.created?.espnEventId === '401671626', `8b: a bare all-digits id is stored verbatim (got ${JSON.stringify(r.created?.espnEventId)})`);
+    assert(!r.err.textContent, '8b: …and no error is shown');
+  }
+  {
+    const r = addManual('https://www.espn.com/nfl/game/_/gameId/401671627/chiefs-ravens');
+    assert(r.created?.espnEventId === '401671627', `8c: a gamecast URL is reduced to its digits (got ${JSON.stringify(r.created?.espnEventId)})`);
+  }
+  {
+    const r = addManual('https://www.espn.com/nfl/game?gameId=401671628');
+    assert(r.created?.espnEventId === '401671628', `8d: a ?gameId= link is reduced to its digits (got ${JSON.stringify(r.created?.espnEventId)})`);
+  }
+  // 8e/8f — an empty or blank field means "not ESPN-linked": null, never ''.
+  {
+    const r = addManual('');
+    assert(!!r.created && r.created.espnEventId === null, `8e: an empty field saves the game with espnEventId null (got ${JSON.stringify(r.created && r.created.espnEventId)})`);
+    const r2 = addManual('   ');
+    assert(!!r2.created && r2.created.espnEventId === null, `8f: a whitespace-only field is empty, not an id (got ${JSON.stringify(r2.created && r2.created.espnEventId)})`);
+  }
+  // 8g/8h — the length bound is the server's: 1-20 digits.
+  {
+    const r = addManual('12345');
+    assert(r.created?.espnEventId === '12345', `8g: a short all-digits id is still digits and is kept (got ${JSON.stringify(r.created?.espnEventId)})`);
+    const r20 = addManual('1'.repeat(20));
+    assert(r20.created?.espnEventId === '1'.repeat(20), '8h: 20 digits are accepted');
+    const r21 = addManual('1'.repeat(21));
+    assert(r21.created === null && !!r21.err.textContent, '8h: 21 digits are refused (the server CHECK allows at most 20)');
+  }
+  // 8i — anything with a non-digit in it is refused; surrounding whitespace is not an error.
+  {
+    for (const bad of ['4016abc', '401 671 626', '401671626;', '-401671626', '401671626<b>', '401671626"']) {
+      const r = addManual(bad);
+      assert(r.created === null && !!r.err.textContent, `8i: ${JSON.stringify(bad)} is refused`);
+    }
+    const r = addManual('  401671629  ');
+    assert(r.created?.espnEventId === '401671629', `8i: leading/trailing spaces are trimmed, not refused (got ${JSON.stringify(r.created?.espnEventId)})`);
+  }
+  // 8j — a link is reduced to its DIGITS; nothing around them is ever kept.
+  {
+    const r = addManual('https://evil.example/<img src=x onerror=1>/gameId/401671630');
+    assert(r.created?.espnEventId === '401671630', `8j: only the extracted digits are stored, never the text around them (got ${JSON.stringify(r.created?.espnEventId)})`);
+  }
+  // 8k — a refusal is not a dead end: fix the field, press Save again, it saves.
+  {
+    const r = addManual(HOSTILE);
+    assert(r.created === null, '8k: fixture — the first Save was refused');
+    el('m-espn-eventid').value = '401671631';
+    el('m-save')._fire('click');
+    const g = storage.getGames(week.weekId).find(x => x.homeTeam === 'SB24 HOME');
+    assert(g?.espnEventId === '401671631', `8k: correcting the field and saving again stores the corrected id (got ${JSON.stringify(g?.espnEventId)})`);
+    assert(!el('m-espn-eventid-error').textContent && el('m-espn-eventid').getAttribute('aria-invalid') === null,
+      '8k: …and the error and aria-invalid are cleared once the value is valid');
+    saved.push({ rawId: '401671631', stored: g?.espnEventId });
+  }
+  // 8l — EDITING a game that already holds a legacy non-digit id: re-saving it
+  // untouched is refused (the form never writes a non-digit id back), and the
+  // stored record is left exactly as it was — cleaning legacy rows is the
+  // 0040 pre-check's job, not a silent rewrite.
+  {
+    const legacy = GAME({ gameId: 'gt_sb24_legacy', weekId: week.weekId, homeTeam: 'LEGACY HOME', awayTeam: 'LEGACY AWAY',
+      isManual: true, leagueLabel: 'NFL', espnSport: 'nfl', espnEventId: HOSTILE, status: 'scheduled' });
+    resetDom();
+    localStorage.clear();
+    storage.saveWeek(week);
+    saveGame(legacy);
+    const before = JSON.stringify(getGame('gt_sb24_legacy'));
+    const btn = prepareEditButton('gt_sb24_legacy');
+    bindCommEventListeners(week, storage.getGames(week.weekId), [], [], storage.getSettings(), [week]);
+    el('m-spread-fav').value = ''; el('m-spread-margin').value = '';
+    el('m-mult-preset').value = '1';
+    el('m-is-manual').checked = true;
+    el('m-league-label').value = 'NFL';
+    el('m-espn-sport').value = 'nfl';
+    el('m-espn-eventid').value = HOSTILE;          // what the field shows, untouched
+    el('m-espn-eventid-error');
+    el('m-save');
+    btn._fire('click');
+    el('m-save')._fire('click');
+    assert(JSON.stringify(getGame('gt_sb24_legacy')) === before,
+      '8l: re-saving a game whose legacy ESPN id is not digits is refused — the stored record is byte-identical');
+    assert(!!el('m-espn-eventid-error').textContent, '8l: …and the inline error tells the commissioner to fix the field');
+  }
+  // 8m — CLIENT = SERVER. Every id the form stored above matches migration
+  // 0040's CHECK, and every input it refused fails it, so the form can never
+  // send a value the server will refuse (a loud write failure) and never keeps
+  // one the server would accept but the form should not.
+  {
+    let check = null;
+    try {
+      const sql = await readFile(new URL('./supabase/migrations/0040_sb24_espn_event_id_check.sql', import.meta.url), 'utf8');
+      const m = /check \(espn_event_id is null or espn_event_id ~ '([^']+)'\)/.exec(sql);
+      check = m ? new RegExp(m[1]) : null;
+    } catch { check = null; }
+    assert(!!check, '8m: fixture — migration 0040\'s CHECK pattern was read from the file');
+    if (check) {
+      const badSaved = saved.filter(s => s.stored !== null && !check.test(s.stored));
+      assert(saved.length >= 9 && badSaved.length === 0,
+        `8m: every id the form stored (${saved.length}) satisfies the server CHECK — offenders: ${JSON.stringify(badSaved)}`);
+      const acceptedByServer = refused.filter(s => check.test(String(s.rawId).trim()));
+      assert(refused.length >= 9 && acceptedByServer.length === 0,
+        `8m: every input the form refused (${refused.length}) fails the server CHECK too — the form is not stricter than the server: ${JSON.stringify(acceptedByServer)}`);
+    }
+  }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

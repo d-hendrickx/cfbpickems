@@ -301,8 +301,23 @@ console.log('\n[3] Structural — every logo read in js/app.js is gated on the t
     .filter(({ l }) => !/^\s*(\*|\/\/|\/\*)/.test(l));
   const reads = code.filter(({ l }) => /logoOk\(/.test(l));
   assert(reads.length >= 7, `3-0: fixture — found the known logoOk() reads in js/app.js (got ${reads.length}, expected at least 7)`);
-  const ungated = reads.filter(({ l }) => !/logoViewOn/.test(l));
-  assert(ungated.length === 0, `3-1: every logoOk() read sits on a line that also reads the toggle (logoViewOn) — ungated: ${ungated.map(r => 'app.js:' + r.n).join(', ') || 'none'}`);
+  // 3-1 RE-DERIVED by SP-52 (2026-10-01, DI-455 / Amendment A1.2, security N1) — OLD: "every logoOk() read sits on a line that also reads the toggle". NEW: the same, EXCEPT exactly one
+  // named VALIDATION read: logoUrlForVariant() re-validates `data-logo-default` (a DOM attribute an injected node could have planted) before it becomes a `src`. That read cannot be a
+  // render path — it only ever runs on an <img> some gated emitter already put on the page — and 3-1b pins that: nothing but the variant writer mints `data-logo-default`, and it mints it
+  // from the img's own existing src. So the invariant this assertion protects ("a page with the toggle OFF cannot grow a logo from an ungated read") is unchanged.
+  const ungatedAll = reads.filter(({ l }) => !/logoViewOn/.test(l));
+  const fnStart = src.indexOf('function logoUrlForVariant(');
+  const fnEnd = fnStart < 0 ? -1 : src.indexOf('\n}\n', fnStart);
+  const fnFirstLine = fnStart < 0 ? 0 : src.slice(0, fnStart).split('\n').length;
+  const fnLastLine = fnEnd < 0 ? 0 : src.slice(0, fnEnd).split('\n').length + 1;
+  const validation = ungatedAll.filter(({ n }) => n >= fnFirstLine && n <= fnLastLine);
+  const ungated = ungatedAll.filter(({ n }) => !(n >= fnFirstLine && n <= fnLastLine));
+  assert(ungated.length === 0, `3-1: every logoOk() read sits on a line that also reads the toggle (logoViewOn), except the one named validation read in logoUrlForVariant() — ungated: ${ungated.map(r => 'app.js:' + r.n).join(', ') || 'none'}`);
+  assert(validation.length === 1 && /logoOk\(stored\)/.test(validation[0].l),
+    `3-1a: the single allowed exception is logoUrlForVariant()'s re-validation of the stored default (${validation.map(r => 'app.js:' + r.n).join(', ') || 'missing'}) — if it disappears, DI-455 A1.2's "a planted non-https data-logo-default writes nothing" is gone`);
+  const writers = code.filter(({ l }) => /dataset\.logoDefault\s*=/.test(l));
+  assert(writers.length === 1 && /dataset\.logoDefault\s*=\s*stored/.test(writers[0].l) && /const stored = storedLogoUrl\(img\);/.test(src.slice(src.lastIndexOf('function ', src.indexOf(writers[0].l)), src.indexOf(writers[0].l))),
+    `3-1b: \`data-logo-default\` is written in exactly one place and only from the img's OWN existing src (storedLogoUrl) — the validation read cannot be reached by a page that has no gated logo (${writers.map(r => 'app.js:' + r.n).join(', ') || 'none'})`);
   // Every <img> template in js/app.js is either the body of teamLogoImgHTML()
   // (whose only callers are the gated helpers above) or the gated
   // dc-chip-logo chip.

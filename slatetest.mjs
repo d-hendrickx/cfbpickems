@@ -251,17 +251,25 @@ console.log('\n[1] computeScore() — DI-2 point values…');
     'DI-2 defect fixed: the marquee national-TV game now outscores the merely-tight streaming game (was reversed under the old table)');
 }
 
+// SB-24 (2026-10-01) — ESPN event ids are DIGITS, and the parser now drops
+// anything else (to null). The fixtures below keep their readable labels as
+// lookup keys and send ESPN an id of the real shape; LABEL_OF maps it back.
+const LABEL_OF = new Map();
+let _nextEventId = 401990000;
+const espnIdFor = (label) => { const id = String(_nextEventId++); LABEL_OF.set(id, label); return id; };
+
 // ═════════════════════════════════════════════════════════════════════════════
 // 2. National TV detection — via fetchByDateRange(), the real parse path
 // ═════════════════════════════════════════════════════════════════════════════
 console.log('\n[2] National TV detection (exact allow-list, real parse path)…');
 {
   function espnEvent(id, { broadcasts, notes } = {}) {
+    const eventId = espnIdFor(id);
     return {
-      id: String(id), date: '2026-09-05T18:00:00Z',
+      id: eventId, date: '2026-09-05T18:00:00Z',
       status: { type: { name: 'STATUS_SCHEDULED', detail: '2:00 PM ET' } },
       competitions: [{
-        id: String(id), neutralSite: false,
+        id: eventId, neutralSite: false,
         competitors: [
           { homeAway: 'home', team: { location: `Home${id}`, name: 'Team', abbreviation: `H${id}` }, score: null, curatedRank: {} },
           { homeAway: 'away', team: { location: `Away${id}`, name: 'Team', abbreviation: `A${id}` }, score: null, curatedRank: {} },
@@ -292,7 +300,7 @@ console.log('\n[2] National TV detection (exact allow-list, real parse path)…'
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ events }) });
   const result = await fetchByDateRange({ startDate: '2026-09-05', endDate: '2026-09-05' });
   assert(result.error === null, 'fixture check: the mocked fetch parsed without error (games=' + result.games.length + ')');
-  const byId = new Map(result.games.map(g => [g.espnEventId, g]));
+  const byId = new Map(result.games.map(g => [LABEL_OF.get(g.espnEventId), g]));
 
   let trueOk = true, falseOk = true;
   for (const [id, n] of expectTrue) { const g = byId.get(id); if (!g || g.nationalTV !== true || g.broadcastNetwork == null) trueOk = false; }
@@ -318,11 +326,12 @@ console.log('\n[2] National TV detection (exact allow-list, real parse path)…'
 console.log('\n[3] Marquee-event detection…');
 {
   function espnEventNotes(id, notes) {
+    const eventId = espnIdFor(id);
     return {
-      id: String(id), date: '2026-09-05T18:00:00Z',
+      id: eventId, date: '2026-09-05T18:00:00Z',
       status: { type: { name: 'STATUS_SCHEDULED', detail: '2:00 PM ET' } },
       competitions: [{
-        id: String(id), neutralSite: false,
+        id: eventId, neutralSite: false,
         competitors: [
           { homeAway: 'home', team: { location: `H${id}`, name: 'Team', abbreviation: `H${id}` }, score: null, curatedRank: {} },
           { homeAway: 'away', team: { location: `A${id}`, name: 'Team', abbreviation: `A${id}` }, score: null, curatedRank: {} },
@@ -338,7 +347,7 @@ console.log('\n[3] Marquee-event detection…');
   ];
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ events }) });
   const result = await fetchByDateRange({ startDate: '2026-09-05', endDate: '2026-09-05' });
-  const byId = new Map(result.games.map(g => [g.espnEventId, g]));
+  const byId = new Map(result.games.map(g => [LABEL_OF.get(g.espnEventId), g]));
   assert(byId.get('mq_yes')?.marqueeEvent === true, 'a non-empty notes[] (e.g. "Aflac Kickoff Game") sets marqueeEvent:true');
   assert(byId.get('mq_no')?.marqueeEvent === false, 'an empty notes[] array sets marqueeEvent:false');
   assert(byId.get('mq_missing')?.marqueeEvent === false, 'a missing notes field defaults marqueeEvent:false — never throws');

@@ -66,7 +66,7 @@ try {
   console.warn('[service-worker] OneSignal SDK import failed — push unavailable, cache-shell unaffected:', err);
 }
 
-const CACHE_NAME = 'cfb-pickems-v28-0';
+const CACHE_NAME = 'cfb-pickems-v29-0';
 
 const STATIC_ASSETS = [
   './',
@@ -186,6 +186,43 @@ const STATIC_ASSETS = [
   // UN-389 / DI-446 (2026-09-30) — the Delete Account sheet's pure half, imported STATICALLY by app.js: boot-critical for the same reason (RG-236's class — a shell cache one
   // module short serves a graph that cannot resolve). notifytest [25e] is the guard.
   './js/account-exit.js',
+  // SP-53 / DI-457 (2026-10-01) — League Settings: the pure text half (imported STATICALLY by auth.js and admin-panel.js) and the rendered half (imported by app.js). Boot-critical for the
+  // same reason as every entry above; notifytest [25e] is the guard.
+  './js/league-settings.js',
+  './js/league-settings-view.js',
+  // SP-57 (2026-10-01) — the long-press section-drag engine, imported STATICALLY by app.js (the Dashboard and Standings renderers call it on every paint): boot-critical for the same
+  // reason as every entry above — a shell cache one module short serves a graph that cannot resolve (RG-03/RG-236's blank app, arriving through the cache). notifytest [25e] is the guard.
+  './js/section-drag.js',
+  // SB-08 (2026-09-30) — the status-bar glyph tracker, imported STATICALLY by app.js: boot-critical for the same reason (a shell cache one
+  // module short serves a graph that cannot resolve). It imports nothing. notifytest [25e] is the guard.
+  './js/status-bar.js',
+  // Social Platform v1 Home (DI-360/361/362, 2026-09-30) — the pure stats / feed modules. js/scribeLines.js (boot-critical, above) now
+  // STATICALLY imports js/stats-core.js, the streak/milestone/lone-wolf logic extracted from it, so stats-core.js is boot-critical for the
+  // same reason scribe-scoring.js is (the Package D precedent: a shell cache one module short serves a graph that cannot resolve — RG-03's
+  // blank app arriving through the cache). js/stats.js and js/feed-cards.js are statically imported by the new modules; notifytest [25e]
+  // is the guard that reported all three missing. js/feed-caption-lines.js, js/reminder-rules.js and js/home.js (the Home renderer, 2026-10-01) join the list now:
+  // notifytest [25e] scans EVERY js/ module's static imports, and home.js imports the other two (reminder-rules.js for the commissioner nudge's assembler and the
+  // near-kickoff threshold; it was imported by nothing on the shell graph before). No CACHE_NAME bump here: that is the release stamp, Drew's.
+  './js/stats-core.js',
+  './js/stats.js',
+  './js/feed-cards.js',
+  './js/feed-caption-lines.js',
+  './js/reminder-rules.js',
+  './js/home.js',
+  // Social Platform News (option A, 2026-10-01) -- the six news modules. js/newsSettings.js is imported STATICALLY by js/control-center.js and js/newsFeed.js by js/app.js (the News
+  // settings pane), so both are boot-critical for the same reason as every module above (a shell cache one module short serves a graph that cannot resolve); the other four
+  // are their static imports (newsFeed -> newsTransport / newsRank / newsCard / newsRules). notifytest [25e] is the guard. No CACHE_NAME bump: that is the release stamp, Drew's.
+  './js/newsRules.js',
+  './js/newsCard.js',
+  './js/newsRank.js',
+  './js/newsTransport.js',
+  './js/newsFeed.js',
+  './js/newsSettings.js',
+  // SP-54 (2026-10-01) — the weekly tie-break's key builder (js/tie-context.js: leaf module, imports data-model/scoring/extra-point only) and the competition read
+  // API (js/competition.js), which app.js now imports STATICALLY for the sport-profile check that decides whether the alma mater step applies to a week (a claimed
+  // "Miami" must never match "Miami Dolphins"). Boot-critical for the same reason as every entry above (RG-03's blank app, arriving through the cache). notifytest [25e].
+  './js/tie-context.js',
+  './js/competition.js',
   './vendor/supabase-js-2.116.0.js',
   './manifest.json',
   'https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap',

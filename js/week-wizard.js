@@ -205,7 +205,10 @@ export const WIZARD_COPY = Object.freeze({
   BLURB_ROW_MISSING: 'Weekly blurb not written yet',
   BLURB_ROW_DONE: 'Weekly blurb written',
   BLURB_WRITE_IT: 'Write it',
-  UNRESOLVED_TIE_WARNING: 'This week has a tie in correct picks and no tiebreaker entered — the winner/loser will be decided arbitrarily until you enter one. Enter it in Confirm Tiebreaker, then continue to Finalize.',
+  // SP-54 / DI-469 (2026-10-01) — REWORDED: the old text said the winner/loser "will be decided" by row order, which stopped being true when the weekly tie-break
+  // shipped. This is the LEGACY body, used only when the caller supplies no `finalizeTieNotice` dependency (weekwizardtest's no-dependency case); the app supplies
+  // the dynamic notice (js/tie-context.js, via app.js), which names the stage the preview actually reaches.
+  UNRESOLVED_TIE_WARNING: "This week has a tie in correct picks and no tiebreaker entered. If you finalize now, it is settled by each tied player's alma mater against the spread, then the Extra Point. Enter it in Confirm Tiebreaker, then continue to Finalize.",
 });
 
 // DI-357 — the tiebreaker Auto-Calc's calculation-basis caption, keyed by
@@ -1015,7 +1018,13 @@ export function confirmFinalizeExtraPoint({ week, actualValue, deps }) {
  * tiebreaker afterward already recalculates automatically, DI-D).
  */
 export function unresolvedTieWarning({ week, players, picks, games, deps }) {
-  const { weekHasUnresolvedTie } = deps;
+  const { weekHasUnresolvedTie, finalizeTieNotice } = deps;
+  // SP-54 / DI-469 — prefer the dynamic notice (it names the stage the preview actually reaches and covers the Extra Point-missing case). It arrives by
+  // INJECTION: this module keeps zero imports. A caller with no such dependency gets today's body exactly (weekwizardtest [15-26], [16-12]).
+  if (typeof finalizeTieNotice === 'function') {
+    const n = finalizeTieNotice(week, players, picks, games, 'wizard');
+    return { show: !!(n && n.show), text: n && n.show ? String(n.text || '') : '' };
+  }
   const show = !!(weekHasUnresolvedTie && weekHasUnresolvedTie(week, players, picks, games));
   return { show, text: show ? WIZARD_COPY.UNRESOLVED_TIE_WARNING : '' };
 }
@@ -1042,7 +1051,9 @@ export function confirmFinalizeWeek({ week, deps }) {
   const cur = (getWeek && getWeek(week.weekId)) || week;
   const updated = { ...cur, status: 'final', finalizedAt: new Date().toISOString(), pendingFinalization: false };
   saveWeek(updated);
-  if (finalizeWeek) finalizeWeek(updated);
+  // N-3 (SP-54 / DESIGN A.9): this IS the live-to-final transition, so the weekly tie rule is in force for the week being settled whatever this device's clock
+  // says (`settling`); every later read goes by the stamp. A finalizeWeek dependency that ignores the second argument behaves exactly as before.
+  if (finalizeWeek) finalizeWeek(updated, { settling: true });
   return { ok: true, week: updated };
 }
 

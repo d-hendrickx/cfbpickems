@@ -67,7 +67,7 @@ export const PILOT_ONLY_REGISTRY = Object.freeze({
   }),
   irbCopy: Object.freeze({
     client: Object.freeze([
-      { file: 'js/app.js', marker: 'the push "needs-install" copy (names the app) and the Invite-to-League helper line (names the league)' },
+      { file: 'js/app.js', marker: 'the push "needs-install" copy (names the app). SP-53 (2026-10-01): the Invite-to-League helper line is NO LONGER a pilot literal — it names the ACTIVE league for every league (js/league-settings-view.js inviteLineFor), so only this one site keeps the gate' },
       { file: 'js/control-center.js', marker: 'renderIdentityHeader() — the league-name fallback' },
     ]),
     server: Object.freeze([{ file: 'supabase/functions/_shared/job-rules.mjs', note: 'the "IRB Pick\'Ems" push titles (SYSTEM_TITLE / SYSTEM_TEST_TITLE) are the PILOT\'s only (R-F3, the DI-435 title seam, reconciled 2026-09-30): systemPushTitle(league) returns them solely when isPilotLeagueRow(league) and otherwise the league\'s OWN name through DI-435\'s one label sanitizer ("Your league" when empty or unknown); _shared/onesignal.mjs names no league (its empty-title fallback is caller-supplied, default "Your league", and notify-fanout passes IRB\'s title for the pilot only)' }]),

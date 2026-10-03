@@ -19,6 +19,7 @@ import {
   DEFAULT_TZ,
   CHAT_ACCENTS,
   REACTION_PALETTE,
+  THEMES,
 } from './data-model.js';
 
 import { cacheGet, cacheSet, isBackendReady } from './backend.js';
@@ -204,8 +205,19 @@ const KEYS = {
   // DEFAULT-WHEN-MISSING (CONVENTIONS #10): absent, unknown or malformed reads
   // as '' and every caller falls back to getTheme() — i.e. exactly today's
   // behaviour. The value is spliced into a CSS class name, so callers validate
-  // it against the seven real theme keys rather than trusting the device.
+  // it against the ten real theme keys (THEMES, js/data-model.js) rather than trusting the device.
   THEME_HINT: 'cfbp_theme_hint',
+  // SP-52 (DI-453, UN-394, 2026-10-01) — the COLOUR-SCHEME hint: the scheme ('light' | 'dark' | 'system') this
+  // handset last painted FROM A RESOLVED PLAYER RECORD. The RG-215 precedent, for the Appearance axis. index.html's inline
+  // bootstrap reads it before any module loads and sets body[data-color-scheme], so a player pinned to Light on a Dark iPhone (or
+  // the reverse) gets the right first frame on a cold open instead of one wrong-scheme frame until the hydrate lands (the
+  // player record is unreadable on a Supabase cold boot, so getColorScheme() could only answer 'system').
+  // DEVICE-LOCAL for the same reason THEME_HINT is: a fact about what THIS screen last showed. Under the `cfbp_` prefix ON PURPOSE,
+  // so the sign-out/handover sweep clears it with no keep-list entry — player B never boots in player A's scheme. A readable
+  // player record always wins over the hint (getColorSchemeBoot), so a stale hint can never strand a player. Not a second source
+  // of truth, not a new preference: the write is still preferences.colorScheme on the player record.
+  // DEFAULT-WHEN-MISSING (CONVENTIONS #10): absent / unknown / malformed reads as '' and boot answers 'system'.
+  SCHEME_HINT: 'cfbp_scheme_hint',
   // Multi-Sport Phase 1a / DI-220 (AD-74, 2026-09-29) — the league's COMPETITIONS: one row per
   // (sport, season-or-tournament) the league plays, under the league. SHARED league data (a
   // commissioner's Games/Week surfaces and every player's chat pills read it), so it is deliberately
@@ -329,6 +341,8 @@ const DEVICE_LOCAL_KEYS = new Set([
   // RG-198 — see the KEYS comment above. Device-local for the same reason
   // SESSION is: it records what THIS screen last painted, not league state.
   KEYS.THEME_HINT,
+  // SP-52 (DI-453) — see the KEYS comment above. Device-local for the same reason THEME_HINT is.
+  KEYS.SCHEME_HINT,
 ]);
 
 /**
@@ -831,6 +845,77 @@ export function setNotifyCategoryPref(category, on) {
   _setPlayerPref('notifyCategories', { ...getNotifyCategoryPrefs(), [category]: !!on });
 }
 
+// ═══ SOCIAL PLATFORM NEWS PREFERENCES (SP-07, DI-379 / S-C7, 2026-10-01) — BEGIN ═══════════════════════════════════════════════
+//
+// `player.preferences.news = { on: boolean, sports: string[], teams: string[], seeded?: true }` — on the PLAYER RECORD through the same
+// _playerPref/_setPlayerPref pair every other per-player preference uses (CLAUDE.md architecture bullet 4): it follows the person across
+// devices, no migration (`league_members.preferences` is a free jsonb column).
+//
+// UNTRUSTED ON READ (S-C7). `league_members_update` lets the member AND the commissioner write that jsonb, and nothing server-side validates
+// its inside — so getNewsPrefs() never trusts a stored field's type or size: only an explicit `on:false` turns news off, `sports` keeps only
+// the five known keys, `teams` is strings only, capped in count and length. A validly EMPTY `sports` array is preserved (the player unchecked
+// every sport on purpose); only a missing / non-array field falls back to the league's sport.
+//
+// DEFAULTS (CONVENTIONS #10): on = true, sports = [the league's sport] (today 'cfb': settings.sport does not exist yet, so the DI's fallback
+// applies), teams = []. The alma-mater chip is seeded ONCE, by seedNewsTeamsOnce(), when the News screen is first opened — never inside the
+// read — and a one-time `seeded` sentinel on the same object keeps a chip the player removed from silently reappearing.
+export const ALLOWED_NEWS_SPORTS = Object.freeze(['cfb', 'nfl', 'nba', 'nhl', 'cbb']);
+export const NEWS_TEAMS_MAX_COUNT = 20;
+export const NEWS_TEAM_NAME_MAX_LEN = 100;
+
+function _rawNewsPref() {
+  const v = _playerPref('news');
+  return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+}
+function _cleanNewsSports(list) {
+  const out = [];
+  for (const x of list) { if (typeof x === 'string' && ALLOWED_NEWS_SPORTS.indexOf(x) >= 0 && out.indexOf(x) < 0) out.push(x); }   // anything else is dropped, never coerced
+  return out;
+}
+function _cleanNewsTeams(list) {
+  const out = [];
+  for (const x of list) {
+    if (typeof x !== 'string') continue;
+    const t = x.trim().slice(0, NEWS_TEAM_NAME_MAX_LEN);
+    if (t && !out.some(o => o.toLowerCase() === t.toLowerCase())) out.push(t);
+    if (out.length >= NEWS_TEAMS_MAX_COUNT) break;
+  }
+  return out;
+}
+
+export function getNewsPrefs() {
+  const s = getSettings();
+  const leagueSport = ALLOWED_NEWS_SPORTS.indexOf(s.sport) >= 0 ? s.sport : 'cfb';
+  const raw = _rawNewsPref();
+  return {
+    on: raw.on === false ? false : true,                                               // strict: only an explicit false turns it off
+    sports: Array.isArray(raw.sports) ? _cleanNewsSports(raw.sports) : [leagueSport],
+    teams: Array.isArray(raw.teams) ? _cleanNewsTeams(raw.teams) : [],
+  };
+}
+/** Merges a PATCH ({ on?, sports?, teams? }) onto the validated current prefs and writes it. Anything else in the patch is ignored; the one-time `seeded` flag survives. */
+export function setNewsPrefs(patch) {
+  const base = getNewsPrefs();
+  const p = patch && typeof patch === 'object' ? patch : {};
+  const next = {
+    on: typeof p.on === 'boolean' ? p.on : base.on,
+    sports: Array.isArray(p.sports) ? _cleanNewsSports(p.sports) : base.sports,
+    teams: Array.isArray(p.teams) ? _cleanNewsTeams(p.teams) : base.teams,
+  };
+  if (_rawNewsPref().seeded === true) next.seeded = true;
+  return _setPlayerPref('news', next);
+}
+/** The one-time alma-mater seed. True when it wrote. Called by the News screen's open action, never from a read or a render. */
+export function seedNewsTeamsOnce() {
+  const sess = getSession();
+  if (!sess?.playerId || _rawNewsPref().seeded === true) return false;
+  const base = getNewsPrefs();
+  const alma = String(getPlayer(sess.playerId)?.almaMater || '').trim().slice(0, NEWS_TEAM_NAME_MAX_LEN);
+  const teams = alma && !base.teams.some(t => t.toLowerCase() === alma.toLowerCase()) ? _cleanNewsTeams([alma, ...base.teams]) : base.teams;
+  return _setPlayerPref('news', { on: base.on, sports: base.sports, teams, seeded: true });
+}
+// ═══ SOCIAL PLATFORM NEWS PREFERENCES — END ════════════════════════════════════════════════════════════════════════════════════
+
 // ── FEAT-8a / UN-179 (2026-09-12, DI-179d) — per-player section order ────────
 //
 // `player.preferences.sectionOrder = { dashboard: [...], standings: [...] }` —
@@ -920,7 +1005,16 @@ export function setTheme(themeKey) {
   // fallback. The UI control that used to call this while signed out has
   // been removed (app.js renderThemeToggle), so in practice this path is not
   // reachable while signed out — this is defense in depth, not the only gate.
-  _setPlayerPref('theme', themeKey);
+  //
+  // SP-52 security C1 (2026-10-01) — VALIDATED AT THE WRITE SEAM (CONVENTIONS #7), the way setColorScheme() is: the value is spliced into a
+  // CSS class name (`theme-<key>`) on every device the player signs in on, so anything outside THEMES is REFUSED, not coerced, and nothing is
+  // written. Returns the REAL result — true only when the value was accepted AND a player record took it — so a caller can tell a refusal
+  // from a write (app.js applyThemeChoice re-derives the paint from the persisted value on false, exactly as applyColorSchemeChoice does).
+  if (!THEMES.some(t => t.key === themeKey)) {
+    console.warn('[storage] setTheme refused a value outside THEMES:', themeKey);
+    return false;
+  }
+  return _setPlayerPref('theme', themeKey);
 }
 
 /**
@@ -970,8 +1064,10 @@ export function setColorScheme(scheme) {
     console.warn('[storage] setColorScheme refused a value outside {system, light, dark}:', scheme);
     return false;
   }
-  _setPlayerPref('colorScheme', scheme);
-  return true;
+  // SP-52 (DI-452 "Write refused (no player record)", 2026-10-01) — return the REAL result of the write. This used to be an unconditional
+  // `return true` AFTER _setPlayerPref(), which is itself `false` when nobody is signed in or the record is missing: the refusal was
+  // swallowed, the paint stuck on a value nothing persisted, and the calm "Couldn't change the appearance" toast could never fire.
+  return _setPlayerPref('colorScheme', scheme);
 }
 
 /**
@@ -980,9 +1076,9 @@ export function setColorScheme(scheme) {
  *
  * Reads answer '' for absent, malformed or non-string values (CONVENTIONS #10):
  * every caller falls back to getTheme(), which is today's behaviour exactly.
- * Validation against the seven real theme keys is the CALLER's job — this seam
+ * Validation against the ten real theme keys (THEMES) is the CALLER's job on the READ side — this seam
  * owns storage, not the palette list, and app.js/index.html both splice the
- * value into a CSS class name.
+ * value into a CSS class name. (The player-record theme is validated at the WRITE seam, setTheme(), below.)
  */
 export function getThemeHint() {
   const v = load(KEYS.THEME_HINT);
@@ -990,6 +1086,31 @@ export function getThemeHint() {
 }
 export function setThemeHint(key) {
   save(KEYS.THEME_HINT, String(key || ''));
+}
+
+/**
+ * SP-52 (DI-453, UN-394) — the DEVICE's memory of the colour scheme it last painted from a resolved player record. See KEYS.
+ * SCHEME_HINT. Allow-listed at BOTH ends (CONVENTIONS #7): a read answers '' for anything but light | dark | system, and a write
+ * refuses anything else — the value is only ever compared against those three literals, never spliced into a class or an
+ * attribute unvalidated (index.html's inline block re-checks it the same way).
+ */
+export function getSchemeHint() {
+  const v = load(KEYS.SCHEME_HINT);
+  return (v === 'light' || v === 'dark' || v === 'system') ? v : '';
+}
+export function setSchemeHint(v) {
+  if (v === 'light' || v === 'dark' || v === 'system') save(KEYS.SCHEME_HINT, v);
+}
+/**
+ * SP-52 (DI-453) — the FIRST-PAINT reader for the Appearance axis (the twin of bootThemeKey()'s two-step: record, then hint).
+ * A readable player record is AUTHORITATIVE (so a stale hint can never strand a player on a scheme their record no longer
+ * holds); the hint stands in only while the record is unreadable (a Supabase cold boot before the hydrate). 'system' otherwise.
+ */
+export function getColorSchemeBoot() {
+  const sess = getSession();
+  if (sess?.playerId && getPlayer(sess.playerId)) return getColorScheme();
+  const h = getSchemeHint();
+  return (h === 'light' || h === 'dark') ? h : 'system';
 }
 
 // ─── FETCH PROOF ──────────────────────────────────────────────────────────────

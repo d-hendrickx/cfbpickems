@@ -597,6 +597,113 @@ const SELECT_COLS = Object.freeze({
 });
 
 /**
+ * SB-01 / RG-265 — EVERY HYDRATE READ IS PAGED, AND ITS COMPLETENESS IS PROVEN, NEVER ASSUMED.
+ *
+ * Hosted PostgREST caps every read at the project's "Max rows" (1,000 by default) and truncates
+ * SILENTLY: HTTP 200, a partial array, no error. `_select()` used to issue one unordered, unranged
+ * select per table, so the first table past the cap (`picks`, at ~6 players x 12 games x 14 weeks)
+ * would have arrived as an arbitrary subset and been adopted as the league — picks shown as unmade,
+ * standings computed from part of the season, and a diff planner that tries to re-insert rows the
+ * server already holds. RG-12's guard cannot see it: it fires only when a read is EMPTY.
+ *
+ * THE CAP IS UNKNOWN TO THE CLIENT, and that is the whole difficulty. "A page shorter than I asked
+ * for is the last page" is only true when the server's cap is at least the page size, so trusting a
+ * short page is the silent-truncation rule again under another name. A read therefore ends only on
+ * a PROOF, and none of them depends on knowing the cap:
+ *   1. the FIRST page asks for `count: 'exact'`. PostgREST computes that count in the SAME statement
+ *      as the page, under the same snapshot and the same RLS, so `rows >= count` on page one proves
+ *      the table was read whole. That is the common case, and it costs no extra request.
+ *   2. a page shorter than it asked for AND shorter than the largest page this server has already
+ *      returned: a cap the server has been seen to exceed cannot have shortened it, so the rows ran
+ *      out. A page EQUAL to the largest so far proves nothing — it may be the cap (a project whose
+ *      Max rows is below the page size) — and the read goes on.
+ *   3. a keyset page that comes back EMPTY: the key range is exhausted, whatever the cap is.
+ * And the count is checked against every rule-2 ending: a short page while the rows read are still
+ * fewer than page one counted (a cap changed mid-read; rows deleted mid-read) does NOT end the read —
+ * it goes on by keyset until an EMPTY page (rule 3). Keyset pages never miss a row that existed for the
+ * whole read, so a shortfall that survives an empty page can only be rows DELETED while the read ran:
+ * adopted, with a console warning. The count never ENDS a read early (rule 1 needs rows >= count), so
+ * a wrong count can only make a read go further, never truncate it. (Pass 2 re-read from the top
+ * instead, and a member's sustained deletions could spend every read and HOLD every device — N2.)
+ *
+ * HOW A READ CONTINUES PAST PAGE ONE — keyset by default, offset for a key too long for a URL.
+ *   • KEYSET: `.gt(key, lastKey)` on the column the read is ordered by. It never misses a row that
+ *     existed for the whole read, whatever is inserted or deleted between pages. Order and `>` share
+ *     the column's collation server-side, so the two agree by construction. But the key goes INTO
+ *     THE URL — and for comments, reactions, game_requests and picks the key is MEMBER-AUTHORED: no
+ *     migration checks an id's length or shape. SECURITY S-C1 (2026-09-26): one member planting a
+ *     6 KB id at a page boundary made every device's continuation URL ~18 KB, past the gateway's
+ *     ~16 KB, so every hydrate got a 414 and HELD — the league withheld from all six, recoverable
+ *     only by SQL. (A database length CHECK is the later, second fix; this one needs no migration.)
+ *   • OFFSET, for a key whose URL-encoded length is over MAX_URL_KEY_CHARS: the key is never sent.
+ *     The next page is `.range(n - 1, n - 1 + size - 1)`, n being the rows read so far — it starts
+ *     ONE row early, on the last key already read: the ANCHOR. Offset's weakness is that an insert or
+ *     delete BEFORE the offset slides the rows beneath it, so a row is silently skipped or re-read —
+ *     and a matching change after it can keep the count whole, so the count alone cannot see it. The
+ *     anchor can: it comes back in the same statement as the page, so if the first row is not the
+ *     last key already read, the table moved beneath the offset and it is read again from the top.
+ *     With the anchor in place the page is exactly the rows after it, as a keyset page would be. The
+ *     offset path is also the only place a shortfall still re-reads (an empty page cannot be asked for
+ *     past a key that cannot go in a URL). Those re-reads are bounded at HYDRATE_READ_ATTEMPTS, then a
+ *     named HydratePagingError (HELD): the accepted residual — churn kept up ahead of a planted key —
+ *     which the planned database length CHECK removes by removing the key.
+ *   • THE BOUND, 1,024 encoded characters. Every id this app and its Edge Functions mint is short
+ *     ASCII — reaction ids `rx_<week>_<game>_<member>_<hex>`, the longest, are ~100 characters, and
+ *     server-minted ids are capped at 200 (`STORED_ID_MAX`) — so every legitimate key stays on the
+ *     exact keyset path with 5x headroom. And a URL carrying a key at the bound stays under ~1.4 KB
+ *     (the rest of the longest hydrate URL — league_members' column list, the league filter, order,
+ *     limit — is ~350 characters): under the 2 KB of the most conservative intermediaries, the SDK's
+ *     own 8,000-character `urlLengthLimit` warning and the gateway's 16 KB. The length is measured by
+ *     BOTH encoders (the SDK form-encodes through URLSearchParams; encodeURIComponent differs on a few
+ *     characters in each direction) and the larger taken; a key either one refuses goes by offset.
+ *
+ * THE PAGE SIZE IS 1,000 — Supabase's default Max rows. At or above that cap a table of N rows costs
+ * ceil(N/1000) requests; the live project's 5,000 (raised by Drew 2026-09-26) is headroom for THIS
+ * read, not a dependency; a project set below 1,000 still reads whole (rule 2 against the cap it
+ * actually returns). That is true of the client hydrate ONLY: the server-side SCRIBE read
+ * (`supabase/functions/_shared/scribe-tools.mjs` loadLeagueData) is still unpaged and DOES depend on
+ * the setting — reported separately (reviewer, SB-01 pass 1), not changed here.
+ *
+ * The page key is each table's PRIMARY KEY minus `league_id`, which `.eq()` pins: every READ_TABLE
+ * is `primary key (league_id, id)` except `league_kv`, which is `(league_id, key)` (0001_schema.sql;
+ * `competitions`, 0033_multisport_core.sql, is `(league_id, id)` with a uuid id). adaptertest
+ * [A-PAGE](7) derives this from every migration and fails on drift.
+ *
+ * Rows arrive in KEY order (the column's collation order) as a consequence. They used to arrive in
+ * heap order, which Postgres does not define and which moved whenever a row was updated. Key order is
+ * deterministic, but it is NOT creation order in general: timestamped ids (`w_<ms>`, `g_<ms>_<rand>`,
+ * `pk_<ms>_<rand>`) approximate it, with ids minted in the same millisecond ordered by their random
+ * suffix; and `league_members` mixes imported `p1`…`p6` with created `p_<ms>_<rand>` ids — under a
+ * glibc en_US collation '_' is ignored at the first level, so a created id sorts AMONG the imported
+ * ones (`p_17…` compares as `p17…`: after `p1`, before `p2`), not after them. Nothing in this adapter
+ * depends on the order.
+ */
+const HYDRATE_PAGE_SIZE = 1000;
+let _hydratePageSize = HYDRATE_PAGE_SIZE;           // a test seam may lower it; nothing else writes it
+const HYDRATE_READ_ATTEMPTS = 3;                    // reads of one table before a shortfall is refused
+const MAX_URL_KEY_CHARS = 1024;                     // see THE BOUND above
+const PAGE_KEY = Object.freeze({ league_kv: 'key' });  // every other READ_TABLE pages on 'id'
+function _pageKeyFor(table) { return PAGE_KEY[table] || 'id'; }
+
+/** The characters a key adds to a URL, by the larger of the two encoders; Infinity when either
+ *  refuses it (encodeURIComponent throws on a lone surrogate, which URLSearchParams would instead
+ *  silently rewrite to U+FFFD — a DIFFERENT key, so such a key is never sent at all). */
+function _urlKeyLength(key) {
+  const s = String(key);
+  try {
+    return Math.max(encodeURIComponent(s).length, new URLSearchParams([['k', s]]).toString().length - 2);
+  } catch {
+    return Infinity;
+  }
+}
+
+/** The sentence a player reads when the league cannot load — the adapter's one hydrate banner. It is
+ *  also what `_lastError` holds for a failure whose own text is technical (a paging refusal, a
+ *  gateway's HTML page): app.js renders `_lastError` into the red banner and the retry toast
+ *  verbatim, and Interaction Principles (Error States) never shows a player a technical message. */
+const HYDRATE_BANNER = 'Couldn’t load your league. Nothing has changed — retry in a moment.';
+
+/**
  * THE NOT NULL COLUMNS OF EVERY ROUTED TABLE (0001_schema.sql), and the one planner rule they buy.
  *
  * The projection turns a legacy field that is ABSENT into `null`. `import_rows` coalesces that back
@@ -854,24 +961,157 @@ function _sizeOf(v) {
   return v ? 1 : 0;
 }
 
+/** SB-01 — a read the server answered but that cannot be proven complete. It is a PARTIAL READ in
+ *  RG-12's sense (the server answered, and the answer was incomplete), so it HOLDS and is never read
+ *  as "offline". NAMED, so the console says which rule refused it; the player sees HYDRATE_BANNER. */
+function _pagingError(table, code, detail, res = null) {
+  const err = new Error(`select ${table}: ${detail}`);
+  err.name = 'HydratePagingError';
+  err.pagingCode = code;
+  err.pgCode = '';
+  err.httpStatus = Number((res && res.status) || 0) || 0;
+  err.table = table;
+  err.rgPartialRead = true;
+  err.userMessage = HYDRATE_BANNER;
+  return err;
+}
+
+/** A select the server (or something in front of it) refused. */
+function _selectError(table, res) {
+  const e = res.error || {};
+  // REVIEWER F4 / SECURITY F1 — CARRY THE HTTP STATUS. The SDK sets `code` to
+  // '' for a body PostgREST did not author — an edge 403, a gateway 502, a
+  // captive portal's 200-shaped interception — so a classifier that reads only
+  // `code` sees nothing at all for exactly the responses that most need to be
+  // read as "the server answered". `res.status` is on the response object;
+  // `res.error.status` is where some SDK versions put it. Both, because a
+  // missing status is what makes the difference invisible.
+  const status = Number(res.status ?? e.status ?? 0) || 0;
+  const raw = String(e.message || e.code || 'refused');
+  // SECURITY S-C3 / REVIEWER R-3 — a GATEWAY'S PAGE IS NEVER ECHOED. A body PostgREST did not author
+  // reaches the SDK's non-JSON branch as `{ message: <the whole body> }` with no code: for a 414 that
+  // is Cloudflare's HTML. It used to become this error's message, then `_lastError`, then the red
+  // banner. The status and status text are what is worth keeping, and only in the console.
+  const gatewayPage = !e.code && /<[a-z!/][^>]*>/i.test(raw);
+  const err = new Error(`select ${table}: ${gatewayPage
+    ? `HTTP ${status || '?'}${res.statusText ? ` ${String(res.statusText).slice(0, 80)}` : ''} (a non-JSON response; its body is not shown)`
+    : raw}`);
+  err.pgCode = e.code || '';
+  err.httpStatus = status;
+  err.table = table;
+  if (gatewayPage) err.userMessage = HYDRATE_BANNER;
+  return err;
+}
+
+/**
+ * One table, read whole — see HYDRATE_PAGE_SIZE above for the rules. A read that ends by a proof is
+ * adopted (a shortfall against the count after an EMPTY page can only be rows deleted while it ran,
+ * and is said in the console). Only the OFFSET path re-reads from the top — when an anchor moved, or
+ * when the count says rows are missing and the next page could only go by offset, where no empty
+ * page can be asked for. After HYDRATE_READ_ATTEMPTS reads it is refused loudly, never adopted short.
+ */
 async function _select(client, table, leagueId) {
-  const cols = SELECT_COLS[table] || '*';
-  const res = await client.from(table).select(cols).eq('league_id', leagueId);
-  if (res && res.error) {
-    const err = new Error(`select ${table}: ${res.error.message || res.error.code || 'refused'}`);
-    err.pgCode = res.error.code || '';
-    // REVIEWER F4 / SECURITY F1 — CARRY THE HTTP STATUS. The SDK sets `code` to
-    // '' for a body PostgREST did not author — an edge 403, a gateway 502, a
-    // captive portal's 200-shaped interception — so a classifier that reads only
-    // `code` sees nothing at all for exactly the responses that most need to be
-    // read as "the server answered". `res.status` is on the response object;
-    // `res.error.status` is where some SDK versions put it. Both, because a
-    // missing status is what makes the difference invisible.
-    err.httpStatus = Number(res.status ?? res.error.status ?? 0) || 0;
-    err.table = table;
-    throw err;
+  for (let attempt = 1; attempt <= HYDRATE_READ_ATTEMPTS; attempt++) {
+    const read = await _readTableOnce(client, table, leagueId);
+    if (read.reread) {
+      console.warn(read.reread === 'moved'
+        ? `[sb] ${table}: the table moved while it was being read (an offset page did not start on the last`
+          + ` row already read) — reading it again from the top (read ${attempt} of ${HYDRATE_READ_ATTEMPTS}).`
+        : `[sb] ${table}: the read is short of its own first-page count and the next page could only go by`
+          + ` offset (an over-length key), where no empty page can prove the end — reading it again from the top`
+          + ` (read ${attempt} of ${HYDRATE_READ_ATTEMPTS}).`);
+      continue;
+    }
+    if (read.total !== null && read.rows.length < read.total) {
+      console.warn(`[sb] ${table}: read ${read.rows.length} rows against its own first-page count of ${read.total},`
+        + ' and the read went on to an EMPTY page, so no row was left unread — the difference is rows deleted'
+        + ' while it ran. Adopting.');
+    }
+    return read.rows;
   }
-  return (res && res.data) || [];
+  throw _pagingError(table, 'incomplete', `after ${HYDRATE_READ_ATTEMPTS} reads the table could not be proven complete`
+    + ' (every read found it moving beneath an offset page).');
+}
+
+/** One pass over a table. `{ rows, total }` when a proof ended it; `{ reread: 'moved' }` when an
+ *  offset page's anchor was not where the last page left it; `{ reread: 'short' }` when the count says
+ *  rows are missing and the only way on is an offset page (see `exhaust` below). */
+async function _readTableOnce(client, table, leagueId) {
+  const cols = SELECT_COLS[table] || '*';
+  const key = _pageKeyFor(table);
+  const size = _hydratePageSize;
+  const rows = [];
+  const seen = new Set();
+  let total = null;
+  let lastKey;
+  let largest = 0;                   // rule 2: the most rows this server has returned in one page
+  // REVIEWER N2 (pass 3) — once the count has CONTRADICTED a rule-2 ending (a short page, yet fewer rows
+  // than page one counted — a cap that dropped mid-read, or rows deleted), rule 2 is no longer trusted
+  // in this read: it goes on by keyset until an EMPTY page (rule 3), which proves nothing is left past
+  // the last key read. Restarting instead let a member's sustained deletions spend every read and HOLD
+  // the league on every device.
+  let exhaust = false;
+  for (let page = 0; ; page++) {
+    const byOffset = page > 0 && _urlKeyLength(lastKey) > MAX_URL_KEY_CHARS;
+    let q = page === 0
+      ? client.from(table).select(cols, { count: 'exact' })
+      : client.from(table).select(cols);
+    q = q.eq('league_id', leagueId);
+    if (page > 0 && !byOffset) q = q.gt(key, lastKey);
+    q = q.order(key, { ascending: true });
+    const anchorAt = rows.length - 1;                    // the offset of the last row already read
+    const res = await (byOffset ? q.range(anchorAt, anchorAt + size - 1) : q.limit(size));
+    if (res && res.error) throw _selectError(table, res);
+    let data = (res && Array.isArray(res.data)) ? res.data : [];
+    const got = data.length;
+    if (page === 0) {
+      total = (res && typeof res.count === 'number' && Number.isFinite(res.count)) ? res.count : null;
+      // Same statement, same snapshot: a count of N beside an empty page is not a race, it is a
+      // body that lost its rows on the way here. Adopting it would paint an empty table.
+      if (total !== null && total > 0 && got === 0) {
+        throw _pagingError(table, 'count_without_rows', `the server counted ${total} row${total === 1 ? '' : 's'} but returned none.`, res);
+      }
+    }
+    if (byOffset) {
+      // THE ANCHOR, checked in the same statement as the page: anything but the last key already read
+      // means rows before it were inserted or deleted since, and this offset no longer points past it.
+      if (!got || !data[0] || data[0][key] !== lastKey) return { reread: 'moved' };
+      data = data.slice(1);
+    }
+    for (const r of data) {
+      const k = r ? r[key] : undefined;
+      // A key already seen means the server did not honour the keyset (or the order), and the loop
+      // would otherwise re-read the same page for ever.
+      if (k !== undefined && k !== null) {
+        if (seen.has(k)) throw _pagingError(table, 'repeated_row', 'the server repeated a row while paging.', res);
+        seen.add(k);
+      }
+      rows.push(r);
+    }
+    if (page === 0 && total !== null && got >= total) break;       // rule 1: the count proves page one whole
+    if (!byOffset && got === 0) break;                               // rule 3: the key range is exhausted
+    if (!exhaust && got < size && got < largest) {                   // rule 2: short of a page it has already exceeded…
+      if (total === null || rows.length >= total) break;             // …trusted while the count agrees (or is absent)
+      exhaust = true;                                                // the count says rows are missing: read on to a proof
+    }
+    largest = Math.max(largest, got);
+    if (data.length) {
+      const tail = data[data.length - 1];
+      lastKey = tail ? tail[key] : undefined;
+      if (lastKey === undefined || lastKey === null) {
+        throw _pagingError(table, 'keyless_row', 'a page ended on a row without its key, so the read cannot continue.', res);
+      }
+    }
+    // Reading on to an empty page needs a keyset page; with an over-length last key the only way on is
+    // an offset page, which cannot prove the end — so that read starts again from the top instead.
+    if (exhaust && _urlKeyLength(lastKey) > MAX_URL_KEY_CHARS) return { reread: 'short' };
+    if (!data.length) {
+      // Only the anchor came back and nothing proves that was the end: a server that has never
+      // returned more than one row per request cannot be paged by offset. Loud, never a spin.
+      throw _pagingError(table, 'no_progress', 'a page brought no new row and did not prove the end of the table.', res);
+    }
+  }
+  return { rows, total };
 }
 
 /**
@@ -1307,7 +1547,11 @@ export function _classifyHydrateFailureForTest(err) { return _classifyHydrateFai
 export function _connectionSqlstatesForTest() { return [...CONNECTION_SQLSTATES]; }
 
 function _fail(err, leagueId, reason) {
-  _lastError = String((err && err.message) || err);
+  // REVIEWER R-3 / SECURITY S-C3 — `_lastError` is what app.js renders into the red banner and the
+  // retry toast. An error that carries `userMessage` (a paging refusal, a gateway's HTML page) shows
+  // that sentence; its technical text goes to the console, where the diagnosis is done.
+  if (err && err.userMessage) console.warn(`[sb] hydrate refused — ${err.name || 'Error'}: ${err.message}`);
+  _lastError = String((err && (err.userMessage || err.message)) || err);
   const pgCode = String((err && err.pgCode) || '');
   const kind = _classifyHydrateFailure(err);
   const privilege = kind === 'privilege';
@@ -1367,7 +1611,7 @@ function _fail(err, leagueId, reason) {
     // per DI-180p). The adapter never clears a token.
     sessionSuspect,
     membershipSuspect: privilege,
-    banner: 'Couldn’t load your league. Nothing has changed — retry in a moment.',
+    banner: HYDRATE_BANNER,
   });
   return 0;
 }
@@ -3612,9 +3856,17 @@ export function _resetForTest() {
   // inside the next one, against a mirror it knows nothing about.
   _cancelRetry(null); _retryAttempt = 0;
   _lastSyncAt = null; _lastError = null; _firstSupabaseBootDone = false;
+  _hydratePageSize = HYDRATE_PAGE_SIZE;
   _listeners.clear();
   _deps = null;
 }
+/** SB-01 — the page size, lowered by a test so the page-size-below-cap and page-boundary cases can
+ *  be driven without thousands of fixture rows. `_resetForTest()` restores the default. */
+export function _setHydratePageSizeForTest(n) {
+  if (!Number.isInteger(n) || n < 1) throw new Error(`_setHydratePageSizeForTest: a positive integer is required (got ${n})`);
+  _hydratePageSize = n;
+}
+export function _hydratePageKeyForTest(table) { return _pageKeyFor(table); }
 export function _setStateForTest(next, reason = 'test') { return _setState(next, reason); }
 export function _dirtyKeysForTest() { return [..._dirty.keys()]; }
 /** RG-202 — the retry schedule, readable without reaching into the module. */

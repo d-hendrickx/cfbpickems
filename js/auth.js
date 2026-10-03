@@ -53,6 +53,9 @@ import { logoutOneSignal, logoutOneSignalAndWait } from './push-onesignal.js';
 // implementation. platform.js is zero-dependency and side-effect-free (no
 // import of its own), so this cannot form a cycle back into this file.
 import { isNativeOrigin } from './platform.js';
+// SP-53 (League Settings, 2026-10-01) — the three wrappers (rename / leave / the accepting-members switch) live in the PURE module, which imports nothing and takes its collaborators as an
+// injected `deps` object; the adapters below bind them to THIS module's client, refresh and cache. One edge, no cycle (league-settings.js imports nothing).
+import * as LS from './league-settings.js';
 
 // ── Typed errors (AD-06 loud-fail) ───────────────────────────────────────────
 // Two named classes, not bare Error strings, because two DIFFERENT callers have
@@ -3509,7 +3512,7 @@ export async function listLeagueMembers(leagueId) {
     // `select('*')` would let a future column arrive in this render path by
     // default, which is the opposite of the "invisible unless a policy allows
     // it" default UN-182's root driver is about.
-    .select('id, display_name, role, active, user_id, initials, alma_mater, link_disputed_at')
+    .select('id, display_name, role, active, user_id, initials, alma_mater, link_disputed_at, linked_at')
     .eq('league_id', leagueId);
   if (error) throw error;
   return (data || []).map(r => ({
@@ -3529,6 +3532,9 @@ export async function listLeagueMembers(leagueId) {
     // renders a WARNING off this value, and a warning that appears because a
     // string was empty is worse than one that never appears.
     linkDisputedAt: r.link_disputed_at || null,
+    // SP-53 / DI-462 §A (F2) — WHEN the seat was first linked, passed through as sent. `leave_league` never clears it, so `!active && !linked && linkedAt` is what separates a
+    // seat whose person LEFT from a placeholder a commissioner removed before anyone linked it (`js/league-settings.js` departedLabel()). In the member-readable grant since 0007.
+    linkedAt: r.linked_at || null,
   }));
 }
 
@@ -4054,6 +4060,69 @@ export async function archiveLeagueOnExit(leagueId) {
   try { await refreshMembershipsAndSession(); }
   catch (e) { refreshed = false; console.warn('[auth] the membership refresh after archive_league_on_exit failed (the archive itself succeeded)', e); }
   return { ok: true, refreshed };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SP-53 (UN-345…349, DI-457…464 as amended, 2026-10-01) — LEAGUE SETTINGS ADAPTERS
+// ═══════════════════════════════════════════════════════════════════════════
+// The three wrappers are in js/league-settings.js (pure, injected deps, ONE outcome object each, never a throw for an expected failure). THIS is the adapter that binds them to this
+// module's client, its membership refresh and its cache — and the only place `sb.dropMirror` is named for a leave. The SEQUENCE is the wrapper's (rpc, then dropMirror, then refresh;
+// leaguesettingstest [11j] pins it in the source and authtest pins that THIS adapter binds exactly those three collaborators). `getLeagueSettings` is the on-demand read of the one
+// value the membership cache does not carry.
+
+/** The deps the three wrappers take. `rpc` resolves { data, error } and NEVER rejects: no client reads as an error the wrapper classifies as an unknown outcome (and then refreshes). */
+function _leagueSettingsDeps(extra = {}) {
+  return {
+    rpc: async (fn, args) => {
+      const client = ensureClient();
+      if (!client) return { data: null, error: new AuthUnavailableError('Supabase client is not configured.') };
+      return client.rpc(fn, args);
+    },
+    // SC-L15 honesty (security C-U1): refreshMembershipsAndSession() answers `null` for "could not ask" (no session user, a recovery session, the identity moved mid-read, an unreadable list) and
+    // an ARRAY only when it read the memberships. The wrappers treat "did not throw" as "the refresh worked", so a bare pass-through would call an offline, expired-token device's unknown outcome
+    // "failed" (and a landed leave "done"). Anything that is not a list is a refresh that did not happen: throw, and the wrapper chooses unconfirmed / done_refresh_failed.
+    refreshMemberships: async () => {
+      const read = await refreshMembershipsAndSession();
+      if (!Array.isArray(read)) throw new Error('could_not_ask');
+    },
+    getMemberships: () => getCachedMemberships(),
+    // The mirror is dropped on a leave only in the Supabase data mode; in any other mode there is no league-scoped mirror to drop (null = the wrapper skips it).
+    dropMirror: isSupabaseDataMode() ? (reason) => sb.dropMirror(reason) : null,
+    isExpired: isSessionExpiredError,
+    ...extra,
+  };
+}
+
+/**
+ * DI-459 — `leagues.accepting_members` for one league, on demand (a member may read their own league's row under `leagues_select`; the membership cache does not carry it). LOUD: an error,
+ * or an answer that is not a boolean, THROWS — a value this client cannot read is never guessed ("Couldn't load this setting." plus Try Again is the honest state).
+ * @returns {Promise<{ acceptingMembers: boolean }>}
+ */
+export async function getLeagueSettings(leagueId) {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { data, error } = await client.from('leagues').select('accepting_members').eq('id', leagueId).single();
+  if (error) throw error;
+  if (!data || typeof data.accepting_members !== 'boolean') throw new Error('leagues.accepting_members did not come back as a boolean — refusing to guess it.');
+  return { acceptingMembers: data.accepting_members };
+}
+
+/** DI-458 — rename (commissioner only; the server decides). Returns the wrapper's outcome object; `role` is the caller's CACHED role in this league (it only picks between two honest messages). */
+export function renameLeague(leagueId, name, { role = null } = {}) {
+  return LS.renameLeague(_leagueSettingsDeps(), { leagueId, name, role });
+}
+
+/**
+ * DI-460/461 — leave a league. `confirmArchive` is true ONLY from the "Leave and archive" sheet (SC-L9); a plain leave never passes it. The outcome object's sequence is rpc -> dropMirror ->
+ * refresh (F4). Resolves with an outcome and never rejects for an expected failure.
+ */
+export function leaveLeague(leagueId, { confirmArchive = false, role = null } = {}) {
+  return LS.leaveLeague(_leagueSettingsDeps(), { leagueId, confirmArchive, role });
+}
+
+/** DI-459 — open or close the league to new members (commissioner only). An unknown outcome is settled by re-reading the value (`readAccepting`). */
+export function setAcceptingMembers(leagueId, open, { role = null } = {}) {
+  return LS.setAcceptingMembers(_leagueSettingsDeps({ readAccepting: async (id) => (await getLeagueSettings(id)).acceptingMembers }), { leagueId, open, role });
 }
 
 /**
@@ -4959,14 +5028,24 @@ export async function signOut({ unlinkPush = true } = {}) {
   // in-RAM copy is dropped through chat.js's own exported clearOutbox(), and
   // flushOutbox() refuses to send an entry whose author is not the current
   // session's member id, so the marker-independent case is covered too.
-  clearDeviceLocalSessionData({ mode: 'signout' });
+  const swept = clearDeviceLocalSessionData({ mode: 'signout' });
   // DI-180q — the DATA and the MARKER go together on an explicit Sign Out. The
   // data is gone, so recording an owner for it would be a lie; and leaving the
   // departing player's tuple behind would make the NEXT sign-in by that same
   // player read "marker matches" over a cache that no longer exists. Removed by
   // the same verified writer, so an unwritable device still reads MISSING next
   // boot and clears again — never a match.
-  _setDeviceDataOwner('');
+  //
+  // SB-20 security F2 (2026-10-01) — …but ONLY when the data really went. On a
+  // handset refusing removals the sweep reports incomplete, the departing
+  // player's chat cache is still there, and removing the marker anyway left that
+  // cache with NO recorded owner — the one state in which the next account could
+  // be handed it. Leaving the marker naming the departing account keeps the
+  // cache attributed: the next different account reads as a different owner
+  // (reconcileDeviceDataOwner() clears again; chat.js refuses to replay it), and
+  // the same player coming back reads "marker matches" over data that IS theirs.
+  if (swept === true) _setDeviceDataOwner('');
+  else console.warn('[auth] the Sign Out sweep did not complete on this device — the device-data owner marker is LEFT naming the departing account, so whatever survived stays attributed to them and is never adopted by the next account (SB-20 F2).');
   _authListeners.forEach(fn => {
     try { fn('SIGNED_OUT', null); }
     catch (e) { console.warn('[auth] listener failed', e); }

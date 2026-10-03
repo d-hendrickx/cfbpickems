@@ -51,7 +51,7 @@ export const LC_COPY = Object.freeze({
   // name step
   nameLabel: 'League name',
   namePlaceholder: 'e.g. Saturday Crew',
-  nameHelper: 'Your friends will see this name.',   // coordinator copy ruling 2026-09-30: no rename UI exists yet (it arrives with the Social Platform thread's SP-53), so the helper must not promise one
+  nameHelper: 'Your friends will see this name. You can change it later.',   // SP-53 / DI-458 (2026-10-01, Q9 agreed with Multi-Sport): the promise is restored WITH the rename UI (League Settings). It is a PROMISE: this string ships in the SAME release as the rename RPC, never before (the 2026-09-30 coordinator ruling softened it to "Your friends will see this name." while no rename existed)
   clearName: 'Clear name',
   // sports step
   sportsTitle: 'Sports',

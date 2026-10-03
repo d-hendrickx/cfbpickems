@@ -65,7 +65,16 @@ import { getSettings, saveSetting, getSession } from './storage.js';
 //   • getAuthMode()            — tells 'pins'/anonymous apart from 'supabase'.
 //   • hasValidSupabaseSession() — an account is PROVEN at this device even though
 //                                 getSession().playerId has not resolved yet.
-import { getActiveLeagueId, getAuthMode, hasValidSupabaseSession } from './auth.js';
+//
+// SB-20 (2026-10-01) — three more reads off the SAME edge, for the store's
+// (account, league) scope: getAccountUserId() is the identity tuple's account
+// term; getDeviceDataOwner() + IDENTITY_KEY_SEP read DI-180q's marker, which
+// owns the device-local events cache the boot replay folds in.
+import {
+  getActiveLeagueId, getAuthMode, hasValidSupabaseSession,
+  getAccountUserId, getDeviceDataOwner, IDENTITY_KEY_SEP,
+  hasConfigBeenRead, getLastKnownAuthMode,
+} from './auth.js';
 
 // ── Device-local persistence keys (AD-12) ─────────────────────────────────────
 const K_LASTSEEN = 'cfbp_chat_lastseen2';   // { seq, byTag: { gameId: seq } }
@@ -115,6 +124,10 @@ const S = {
   // (which knows one delivery at a time) or in notifications.js (which cannot
   // see the transport at all — AD-16).
   caughtUp: false,
+  // SB-20 — bumped every time the store is emptied for a new (account, league).
+  // A subscription captures it when it opens and refuses any delivery made
+  // after it moved: see _subscribeNow() and rescopeChat().
+  scopeGen: 0,
 };
 
 function notify(kind, detail) { S.subs.forEach(fn => { try { fn(kind, detail); } catch {} }); }
@@ -353,7 +366,14 @@ function _applyEpochLocally(epochSeq) {
  * Script cold starts run 10-20s.
  */
 export async function startFreshChat() {
+  const gen = S.scopeGen;                       // SB-20 class rule — see below
   const { head } = await fetchHead();          // LIVE head — the whole point
+  // SB-20 class rule — the head is per-league, and saveSetting() writes into
+  // whichever league is active NOW. A league switch (or handover) during the
+  // round trip would stamp the old league's head as the new league's epoch and
+  // empty this device's queue on its behalf. Loud-fail, same as a failed read:
+  // nothing is touched.
+  if (gen !== S.scopeGen) throw new Error('The league changed before Clear Chat History could be applied — nothing was changed. Try again.');
   saveSetting('chatEpochSeq', head);
   saveSetting('chatEpochSetAt', new Date().toISOString());
   _applyEpochLocally(head);                     // this device empties immediately — doubles as verification
@@ -363,6 +383,11 @@ export async function startFreshChat() {
 // ── Fold ──────────────────────────────────────────────────────────────────────
 function newItem(ev) {
   return { id: ev.id, seq: ev.seq ?? null, ts: ev.ts ?? ev._localTs ?? null,
+           // SB-20 — the row's league: from the wire (rowToMessage's league_id),
+           // or from sendEvent()'s compose-time stamp. '' = unknown (a device
+           // cache written before this release, or PIN mode). Read by the
+           // league filter on every reader below (_otherLeague()).
+           leagueId: ev.leagueId ? String(ev.leagueId) : '',
            author: ev.author, gameTag: ev.gameTag || '', body: ev.body || '',
            replyTo: ev.replyTo || '', notify: !!ev.notify, meta: ev.meta || null,
            type: ev.type, edited: false, deleted: false, pinned: false,
@@ -595,11 +620,43 @@ export function ingest(events, head, delivery) {
  *  "filter/search surface disagrees with what the underlying view honors"
  *  class named in the design input). feedbacktest.mjs mutation-checks this
  *  ordering directly. */
+/**
+ * ══ SB-20 (c) — NO READER IS EVER HANDED ANOTHER LEAGUE'S ROW ════════════════
+ *
+ * rescopeChat() (below) empties the store when the league moves, but only once
+ * app.js's chokepoint hears about it — and on a league switch that is
+ * SWITCH_END, which js/auth.js emits only AFTER it has moved the pointer and
+ * awaited the new league's hydrate. For that whole round trip the store still
+ * holds the old room while every header, pill and badge already says the new
+ * one. This filter closes that window, and anything else that ever lands a
+ * foreign row in the store: in supabase mode, a row stamped with a league other
+ * than the active one does not exist as far as any reader is concerned.
+ *
+ *   null  -> PIN mode: no filter at all, byte-identical to before.
+ *   ''    -> supabase mode with no active league: every STAMPED row is hidden.
+ *   'L…'  -> only rows stamped 'L…', plus unstamped ones.
+ *
+ * An UNSTAMPED row (leagueId '') is not guessed at: it is a device cache
+ * written before this release, already owner-scoped by DI-180q's sweep.
+ *
+ * Resolved ONCE per read, never per message — the retentionCutoff() lesson
+ * (v0.17.2): getActiveLeagueId() is a localStorage read.
+ */
+function _readLeague() {
+  try { if (getAuthMode() !== 'supabase') return null; } catch { return null; }
+  try { return String(getActiveLeagueId() || ''); } catch { return ''; }
+}
+function _otherLeague(m, league) {
+  return league !== null && !!m && !!m.leagueId && m.leagueId !== league;
+}
+
 export function getMessages(filter = {}) {
   const tag = filter.tag ?? 'all';
   const needle = filter.textContains ? String(filter.textContains).toLowerCase() : '';
+  const league = _readLeague();          // SB-20 (c) — once per read
   const out = [];
   S.items.forEach(m => {
+    if (_otherLeague(m, league)) return;
     if (filter.types && !filter.types.includes(m.type)) return;
     if (tag !== 'all' && (m.gameTag || '') !== tag) return;
     if (filter.pinned && !m.pinned) return;
@@ -621,7 +678,10 @@ export function getMessages(filter = {}) {
   return out.sort(cmpOrder);          // AD-10 — ordered pair, see cmpOrder()
 }
 
-export function getMessage(id) { return S.items.get(id) || null; }
+export function getMessage(id) {
+  const m = S.items.get(id) || null;
+  return m && _otherLeague(m, _readLeague()) ? null : m;   // SB-20 (c)
+}
 
 // ── The cross-talk rule ───────────────────────────────────────────────────────
 /** resolveTag({replyTo, viewTag}) — reply inherits parent tag (even null);
@@ -1029,6 +1089,12 @@ export async function flushOutbox() {
   // come back. This is the original gate, unmoved otherwise.
   if (!S.outbox.length || !isBackendConfigured() || !isChatEnabled()) return;
   const batch = S.outbox.splice(0, S.outbox.length);
+  // SB-20 security F1 — the batch is out of S.outbox for the whole round trip,
+  // so rescopeChat() cannot see it. Which store generation and which account it
+  // left under are captured HERE, and the catch below refuses to put it back
+  // (FAILED set, requeue, persisted outbox) once the ACCOUNT has moved.
+  const sentGen = S.scopeGen;
+  const sentAccount = _scope ? _scope.account : null;
   try {
     // RG-95 — the response's `head` is DELIBERATELY IGNORED. `chatAppend`
     // answers with the TRUE sheet head (Code.gs `msgHead(s)`), not a head this
@@ -1048,6 +1114,13 @@ export async function flushOutbox() {
     // any other event, deduped by id server-side and in the fold (AD-09/AD-10).
     // Guarded by loadtest §[74].
     const { assigned } = await appendEvents(batch.map(o => o.ev));
+    // SB-20 class rule, SUCCESS side — the scope moved during the round trip.
+    // The batch's items left the store with the reset and its waiters were
+    // rejected there (C-A); acknowledging into the new scope would touch rows
+    // and waiters that are not its own. Only the CURRENT queue is persisted:
+    // the batch was spliced out of it before the await, so this is what stops
+    // the delivered batch being restored and re-sent from the device later.
+    if (sentGen !== S.scopeGen) { persistOutbox(); return; }
     const byId = new Map(assigned.map(a => [a.id, a]));
     batch.forEach(o => {
       const a = byId.get(o.ev.id);
@@ -1059,6 +1132,17 @@ export async function flushOutbox() {
     notify('sent', { count: batch.length });
   } catch (err) {
     handleTransportError(err);
+    // SB-20 security F1 — AN APPEND THAT STRADDLED AN ACCOUNT HANDOVER. Account A's
+    // attempt was in flight when A signed out and B signed in: putting it back
+    // would land A's words in B's FAILED set (retryable, readable) or write them
+    // back into the persisted outbox the Sign Out sweep had just emptied. Its
+    // waiters are answered and nothing is kept. A LEAGUE-only move is the same
+    // person and keeps today's behaviour below (flushOutbox()'s league term
+    // decides where a requeued entry may go).
+    if (sentGen !== S.scopeGen && (_scope ? _scope.account : null) !== sentAccount) {
+      batch.forEach(o => settleAppend(o.ev.id, new Error(`The account changed before ${o.ev.id} could be sent`)));
+      return;
+    }
     // ── RG (live bug, v0.25.0, 2026-09-24) — AN EVENT THE SERVER TOOK IS NOT A FAILURE ───────
     // One batch is several requests (chatTransport.js's `sbPlanBatches` splits it by author kind
     // and by each RPC's own cap), so a throw from `appendEvents()` can mean "one run was refused
@@ -1366,6 +1450,16 @@ function readAndPrimeEventsCache() {
     try { localStorage.removeItem(K_EVENTS_CACHE); } catch {}
     return;
   }
+  // SB-20 — this replay is the one way content enters the store BEFORE the
+  // identity has settled, so the store takes its scope from the data's OWNER
+  // (DI-180q's marker) rather than from the live identity. A handset that
+  // changed hands between sessions replays the previous player's room here, and
+  // the incoming account then reads as a MOVE in rescopeChat() instead of being
+  // adopted. A cache owned by a different RESOLVED identity is not replayed.
+  if (!_claimCacheForScope()) {
+    console.warn('[chat] the device events cache belongs to a different identity than this page — not replayed (SB-20)');
+    return;
+  }
   _eventsCacheBuf = parsed.events.slice();          // seed so the next real write merges onto real history
   // DI-169d — caughtUp: false, UNCONDITIONALLY: a cached replay is never a
   // live delivery reaching today's true head, regardless of what the cache
@@ -1403,8 +1497,17 @@ function _subscribeNow() {
   // front of the lock. See setPollMode()'s comment.
   if (S.paused === true) return;
   if (S.unsub) S.unsub();
+  const gen = S.scopeGen;   // SB-20 — the store generation this subscription was opened for
   const sub = subscribe(
     (events, head, delivery) => {
+      // SB-20 — A LATE DELIVERY FROM A SCOPE THIS STORE HAS LEFT. Unsubscribing
+      // stops the timer and the channel, but a round trip already in flight
+      // still lands here when it resolves. The transport discards the ROWS of a
+      // page whose league/identity moved (its I6 check), but drainSince() then
+      // reports the page's starting cursor as `head` — the OLD league's seq —
+      // and ingest() would raise S.head to it, so the new league's next
+      // messages (whose seqs restart at 1) read as already held. Refused whole.
+      if (gen !== S.scopeGen) return;
       ingest(events, head, delivery);
       // DI-169c — accumulate every raw wire event this session sees
       // (including a mid-walk page of a big drain — it is real, legitimate
@@ -1635,12 +1738,196 @@ export function refreshChatEnabled() {
   else if (!enabled && S.unsub) { S.unsub(); S.unsub = null; S.forceTick = null; S.wake = null; }
 }
 
+/**
+ * ══ SB-20 (2026-10-01) — THE STORE BELONGS TO ONE (account, league) ══════════
+ *
+ * THE DEFECT. `S.items` — the folded room every chat surface reads — was one
+ * page-lifetime Map that nothing but _resetForTest() ever emptied. An in-page
+ * league switch, or an in-page Sign Out followed by a different account signing
+ * in, left the previous room in it: League A's rows painted under League B's
+ * header, and account A's PRIVATE rows (the push self-test, the private SCRIBE
+ * changelog — kept off B's wire by RLS) handed to B straight out of RAM.
+ *
+ * AND THE CURSOR WITH IT. `messages.seq` is per-league, contiguous from 1
+ * (0001_schema.sql:341). `S.head` is the poll cursor, so the new league was read
+ * from the old league's seq: a smaller room never loaded at all (the head probe
+ * answers "nothing new" forever), a bigger one lost every row at or below the
+ * old head, Realtime dropped the new league's next messages as already held, and
+ * `_eventsCacheBuf` wrote the old room back into the device cache DI-180q's
+ * sweep had just removed.
+ *
+ * THE RULE. The store carries the (account, league) its content belongs to.
+ * app.js's identity chokepoint — the one place every identity change passes
+ * through — calls rescopeChat() on every delta, and the store is emptied when
+ * either term moves to a DIFFERENT resolved value:
+ *
+ *   account A -> B, league L1 -> L2       reset
+ *   account A -> nobody, deliberate       reset (Sign Out is a change of person —
+ *                                          `discard`, the chokepoint's own flag)
+ *   account A -> nobody, expiry           HOLD: A9's ruling — a player whose
+ *                                          token died gets their room back; if a
+ *                                          DIFFERENT account arrives instead,
+ *                                          that is A -> B, and it resets
+ *   nobody -> A (boot resolving)          adopt — never a reset, or every cold
+ *                                          start would throw away DI-169's
+ *                                          instant room
+ *   league L1 -> none, L1 ENDED           reset (C-U3, 2026-10-01) — a leave or a
+ *                                          removal drops the pointer to null when
+ *                                          0 or 2+ leagues remain. A null league
+ *                                          is otherwise "not resolved yet" (HOLD),
+ *                                          so the pointer alone cannot say which;
+ *                                          `memberLeagues` can — the ids of a
+ *                                          SUCCESSFULLY read membership list, from
+ *                                          app.js (auth.js cannot import chat.js).
+ *                                          null = no list has resolved: a cold
+ *                                          boot or a failed read never wipes
+ *
+ * WHAT A RESET IS: the folded room, the buffered targets, the cursor, the
+ * backfill floor, the caught-up latch and the events-cache buffer go; this
+ * device's own unsent work is folded back in (the outbox — already emptied by
+ * clearOutbox() on an account move — and, on a league-only move, the FAILED
+ * set; read-side filtering hides a queued send for the other league, and
+ * flushOutbox()'s league term drops it); and a live subscription is restarted,
+ * so the new room is read from seq 0 NOW rather than on the next 60s tick. The
+ * restart is what makes late frames safe: S.scopeGen moves first, and the old
+ * subscription's in-flight deliveries are refused by it (_subscribeNow()).
+ *
+ * caughtUp goes back to false on purpose: the new room's first drain is
+ * HISTORY, so notifications.js relays none of it (BUG-C's rule, honoured).
+ *
+ * Device-local keys are NOT touched here: js/auth.js's DI-180q sweep owns them
+ * and already runs on every one of these transitions. This is the RAM half —
+ * the same split clearOutbox() made for SECURITY F-4.
+ *
+ * @returns {'adopted'|'kept'|'reset'} for the suites and the console trail.
+ */
+let _scope = null;   // null = never scoped; else { account, league } — '' is "not resolved"
+
+function _scopeNow() {
+  let account = '';
+  try { account = String(getAccountUserId() || ''); } catch { account = ''; }
+  let league = '';
+  try { league = String(getActiveLeagueId() || ''); } catch { league = ''; }
+  return { account, league };
+}
+
+/**
+ * SB-20 review N1 — "is this a Supabase device?", answered FAIL-CLOSED across
+ * the early-boot window. The cache replay runs from initChatUI({phase:'early'}),
+ * BEFORE config.json has landed, and until then getAuthMode() answers its
+ * 'pins' DEFAULT on a Supabase device (js/auth.js, SECURITY A-1-R). So before
+ * the config read, the device's persisted last-known mode decides; '' (never
+ * read a config) falls back to getAuthMode(), the only case auth.js allows the
+ * 'pins' default to stand for.
+ */
+function _isSupabaseDevice() {
+  let mode = '';
+  try {
+    mode = hasConfigBeenRead() ? String(getAuthMode() || '') : String(getLastKnownAuthMode() || getAuthMode() || '');
+  } catch { mode = ''; }
+  return mode === 'supabase';
+}
+
+/**
+ * The boot cache replay's half of the rule. The events cache is device-local
+ * data, and DI-180q's marker names its owner — so the store takes that owner's
+ * terms wherever the live identity has not resolved them yet. Order-independent:
+ * it fills only UNRESOLVED terms, whether or not the chokepoint got here first.
+ *
+ * Returns false — REFUSE the replay — when the marker names a DIFFERENT resolved
+ * account or league than the store is already scoped to. DI-180q's sweep removes
+ * such a cache before it could be read; this is the fail-closed answer for a
+ * sweep that could not complete (a handset refusing removals).
+ */
+function _claimCacheForScope() {
+  let owner = '';
+  try { owner = String(getDeviceDataOwner() || ''); } catch { owner = ''; }
+  // SB-20 review N1 — NO MARKER ON A SUPABASE DEVICE: NOT YOURS. DI-180q reads a
+  // missing marker as "not this identity's" and clears; replaying first would
+  // put an unowned room (account A's private rows included) in the store with an
+  // UNRESOLVED account, which rescopeChat() then fills with whoever signs in.
+  // PIN mode has no marker at all and is unchanged.
+  if (!owner && _isSupabaseDevice()) return false;
+  const [a = '', l = ''] = owner ? owner.split(IDENTITY_KEY_SEP) : [];
+  const ownerAccount = a === 'null' ? '' : a;
+  const ownerLeague = l === 'null' ? '' : l;
+  const cur = _scope || _scopeNow();
+  if (ownerAccount && cur.account && ownerAccount !== cur.account) return false;
+  if (ownerLeague && cur.league && ownerLeague !== cur.league) return false;
+  _scope = { account: cur.account || ownerAccount, league: cur.league || ownerLeague };
+  return true;
+}
+
+export function rescopeChat({ discard = false, memberLeagues = null } = {}) {
+  if (!_scope) { _scope = _scopeNow(); return 'adopted'; }
+  const prev = _scope;
+  const now = _scopeNow();
+  const accountMoved = (!!prev.account && !!now.account && prev.account !== now.account)
+    || (discard === true && !!prev.account && !now.account);
+  // C-U3 — the store's league is gone from a list that RESOLVED: that is a move to
+  // "no league", not "not resolved yet". Only with an array; null never ends one.
+  const leagueEnded = !!prev.league && !now.league
+    && Array.isArray(memberLeagues) && !memberLeagues.includes(prev.league);
+  const leagueMoved = (!!prev.league && !!now.league && prev.league !== now.league) || leagueEnded;
+  if (!accountMoved && !leagueMoved) {
+    // Fill a term that has just resolved; never overwrite a resolved one with
+    // "unknown" — that is what lets an expiry HOLD and a returning player keep.
+    _scope = { account: now.account || prev.account, league: now.league || prev.league };
+    return 'kept';
+  }
+  _scope = now;
+  S.scopeGen++;                                   // FIRST: every in-flight delivery is now stale
+  // SB-20 security C-A — and every pending append WAITER belongs to the scope
+  // that just ended. Left alive, account A's @scribe wait would reject or time
+  // out under account B and fireScribeMention() would degrade-post a canned line
+  // naming A into B's league (notify:true). Rejected now, marked scopeMoved, so
+  // the waiter can tell "the asker left" from "the send failed".
+  appendWaiters.forEach((_l, id) => settleAppend(id, Object.assign(new Error(`The chat scope moved before ${id} was acknowledged`), { scopeMoved: true })));
+  S.items.clear(); S.buffered.clear();
+  S.head = 0; S.backfillLow = null; S.caughtUp = false;
+  _eventsCacheBuf = [];
+  if (accountMoved) S.failed.clear();             // another person's failed words are not B's to retry
+  const own = [...S.outbox.map(o => o.ev), ...S.failed.values()];
+  if (own.length) ingest(own.map(ev => ({ ...ev, local: true })), undefined, { caughtUp: false });
+  if (S.unsub) {
+    S.unsub(); S.unsub = null; S.forceTick = null; S.wake = null;
+    if (isChatEnabled()) _subscribeNow();         // _subscribeNow() itself honours a hold-gate pause
+  }
+  notify('events', { added: 0, caughtUp: false, wasCaughtUp: false, rescoped: true });
+  console.info(`[chat] the chat store was emptied for a new ${accountMoved ? 'account' : leagueEnded ? 'league (the previous membership ended — C-U3)' : 'league'} (SB-20) — the new room is read from the start`);
+  return 'reset';
+}
+/** SB-20 — the scope the store currently belongs to. Suites only. */
+export function _chatScopeForTest() { return _scope ? { ..._scope } : null; }
+/** SB-20 security C-A — the store generation, for an async caller OUTSIDE this
+ *  module (scribeLines.js fireScribeMention()) to capture before an await and
+ *  compare after it: the same class rule §[21] enforces inside chat.js. */
+export function chatScopeGen() { return S.scopeGen; }
+
+/**
+ * Home wiring (DI-372 inline amendment A1, 2026-10-01; security W1/W2) — is THIS STORE bound to `leagueId`? A STORE-backed predicate, not a transport flag: it attests
+ * the in-memory room that getMessages() reads, which is the thing Home's SCRIBE and Locker Room cards trust. True only when ALL of:
+ *   - the store was scoped to `leagueId` (`_scope.league` — rescopeChat() resets it to '' when a membership ends, C-U3),
+ *   - the live active-league pointer still names `leagueId` (`_scope` alone is not enough: it keeps the last resolved league while the pointer is null),
+ *   - the room has caught up to the server's head (`S.caughtUp` — false on a cached replay, after a reset, and while realtime has never gone live, so it FAILS CLOSED).
+ * An empty or non-string `leagueId` is never bound (two unresolved '' terms must not compare equal). Pure read: no write, no await, no network. chatTransport.js (AD-16) is untouched.
+ */
+export function chatBoundToLeague(leagueId) {
+  if (typeof leagueId !== 'string' || !leagueId) return false;
+  if (!_scope || _scope.league !== leagueId) return false;
+  let active = '';
+  try { active = String(getActiveLeagueId() || ''); } catch { return false; }
+  return active === leagueId && S.caughtUp === true;
+}
+
 export async function backfill(limit = 100) {
   // Reachable only from the "load earlier" control, which is hidden while
   // chat is off — guarded anyway so a stray call can never cause traffic.
   if (!isBackendConfigured() || !isChatEnabled() || S.backfillLow === null || S.backfillLow <= 1) return 0;
+  const gen = S.scopeGen;   // SB-20 — same late-page rule as _subscribeNow()
   try {
     const { events } = await fetchBefore(S.backfillLow, limit);
+    if (gen !== S.scopeGen) return 0;
     // "Load earlier" is older history by construction — never a live delivery,
     // and never a reason to declare the forward walk caught up (BUG-C).
     return ingest(events, undefined, { caughtUp: S.caughtUp });
@@ -1821,6 +2108,17 @@ function putLastSeen(v) {
  * Guarded by loadtest §[17b].
  */
 export function markSeen(tag = 'all') {
+  // SB-20 sibling — the cursor is advanced to S.head, and S.head belongs to the
+  // STORE's league. In the switch window (the pointer already on the new league,
+  // the store not yet rescoped — js/auth.js awaits the hydrate before SWITCH_END)
+  // a pending 1s mark-read would write the OLD league's head as the NEW league's
+  // read position, and the new room's unread would read as already seen. A store
+  // that is not the active league's writes no cursor at all.
+  if (_scope && _scope.league) {
+    let active = '';
+    try { active = String(getActiveLeagueId() || ''); } catch { active = ''; }
+    if (active && active !== _scope.league) return;
+  }
   const ls = getLastSeen();
   const fwd = (cur) => Math.max(Number(cur) || 0, S.head);
   if (tag === 'all') {
@@ -2023,7 +2321,24 @@ export function isPrivateScribeChangelog(m) {
     && !!(m.meta && String(m.meta.playerId || ''));
 }
 
-function isUnreadFor(m, selfId, afterSeq, cutoff = retentionCutoff()) {
+/**
+ * SB-20 / security W7 (2026-10-01) — "this row is addressed to ONE member",
+ * as one predicate: the OR of the two above, nothing more. A surface that must
+ * never show or count a private row (the Home feed) asks this rather than
+ * repeating the pair, so a third private shape is added in one place.
+ *
+ * The two shapes are the only two because the only two writers of
+ * `messages.visible_to` are send_test_push() (migrations 0018/0026) and
+ * js/scribeChangelog.js buildChangelogPost(); chatscopetest.mjs §[11] scans
+ * the source for writers and fails on a third until this is taught its shape.
+ */
+export function isPrivateRow(m) {
+  return isPrivateSelfTest(m) || isPrivateScribeChangelog(m);
+}
+
+function isUnreadFor(m, selfId, afterSeq, cutoff = retentionCutoff(), league = _readLeague()) {
+  // SB-20 (c) — another league's row is never unread here; it is not in this room.
+  if (_otherLeague(m, league)) return false;
   // A message hidden by retention can never count toward unread — a player
   // who can't scroll to it should never see a badge promising it's there.
   if (_hiddenBy(cutoff, m)) return false;
@@ -2062,10 +2377,11 @@ export function unreadCount(selfId, tag = 'all') {
   const ls = getLastSeen();
   const after = readCursorFor(ls, tag);
   const cutoff = retentionCutoff();          // resolved once, not per message
+  const league = _readLeague();              // SB-20 (c) — likewise
   let n = 0;
   S.items.forEach(m => {
     if (tag !== 'all' && (m.gameTag || '') !== tag) return;
-    if (isUnreadFor(m, selfId, after, cutoff)) n++;
+    if (isUnreadFor(m, selfId, after, cutoff, league)) n++;
   });
   return n;
 }
@@ -2093,11 +2409,12 @@ export function unreadAuthors(selfId, tag = 'all') {
   const ls = getLastSeen();
   const after = readCursorFor(ls, tag);
   const cutoff = retentionCutoff();
+  const league = _readLeague();              // SB-20 (c)
   const seen = new Set();
   const out = [];
   S.items.forEach(m => {
     if (tag !== 'all' && (m.gameTag || '') !== tag) return;
-    if (!isUnreadFor(m, selfId, after, cutoff)) return;
+    if (!isUnreadFor(m, selfId, after, cutoff, league)) return;
     if (!seen.has(m.author)) { seen.add(m.author); out.push(m.author); }
   });
   return out;
@@ -2132,8 +2449,10 @@ export function latestNotifying(selfId) {
   // inside the same pre-identity window. Same direction as unreadCount()'s
   // guard: an unknown viewer produces NO statement, never a maximal one.
   if (!identityKnown(selfId)) return null;
+  const league = _readLeague();                         // SB-20 (c) — once per read
   let best = null;
   S.items.forEach(m => {
+    if (_otherLeague(m, league)) return;                // SB-20 (c) — not this room
     if (m.type !== 'message' || m.deleted || !m.notify) return;
     if (m.author === selfId) return;                    // never surface the viewer's own post
     if (isHiddenByRetention(m)) return;                // don't preview a message the reader can't open
@@ -2184,11 +2503,12 @@ export function latestUnreadNotifying(selfId, floorSeq = 0) {
   if (!identityKnown(selfId)) return null;
   const ls = getLastSeen();
   const cutoff = retentionCutoff();
+  const league = _readLeague();                                 // SB-20 (c)
   const floor = Number(floorSeq) || 0;
   let best = null;
   S.items.forEach(m => {
     if (typeof m.seq !== 'number' || m.seq <= floor) return;   // at/below the ✕ dismissal
-    if (!isUnreadFor(m, selfId, readCursorFor(ls, m.gameTag || 'all'), cutoff)) return;
+    if (!isUnreadFor(m, selfId, readCursorFor(ls, m.gameTag || 'all'), cutoff, league)) return;
     if (!best || cmpOrder(m, best) > 0) best = m;   // AD-10 — ordered pair, see cmpOrder()
   });
   return best;
@@ -2292,6 +2612,12 @@ export function chatDigest(startMs, endMs, ctx = {}) {
 // ── Test hooks ────────────────────────────────────────────────────────────────
 export function _resetForTest() {
   if (S.unsub) { S.unsub(); S.unsub = null; }             // no dangling timers across test sections
+  // SB-20 — …including the outbox's 750ms coalescing timer (scheduleFlush()).
+  // Left armed, a previous section's send fired flushOutbox() inside the NEXT
+  // section and spent one of its attempts: chatscopetest §[18]'s load-dependent
+  // "appends 3" was exactly that (stack: chat.js scheduleFlush arrow ->
+  // flushOutbox, from an earlier section's sendMessage()).
+  if (S.flushTimer) { clearTimeout(S.flushTimer); S.flushTimer = null; }
   S.forceTick = null;                                     // DI-168 — same lifecycle as S.unsub, above
   S.wake = null;                                          // BUG-12 — same lifecycle again
   S.items.clear(); S.buffered.clear(); S.head = 0; S.outbox = []; S.failed.clear();
@@ -2300,6 +2626,8 @@ export function _resetForTest() {
   _eventsCacheBuf = [];                                   // DI-169 — no leaking raw events into the next test section's writes
   _cachePrimed = false;                                   // BUG-G — the once-per-session prime latch is session state, same lifecycle as the buffer above
   _identityHolds = 0;                                     // SECURITY F-2 (eighth gate) — a per-page counter, so a suite's sections do not inherit each other's holds
+  _scope = null;                                          // SB-20 — the store's (account, league) is page state
+  S.scopeGen++;                                           // SB-20 — bumped, never zeroed: a torn-down subscription's in-flight page must not land in the NEXT section
   // DI-169 — UNLIKE K_LASTSEEN/K_OUTBOX/K_EPOCH_APPLIED above (whose
   // persistence across _resetForTest() is harmless — they're read on demand
   // by specific functions, not unconditionally on every initChat()), a stale

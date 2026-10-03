@@ -115,8 +115,19 @@ const aggieVars = extractVars(cssText, 'body\\.theme-aggie');
 // DI-360 night mode — the media-query block AND the manual-override block
 // (`body.theme-neutral[data-color-scheme="dark"]`) must carry the identical
 // token set (source-level "keep these two blocks in sync" contract).
-const nightMediaVars = extractVars(cssText, 'body\\.theme-neutral:not\\(\\[data-color-scheme="light"\\]\\)');
-const nightManualVars = extractVars(cssText, 'body\\.theme-neutral\\[data-color-scheme="dark"\\]');
+// RE-DERIVED (SP-52 DI-448/DI-456, 2026-10-01). The night region is no longer one `body.theme-neutral:not(…){}` block per trigger: Munera Dark is the
+// SHARED SURFACE block A (an enumerated list of the eight Munera-surface keys) plus the BRAND block B-munera (neutral + ink), each in both triggers, and
+// every school has its own B-school pair. These extractors read exactly Block A and B-munera for body.theme-neutral through themeresolve.mjs's parser (a
+// regex over `selector {` can no longer find a selector that sits inside a comma list), keeping extractVars()'s own `--name:#hex` capture rule.
+import * as ThemeR from './themeresolve.mjs';
+const _sheet = ThemeR.parseSheet(cssText);
+const _hexDecls = (rules) => { const v = {}; for (const r of rules) for (const d of r.decls) if (d.prop.startsWith('--') && /^#[0-9A-Fa-f]{3,8}$/.test(d.value.trim())) v[d.prop.slice(2)] = d.value.trim(); return v; };
+const _isNeutralMedia = (r) => r.media === 'dark' && /body\.theme-neutral:not\(\[data-color-scheme="light"\]\)/.test(r.selectorText) && !r.selectorText.startsWith(':where(');
+const _isNeutralManual = (r) => r.media === null && /body\.theme-neutral\[data-color-scheme="dark"\]/.test(r.selectorText) && !r.selectorText.startsWith(':where(');
+const _nightMediaRules = _sheet.rules.filter(_isNeutralMedia);   // Block A and B-munera
+const _nightManualRules = _sheet.rules.filter(_isNeutralManual);
+const nightMediaVars = _hexDecls(_nightMediaRules);
+const nightManualVars = _hexDecls(_nightManualRules);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // [1] Token values match DI-362's amended hex (source-of-truth check).
@@ -327,10 +338,10 @@ console.log('\n[2d] DI-393 — .header-sync-icon colours against var(--maroon), 
 // ─────────────────────────────────────────────────────────────────────────────
 console.log('\n[2c] DI-360 — night mode: scope, sync, and contrast…');
 {
-  assert(Object.keys(nightMediaVars).length > 0,
-    '[2c-pre] fixture: the `@media(prefers-color-scheme:dark){ body.theme-neutral:not([data-color-scheme="light"]) {...} }` block was found and parsed');
-  assert(Object.keys(nightManualVars).length > 0,
-    '[2c-pre] fixture: the `body.theme-neutral[data-color-scheme="dark"] {...}` manual-override block was found and parsed');
+  assert(_nightMediaRules.length === 2 && Object.keys(nightMediaVars).length > 0,
+    `[2c-pre] fixture: the \`@media(prefers-color-scheme:dark)\` blocks that select body.theme-neutral — Block A (shared surfaces) and B-munera (brand roles) — were found and parsed (${_nightMediaRules.length} rules)`);
+  assert(_nightManualRules.length === 2 && Object.keys(nightManualVars).length > 0,
+    `[2c-pre] fixture: the \`body.theme-neutral[data-color-scheme="dark"]\` manual blocks (A and B-munera) were found and parsed (${_nightManualRules.length} rules)`);
 
   // The two blocks must declare the exact same set of variables, with the
   // exact same values — a future edit to one without the other is exactly
@@ -339,6 +350,17 @@ console.log('\n[2c] DI-360 — night mode: scope, sync, and contrast…');
   const manualKeys = Object.keys(nightManualVars).sort();
   assert(mediaKeys.length > 5 && mediaKeys.join(',') === manualKeys.join(','),
     `[2c-a] the media-query and manual-override blocks declare the IDENTICAL variable set (media: ${mediaKeys.join(',')} | manual: ${manualKeys.join(',')})`);
+  // RE-DERIVED per block (themetest [T6] proves it for all twelve Dark rules; this pins the two that carry Munera): each of A and B-munera is byte-identical
+  // between the media trigger and the manual trigger, declaration for declaration.
+  {
+    const canon = (r) => r.decls.map((d) => `${d.prop}:${d.value.replace(/\s+/g, ' ')}`).join(';');
+    const pair = (sel) => [_nightMediaRules.find(sel), _nightManualRules.find(sel)];
+    const isA = (r) => (r.selectorText.match(/body\.theme-/g) || []).length === 8;
+    const isB = (r) => (r.selectorText.match(/body\.theme-/g) || []).length === 2;
+    const [aM, aU] = pair(isA), [bM, bU] = pair(isB);
+    assert(!!aM && !!aU && !!bM && !!bU && canon(aM) === canon(aU) && canon(bM) === canon(bU),
+      '[2c-a2] Block A and Block B-munera are each BYTE-IDENTICAL between the media-query trigger and the manual-override trigger (the "keep in sync" contract, per block)');
+  }
   let allMatch = true, mismatch = null;
   for (const k of mediaKeys) {
     if (nightMediaVars[k].toUpperCase() !== nightManualVars[k].toUpperCase()) { allMatch = false; mismatch = k; }
@@ -351,13 +373,23 @@ console.log('\n[2c] DI-360 — night mode: scope, sync, and contrast…');
   const bareRootInDarkMedia = /@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{/.test(cssText);
   assert(!bareRootInDarkMedia,
     '[2c-c] the dark media query never targets bare :root directly — only body.theme-neutral, so the five non-aggie school themes (which inherit --bg/--text-primary from :root) never go dark');
-  // Every school theme selector must be ABSENT from both night-mode blocks.
+  // [2c-d] OVERTURNED by Drew's amendment (2026-09-30, "make light/dark versions of school themes") and re-derived (SP-52 DI-448/DI-451/DI-456, 2026-10-01).
+  // The old assertion — "every school selector is ABSENT from both night blocks" (school themes stay light-only) — would now fail a CORRECT build. The
+  // scoping it protected is pinned in the NEW direction: every school selector IS in Block A's list (so it inherits Munera Dark's page, cards, text and
+  // semantics) and has its OWN B-school pair; none is in P (Paper) or G (Graphite); and bare :root still never goes dark (checked above).
   const schoolThemes = ['theme-aggie', 'theme-sooner', 'theme-trojan', 'theme-irish', 'theme-boilermaker', 'theme-razorback'];
   const mediaBlockMatch = cssText.match(/@media\s*\(prefers-color-scheme:\s*dark\)\s*\{([\s\S]*?)\n\}/);
-  assert(!!mediaBlockMatch, '[2c-pre] fixture: the dark-mode @media block\'s full body was located for the school-theme absence check below');
+  assert(!!mediaBlockMatch, '[2c-pre] fixture: the dark-mode @media block\'s full body was located for the school-theme checks below');
+  const darkRules = _sheet.rules.filter((r) => r.media === 'dark' && !r.selectorText.startsWith(':where('));
+  const blockA = darkRules.find((r) => (r.selectorText.match(/body\.theme-/g) || []).length === 8);
   for (const theme of schoolThemes) {
-    assert(!!mediaBlockMatch && !mediaBlockMatch[1].includes(theme),
-      `[2c-d] the dark @media block never mentions body.${theme} — school themes stay light-only even with OS dark mode on`);
+    assert(!!blockA && blockA.selectorText.includes(`body.${theme}:not(`),
+      `[2c-d] body.${theme} IS in the shared Dark-surface block A — it inherits Munera Dark's page, cards, text and semantics (the school Dark side exists)`);
+    const own = darkRules.filter((r) => r.selectorText.trim().startsWith(`body.${theme}:not(`));
+    assert(own.length === 1 && own[0].decls.some((d) => d.prop === '--maroon-text'),
+      `[2c-d2] body.${theme} has its OWN B-school block declaring its accent-text roles (--maroon-text …) — the school's brand is not borrowed from Munera`);
+    const inPG = darkRules.filter((r) => /^body\.theme-(paper|graphite)/.test(r.selectorText.trim()) && r.selectorText.includes(theme));
+    assert(inPG.length === 0, `[2c-d3] body.${theme} appears in neither the Paper nor the Graphite block`);
   }
 
   // Contrast — every new dark token against the ones it actually pairs with
@@ -407,12 +439,11 @@ console.log('\n[2c] DI-360 — night mode: scope, sync, and contrast…');
   // chrome, default focus ring) in dark styling too, not just our own
   // tokens. Source-level: `extractVars()` only captures `--name:#hex`
   // declarations, so this plain CSS property needs its own direct check.
-  const mediaBlockBody = mediaBlockMatch ? mediaBlockMatch[1] : '';
-  const manualBlockMatch = cssText.match(/body\.theme-neutral\[data-color-scheme="dark"\]\s*\{([^}]*)\}/);
-  assert(/color-scheme:\s*dark/.test(mediaBlockBody),
-    '[2c-h] the @media(prefers-color-scheme:dark) block sets color-scheme:dark on body.theme-neutral');
-  assert(!!manualBlockMatch && /color-scheme:\s*dark/.test(manualBlockMatch[1]),
-    '[2c-i] the manual-override block sets color-scheme:dark too — both triggers get native-UI dark styling, not just the automatic one');
+  const hasDarkScheme = (r) => r.decls.some((d) => d.prop === 'color-scheme' && /^dark$/.test(d.value.trim()));
+  assert(_nightMediaRules.some(hasDarkScheme),
+    '[2c-h] the @media(prefers-color-scheme:dark) block A sets color-scheme:dark on body.theme-neutral');
+  assert(_nightManualRules.some(hasDarkScheme),
+    '[2c-i] the manual-override block A sets color-scheme:dark too — both triggers get native-UI dark styling, not just the automatic one');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

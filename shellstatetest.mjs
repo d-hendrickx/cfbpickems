@@ -121,7 +121,8 @@ console.log('\n[2] S-C17 — a bogus tab name is rejected — never a blank shel
   restore();
   assert(state.currentTab === 'picks', `[2a] state.currentTab is UNCHANGED — a bogus save never wins (got "${state.currentTab}")`);
   assert(wasRestored() === false, '[2b] the restored flag stays false');
-  assert(bootDefaultTab() === 'dashboard', '[2c] bootDefaultTab() falls back to "dashboard" — normal boot, never a blank shell');
+  // RE-DERIVED (Home wiring, 2026-10-01; checklist item 2, DI-370): the local / error boot paths now fall back to "home", the app's default landing; still never a blank shell.
+  assert(bootDefaultTab() === 'home', '[2c] bootDefaultTab() falls back to "home" — normal boot, never a blank shell');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -155,7 +156,8 @@ console.log('\n[4] Web (isNativeShell()===false) never restores…');
   restore();
   assert(state.currentTab === 'picks', `[4a] state.currentTab is UNCHANGED on web even with a valid saved tab present (got "${state.currentTab}")`);
   assert(wasRestored() === false, '[4b] the restored flag stays false on web');
-  assert(bootDefaultTab() === 'dashboard', '[4c] bootDefaultTab() is "dashboard" on web — byte-identical to pre-DI-210b behaviour');
+  // RE-DERIVED (Home wiring, 2026-10-01): "home" is the default landing now; the DI-210b property (web ignores the native restore: the default, whatever it is) is unchanged.
+  assert(bootDefaultTab() === 'home', '[4c] bootDefaultTab() is "home" on web — the default landing, unchanged by DI-210b (web never takes the native restore path)');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

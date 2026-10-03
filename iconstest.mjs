@@ -83,7 +83,44 @@ console.log('\n[1] ICONS entries — structural validity, shared convention…')
   // loop below scans it like the rest.
   assert(names.includes('munera'), '[1b10] v0.27.0 set present: munera (the native header mark that opens the control center)');
   // Raised 27 -> 34, N1 league creation (DI-430, 2026-09-30) — the seven glyphs the New League flow's mockup names: plus, share, copy, clear, sportBasketball, sportHockey, trophy.
-  assert(names.length === 34, `[1b6] ICONS carries exactly 34 entries this pass (found ${names.length}: ${names.join(', ')}) — a raised count here is a deliberate signal to re-check this assertion, not a floor to silently exceed`);
+  // Raised 34 -> 37, Social Platform v1 Home (DI-367, 2026-10-01) — the three card-eyebrow glyphs the approved Home mockups draw and the family lacked: flame, rankUp, chatBubble.
+  // Raised 37 -> 38 at the v0.29.0 batch-5a integration (2026-10-01) — SP-57 (DI-387): `grip`, the section title row's reorder handle (three horizontal strokes). Built on the 34-entry
+  // base, SP-57's branch read 34 -> 35 and labelled its presence check [1b12]; that label is the Home set's on release, so SP-57's presence check is [1b15] here ([1b13]/[1b14] unchanged).
+  // Raised 34 -> 36, SP-52 (DI-452, 2026-10-01) — `sun` and `moon`, the two glyphs of the quick Light/Dark toggle at the top of the control center.
+  // Raised 38 -> 40 at the v0.29.0 batch-5b integration (2026-10-01) — SP-52 (DI-452): `sun` and `moon`, the quick Light/Dark toggle's glyphs. Built on the 34-entry base,
+  // SP-52's branch read 34 -> 36 and labelled its checks [1b12]/[1b13], which are the Home set's and SP-57's here, so they are [1b16]/[1b17].
+  // Raised 40 -> 42, the Home wiring window (2026-10-01; DESIGN_NEEDS_HOME Amendment 3 A3.5/A3.6) — `home` (the center tab's mark: ICONS.munera's shapes with class="home-roof" on the pediment, so CSS can
+  // fill the roof when Home is selected) and `menu` (the header button's three strokes, replacing the Munera mark in #control-center-trigger).
+  assert(names.length === 42, `[1b6] ICONS carries exactly 42 entries this pass (found ${names.length}: ${names.join(', ')}) — a raised count here is a deliberate signal to re-check this assertion, not a floor to silently exceed`);
+  assert(names.includes('home') && names.includes('menu'), '[1b18] Home wiring set present: home (the center tab\'s mark) and menu (the header menu button)');
+  {
+    const MUNERA_SHIPPED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9 12 4.5 20.5 9Z"/><line x1="7" y1="12" x2="7" y2="16"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="17" y1="12" x2="17" y2="16"/><line x1="4" y1="19.5" x2="20" y2="19.5"/></svg>';
+    assert(ICONS.munera === MUNERA_SHIPPED, '[1b19] ICONS.munera is BYTE-UNCHANGED (the sign-in gate and brand surfaces still draw it; Home is its own entry)');
+    assert(ICONS.home === MUNERA_SHIPPED.replace('<path d="M3.5 9 12 4.5 20.5 9Z"/>', '<path class="home-roof" d="M3.5 9 12 4.5 20.5 9Z"/>') && (ICONS.home.match(/class="home-roof"/g) || []).length === 1,
+      '[1b20] ICONS.home is the Munera mark with class="home-roof" on the pediment and nothing else changed (one SVG, the roof filled by CSS when Home is selected: no second asset)');
+    for (const n of ['home', 'menu']) {
+      assert(/^<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">/.test(ICONS[n]) && !/#[0-9a-fA-F]{3,8}\b|rgb\(|hsl\(/.test(ICONS[n]),
+        `[1b21] ICONS.${n} is the stroked family (fill="none" stroke="currentColor", 24 viewBox, width 2, round caps and joins) and carries no hex or rgb colour`);
+    }
+    assert(ICONS.menu === '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>',
+      '[1b22] ICONS.menu is exactly three horizontal strokes (y = 7, 12, 17; x = 4 to 20)');
+  }
+  for (const n of ['flame', 'rankUp', 'chatBubble']) {
+    assert(names.includes(n), `[1b12] Home card-eyebrow set present: ${n} (DI-367, copied from the approved Home mockups)`);
+  }
+  assert(names.includes('grip'), '[1b15] SP-57 set present: grip (the section title row\'s reorder handle)');
+  {
+    const g = ICONS.grip || '';
+    const ys = [...g.matchAll(/<line x1="5" y1="(\d+)" x2="19" y2="(\d+)"\/>/g)].map(m => [Number(m[1]), Number(m[2])]);
+    assert(ys.length === 3 && ys.every(([a, b]) => a === b) && ys.map(y => y[0]).join(',') === '8,12,16',
+      `[1b13] grip is three horizontal strokes at y = 8, 12, 16 from x = 5 to 19 (found ${JSON.stringify(ys)})`);
+    assert(/aria-hidden="true"/.test(icon('grip')) && /focusable="false"/.test(icon('grip')), '[1b14] icon("grip") is decorative: aria-hidden="true" focusable="false" (the section name and the hidden Move buttons carry the meaning)');
+  }
+  for (const n of ['sun', 'moon']) {
+    assert(names.includes(n), `[1b16] SP-52 set present: ${n} (the quick Light/Dark toggle's glyph)`);
+  }
+  assert((ICONS.sun.match(/<circle\b/g) || []).length === 1 && (ICONS.sun.match(/<line\b/g) || []).length === 8 && (ICONS.moon.match(/<path\b/g) || []).length === 1 && !ICONS.moon.includes('<circle'),
+    '[1b17] sun is a disc and eight rays; moon is one crescent path (the playground\'s drawing)');
   for (const n of ['plus', 'share', 'copy', 'clear', 'sportBasketball', 'sportHockey', 'trophy']) {
     assert(names.includes(n), `[1b11] N1 set present: ${n} (the New League flow's mockup glyph)`);
   }
@@ -510,6 +547,30 @@ console.log('\n[8] S1-A — every icon() host in app.js / leagues-home.js has an
   for (const [name, sel] of [['week-status-btn', '.week-status-btn svg'], ['invite Copy', '#copy-invite-code-btn svg'], ['invite Rotate', '#rotate-invite-code-btn svg']]) {
     assert(all.some(s => s.hit === sel), `[8e] the reviewer's named host "${name}" resolves to its own rule ${sel}`);
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [9] Breathing Room sweep (2026-10-01) — "Edit My Picks" swaps its ✏️ emoji for
+// the family's pencil. The glyph already existed in ICONS (DI-330, Manual data
+// source), so ICONS' entry count is unchanged ([1b6] stays 37): what is pinned here
+// is the call site, the host's svg size rule, and that the glyph is the family's.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n[9] Edit My Picks — the control uses icon(\'pencil\'), not an emoji…');
+{
+  const { readFileSync } = await import('node:fs');
+  const appSrc = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+  const cssSrc = readFileSync(new URL('./css/styles.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ');
+  assert(typeof ICONS.pencil === 'string' && /<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"/.test(ICONS.pencil),
+    '[9a] ICONS.pencil exists and carries the family attributes (viewBox 24, fill none, stroke currentColor, stroke-width 2)');
+  const btn = /<button class="btn btn-secondary" id="edit-picks-btn">([^`]*?)<\/button>/.exec(appSrc);
+  assert(!!btn && /^\$\{icon\('pencil'\)\} Edit My Picks$/.test(btn[1]),
+    `[9b] the Edit My Picks button in js/app.js is "\${icon('pencil')} Edit My Picks" (got ${JSON.stringify(btn && btn[1])})`);
+  assert(!/✏️?\s*Edit My Picks/.test(appSrc), '[9c] no "✏️ Edit My Picks" emoji label survives anywhere in js/app.js');
+  assert(/#edit-picks-btn svg\s*\{[^}]*width:\s*18px[^}]*height:\s*18px/.test(cssSrc),
+    '[9d] css/styles.css sizes the host: #edit-picks-btn svg{width:18px;height:18px} (an unsized viewBox-only svg falls back to the UA default — [8d] derives the same host from the source and fails without this rule)');
+  const rendered = icon('pencil');
+  assert(/aria-hidden="true"/.test(rendered) && /focusable="false"/.test(rendered),
+    '[9e] the pencil is decorative beside its visible label: icon() returns aria-hidden + focusable=false (VoiceOver reads "Edit My Picks" once)');
 }
 
 process.stdout.write(`\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`,

@@ -78,7 +78,10 @@ console.log('\n[2] Tripwire A — every registered client site contains its gate
   assert(/^\{\s*if \(!isPilotOnlyAllowed\('sixSchoolAlmaMaters'\)\) return \[\];/.test(fnBody(app, 'function almaMaterCatalogFallback()')), '[2d] almaMaterCatalogFallback(): gated first, returns NO schools for a non-pilot league');
   assert(/isPilotOnlyAllowed\('recap2025'\)/.test(fnBody(stripComments(src('./js/recap.js')), 'export function renderSeasonSummaryHTML(')), '[2e] recap.js renderSeasonSummaryHTML(): the 2K25 card is gated');
   assert(/isPilotOnlyAllowed\('irbCopy', ctx\.league\)/.test(fnBody(stripComments(src('./js/control-center.js')), 'export function renderIdentityHeader(')), '[2f] control-center.js renderIdentityHeader(): the league-name fallback is gated on the league in hand');
-  assert(/isPilotOnlyAllowed\('irbCopy'\)/.test(app) && (app.match(/isPilotOnlyAllowed\('irbCopy'\)/g) || []).length >= 2, '[2g] app.js: both IRB-string sites (push install copy, Invite-to-League line) are gated');
+  // SP-53 (2026-10-01): the Invite-to-League helper line stopped being a pilot literal (it names the ACTIVE league for every league, so a renamed league never reads a stale name); the push "needs-install" copy is the ONE
+  // remaining IRB-string site in app.js and keeps its gate. The tripwire still requires the gate at that site, and now ALSO fails if the literal "IRB Football" comes back into the Invite line.
+  assert(/isPilotOnlyAllowed\('irbCopy'\)/.test(app) && (app.match(/isPilotOnlyAllowed\('irbCopy'\)/g) || []).length >= 1, '[2g] app.js: the remaining IRB-string site (the push install copy) is gated');
+  assert(!/Share this code with anyone joining IRB Football/.test(app), '[2g-2] app.js: the Invite-to-League line carries no pilot literal (SP-53: it names the active league)');
 }
 
 console.log('\n[3] Tripwire B — every gate in js/ names a registered key, and every registered client key is used…');

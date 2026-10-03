@@ -737,6 +737,27 @@ console.log('\n[Bonus] Direct unit coverage of native card bodies …');
   assert(caps.includes('scribe-caps-remove-toggle'), '[B4] SCRIBE Caps & Limits carries a real control id, not just prose');
 }
 
+// ── SP-53 / DI-462 (2026-10-01) — the "(left)" label and the Linked line on the cross-league users roster ────────────────────────────────────────
+console.log('\n[SP-53] Admin users: "(left)" for a person who left, "(removed)" for a removed seat, and "Not linked" for an unlinked seat even though linked_at is kept …');
+{
+  const viewer = { isPlatformAdmin: true, isAdmin: true, activeLeagueId: 'L1', userId: 'u-drew' };
+  const row = (o) => ({ memberId: 'm-x', userId: null, displayName: 'Someone', leagueId: 'L1', leagueName: 'Test League', role: 'player', active: true, linkedAt: null, isPlatformAdmin: false, ...o });
+  const body = (o) => renderUsersAcrossLeaguesBody({ viewer, users: [row(o)], escHtml });
+  const left = body({ active: false, userId: null, linkedAt: '2026-09-01T00:00:00Z', displayName: 'Lefty' });
+  assert(left.includes('Lefty<em class="text-muted">') === false && /Lefty <em class="text-muted">\(left\)<\/em>/.test(left) && !left.includes('(removed)'), '[SP53a] an inactive seat that WAS linked and is now unlinked reads "(left)"');
+  assert(left.includes('Not linked') && !left.includes('Linked 2026') && !/Linked [A-Z][a-z]{2}/.test(left), '[SP53b] F3: a left seat keeps linked_at but reads "Not linked", never "Linked {date}" (the line keys on userId AND linkedAt)');
+  const removed = body({ active: false, userId: null, linkedAt: null, displayName: 'Placeholder' });
+  assert(/Placeholder <em class="text-muted">\(removed\)<\/em>/.test(removed) && !removed.includes('(left)'), '[SP53c] an inactive seat that NEVER linked (a placeholder a commissioner removed) reads "(removed)", not "(left)"');
+  const removedLinked = body({ active: false, userId: 'u-sam', linkedAt: '2026-09-01T00:00:00Z', displayName: 'Sam' });
+  assert(/Sam <em class="text-muted">\(removed\)<\/em>/.test(removedLinked) && /Linked /.test(removedLinked), '[SP53d] an inactive seat that is still LINKED (a commissioner removed the person; the account stays) reads "(removed)" and still "Linked {date}"');
+  const active = body({ active: true, userId: 'u-sam', linkedAt: '2026-09-01T00:00:00Z', displayName: 'Sam' });
+  assert(!active.includes('(left)') && !active.includes('(removed)') && /Linked /.test(active), '[SP53e] an active linked seat carries no label and reads "Linked {date}" as before');
+  const activeUnlinked = body({ active: true, userId: null, linkedAt: null });
+  assert(!activeUnlinked.includes('(left)') && !activeUnlinked.includes('(removed)') && activeUnlinked.includes('Not linked'), '[SP53f] an active unlinked placeholder is unchanged');
+  const hostile = body({ active: false, userId: null, linkedAt: '2026-09-01T00:00:00Z', displayName: '<img src=x onerror=alert(1)>' });
+  assert(!hostile.includes('<img') && hostile.includes('(left)'), '[SP53g] a hostile display name beside the label is escaped');
+}
+
 // ── Result ───────────────────────────────────────────────────────────────────
 process.stdout.write(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n\n`,
   () => process.exit(fail === 0 ? 0 : 1));

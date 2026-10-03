@@ -65,8 +65,40 @@ export function getAlmaMaters(...league) {
   return isPilotOnlyAllowed('sixSchoolAlmaMaters', ...league) ? [...PILOT_ALMA_MATERS] : [];
 }
 
+/**
+ * SB-12 (security finding SF-1, 2026-09-30) — THE ONE OWN-PROPERTY READ for a
+ * plain-object table keyed by a value somebody typed.
+ *
+ * `ownGet(obj, key)` returns `obj[key]` when `key` is an OWN property of `obj`,
+ * and `undefined` otherwise — including when `obj` is null/undefined. A bare
+ * `TABLE[key]` on an object literal also answers for every key on
+ * `Object.prototype`: a self-edited alma mater of `constructor` made the bare
+ * exclude-pattern read (with its `|| []` default) return the `Object` function,
+ * and `excludes.some` threw for every alma-mater surface in the league (Watch,
+ * Rankings, the ⭐ flag, the Auto-Calc, the live alma call-out — the last one on
+ * the scribe-autonomous Edge Function too, which imports this file). The same
+ * class as F-1 below (`effectiveScribeHeat()`), now behind one helper so the
+ * next table does not need the essay again. almaprototest.mjs is the guard.
+ *
+ * `Object.prototype.hasOwnProperty.call`, NOT `Object.hasOwn`: the iOS
+ * deployment target is 15.0 and `Object.hasOwn` needs Safari 15.4 (SP-54
+ * design ruling). Not `obj.hasOwnProperty(key)` either — that is itself an
+ * inherited lookup, and a table can carry an own `hasOwnProperty` key.
+ *
+ * Membership, not a deny-list: an own key that happens to share a prototype
+ * member's name is returned like any other own key.
+ *
+ * @param {object|null|undefined} obj  the table
+ * @param {string} key                 the user-controlled key
+ * @returns {*} the own value, or undefined
+ */
+export function ownGet(obj, key) {
+  return obj != null && Object.prototype.hasOwnProperty.call(obj, key) ? obj[key] : undefined;
+}
+
 // Precise matching patterns — prevents "Arkansas State" from matching "Arkansas" etc.
 // These are the exact ESPN displayName substrings that identify each alma mater.
+// Read ONLY through ownGet() — the key is a claimed (self-edited) school (SB-12).
 export const ALMA_MATER_EXACT_PATTERNS = {
   'Oklahoma':   ['Oklahoma Sooners', 'Oklahoma'],          // not Oklahoma State
   'Texas A&M':  ['Texas A&M Aggies', 'Texas A&M'],
@@ -77,6 +109,7 @@ export const ALMA_MATER_EXACT_PATTERNS = {
 };
 
 // Negative-match patterns — these teams should never match even if substring is present
+// Read ONLY through ownGet() — the key is a claimed (self-edited) school (SB-12).
 export const ALMA_MATER_EXCLUDE_PATTERNS = {
   'Oklahoma':  ['Oklahoma State', 'Central Oklahoma', 'Southeastern Oklahoma', 'Northwestern Oklahoma', 'Northeastern Oklahoma'],
   'Arkansas':  ['Arkansas State', 'Arkansas-Pine Bluff', 'Arkansas-Monticello', 'Arkansas Tech', 'Arkansas-Fort Smith', 'Little Rock', 'Central Arkansas', 'UA Little Rock'],
@@ -96,6 +129,7 @@ export const ALMA_MATER_EXCLUDE_PATTERNS = {
 };
 
 // Display format: School (Mascot)
+// Read through ownGet() wherever the key is a claimed school (SB-12).
 export const ALMA_MATER_DISPLAY = {
   'Oklahoma':   'Oklahoma (Sooners)',
   'Texas A&M':  'Texas A&M (Aggies)',
@@ -237,12 +271,14 @@ export function getAlmaMaterMatch(teamName, almaMaters = getAlmaMaters()) {
   };
 
   for (const alma of almaMaters) {
-    // Exclusions first
-    const excludes = ALMA_MATER_EXCLUDE_PATTERNS[alma] || [];
+    if (typeof alma !== 'string') continue;   // same guard as the exact-first loop: a frozen jsonb roster is untyped (SB-12 finding 2)
+    // Exclusions first. ownGet(), never a bare probe: `alma` is a self-edited
+    // claim and may be "constructor"/"__proto__"/… (SB-12 — see ownGet()).
+    const excludes = ownGet(ALMA_MATER_EXCLUDE_PATTERNS, alma) || [];
     if (excludes.some(ex => tLow.includes(ex.toLowerCase()))) continue;
 
     // Inclusion patterns = configured patterns + the key itself (guaranteed)
-    const patterns = new Set([...(ALMA_MATER_EXACT_PATTERNS[alma] || []), alma]);
+    const patterns = new Set([...(ownGet(ALMA_MATER_EXACT_PATTERNS, alma) || []), alma]);
     if ([...patterns].some(p => wordAwareIncludes(tLow, p))) return alma;
   }
   return null;
@@ -454,18 +490,31 @@ export const SITE_PIN_KEY = 'cfbp_site_unlocked';
  *  - Selected theme is stored per-DEVICE in settings.theme.
  */
 export const THEMES = [
-  // key, label, classSuffix is the same as key
-  { key: 'aggie',     label: 'A&M (Maroon)',    school: 'Texas A&M' },
-  { key: 'sooner',    label: 'Oklahoma (Crimson & Cream)', school: 'Oklahoma' },
-  { key: 'trojan',    label: 'USC (Cardinal & Gold)',      school: 'USC' },
-  { key: 'irish',     label: 'Notre Dame (Navy & Gold)',   school: 'Notre Dame' },
-  { key: 'boilermaker', label: 'Purdue (Old Gold & Black)',school: 'Purdue' },
-  { key: 'razorback', label: 'Arkansas (Cardinal)',        school: 'Arkansas' },
-  // DI-328h — the label must describe the actual palette, not the old
-  // pre-Munera one, or the theme picker shows a stale name for the correct
-  // colors ("the pills said one thing, the data said another").
-  { key: 'neutral',   label: 'Munera (Ink · Marble · Gold)', school: null, desc: 'Default' },
+  // key, label, group, school. `key` is the CSS class suffix (`theme-<key>`) AND
+  // the stored `preferences.theme`; `group` is the picker's <optgroup>.
+  // SP-52 (DI-447, 2026-10-01): four Munera looks, then the six schools. Order
+  // is the picker order: Munera first and the default. `neutral` stays the
+  // stored key for Munera (AD-71's "no `theme-munera`" kept literally), so an
+  // existing player's stored theme is untouched by this change. The unused
+  // `desc: 'Default'` field is dropped. Labels for the six schools unchanged.
+  // Every school has BOTH sides now (DI-451); `paper`/`ink`/`graphite` are
+  // the new looks (DI-448/449/450). THE ONE LIST: bootThemeKey(),
+  // resyncThemeKey(), renderThemeToggle(), the control-center picker and
+  // index.html's inline OK list all derive from or are tested against this
+  // array (themetest [T13]).
+  { key: 'neutral',     label: 'Munera (default)',           group: 'munera',  school: null },
+  { key: 'paper',       label: 'Munera Paper',               group: 'munera',  school: null },
+  { key: 'ink',         label: 'Munera Ink',                 group: 'munera',  school: null },
+  { key: 'graphite',    label: 'Graphite',                   group: 'neutral', school: null },
+  { key: 'aggie',       label: 'A&M (Maroon)',               group: 'school',  school: 'Texas A&M' },
+  { key: 'sooner',      label: 'Oklahoma (Crimson & Cream)', group: 'school',  school: 'Oklahoma' },
+  { key: 'trojan',      label: 'USC (Cardinal & Gold)',      group: 'school',  school: 'USC' },
+  { key: 'irish',       label: 'Notre Dame (Navy & Gold)',   group: 'school',  school: 'Notre Dame' },
+  { key: 'boilermaker', label: 'Purdue (Old Gold & Black)',  group: 'school',  school: 'Purdue' },
+  { key: 'razorback',   label: 'Arkansas (Cardinal)',        group: 'school',  school: 'Arkansas' },
 ];
+// SP-52 (DI-447) — the picker's <optgroup> labels, keyed by THEMES[].group.
+export const THEME_GROUP_LABELS = { munera: 'Munera', neutral: 'Neutral', school: 'School colors' };
 
 // ─── DEFAULT RULES ────────────────────────────────────────────────────────────
 
@@ -508,7 +557,7 @@ export const DEFAULT_RULES = [
   { id:'r3', section:'Tiebreaker', items:[
     'If players are tied on correct picks, the tiebreaker decides.',
     'Default: total combined points scored by all alma mater teams on the slate.',
-    'Closest guess wins. If still tied, players share the rank.',
+    'Closest guess wins, over or under. If still tied, Weekly Ties (below) settles it.',
   ]},
   { id:'r4', section:'Prizes', items:[
     'Weekly prize: loser owes winner a consolation prize.',
@@ -674,6 +723,12 @@ export const DEFAULT_SETTINGS = {
   // matches what a never-configured league should see in the client's own
   // cooldown-input and "last reminded" copy.
   reminderCooldownHours: 3,
+  // Social Platform News (SP-07/08, DI-381, 2026-10-01) — the LEAGUE layer of the news kill switch. Default TRUE: a settings blob that predates this
+  // field must read as "on, following the code constant and the player's own choice", never as an upgrade nobody acted on silently opting a league
+  // out (CONVENTIONS #10); js/newsTransport.js `isNewsAvailable()` gates on `=== false` only. NO MIGRATION: 'settings' is already a legal league_kv
+  // key (0001_schema.sql's CHECK list) and this is one new field inside that existing jsonb blob. The write gate is Postgres RLS (is_commissioner),
+  // not this client; the commissioner-facing toggle has no home yet (see the news build handoff) — until it ships, the key is code/DB-reachable only.
+  newsEnabled: true,
 };
 
 // ─── SCRIBE FREQUENCY DIAL (Build 3, Group D, DI-D1) ──────────────────────────
@@ -1481,12 +1536,23 @@ export function formatWeekLabel(week) {
  * the flag. Every other existing caller omits the option and gets the exact
  * same string as before this change — verified byte-identical in
  * headermetatest.mjs.
+ *
+ * SP-56 (2026-09-30, DI-472): `compact` is a second OPT-IN option, default
+ * false, same pattern. When true, `dates` is a SHORT range with no year and no
+ * spaces around the en dash — "Sep 24–26" (same month), "Sep 30–Oct 2" (two
+ * months), "Sep 24" (one date, or start equals end) — so the Standings Weekly
+ * History can put the date under the week name inside a 88 px cell instead of
+ * the 223 px one-line label. Every non-`compact` caller is byte-identical (the
+ * default path below is untouched). `compact` wins over `collapseYear` when
+ * both are passed. An unparseable date never prints "Invalid Date": it falls
+ * back to the raw string (what fmtDate's own catch has always returned).
  */
-export function formatWeekLabelParts(week, { collapseYear = false } = {}) {
+export function formatWeekLabelParts(week, { collapseYear = false, compact = false } = {}) {
   if (!week) return { name: '', dates: '' };
   const name = composeWeekNamePart(week);
 
   if (week.dataSourceMode === 'demo') return { name, dates: '' };
+  if (compact) return { name, dates: compactWeekDates(week.startDate, week.endDate) };
   if (week.startDate && week.endDate && week.startDate !== week.endDate) {
     if (collapseYear) {
       const startYear = new Date(week.startDate + 'T12:00:00').getFullYear();
@@ -1520,6 +1586,28 @@ export function formatWeekGroupLabel(memberWeeks) {
   // grouping. Members with genuinely distinct labels (e.g. custom round
   // labels "1.1"/"1.2", or a bowl + a CFP round) are listed out.
   return unique.length === 1 ? `${unique[0]} (${sorted.length} parts)` : labels.join(' + ');
+}
+
+/**
+ * SP-56 (DI-472) — the short date range behind formatWeekLabelParts's
+ * `compact` option. Same parse as fmtDate (`ds + 'T12:00:00'`, local noon, so
+ * a DST edge never shifts the day) and the same en-US month names. Never
+ * returns the string "Invalid Date".
+ */
+function compactWeekDates(startDate, endDate) {
+  const parse = ds => { const d = new Date(ds + 'T12:00:00'); return Number.isNaN(d.getTime()) ? null : d; };
+  const monthDay = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  // The uncompacted fmtDate answer, except that "Invalid Date" (which
+  // toLocaleDateString RETURNS for a bad date rather than throwing) is replaced
+  // by the raw string, as fmtDate's own catch has always done.
+  const raw = ds => { const s = fmtDate(ds); return s === 'Invalid Date' ? ds : s; };
+  if (!startDate) return '';
+  const s = parse(startDate);
+  if (!endDate || endDate === startDate) return s ? monthDay(s) : raw(startDate);
+  const e = parse(endDate);
+  if (!s || !e) return `${raw(startDate)}–${raw(endDate)}`;
+  const sameMonth = s.getFullYear() === e.getFullYear() && s.getMonth() === e.getMonth();
+  return sameMonth ? `${monthDay(s)}–${e.getDate()}` : `${monthDay(s)}–${monthDay(e)}`;
 }
 
 // DI-A2 (2026-09-09): `omitYear` is opt-in, default false, so every existing
@@ -1833,6 +1921,11 @@ export function obligationRole(sess, ob) {
  *   pending --creditor/admin "confirm"--> paid
  *   pending --creditor/admin "deny"-->    unpaid
  *   paid    --admin "undo"-->             unpaid    (pre-existing affordance, unchanged)
+ *   unpaid/pending --admin "waive"-->     waived    (SP-53 / DI-462 §C: a commissioner forgives an open debt; the record stays, badged "Waived")
+ *   waived  --admin "reopen"-->           unpaid    (SP-53: the undo of a waive)
+ *
+ * `waive` and `reopen` are ADMIN-ONLY and are the ONLY writers of the `waived` status (the DB CHECK and the badge already existed; nothing set it until SP-53). The Comm card that
+ * offers them bounds Waive to a debt where a party has left (js/league-settings-view.js canShowWaive) — a UI bound, not a rule of this machine: the server lets a commissioner set any status.
  *
  * Nothing here ever multiplies or scores anything (CONVENTIONS #22-23) —
  * obligations are drink debts, not pick results.
@@ -1846,5 +1939,7 @@ export function obligationNextStatus(status, role, action) {
   if (status === 'pending' && action === 'confirm' && (role === 'creditor' || role === 'admin')) return 'paid';
   if (status === 'pending' && action === 'deny' && (role === 'creditor' || role === 'admin')) return 'unpaid';
   if (status === 'paid' && action === 'undo' && role === 'admin') return 'unpaid';
+  if ((status === 'unpaid' || status === 'pending') && action === 'waive' && role === 'admin') return 'waived';
+  if (status === 'waived' && action === 'reopen' && role === 'admin') return 'unpaid';
   return null;
 }

@@ -190,9 +190,17 @@ export const ICONS = {
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>',
   // v0.27.0 fix (2026-09-27) — the Munera temple mark (pediment, three
   // columns, stylobate), a stroke-outline reduction of the iOS app icon's
-  // temple mark to the family grid. Fills #control-center-trigger on the
-  // native shell (js/app.js renderControlCenterTrigger()).
+  // temple mark to the family grid. Since the Home wiring (2026-10-01) it is the brand mark in
+  // the app's center tab (ICONS.home below, the same shapes) and the sign-in gate/brand
+  // surfaces; the header trigger (#control-center-trigger) now wears ICONS.menu.
   munera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9 12 4.5 20.5 9Z"/><line x1="7" y1="12" x2="7" y2="16"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="17" y1="12" x2="17" y2="16"/><line x1="4" y1="19.5" x2="20" y2="19.5"/></svg>',
+  // Home wiring (2026-10-01, DESIGN_NEEDS_HOME Amendment 3 A3.5) — the Home tab's mark: the literal of ICONS.munera with class="home-roof" on the pediment, so CSS can FILL the roof when
+  // Home is the selected tab (.nav-item.active .nav-home-disc .home-roof). One SVG, no second asset; ICONS.munera above is byte-unchanged. index.html's static Home button carries this
+  // markup (as icon('home') returns it), and homenavtest pins the two equal.
+  home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path class="home-roof" d="M3.5 9 12 4.5 20.5 9Z"/><line x1="7" y1="12" x2="7" y2="16"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="17" y1="12" x2="17" y2="16"/><line x1="4" y1="19.5" x2="20" y2="19.5"/></svg>',
+  // Three horizontal strokes (y = 7, 12, 17, x = 4 to 20): the header MENU glyph, replacing the Munera mark in #control-center-trigger (UN-320c, Amendment 2 A2.7, Amendment 3 A3.6):
+  // the mark now lives in the center tab, and the header button says what it does. Stroked, current-colour, the same grid; no label, badge or morph.
+  menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>',
 
   // ── N1 league creation (DI-430, 2026-09-30) — SEVEN icons for the New League flow, drawn to the family grid from the approved mockup's symbol sheet
   // (docs/mockups/league-create.html). Same convention as everything above; no emoji anywhere in the flow's chrome. ─────────────────────────────────
@@ -210,6 +218,26 @@ export const ICONS = {
   sportHockey: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="9" rx="8" ry="3.5"/><path d="M4 9v5c0 2 3.6 3.5 8 3.5s8-1.5 8-3.5V9"/></svg>',
   // A cup with two handles. March Madness and World Juniors (the picker's Tournaments group).
   trophy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4h8v5a4 4 0 0 1-8 0z"/><path d="M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4"/><line x1="12" y1="13" x2="12" y2="17"/><line x1="8" y1="20" x2="16" y2="20"/></svg>',
+  // Three horizontal strokes (y = 8, 12, 16, x = 5 to 19): the iOS reorder grip. SP-57 (2026-10-01, DI-387): the
+  // handle at the right end of every Dashboard / Standings section title row while a layout is being rearranged.
+  // Decorative (aria-hidden by icon()); the section's own name and the hidden Move buttons carry the meaning.
+  grip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="8" x2="19" y2="8"/><line x1="5" y1="12" x2="19" y2="12"/><line x1="5" y1="16" x2="19" y2="16"/></svg>',
+
+  // ── Social Platform v1 Home (DI-367, 2026-10-01) — THREE card-eyebrow glyphs the approved Home mockups (card-sheet.html / home-states.html) draw and the family did not yet have,
+  // copied from those mockups' own paths. Every other eyebrow icon is an entry that already existed (calendarWeek, unlock, trophy, scribeSpark). Same convention as everything above. ──
+  // A flame. The personal-performance cards: called.it, stood.alone, player.week, streak.extended, streak.broken.
+  flame: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c1 3-2 4-2 7a4 4 0 1 0 8 0c0-1.5-.8-2.2-1.3-3 .3 2-.7 2.8-1.7 2.8-1.6 0-2-1.6-1-3.3.6-1 .5-2.4-2-3.5Z"/></svg>',
+  // A rising line with an arrowhead. The rank.changed card.
+  rankUp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 15 10 9 14 13 20 6"/><polyline points="15 6 20 6 20 11"/></svg>',
+  // A speech bubble with a tail. The lockerroom.top card ("In the Locker Room").
+  chatBubble: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-4 3.5v-3.5H6a2 2 0 0 1-2-2v-9Z"/></svg>',
+
+  // ── SP-52 (DI-452, 2026-10-01) — TWO icons for the quick Light/Dark toggle at the top of the control center (D-1: hand-authored
+  // inline SVG, fill="none" stroke="currentColor", 24 grid, 2px round stroke; no emoji). Drawn in the approved theme playground. ───────
+  // A sun: a disc and eight short rays. The Light segment.
+  sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2.5" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="21.5"/><line x1="2.5" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="21.5" y2="12"/><line x1="5.3" y1="5.3" x2="7.1" y2="7.1"/><line x1="16.9" y1="16.9" x2="18.7" y2="18.7"/><line x1="5.3" y1="18.7" x2="7.1" y2="16.9"/><line x1="16.9" y1="7.1" x2="18.7" y2="5.3"/></svg>',
+  // A crescent moon (one path). The Dark segment.
+  moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.2A8.2 8.2 0 0 1 9.8 4a8.2 8.2 0 1 0 10.2 10.2Z"/></svg>',
 
   // Phase 2 entries added incrementally, same shape — see DI-330's backlog
   // table (design-matrix-pm's §6) for the ordered candidate list.

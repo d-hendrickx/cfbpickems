@@ -6,7 +6,10 @@
        installed app. Drew knowingly approved the WCAG 1.4.4 tradeoff on
        2026-08-07 for this private six-person league — do not re-litigate. -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-  <meta name="theme-color" content="#500000" />
+  <!-- SP-52 (DI-453, UN-394): the static theme-color is Munera crimson (it was the Aggie #500000 first value); an inline block below
+       (after <body>) replaces it with the resolved --chrome-bg of the player's look before first paint, so there is no second list of
+       header colours here. -->
+  <meta name="theme-color" content="#8C1515" />
   <!-- DI-360 (UN-318) night mode — tells the browser BOTH color schemes are
        supported (form controls/scrollbars follow the OS choice natively)
        rather than assuming light-only, matching the CSS's own
@@ -33,7 +36,7 @@
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="icon" type="image/x-icon" href="favicon.ico" />
-  <link rel="stylesheet" href="css/styles.css?v=28-0" />
+  <link rel="stylesheet" href="css/styles.css?v=29-0" />
   <style>
     /* v14.1: Hide app shell until JS is ready so users don't see a flash of the
        maroon header before the PIN gate / dashboard renders. JS removes the
@@ -42,9 +45,10 @@
   </style>
 </head>
 <!-- UN-110: data-tab mirrors app.js navigateTo()'s active tab; set statically
-     here (matching the hardcoded default-active #page-dashboard below) so
-     there's no flash before JS runs navigateTo() for the first time. -->
-<body class="cfbp-booting" data-tab="dashboard">
+     here (matching the hardcoded default-active #page-home below, which is also
+     what state.currentTab initializes to) so there's no flash before JS runs
+     navigateTo() for the first time. -->
+<body class="cfbp-booting" data-tab="home">
 
 <!-- v0.16.0: Reveal-page PIN bypass. The CFP 2K26 reveal finale links to
      ?access=scribe — honor it by setting the SAME flag the real PIN gate sets
@@ -62,6 +66,21 @@
         history.replaceState(null, '', location.pathname);
       }
     } catch (e) { /* non-fatal */ }
+  })();
+</script>
+
+<!-- SP-52 / UN-394 — scheme hint, BEFORE the theme block below. A separate block on purpose: boottest finds the
+     theme block as the one that mentions the theme-hint key, so this comment and block must NOT contain that substring.
+     KEEP IN SYNC with storage.js getSchemeHint()/getColorSchemeBoot(). The value is allow-listed (light | dark), never
+     spliced into anything. A pinned Light/Dark scheme is on <body> before first paint, so a player pinned to Light on a Dark
+     iPhone (or the reverse) never sees one wrong-scheme frame on a cold open. 'system', absent, malformed: nothing is set and
+     the CSS prefers-color-scheme media query decides. -->
+<script>
+  (function () {
+    try {
+      var h = JSON.parse(localStorage.getItem('cfbp_scheme_hint') || 'null');
+      if (h === 'light' || h === 'dark') document.body.setAttribute('data-color-scheme', h);
+    } catch (e) { /* system: the CSS media query decides */ }
   })();
 </script>
 
@@ -94,12 +113,12 @@
      read FIRST because it is the only one of the four that is still written.
 
      THE VALUE IS UNTRUSTED. It is concatenated into a class name, so it is
-     checked against the seven real theme keys spelled out here — the one place
+     checked against the ten real theme keys spelled out here — the one place
      in this file that may not import js/data-model.js's THEMES. Anything else,
      including a corrupt or absent value, is 'neutral'. KEEP THE LIST IN SYNC. -->
 <script>
   (function () {
-    var OK = ['aggie','sooner','trojan','irish','boilermaker','razorback','neutral'];
+    var OK = ['aggie','sooner','trojan','irish','boilermaker','razorback','neutral','paper','ink','graphite'];   // = js/data-model.js THEMES keys (themetest [T13])
     try {
       var hint = JSON.parse(localStorage.getItem('cfbp_theme_hint') || 'null');
       if (typeof hint === 'string' && OK.indexOf(hint) !== -1) {
@@ -134,6 +153,19 @@
   })();
 </script>
 
+<!-- SP-52 (DI-453) — tint the browser chrome from the RESOLVED token, after both the scheme attribute and the theme class are on <body>.
+     The stylesheet <link> in <head> is render-blocking, so the tokens resolve when this runs. One source for header colours (the
+     --chrome-bg token, Table 1); the static value in <head> stays if anything here throws. -->
+<script>
+  (function () {
+    try {
+      var c = getComputedStyle(document.body).getPropertyValue('--chrome-bg').trim();
+      var m = document.querySelector('meta[name="theme-color"]');
+      if (c && m) m.setAttribute('content', c);
+    } catch (e) { /* the static value in <head> stays */ }
+  })();
+</script>
+
 <div class="page-wrapper">
 
   <header class="app-header">
@@ -153,7 +185,7 @@
            "no flash of unstyled content" discipline #header-meta-week
            already uses below. Opens the control-center drawer
            (js/control-center.js) on tap. -->
-      <button type="button" id="control-center-trigger" class="control-center-trigger" aria-label="Open control center"></button>
+      <button type="button" id="control-center-trigger" class="control-center-trigger" aria-label="Menu" aria-haspopup="dialog" aria-expanded="false" aria-controls="control-center"></button>
       <!-- DI-393 amendment (Drew, 2026-09-28, v0.27.0 feedback: "the 'IRB
            Pickems' pill in the top header is not centered in the space it's
            in") — a LEADING spacer, the twin of .header-spacer below, so the
@@ -204,12 +236,21 @@
   </header>
 
   <main class="main-content">
-    <!-- Default tab is DASHBOARD (per Phase I requirements UN-27).
-         Other sections are inactive until navigated. -->
+    <!-- Default tab is HOME (v0.29.0, Social Platform; UN-320). state.currentTab initializes to 'home'
+         in js/app.js and this section is the one that ships `active`, so there is no flash of another
+         page before the first navigateTo(). Other sections are inactive until navigated.
+         #home-root is the INNER container js/home.js paints into (it rewrites its container's innerHTML, so
+         the page section itself must survive; the paused-league banner is a child of the section, outside it).
+         Its cold-boot content is the FEED SKELETON, byte-for-byte what home.js paints while its data is not
+         ready (four .feed-skel cards inside .home-feed): never the .loading-state spinner, so the first real
+         paint replaces like with like and nothing shifts (homenavtest pins the two equal). -->
+    <section class="page-section active" id="page-home">
+      <div id="home-root"><div class="home-feed" aria-busy="true"><p class="sr-only" role="status">Loading Home</p><div class="feed-item" data-card-key="skel:0"><article class="card feed-card feed-skel" aria-hidden="true"><div class="feed-skel-line feed-skel-line--narrow"></div><div class="feed-skel-line feed-skel-line--full"></div><div class="feed-skel-line feed-skel-line--wide"></div></article></div><div class="feed-item" data-card-key="skel:1"><article class="card feed-card feed-skel" aria-hidden="true"><div class="feed-skel-line feed-skel-line--narrow"></div><div class="feed-skel-line feed-skel-line--full"></div><div class="feed-skel-line feed-skel-line--wide"></div></article></div><div class="feed-item" data-card-key="skel:2"><article class="card feed-card feed-skel" aria-hidden="true"><div class="feed-skel-line feed-skel-line--narrow"></div><div class="feed-skel-line feed-skel-line--full"></div><div class="feed-skel-line feed-skel-line--wide"></div></article></div><div class="feed-item" data-card-key="skel:3"><article class="card feed-card feed-skel" aria-hidden="true"><div class="feed-skel-line feed-skel-line--narrow"></div><div class="feed-skel-line feed-skel-line--full"></div><div class="feed-skel-line feed-skel-line--wide"></div></article></div></div></div>
+    </section>
     <section class="page-section" id="page-picks">
       <div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>
     </section>
-    <section class="page-section active" id="page-dashboard">
+    <section class="page-section" id="page-dashboard">
       <div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>
     </section>
     <section class="page-section" id="page-leaderboard">
@@ -220,9 +261,10 @@
     </section>
     <!-- DI-320/344/345 (T-12/T-35), UX Revamp wiring pass 2 (2026-09-25) —
          the Admin panel. Reached via the control-center Admin/Super Admin
-         rows (js/control-center.js's starredPanels()) and, for an admin-only
-         viewer, the bottom-nav Comm icon (DI-320 §Entry point 2) — never a
-         bottom-nav icon of its own; T-35 adds no bottom-nav footprint. -->
+         rows (js/control-center.js's starredPanels()), and for an admin-only
+         viewer navigateTo('commissioner') still lands here (DI-320 §Entry point 2). Since
+         v0.29.0 there is no Comm icon in the bottom bar at all: both panels are reached
+         from the control center, opened by the header menu button. -->
     <section class="page-section" id="page-admin">
       <div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>
     </section>
@@ -242,9 +284,13 @@
        screen at the bottom like instagram"). Class name and DOM position
        are UNCHANGED on purpose — js/nav-gestures.js's bindScrollDirection()
        keeps working with zero changes to that file. FIVE buttons, not six:
-       Picks · Dashboard · Chat · Standings · Comm — the Settings tab is
-       RETIRED (amends D-3 again; its content lives in the control-center
-       drawer only, DI-350's Settings-tab identity block retired with it).
+       Picks · Dashboard · Home · Chat · Standings (v0.29.0, Social Platform:
+       Home is the CENTER tab, a raised Munera disc, 56 pt, vertically centred
+       on the pill with an equal 4 pt overhang above and below; Comm LEFT the bar
+       and lives in the control center's Commissioner group, opened by the header
+       menu button; the Settings tab was retired earlier, DI-397, and its rows
+       live in the same drawer). Home is the third of five, so it is the center
+       slot (two tabs each side) and it is where the app lands.
        Every button keeps the SAME hand-authored inline SVG (UN-97's one
        named icon-family exception, unchanged) but drops its visible text
        label — the label moves to a `.sr-only` span (VoiceOver-only text,
@@ -255,17 +301,17 @@
     <button class="nav-item" data-tab="picks" aria-label="Picks">
       <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="3"/><polyline points="7.5 12.5 10.5 15.5 16.5 8.5"/></svg></span><span class="sr-only">Picks</span>
     </button>
-    <button class="nav-item active" data-tab="dashboard" aria-label="Dashboard" aria-current="page">
+    <button class="nav-item" data-tab="dashboard" aria-label="Dashboard">
       <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="19" x2="5" y2="13"/><line x1="12" y1="19" x2="12" y2="7"/><line x1="19" y1="19" x2="19" y2="10"/></svg></span><span class="sr-only">Dashboard</span>
+    </button>
+    <button class="nav-item active" data-tab="home" aria-label="Home" aria-current="page">
+      <span class="nav-icon nav-home-disc" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path class="home-roof" d="M3.5 9 12 4.5 20.5 9Z"/><line x1="7" y1="12" x2="7" y2="16"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="17" y1="12" x2="17" y2="16"/><line x1="4" y1="19.5" x2="20" y2="19.5"/></svg></span><span class="sr-only">Home</span>
     </button>
     <button class="nav-item" data-tab="chat" aria-label="Chat">
       <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 5.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-4 3.5v-3.5H6a2 2 0 0 1-2-2v-9Z"/></svg></span><span class="sr-only">Chat</span>
     </button>
     <button class="nav-item" data-tab="leaderboard" aria-label="Standings">
       <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 4h10v5a5 5 0 0 1-10 0V4Z"/><path d="M5 5H3v2a4 4 0 0 0 4 4.5"/><path d="M19 5h2v2a4 4 0 0 0-4 4.5"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="8" y1="20.5" x2="16" y2="20.5"/><line x1="8" y1="20.5" x2="9" y2="18"/><line x1="16" y1="20.5" x2="15" y2="18"/></svg></span><span class="sr-only">Standings</span>
-    </button>
-    <button class="nav-item" data-tab="commissioner" aria-label="Commissioner">
-      <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="2" x2="12" y2="4.5"/><line x1="12" y1="19.5" x2="12" y2="22"/><line x1="2" y1="12" x2="4.5" y2="12"/><line x1="19.5" y1="12" x2="22" y2="12"/><line x1="4.8" y1="4.8" x2="6.6" y2="6.6"/><line x1="17.4" y1="17.4" x2="19.2" y2="19.2"/><line x1="4.8" y1="19.2" x2="6.6" y2="17.4"/><line x1="17.4" y1="6.6" x2="19.2" y2="4.8"/></svg></span><span class="sr-only">Comm.</span>
     </button>
   </nav>
 
@@ -284,7 +330,7 @@
      disk by authtest.mjs [12]. Still vendored, still same-origin, still no
      CDN and no build step. -->
 <!-- Cache-bust the main entry script so a stale browser cache can't serve v9 app.js. -->
-<script type="module" src="js/app.js?v=28-0"></script>
+<script type="module" src="js/app.js?v=29-0"></script>
 <script type="module">
   // Service worker registration + auto-update.
   // The logic moved to js/sw-register.js on 2026-09-10 (reviewer BLOCK F1) so
@@ -301,7 +347,7 @@
   import { setupServiceWorker } from './js/sw-register.js';
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      setupServiceWorker({ scriptUrl: 'service-worker.js?v=28-0' })
+      setupServiceWorker({ scriptUrl: 'service-worker.js?v=29-0' })
         .catch(e => console.warn('[SW] setup failed', e)); // CONVENTIONS #4 — every await guarded inside, this keeps it that way
     });
   }

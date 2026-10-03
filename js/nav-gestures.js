@@ -207,7 +207,7 @@ export const RUBBER_BAND_SPRING_MS = 200; // release snap, Navigation range roun
  * as an always-HIDDEN input (see `isKeyboardUp()` and the `'keyboard'` event
  * branch of `stepNavShowHide()` below), never through this function.
  */
-export function gesturesSuspended() {
+export function gesturesSuspended({ ignoreLayoutBar = false } = {}) {
   if (typeof document === 'undefined') return false;
   if (document.getElementById?.('site-gate-overlay')) return true;
   if (document.querySelector?.('.modal-overlay')) return true;
@@ -246,6 +246,17 @@ export function gesturesSuspended() {
   // it would be self-defeating), so this addition never blocks the drawer
   // from closing itself.
   if (document.querySelector?.('#control-center[data-open="true"]')) return true;
+  // SP-57 (2026-10-01, DI-476) — layout EDIT MODE (the fixed `#layout-edit-bar`,
+  // js/app.js syncLayoutEditBar()). While a page is being rearranged the week
+  // swipe, pull-to-refresh, nav hide-on-scroll and the web bottom bounce are
+  // suspended for EVERY touch (no competing gestures: a title row that drags a
+  // section must not also change the week). The section drag itself passes
+  // `ignoreLayoutBar: true` (js/section-drag.js): it must not be frozen by the
+  // very mode it enables — the same reason the drawer's own binder does not
+  // consult this function (see the file header of js/control-center.js).
+  // Overlays (modals, sheets, the drawer) stay the other entries above and
+  // still suspend the section drag: they sit over the bar and own the touch.
+  if (!ignoreLayoutBar && document.getElementById?.('layout-edit-bar')) return true;
   return false;
 }
 
@@ -297,6 +308,35 @@ export function prefersReducedMotion() {
 let touchOwner = null;
 /** bindWeekSwipe()'s own claim name (js/app.js's reorder uses its own). */
 const WEEK_SWIPE_TOUCH_OWNER = 'week-swipe';
+/** SB-15 (2026-10-01) — js/control-center.js bindControlCenterEdgeSwipe()'s
+ *  claim name: the drawer claims the touch when its drag locks horizontal,
+ *  exactly as the week swipe does, and gives it back on release. */
+export const DRAWER_TOUCH_OWNER = 'control-center-drawer';
+/** SP-57 (2026-10-01, DI-476) — js/section-drag.js's claim name: a held title
+ *  row claims the touch at its 500 ms fire and keeps it through the 260 ms
+ *  settle. js/section-drag.js re-exports this (one source); it lives HERE
+ *  because the repaint-deferral set below needs it and nav-gestures.js must
+ *  never import the module that imports it. */
+export const SECTION_DRAG_TOUCH_OWNER = 'section-drag';
+/** SP-57 — the section-title hold. Drew, 2026-09-30 ("I want the long hold
+ *  the 500s"): deliberately NOT the 350 ms pill / column / chat hold, which is
+ *  left exactly as it is (js/app.js bindColumnReorderHandlers() and
+ *  js/chat-ui.js keep their own 350 literals; sectiondragtest.mjs AT5 pins
+ *  all three together and pins this one apart from them). */
+export const SECTION_LONG_PRESS_MS = 500;
+/** SP-57 — a third, exported copy of the 350 ms pill hold, for the test that
+ *  pins the group together. NOTHING reads this at runtime; the two literals
+ *  that drive the pill and the chat bubble are untouched (Drew: "the 350
+ *  group stays as it is"). */
+export const LONG_PRESS_MS = 350;
+/** SB-15 — the owners whose drags a Picks/Dashboard repaint must wait for
+ *  (deferRenderWhileWeekSwiping(), below). All follow the finger across the
+ *  page, so all lose their touch's end when the node under it is replaced.
+ *  SP-57 (2026-10-01) adds the section drag: a live-score tick, a Realtime
+ *  repaint or the 60 s refresh must not replace the lifted section (or the
+ *  title row under the finger) mid-drag; it parks, and the drop asks for its
+ *  own repaint through the same door (releaseTouchAndFlush, below). */
+const REPAINT_DEFERRING_OWNERS = new Set([WEEK_SWIPE_TOUCH_OWNER, DRAWER_TOUCH_OWNER, SECTION_DRAG_TOUCH_OWNER]);
 
 /** Take the current touch for `owner`. True if it is (now) theirs, false if
  *  another recognizer already committed to it. */
@@ -322,9 +362,28 @@ export function touchClaimedBy() {
  *  Nobody claims AT touchstart, so clearing here never takes a live claim. */
 export function clearStaleTouchClaim(e) {
   if ((e?.touches?.length ?? 0) !== 1) return;
-  const wasWeekSwipe = touchOwner === WEEK_SWIPE_TOUCH_OWNER;
+  const wasDeferring = REPAINT_DEFERRING_OWNERS.has(touchOwner);   // SB-15: the drawer's stale claim too
   touchOwner = null;
-  if (wasWeekSwipe) flushDeferredRendersAfterThisTouch();   // never strand a deferred repaint
+  if (wasDeferring) flushDeferredRendersAfterThisTouch();   // never strand a deferred repaint
+}
+
+/** SB-15 (2026-10-01) — the drawer's release: give the touch back and run
+ *  the repaints parked under it (the touch has ended, so no finger can lose
+ *  its node). A no-op unless `owner` held the touch. The week swipe keeps
+ *  its own release (it skips the swiped page's repaint on a commit).
+ *  The name is DI-476's (DESIGN_INPUTS_LAYOUT_DRAG_093026.md): SP-57's
+ *  section-drag engine looks it up by this exact name and, if it is missing,
+ *  silently falls back to plain releaseTouch() — its parked repaints would
+ *  never run. Do not rename it. */
+export function releaseTouchAndFlush(owner) {
+  // LOAD-BEARING OWNER GUARD — do not remove or loosen. The drawer's settle()
+  // calls this on EVERY window touchend, including the one that begins
+  // SP-57's 260 ms section-drag settle while section-drag still owns the
+  // touch. Unguarded, that call would run section-drag's parked repaints
+  // mid-settle, replacing the nodes it is animating.
+  if (touchOwner !== owner) return;
+  touchOwner = null;
+  flushDeferredRenders();
 }
 
 // Reviewer note on c7f8bee (2026-09-29) — the stale-claim flush must never
@@ -368,13 +427,22 @@ function flushDeferredRendersAfterThisTouch() {
 // swipe owns the touch. bindWeekSwipe() runs them on release — except the
 // swiped page's own when the release commits, since onNavigate() repaints
 // that page from the same (now current) data anyway.
+// SB-15 (2026-10-01) — the control-center drawer's drag is the SAME hazard
+// (its binder listens on `window`; a repaint under the finger lost its
+// touchend and stranded the drawer at dragging:true, which SB-05's
+// data-dragging lock turned into a frozen page). The drawer now claims the
+// touch too, and this door parks for either owner; the name is kept for its
+// two call sites in js/app.js.
 // ─────────────────────────────────────────────────────────────────────────
 const deferredRenders = new Map();
 
-/** True (and the render parked) while a week swipe owns the touch; false —
- *  render now — otherwise. `key` is the page ('picks' | 'dashboard'). */
+/** True (and the render parked) while a week swipe, the control-center
+ *  drawer's drag OR (SP-57, 2026-10-01) a lifted section owns the touch;
+ *  false — render now — otherwise. `key` is the page ('picks' | 'dashboard'
+ *  | 'leaderboard'). The name is kept for its call sites in js/app.js and
+ *  js/section-drag.js. */
 export function deferRenderWhileWeekSwiping(key, render) {
-  if (touchOwner !== WEEK_SWIPE_TOUCH_OWNER || typeof render !== 'function') return false;
+  if (!REPAINT_DEFERRING_OWNERS.has(touchOwner) || typeof render !== 'function') return false;
   deferredRenders.set(key, render);
   return true;
 }
@@ -837,6 +905,12 @@ function stepPullToRefresh(state, event) {
       if (state.phase === 'armed') return { ...state, phase: 'refreshing' };
       return { ...state, phase: 'idle', eligible: false };
     }
+    case 'claimed':
+      // SP-57 (2026-10-01, DI-476) — another recognizer (a lifted section,
+      // js/section-drag.js) took this touch. It is not a pull, however far
+      // down it goes: ineligible and idle, for the rest of the touch, so a
+      // held title dragged down past the arm point can never refresh the page.
+      return { ...state, eligible: false, phase: 'idle' };
     case 'refresh-success':
       return { ...state, phase: 'success' };
     case 'refresh-fail':
@@ -989,6 +1063,15 @@ export function bindPullToRefresh(getScrollEl, refreshFn, opts = {}) {
   }
   function onTouchMove(e) {
     if (startY === null) return;
+    // SP-57 (2026-10-01, DI-476, C4) — scoped to the section drag ONLY, so the
+    // pill path (touchClaimedBy() === 'column-reorder') is byte-for-byte what
+    // it was: a lifted section dragged down at the top of the page must never
+    // arm a refresh. onTouchEnd already returns when startY is null.
+    if (touchClaimedBy() === SECTION_DRAG_TOUCH_OWNER) {
+      setState(stepPullToRefresh(state, { type: 'claimed' }));
+      startY = null;
+      return;
+    }
     const t = e.touches?.[0];
     if (!t) return;
     setState(stepPullToRefresh(state, { type: 'touchmove', dy: t.clientY - startY, dx: typeof startX === 'number' ? t.clientX - startX : 0 }));
@@ -1236,6 +1319,40 @@ export function _weekSwipeShouldCommit(dx, samples, releaseT) {
  * while the incoming one fades in at rest), and a cancel settles back to 0
  * immediately instead of springing. Supersedes DI-409's "no live tracking
  * under reduced motion".
+ *
+ * SB-23 (Drew, 2026-10-01: "it looks jumpy because you can still scroll
+ * vertically… You can also see the current week sliding out but can't see
+ * the new week sliding in") — TWO ROOT CAUSES, both in this binder's drag:
+ *  1. The axis lock above was VISUAL ONLY. Its listeners are passive (they
+ *     must stay so — RG-TBD-A4, weekswipetest [D]), so locking 'x' could
+ *     never stop the browser's own scroll, and nothing told the browser a
+ *     horizontal-first drag on Picks/Dashboard is not a scroll. Every
+ *     diagonal drag scrolled the page by its vertical drift while the week
+ *     moved sideways (Blink rails shallow angles by itself; an iPhone's
+ *     scroll view does not). Fixed at the browser's own layer, twice:
+ *     css/styles.css gives #page-picks/#page-dashboard `touch-action:pan-y`
+ *     (a drag that BEGINS horizontally is never a scroll), and from the claim
+ *     to the release this binder sets `data-week-swipe-dragging` on root,
+ *     which locks the document (`overflow:hidden`, bounce off) exactly as
+ *     SB-05 locks it under the control-center drawer's drag — the same rule,
+ *     keyed on the same moment (the claim), lifted in the same frame the
+ *     finger lifts. Every listener stays passive.
+ *  2. Nothing rendered the incoming week until RELEASE: the drag moved the
+ *     outgoing page over bare background. Now, once per direction per drag
+ *     (at the claim, or when the drag first crosses to the other side), the
+ *     caller's `opts.renderPreview(weekId)` returns that week's page (HTML or
+ *     a node) and it is laid into an `inert`, `aria-hidden` layer that is a
+ *     CHILD of root, flush beside it (`left:±100%`) — so the one
+ *     `--week-swipe-x` write per move carries both weeks; no per-frame render,
+ *     no second transform to keep in step. The layer is clipped to the
+ *     viewport and placed where the week will LAND: `opts.incomingAtTop`
+ *     (Picks, which lands scrolled to its top) shows the incoming week's top;
+ *     otherwise (Dashboard keeps its scroll offset) the same slice of it. The
+ *     preview is whatever the caller's real page renderer paints for that
+ *     week, so it can never show more than that page would (the blind rule).
+ *     Release removes it before commitSlide() renders the real week into
+ *     root at the very spot the layer occupied; a cancel slides it back out
+ *     with root and drops it when the spring ends (Reduce Motion: at once).
  */
 const weekSwipeStates = new WeakMap();
 // Test/diagnostic hook — the inputs and outcome of the most recent release.
@@ -1265,9 +1382,90 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
   // painted at (the last live drag write), so commitSlide() can start the
   // incoming layer flush against the clone instead of a full width away.
   let liveOffsetPx = 0;
+  // SB-23 — this drag's incoming-week layers, by drag direction (-1: the next
+  // week, in from the right; +1: the previous one, in from the left). A key
+  // with a null value means "tried, nothing to show" — one render per
+  // direction per drag, never one per move. `leavingPanels` holds the layers
+  // still sliding out with a spring-back, so a new drag's own are never the
+  // ones a stale spring timer removes.
+  let panels = new Map();
+  const leavingPanels = new Set();
 
   function viewportWidthPx() {
     return (typeof window !== 'undefined' && typeof window.innerWidth === 'number') ? window.innerWidth : 0;
+  }
+
+  /** SB-23 (1) — the document lock (css/styles.css, `html:has(…[data-week-swipe-dragging])`). */
+  function setDragLock(on) {
+    if (!root.dataset) return;
+    if (on) root.dataset.weekSwipeDragging = 'true';
+    else delete root.dataset.weekSwipeDragging;
+  }
+
+  function dropLayer(el) { if (el && el.parentNode) el.parentNode.removeChild(el); }
+  function removePanels() {
+    for (const el of panels.values()) dropLayer(el);
+    panels = new Map();
+    for (const el of leavingPanels) dropLayer(el);
+    leavingPanels.clear();
+  }
+  /** Hand this drag's layers to a spring-back: they leave with root, then go. */
+  function takePanelsForSpring() {
+    const out = [...panels.values()].filter(Boolean);
+    for (const el of out) leavingPanels.add(el);
+    panels = new Map();
+    return out;
+  }
+
+  /** SB-23 (2) — build the incoming week's layer for drag direction `dir`, once. */
+  function ensurePanel(dir) {
+    if (!dir || panels.has(dir)) return;
+    panels.set(dir, null);
+    if (typeof opts.renderPreview !== 'function') return;
+    if (typeof document === 'undefined' || typeof document.createElement !== 'function'
+      || typeof root.appendChild !== 'function' || typeof root.getBoundingClientRect !== 'function') return;
+    const targetId = _weekSwipeResolve(dragWeekIds, dragCurrentWeekId, dir * SWIPE_COMMIT_PX);
+    if (targetId == null) return;
+    // The page renderers park themselves while this binder owns the touch
+    // (deferRenderWhileWeekSwiping()). The preview is the one render that
+    // must run now, so the claim stands down for exactly this synchronous
+    // call and is retaken before anything else can run.
+    const held = touchClaimedBy() === WEEK_SWIPE_TOUCH_OWNER;
+    if (held) releaseTouch(WEEK_SWIPE_TOUCH_OWNER);
+    let content = null;
+    try { content = opts.renderPreview(targetId); }
+    catch (err) { content = null; if (typeof console !== 'undefined') console.warn('[nav-gestures] week preview failed', err); }
+    finally { if (held) claimTouch(WEEK_SWIPE_TOUCH_OWNER); }
+    if (!content || !start || axis !== 'x') return;
+    const rect = root.getBoundingClientRect();
+    const vh = (typeof window !== 'undefined' && typeof window.innerHeight === 'number') ? window.innerHeight : 0;
+    const scrolled = (typeof window !== 'undefined' && typeof window.scrollY === 'number') ? window.scrollY : 0;
+    // Where the week LANDS: scrolled to its top (Picks), or at this same
+    // scroll offset (Dashboard). `top` is root-relative; the layer runs from
+    // there to the bottom of the viewport.
+    const top = opts.incomingAtTop ? scrolled : Math.max(0, -rect.top);
+    const shift = opts.incomingAtTop ? 0 : top;
+    const height = Math.round(vh - (rect.top + top));
+    if (!(height > 0)) return;
+    const layer = document.createElement('div');
+    layer.className = 'week-swipe-incoming-layer';
+    layer.setAttribute('aria-hidden', 'true');
+    layer.setAttribute('inert', '');
+    const ls = layer.style;
+    ls.position = 'absolute';
+    ls.top = `${top}px`;
+    ls.left = dir < 0 ? '100%' : '-100%';
+    ls.width = '100%';
+    ls.height = `${height}px`;
+    ls.overflow = 'hidden';
+    ls.pointerEvents = 'none';
+    const inner = document.createElement('div');
+    if (typeof content === 'string') inner.innerHTML = content;
+    else inner.appendChild(content);
+    if (shift) inner.style.transform = `translateY(${-shift}px)`;
+    layer.appendChild(inner);
+    root.appendChild(layer);
+    panels.set(dir, layer);
   }
 
   function setX(cssValue) {
@@ -1319,10 +1517,15 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
   function springBack() {
     // Cancelling, or a release at an edge — Small-feedback bucket, no
     // haptic (an incomplete or edge gesture is never a success).
-    if (prefersReducedMotion()) { setAnimating(false); setX('0px'); return; }
+    // SB-23 — the incoming week (a child of root) slides back out with it.
+    if (prefersReducedMotion()) { setAnimating(false); setX('0px'); removePanels(); return; }
+    const leaving = takePanelsForSpring();
     setAnimating('bounce');
     setX('0px');
-    afterTransition(() => setAnimating(false), WEEK_SWIPE_BOUNCE_MS);
+    afterTransition(() => {
+      setAnimating(false);
+      for (const el of leaving) { leavingPanels.delete(el); dropLayer(el); }
+    }, WEEK_SWIPE_BOUNCE_MS);
   }
 
   /**
@@ -1531,6 +1734,10 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     // whatever dx it last held. A fresh drag always starts from a
     // known-clean translateX(0), never inherited state.
     setX('0px');
+    // SB-23 — and with no document lock or incoming layer left over from a
+    // drag whose end never arrived (or a spring this touch interrupted).
+    setDragLock(false);
+    removePanels();
     start = { x: t.clientX, y: t.clientY };
     axis = null;
     lastDx = 0;
@@ -1550,6 +1757,7 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     // it. If the week had already been following the finger, put it back.
     const owner = touchClaimedBy();
     if (owner !== null && owner !== WEEK_SWIPE_TOUCH_OWNER) {
+      setDragLock(false);   // SB-23 — the page is the other recognizer's to manage now
       if (axis === 'x') springBack();
       start = null; axis = null; lastDx = 0;
       return;
@@ -1595,8 +1803,14 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
         start = null; axis = null; lastDx = 0;
         return;
       }
+      // SB-23 (1) — locked horizontal and claimed: the page stays still
+      // vertically until the finger lifts (see this binder's SB-23 note).
+      if (axis === 'x') setDragLock(true);
     }
     if (axis !== 'x') return; // never fights vertical scroll — no transform touched
+    // SB-23 (2) — the incoming week, once per direction, toward a week that
+    // exists (none at an end of the list: that drag only rubber-bands).
+    if (dx !== 0 && !_weekSwipeAtBound(dragWeekIds, dragCurrentWeekId, dx)) ensurePanel(Math.sign(dx));
     // RG-TBD-A1 — no commit while the finger is down: the page follows it
     // for the whole drag and release decides (onTouchEnd, below).
     lastDx = dx;
@@ -1635,8 +1849,13 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     start = null; axis = null; lastDx = 0; samples = [];
     const heldTouch = touchClaimedBy() === WEEK_SWIPE_TOUCH_OWNER;
     releaseTouch(WEEK_SWIPE_TOUCH_OWNER);
-    if (!wasHorizontal) { if (heldTouch) flushDeferredRenders(); return; }
+    setDragLock(false);   // SB-23 — the finger is up: the page scrolls again
+    if (!wasHorizontal) { removePanels(); if (heldTouch) flushDeferredRenders(); return; }
     if (target != null) {
+      // SB-23 — the preview layer goes first, so commitSlide()'s outgoing
+      // clone never copies it; onNavigate() then paints the real week into
+      // root, which commitSlide() places exactly where the layer just was.
+      removePanels();
       // onNavigate() repaints the swiped page itself, from current data —
       // its parked repaint is redundant; any OTHER page's still runs.
       try { commitSlide(dx, target); } finally { flushDeferredRenders(swipedPage); }
@@ -1659,7 +1878,8 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
   function recoverAbandonedDrag() {
     const hadDrag = !!start || liveOffsetPx !== 0;
     start = null; axis = null; lastDx = 0; samples = [];
-    if (hadDrag && !busy) { setAnimating(false); setX('0px'); }
+    if (hadDrag && !busy) { setAnimating(false); setX('0px'); removePanels(); }
+    setDragLock(false);   // SB-23 — never leave the page locked behind a lost touch
     releaseTouch(WEEK_SWIPE_TOUCH_OWNER);
     flushDeferredRenders();
   }
@@ -1683,6 +1903,8 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     root.removeEventListener('touchcancel', onTouchEnd);
     if (canDoc) document.removeEventListener('visibilitychange', onVisibility);
     if (canWin) window.removeEventListener('pagehide', recoverAbandonedDrag);
+    setDragLock(false);
+    removePanels();
     weekSwipeStates.delete(root);
   };
   weekSwipeStates.set(root, unbind);
@@ -1778,7 +2000,7 @@ export function bindBottomBounce(getScrollEl, target, opts = {}) {
   if (!scrollEl) return () => {};
   if (bottomBounceStates.has(scrollEl)) return bottomBounceStates.get(scrollEl).unbind;
 
-  let startY = null, eligible = false;
+  let startY = null, startX = null, axis = null, eligible = false;
 
   function apply(offsetPx) {
     target.style.transform = offsetPx > 0 ? `translateY(-${offsetPx}px)` : '';
@@ -1806,12 +2028,32 @@ export function bindBottomBounce(getScrollEl, target, opts = {}) {
       : (scrollEl.scrollHeight ?? 0);
     eligible = _bottomBounceEligible(scrollY, innerHeight, scrollHeight);
     startY = eligible ? t.clientY : null;
+    startX = eligible && typeof t.clientX === 'number' ? t.clientX : null;
+    axis = null;
   }
   function onTouchMove(e) {
     if (!eligible || startY === null) return;
+    // SP-57 (2026-10-01, DI-476, C4) — a lifted section dragged up at the
+    // page's bottom must not rubber-band the page under it. Scoped to the
+    // section drag only; the pill path is unchanged.
+    if (touchClaimedBy() === SECTION_DRAG_TOUCH_OWNER) { apply(0); eligible = false; return; }
     const t = e.touches?.[0];
     if (!t) return;
     const dragUp = startY - t.clientY; // positive = dragging up past the bottom
+    // SB-05 (2026-09-30) — AXIS LOCK, the same 8px dead zone and the same
+    // test as stepPullToRefresh()'s (full-app review Step 6). Eligibility is
+    // decided once, at touchstart, so without this a HORIZONTAL drag — the
+    // control-center drawer's swipe open, whose own binder claims the touch on
+    // exactly this test — lifted `.page-wrapper` under the opening drawer
+    // whenever the thumb drifted up with the page at its bottom (~18px,
+    // ccscrolltest.mjs [B-8]). Nothing is shown before the lock; once the
+    // touch commits horizontal it is not a pull, however far it drifts.
+    if (axis === null) {
+      const dx = typeof startX === 'number' && typeof t.clientX === 'number' ? t.clientX - startX : 0;
+      if (Math.abs(dx) <= AXIS_DEAD_ZONE_PX && Math.abs(dragUp) <= AXIS_DEAD_ZONE_PX) return;
+      axis = Math.abs(dx) > Math.abs(dragUp) ? 'x' : 'y';
+    }
+    if (axis === 'x') { eligible = false; startY = null; return; }
     if (dragUp <= 0) { apply(0); return; }
     apply(_rubberBandOffset(dragUp));
   }

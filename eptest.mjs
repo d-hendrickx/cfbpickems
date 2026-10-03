@@ -126,14 +126,22 @@ const {
 } = storage;
 
 // ═════════════════════════════════════════════════════════════════════════════
-console.log('[1] AD-33 TRIPWIRE — js/scoring.js contains zero Extra-Point references…');
+console.log('[1] AD-33 TRIPWIRE — js/scoring.js contains zero Extra-Point references, and is only ever HANDED keys…');
 // ═════════════════════════════════════════════════════════════════════════════
 {
-  // AD-33: "Season standings are computed from picks performance and the
-  // intra-week tiebreaker ONLY. Extra Point is never a gate, never a scoring
-  // input, and never a second-level tiebreaker." Ruling R3 (2026-09-12)
-  // confirms it stands unamended. This is the whole-file form of the guard:
-  // FEAT-9 must leave scoring.js exactly as it found it.
+  // AD-33, AMENDED 2026-09-30 by Drew (SP-54 / DI-466, Q1) — the wording now in force:
+  //   "Extra Point is never a gate, never a scoring input, never aggregated across
+  //    weeks, and never read by the season sort; its only role is the fourth-ranked
+  //    fallback inside a weekly true tie, handed to scoring.js as precomputed keys."
+  // (The retired wording read "…and never a second-level tiebreaker"; Drew's ruling
+  // makes the Extra Point exactly that, inside a weekly true tie, so the tripwire is
+  // RE-DERIVED here, not dodged with a renamed field.)
+  //
+  // The whole-file scan below is KEPT as the STRUCTURAL half of the new wording:
+  // scoring.js can neither reach Extra Point data nor the Extra Point module, so it can
+  // only ever be HANDED keys (js/tie-context.js builds them). The POSITIVE half follows
+  // it: the one place a key is read, the one place it is compared, and the season sort
+  // never reading it.
   const EP_TOKENS = [
     'extraPoint', 'ExtraPoint', 'EP_', 'extra-point',
     'gradeExtraPoint', 'EP_GUESSES', 'seasonExtraPointTally', 'isCountedExtraPointWeek',
@@ -171,6 +179,45 @@ console.log('[1] AD-33 TRIPWIRE — js/scoring.js contains zero Extra-Point refe
   // so the guard cannot be "passing" by matching everything.
   assert(scanFor('const extraneous = pointsFor(player);', EP_TOKENS).length === 0,
     'canary 3: an unrelated line mentioning "extra"/"point" separately is not flagged — no fuzzy over-matching');
+
+  // ── THE POSITIVE HALF OF THE AMENDED AD-33 (SP-54 / DI-466) ───────────────────────────────
+  // (a) the ranker declares the third parameter: keys arrive by ARGUMENT, never by import.
+  assert(/export function rankWeeklyResults\(rows, anyFinal, tie = null\)/.test(scoringSrc),
+    'SP-54 (a): rankWeeklyResults declares a third parameter, `tie = null` — the Extra Point can only arrive as a handed key');
+
+  // function bodies, declaration to the next top-level declaration (the ranktest [5] principle)
+  const bodyOf = (src, name) => {
+    const lines = src.split('\n');
+    const at = lines.findIndex(l => new RegExp(`^(?:export )?function ${name}\\s*\\(`).test(l));
+    if (at === -1) return null;
+    let end = lines.length;
+    for (let i = at + 1; i < lines.length; i++) { if (/^(?:export function|function|const) /.test(lines[i])) { end = i; break; } }
+    return lines.slice(at, end).join('\n');
+  };
+  // (b) the S4 comparison exists EXACTLY ONCE, and `tie.ep` / its `byPlayer` map is read only by the three helpers that own it:
+  //     the key reader (epKeyOf), the run orderer (orderRun) and the descriptor builder (attachTieBreak).
+  assert((scoringSrc.match(/^function compareEp\(/gm) || []).length === 1, 'SP-54 (b): the S4 comparator (compareEp) is defined exactly once');
+  const epReaders = ['compareS1S2', 'almaKeyOf', 'almaNetOf', 'almaApplies', 'compareAlma', 'splitBy', 'drawOrder', 'tieRunsOf', 'orderTieRuns', 'calculateWeeklyResults', 'calculateGroupWeeklyResults', 'calculateSeasonStandings']
+    .filter(n => { const b = bodyOf(scoringSrc, n); return b === null || /\.ep\b|byPlayer/.test(b); });
+  assert(epReaders.length === 0, `SP-54 (b): no ordering, weekly-compute or season function reads \`.ep\` / \`byPlayer\` (offenders: ${JSON.stringify(epReaders)})`);
+  assert(/tie\.ep\.byPlayer/.test(bodyOf(scoringSrc, 'epKeyOf') || '') && /\.byPlayer/.test(bodyOf(scoringSrc, 'epKeyOf') || ''), 'SP-54 (b): the key map IS read in epKeyOf (the scan is not vacuous)');
+  // (c) the season sort never reads a key (the exact-line allowlist for the two pass-through lines lives in ranktest [5])
+  const season = bodyOf(scoringSrc, 'calculateSeasonStandings') || '';
+  assert(season.length > 500 && !/\.ep\b|\.alma\b|drawKey/.test(season), 'SP-54 (c): calculateSeasonStandings() never reads `.ep`, `.alma` or `drawKey`');
+  // (d) no import line names the Extra Point module or the key builder
+  const importLines = scoringSrc.split('\n').filter(l => /^\s*(?:import\b|\}\s*from\b)/.test(l));
+  assert(importLines.length >= 2 && !importLines.some(l => /extra-point|tie-context/.test(l)),
+    `SP-54 (d): scoring.js has no import naming extra-point.js or tie-context.js (${importLines.length} import lines read)`);
+  // (e) canaries — the positive scans are not vacuous
+  const canarySeasonEp = 'export function calculateSeasonStandings(p, r, w, t) {\n  const x = t.ep.byPlayer[p];\n  return x;\n}\nexport function other() {}';
+  assert(/\.ep\b|\.alma\b|drawKey/.test(bodyOf(canarySeasonEp, 'calculateSeasonStandings')), 'SP-54 canary: an `.ep` read injected into the season body IS caught');
+  const canaryImport = 'import { gradeWeekExtraPoint } from "./extra-point.js";';
+  assert(/extra-point|tie-context/.test(canaryImport) && scanFor(canaryImport, EP_TOKENS).length === 1, 'SP-54 canary: an import of extra-point.js into scoring.js IS caught (by path and by name)');
+  assert(!/\.ep\b|\.alma\b|drawKey/.test(bodyOf('export function calculateSeasonStandings(p) {\n  return p.sort();\n}\nexport function other() {}', 'calculateSeasonStandings')), 'SP-54 canary: an unrelated season body is NOT flagged');
+  // (f) this suite's own header quotes the AMENDED wording and not the retired one
+  const self = await readFile(new URL(import.meta.url), 'utf8');
+  assert(/\/\/\s+weeks, and never read by the season sort; its only role is the fourth-ranked/.test(self) && !/\/\/\s+input, and never a second-level tiebreaker\."/.test(self),
+    'SP-54 (f): eptest [1]\'s header quotes the amended AD-33 wording, not the retired one');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -252,8 +299,12 @@ setSession('alpha', false, true);
     'the Season Summary table body contains no Extra Point column, label or symbol — the separation is structural, not a comment');
 
   const head = html.slice(html.indexOf('<thead>'), html.indexOf('</thead>'));
-  assert(head.includes('✅ Correct') && head.includes('Wk L') && !/Extra|EP\b/.test(head),
-    'the Season Summary header row is the same seven columns it was — no EP column added');
+  // SP-56 (2026-09-30, DI-471/DI-474 A) — RE-DERIVED, not weakened. The seven
+  // emoji-prefixed columns became five (#, Player, Picks, Win %, Weeks) so the
+  // table fits one iPhone screen wide; the AD-33 half of this assertion — NO
+  // Extra Point column, structurally — is preserved word for word.
+  assert(head.includes('Picks') && head.includes('Win %') && head.includes('Weeks') && (head.match(/<th\b/g) || []).length === 5 && !/Extra|EP\b/.test(head),
+    'the Season Summary header row is the five SP-56 columns (#, Player, Picks, Win %, Weeks) — and still no EP column added (AD-33: the separation is structural)');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

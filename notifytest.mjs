@@ -2826,9 +2826,13 @@ console.log('\n[25] Service worker: the two registrars converge, and only a real
       // makes this a genuine web-inertness proof rather than a broken
       // sandbox: with it false, execution falls straight through to the
       // EXACT same web call sequence this section has always asserted.
-      new Function('ov', 'showToast', 'enablePushOnThisDevice', 'refreshNotifSettingsBody', 'refreshPushActiveFlag', 'playerId', 'isNativeShell', src)(
+      // RG (2026-10-02, the control-center Turn On fix) — the handler now repaints
+      // through bindNotifSettingsBody()'s `refresh` parameter (modal or drawer
+      // row), so `refresh` is injected beside the old name. Same no-op stub;
+      // nothing this section asserts depends on which host repaints.
+      new Function('ov', 'showToast', 'enablePushOnThisDevice', 'refreshNotifSettingsBody', 'refreshPushActiveFlag', 'playerId', 'isNativeShell', 'refresh', src)(
         ov, () => { toasts++; }, () => { calls++; return new Promise(r => releases.push(r)); }, async () => {},
-        () => { pushFlagRefreshes++; }, 'p1', () => false);
+        () => { pushFlagRefreshes++; }, 'p1', () => false, async () => {});
       const t1 = handler({ currentTarget: btn });
       const disabledDuring = btn.disabled;
       const t2 = handler({ currentTarget: btn });        // the impatient second tap

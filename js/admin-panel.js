@@ -105,6 +105,9 @@ import {
   isPilotLeague,
   canOperateCard,
 } from './roles.js';
+// SP-53 / DI-462 (2026-10-01) — the "(left)" / "(removed)" label for a seat whose person is no longer in the league, from the ONE derivation in the League Settings pure module (which
+// imports nothing, so this adds no edge back into anything).
+import { departedLabel } from './league-settings.js';
 
 // ── ADMIN_TABS — the five-tab shell, DI-320 §Layout ─────────────────────────
 // Deliberately the SAME five tab keys the Commissioner panel just vacated
@@ -680,7 +683,11 @@ export function renderUsersAcrossLeaguesBody({ viewer, users = [], usersLoading 
       // (reviewer fix round 1, finding 8: double-escaping harmless-looking
       // text is still a defect — a literal `&` in a locale's date format
       // would otherwise come out `&amp;amp;`).
-      const linkedLine = u.linkedAt ? `Linked ${esc(shortDate(u.linkedAt))}` : 'Not linked';
+      // SP-53 / DI-462 §A (F3) — keyed on `userId` AS WELL as `linkedAt`: `leave_league` keeps `linked_at` (it is what tells a leaver from a never-linked placeholder), so a left seat has
+      // a `linkedAt` and no account, and must read "Not linked" — not "Linked {date}" (the same misstatement already existed for a deleted account's seat).
+      const linkedLine = u.userId != null && u.linkedAt ? `Linked ${esc(shortDate(u.linkedAt))}` : 'Not linked';
+      // "(left)" for a person who left (or deleted their account), "(removed)" for a seat a commissioner removed; '' for an active seat.
+      const departed = departedLabel({ active: u.active, linked: u.userId != null, linkedAt: u.linkedAt });
 
       let commissionerBtn = '';
       let commissionerCaption = '';
@@ -731,7 +738,7 @@ export function renderUsersAcrossLeaguesBody({ viewer, users = [], usersLoading 
           <div class="player-admin-info">
             <span class="player-admin-avatar${u.active === false ? ' inactive' : ''}">${esc(initialsFor(u.displayName))}</span>
             <div>
-              <div class="font-display" style="font-size:.9rem">${esc(u.displayName || u.userId || 'Unnamed')}${u.active === false ? ' <em class="text-muted">(removed)</em>' : ''} ${roleBadge}</div>
+              <div class="font-display" style="font-size:.9rem">${esc(u.displayName || u.userId || 'Unnamed')}${departed ? ` <em class="text-muted">${esc(departed)}</em>` : ''} ${roleBadge}</div>
               <div class="text-xs text-muted">${linkedLine}</div>
             </div>
           </div>

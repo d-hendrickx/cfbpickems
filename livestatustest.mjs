@@ -186,7 +186,9 @@ const { fetchCurrentCFBGames } = dataProvider;
 // ── 2. End-to-end capture through the REAL refresh pipeline ─────────────────
 console.log('\n[2] End-to-end capture (parseAndReport -> refreshScoresByEventIds -> doRefreshScores)…');
 
-const ESPN_EVENT_ID = 'espn_evt_401520000';
+// SB-24 (2026-10-01) — an ESPN-shaped DIGIT id: the parser now drops anything
+// that is not 1-20 digits (to null), as migration 0040's CHECK would refuse it.
+const ESPN_EVENT_ID = '401520000';
 
 function representativeLiveEvent({ name = 'STATUS_IN_PROGRESS', detail = '12:34 - 2nd Quarter', shortDetail = '12:34 - 2nd' } = {}) {
   return {
@@ -506,7 +508,11 @@ liveStatusById.set(finalGame.gameId, { name: 'STATUS_FINAL', detail: 'Final', sh
 
 const cardFinal = renderGameCard(finalGame, null, PICK_RESULT.WIN, true, true);
 assert(cardFinal.includes('FINAL') && !cardFinal.includes('live-status-detail'), 'renderGameCard: FINAL game shows the plain FINAL label, no live-status-detail line added');
-assert(!cardFinal.includes('score-status-no-pulse'), 'renderGameCard: FINAL game never gains the no-pulse modifier — the lookup never happens for it');
+// RE-DERIVED (SP-52 themes DI A1.10, coordinator 2026-10-01). OLD: "FINAL game never gains the no-pulse modifier — the lookup never happens
+// for it". That pinned the defect: `.score-status` pulses, so a FINAL card's status line looped forever. NEW: FINAL ALWAYS carries the static
+// score-status-no-pulse treatment (a settled result never pulses; only LIVE does), and the Map is still never read for it — the line above
+// (no live-status-detail despite the bogus STATUS_FINAL entry) is what proves the lookup does not happen.
+assert(/<div class="score-status score-status-no-pulse">FINAL<\/div>/.test(cardFinal), 'renderGameCard: FINAL game renders the static FINAL line (score-status score-status-no-pulse) — it never pulses (A1.10)');
 
 const tableFinal = renderDashboardTable(players7, [finalGame], [{ pickId: 'pk_final', weekId: week7.weekId, gameId: finalGame.gameId, playerId: 'ig_p1', selectedTeam: 'Home U' }], [{ playerId: 'ig_p1', correctPicks: 1, incorrectPicks: 0 }], week7.weekId, null);
 assert(tableFinal.includes('FINAL 20–30') && !tableFinal.includes('live-dot-static'), 'renderDashboardTable: FINAL row unchanged — no live-dot-static, no injected detail text');

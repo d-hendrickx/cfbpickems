@@ -308,6 +308,31 @@ console.log('\n[5] isNativeOrigin() — the origin-positive gate every SECURITY 
   if (hadLocation) globalThis.location = savedLocation; else delete globalThis.location;
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// [6] openExternalUrl() — Social Platform News (DI-378 / S-C4, 2026-10-01)
+//
+// The generic "open an https page outside the app" helper: the Capacitor Browser plugin's in-app Safari sheet on native, a new tab on the web.
+// It does NO host allow-listing (that is the caller's — js/newsCard.js's parseArticleUrl hands it only its own serialized output), but it carries ONE floor
+// of its own, independent of any caller: it opens NOTHING that is not a string starting https://. newstest.mjs [3] proves the news-specific half.
+// ═══════════════════════════════════════════════════════════════════════
+console.log('\n[6] openExternalUrl() — the https-only floor, the native sheet, the web tab…');
+{
+  const { openExternalUrl } = await import('./js/platform.js');
+  const hadWindow = 'window' in globalThis;
+  const savedWindow = globalThis.window;
+  const log = [];
+  globalThis.window = { open: (...a) => log.push(['tab', ...a]) };
+  assert(openExternalUrl('https://www.espn.com/x') === true && JSON.stringify(log) === JSON.stringify([['tab', 'https://www.espn.com/x', '_blank', 'noopener,noreferrer']]),
+    '[6a] web: a new tab, opened with noopener,noreferrer (third-party content never gets a live window.opener back to the app)');
+  log.length = 0;
+  for (const bad of ['http://www.espn.com/x', 'javascript:alert(1)', 'data:text/html,x', 'file:///etc/passwd', '//www.espn.com/x', '', null, undefined, 5, {}]) openExternalUrl(bad);
+  assert(log.length === 0, '[6b] the https-only floor: http:, javascript:, data:, file:, a scheme-relative URL, an empty string and every non-string open NOTHING (S-C4, independent of any caller)');
+  globalThis.window = { Capacitor: { isNativePlatform: () => true, Plugins: { Browser: { open: (o) => log.push(['sheet', o]) } } }, open: (...a) => log.push(['tab', ...a]) };
+  assert(openExternalUrl('https://www.espn.com/x') === true && JSON.stringify(log) === JSON.stringify([['sheet', { url: 'https://www.espn.com/x' }]]),
+    '[6c] native: the Browser plugin gets { url } (the system in-app Safari sheet), and window.open is not touched');
+  if (hadWindow) globalThis.window = savedWindow; else delete globalThis.window;
+}
+
 // ── Result ───────────────────────────────────────────────────────────────────
 // Write-then-exit-in-the-callback + unref'd backstop timer (grouptest.mjs/
 // authtest.mjs precedent, reviewer F-3/security F-6) — a dropped summary line

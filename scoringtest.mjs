@@ -523,18 +523,20 @@ console.log('\n[14] F3 — the detectors, on fixtures…');
     const games = [game('g1'), game('g2')];
     const picks = [pick('p1', 'g1', 'Hg1'), pick('p2', 'g1', 'Hg1'), pick('p3', 'g1', 'Hg1'),
                    pick('p1', 'g2', 'Hg2'), pick('p2', 'g2', 'Ag2'), pick('p3', 'g2', 'Hg2')];
-    const out = detectWeekSignals({ weekId: 'w1', weekStatus: 'locked', games, picks, players });
+    const out = detectWeekSignals({ weekId: 'w1', weekStatus: 'live', games, picks, players });
     const u = out.filter(s => s.signal === 'unanimous');
     assert(u.length === 1 && u[0].subject === 'g1', `exactly one unanimous signal, on the game everyone agreed about (got ${u.length})`);
     assert(u[0].gameTag === 'g1' && u[0].evidence.team === 'Hg1' && u[0].evidence.count === 3, 'it carries the game, the side, and how many agreed');
 
-    const partial = detectWeekSignals({ weekId: 'w1', weekStatus: 'locked', games,
+    const partial = detectWeekSignals({ weekId: 'w1', weekStatus: 'live', games,
       picks: picks.filter(p => !(p.playerId === 'p3' && p.gameId === 'g1')), players });
     assert(partial.filter(s => s.signal === 'unanimous').length === 0,
       'two of three agreeing while the third abstained is NOT unanimity — it is a small sample');
 
     // N-4 — THE BLIND RULE AT THE SIGNAL LEVEL.
-    for (const status of ['open', 'draft', null, '', 'nonsense']) {
+    // N3 (2026-10-01, closes S-C13): 'locked' joins the blind list — arePicksPublic() is LIVE or FINAL only, so a LOCKED
+    // week's picks are NOT public and "all six took the same side" must not be DETECTED there either.
+    for (const status of ['open', 'draft', 'locked', null, '', 'nonsense']) {
       const blind = detectWeekSignals({ weekId: 'w1', weekStatus: status, games, picks, players });
       assert(blind.filter(s => s.signal === 'unanimous').length === 0,
         `weekStatus ${JSON.stringify(status)}: no unanimous signal is even DETECTED — "all six took the same side" is a statement about every player's pick`);

@@ -40,7 +40,7 @@
  * same trigger simultaneously, the server's id-dedupe collapses them to one row.
  */
 
-import { sendEvent, whenAppended, getMessages } from './chat.js';
+import { sendEvent, whenAppended, getMessages, chatScopeGen } from './chat.js';
 // Build 2, Group C (2026-09-10, UN-150…154) — the @scribe mention branch now
 // calls the interactive (LLM-backed) runtime instead of posting a canned
 // line unconditionally. One-directional import (scribeAgent.js never imports
@@ -618,17 +618,31 @@ async function fireScribeMention({ gameTag, author, authorName, triggerMessageId
   // found' and a canned degrade — which is what every live @scribe mention
   // got. Waiting on the append is deterministic and free; the server's
   // not-found error stays as the backstop behind it.
+  //
+  // SB-20 security C-A — EVERY await below is followed by a scope check, on
+  // the success side AND the catch side. The asker is the identity at this
+  // instant; if the chat store's scope moves while we wait (a Sign Out and a
+  // different account, or a league switch), nothing is asked and nothing is
+  // posted for them — a canned degrade would otherwise land under the NEW
+  // scope, naming the departed asker, with notify:true, in a league they may
+  // not belong to. chat.js's rescopeChat() also rejects the append waiter
+  // (scopeMoved), so the first check is reached at once rather than after the
+  // 45s bound.
+  const scopeGen = chatScopeGen();
   try {
     await whenAppended(triggerMessageId, { timeoutMs: appendWaitMs });
   } catch {
+    if (chatScopeGen() !== scopeGen) return false;   // C-A — the asker left; nothing is asked or posted for them
     // FAILED outbox item, or the bound elapsed. Either way the question never
     // reached the room, so a canned reply is the honest outcome — and it posts
     // under the SAME deterministic id as always, so the id-dedupe contract
     // documented in this file's header is unchanged.
     return scribeMentionDegraded({ gameTag, subject: author, vars, triggerMessageId });
   }
+  if (chatScopeGen() !== scopeGen) return false;     // C-A
   try {
     const r = await scribeAskRemote({ triggerMessageId, playerId: author, gameTag });
+    if (chatScopeGen() !== scopeGen) return false;   // C-A
     // F4/B3a remediation (2026-09-10, round 1) — a real message id is the
     // ONLY thing that counts as "answered," whether it's a fresh reply or a
     // dedup that landed after the fact. Everything else degrades, including:
@@ -649,6 +663,7 @@ async function fireScribeMention({ gameTag, author, authorName, triggerMessageId
     if (r && r.ok && r.responseMessageId) return true;
     return scribeMentionDegraded({ gameTag, subject: author, vars, triggerMessageId });
   } catch {
+    if (chatScopeGen() !== scopeGen) return false;   // C-A
     // Network/outage failure reaching scribeAsk at all → same degrade path
     // (C1: throttle, budget-cap and outage share ONE visible fallback).
     return scribeMentionDegraded({ gameTag, subject: author, vars, triggerMessageId });
@@ -1456,7 +1471,16 @@ function considerClaim({ triggerMessageId, gameTag, author }) {
 // change, out of scope for this pass, and inventing it from final scores
 // alone would be exactly the fabricated-stat failure SCRIBE.md §9 forbids.
 
-import { calculateAtsWinner, evaluatePick } from './scoring.js';
+import { calculateAtsWinner } from './scoring.js';
+// Social Platform v1 Home (DI-360, 2026-09-30) — the streak / milestone / lone-wolf logic now lives in
+// js/stats-core.js so the Home feed and SCRIBE compute the SAME facts by construction. This file IMPORTS
+// them and declares NEITHER constant (S-C9): the server's drift guard in
+// supabase/tests/functions/scribeAutonomous.twin.mjs [B2c] reads stats-core.js's `export const`
+// declarations and asserts this line still names both identifiers. `runLength` / `STREAK_MIN` stay
+// un-exported from here (they never were); `orderedGradedResults` / `MILESTONE_MARKS` keep their public
+// names and values through the re-export below, so groupdtest / scoringtest read them unchanged.
+import { orderedGradedResults, runLength, STREAK_MIN, MILESTONE_MARKS, loneWolfWinner, streakChange } from './stats-core.js';
+export { orderedGradedResults, MILESTONE_MARKS };
 import { SCRIBE_FREQUENCY_LEVELS, SCRIBE_FREQUENCY_DEFAULT, SCRIBE_HEAT_DEFAULT } from './data-model.js';
 // SCRIBE v3 Package D (DI-287, 2026-09-24) — the heated-exchange predicate,
 // imported rather than written a second time here. `js/scribe-scoring.js` is
@@ -1465,11 +1489,7 @@ import { SCRIBE_FREQUENCY_LEVELS, SCRIBE_FREQUENCY_DEFAULT, SCRIBE_HEAT_DEFAULT 
 // "verified" can only mean that if there is one implementation rather than two.
 import { heatedExchangeRun, HEATED_MIN_LEN, HEATED_WINDOW_MS } from './scribe-scoring.js';
 
-/** Round-number career/season correct-pick counts worth noticing. RAW
- *  counts, never the weighted tally — a milestone is "you have been right
- *  100 times," which is a count of games, not a score (CONVENTIONS #22). */
-export const MILESTONE_MARKS = [25, 50, 100, 150, 200, 250, 300];
-const STREAK_MIN = 3;
+// MILESTONE_MARKS / STREAK_MIN are imported from ./stats-core.js above (DI-360, S-C9) — declared there, once.
 
 /**
  * RAW correct count for a standings row, or `null` when the row does not
@@ -1490,59 +1510,8 @@ function rawCorrect(row) {
   return Number.isFinite(raw) ? raw : null;
 }
 
-/**
- * Every graded pick for one player, in true chronological order.
- *
- * The ordering rule is the same one backend/Code.gs's
- * `scribeOrderedGradedPicks_` uses, for the same reason (F2): a streak is an
- * ordered claim, and an unordered list produces a confidently wrong number.
- * Here the sort key is the game's own `kickoff` (games carry ISO kickoffs, so
- * week order falls out of it) with `gameId` as a stable final tiebreak.
- *
- * `complete:false` means at least one graded pick could not be placed —
- * missing game, missing or unparseable kickoff. The caller must then emit no
- * streak at all: a sequence with a hole is worse than no sequence.
- */
-export function orderedGradedResults(playerId, games, picks, weeks = null) {
-  const gameById = new Map();
-  for (const g of games || []) { if (g && g.gameId) gameById.set(g.gameId, g); }
-  // N-5 — the SAME comparator backend/Code.gs's scribeOrderedGradedPicks_
-  // uses: (season, weekNumber) first, then kickoff, then gameId. Supplying
-  // `weeks` is how the two runtimes agree exactly; with no week list the
-  // ordering degrades to kickoff-only, which is identical whenever kickoffs
-  // are correct and is why a pick whose week is UNKNOWN to a supplied list
-  // marks the sequence incomplete rather than being silently ranked 0.
-  const weekRank = new Map();
-  if (Array.isArray(weeks)) {
-    [...weeks].filter(Boolean).sort((a, b) =>
-      String(a.season || '').localeCompare(String(b.season || '')) ||
-      ((Number(a.weekNumber) || 0) - (Number(b.weekNumber) || 0))
-    ).forEach((w, i) => weekRank.set(String(w.weekId), i));
-  }
-  const out = [];
-  let complete = true;
-  for (const p of picks || []) {
-    if (!p || p.playerId !== playerId) continue;
-    const game = gameById.get(p.gameId);
-    if (!game) { complete = false; continue; }
-    const result = evaluatePick(p, game);
-    if (result !== 'win' && result !== 'loss') continue;          // graded only
-    const ms = game.kickoff ? Date.parse(game.kickoff) : NaN;
-    const rank = weekRank.size ? weekRank.get(String(p.weekId)) : 0;
-    if (!Number.isFinite(ms) || rank === undefined) { complete = false; continue; }
-    out.push({ weekId: p.weekId, gameId: p.gameId, result, ms, rank });
-  }
-  out.sort((a, b) => (a.rank - b.rank) || (a.ms - b.ms) || String(a.gameId).localeCompare(String(b.gameId)));
-  return { results: out, complete };
-}
-
-function runLength(results) {
-  if (!results.length) return { run: 0, result: null };
-  const last = results[results.length - 1].result;
-  let run = 0;
-  for (let i = results.length - 1; i >= 0; i--) { if (results[i].result === last) run++; else break; }
-  return { run, result: last };
-}
+// orderedGradedResults / runLength: MOVED byte-for-byte to ./stats-core.js (DI-360) — imported above.
+// The ordering rule, the N-5 week-rank comparator and the `complete:false` contract are documented there.
 
 /**
  * The detectors. Returns `[{ signal, subject, gameTag, evidence }]` — never
@@ -1561,7 +1530,12 @@ function runLength(results) {
  *                        is additive
  * @param standingsBefore/After season standings either side of the finalize
  */
-export const UNANIMOUS_VISIBLE_STATUSES = ['locked', 'live', 'final'];
+// N3 (security, 2026-10-01 — closes S-C13): 'locked' is no longer admitted. `arePicksPublic()` is LIVE or FINAL
+// only, and the one caller (app.js's week-signals path) already returns before detection unless it holds, so
+// the LOCKED allowance was unreachable today; dropping it stops a FUTURE caller from inheriting a looser reading
+// of the blind rule than the rest of the app (and than the Home feed, which never admits it) and makes the
+// client detector exactly as strict as the server verifier (supabase/functions/_shared/scribe-evidence.mjs).
+export const UNANIMOUS_VISIBLE_STATUSES = ['live', 'final'];
 
 export function detectWeekSignals({
   weekId, weekStatus = null, games = [], picks = [], players = [], weeks = null,
@@ -1601,16 +1575,13 @@ export function detectWeekSignals({
   // ── loneWolfWin — at finalize. Exactly one player on the ATS-winning side,
   // everyone else on the other. Uses the SAME calculateAtsWinner the
   // standings use (CONVENTIONS #21), never a second reading of the spread.
+  // DI-360 — the three conditions now live in js/stats-core.js's loneWolfWinner() (the Home feed's
+  // `stood.alone` card asks the identical question); the signal shape pushed below is unchanged.
   for (const game of weekGames) {
-    if (game.status !== 'final') continue;
-    const ats = (game.atsWinner !== undefined && game.atsWinner !== null) ? game.atsWinner : calculateAtsWinner(game);
-    if (!ats || ats === 'no_decision') continue;
-    const gp = weekPicks.filter(p => p.gameId === game.gameId);
-    const winners = gp.filter(p => p.selectedTeam === ats);
-    const losers = gp.filter(p => p.selectedTeam !== ats);
-    if (winners.length === 1 && losers.length >= 2) {
-      signals.push({ signal: 'loneWolfWin', subject: winners[0].playerId, gameTag: game.gameId,
-        evidence: { gameId: game.gameId, playerId: winners[0].playerId, team: ats, against: losers.length, weekId } });
+    const wolf = loneWolfWinner(game, weekPicks, { calculateAtsWinner });
+    if (wolf) {
+      signals.push({ signal: 'loneWolfWin', subject: wolf.playerId, gameTag: game.gameId,
+        evidence: { gameId: game.gameId, playerId: wolf.playerId, team: wolf.team, against: wolf.against, weekId } });
     }
   }
 
@@ -1648,19 +1619,13 @@ export function detectWeekSignals({
   // Chronological by kickoff (see orderedGradedResults); a player whose
   // history cannot be fully ordered is SKIPPED rather than guessed at.
   const streakIds = new Set(weekPicks.map(p => p.playerId));
+  // The extended/broken RULE lives in js/stats-core.js's streakChange() (reviewer note 4, 2026-10-01) so the
+  // Home feed's streak cards apply the identical rule; the signal shape pushed below is unchanged.
   for (const playerId of streakIds) {
-    const { results, complete } = orderedGradedResults(playerId, games, picks, weeks);
-    if (!complete || results.length < STREAK_MIN) continue;
-    const current = runLength(results);
-    const prior = runLength(results.filter(r => r.weekId !== weekId));
-    if (current.run >= STREAK_MIN) {
+    const change = streakChange(orderedGradedResults(playerId, games, picks, weeks), weekId);
+    if (change) {
       signals.push({ signal: 'streak', subject: playerId, gameTag: '',
-        evidence: { playerId, run: current.run, kind: current.result === 'win' ? 'covers' : 'misses',
-                    state: 'active', weekId } });
-    } else if (prior.run >= STREAK_MIN && prior.result && current.result !== prior.result) {
-      signals.push({ signal: 'streak', subject: playerId, gameTag: '',
-        evidence: { playerId, run: prior.run, kind: prior.result === 'win' ? 'covers' : 'misses',
-                    state: 'broken', weekId } });
+        evidence: { playerId, run: change.run, kind: change.kind, state: change.state, weekId } });
     }
   }
 

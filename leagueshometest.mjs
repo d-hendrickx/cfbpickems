@@ -354,6 +354,17 @@ console.log('\n[10] renderLeaguePage()');
   const xssSports = [{ key: 'college-football', label: XSS_NAME }];
   const xssSportLabel = renderLeaguePage(league, { sports: xssSports, escHtml });
   assert(!xssSportLabel.includes('<script>'), 'REVIEWER GATE (plus assertion): a <script> sport LABEL is escaped');
+
+  // SP-53 / DI-457 (2026-10-01) — the League Settings row: ONE new row, LAST in the body, for EVERY member, in the League Standings row vocabulary; the Sports block above it is untouched.
+  for (const [who, html] of [['commissioner', asCommish], ['player', asPlayer]]) {
+    const row = '<button type="button" class="league-standings-row" data-action="open-league-settings"';
+    const at = html.indexOf(row);
+    assert(at > -1 && html.indexOf('data-action="open-league-settings"') === html.lastIndexOf('data-action="open-league-settings"'), `SP-53 (${who}): the League Settings row is present exactly once`);
+    assert(html.indexOf('data-action="open-league-standings"') < at && html.indexOf('data-action="open-sport"') < at && (who === 'player' || html.indexOf('add-sport-card') < at), `SP-53 (${who}): it comes AFTER the Sports block, League Standings and (for a commissioner) the Add-sport stub: LAST on the page`);
+    assert(html.slice(at).includes('<span>League Settings</span>') && html.slice(at).includes('aria-label="Open League Settings for IRB Football"') && /<\/button>\s*<\/div>\s*$/.test(html.slice(at)), `SP-53 (${who}): it reads "League Settings", carries a full-sentence label, and closes the body`);
+  }
+  assert(renderLeaguePage({ leagueId: 'z', leagueName: XSS_NAME }, { sports, escHtml }).includes('aria-label="Open League Settings for &lt;script&gt;'), 'SP-53: a <script> league name is escaped inside the row aria-label');
+  assert(renderLeaguePage({ leagueId: 'z' }, { sports, escHtml }).includes('aria-label="Open League Settings for this league"'), 'SP-53: a league whose name has not loaded reads "this league" in the label (never an empty "for ")');
 }
 
 console.log('\n[11] leagueStandingsScopeLabel()');

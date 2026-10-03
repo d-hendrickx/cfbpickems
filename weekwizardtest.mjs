@@ -867,6 +867,24 @@ console.log('\n[15] DI-359 — Finalize Week guided flow: FINALIZE_STEPS shape, 
     const noDepAtAll = wizard.unresolvedTieWarning({ week: { weekId: 'w1' }, players: [], picks: [], games: [], deps: {} });
     assert(noDepAtAll.show === false, '15-26: missing the weekHasUnresolvedTie dep entirely ⇒ defaults to false, never a throw');
 
+    // SP-54 / DI-469 — the dynamic notice dependency (js/tie-context.js, injected by app.js; this module keeps ZERO imports).
+    {
+      let seen = null, legacyCalls = 0;
+      const wk = { weekId: 'w1' }, pl = [{ playerId: 'p' }], pk = [{ gameId: 'g' }], gm = [{ gameId: 'g' }];
+      const dyn = wizard.unresolvedTieWarning({ week: wk, players: pl, picks: pk, games: gm,
+        deps: { weekHasUnresolvedTie: () => { legacyCalls++; return true; }, finalizeTieNotice: (...a) => { seen = a; return { show: true, kind: 'ep-missing', text: 'DYNAMIC TEXT' }; } } });
+      assert(dyn.show === true && dyn.text === 'DYNAMIC TEXT', '15-26b (SP-54): with a finalizeTieNotice dependency the warning IS its text and show');
+      assert(seen && seen[0] === wk && seen[1] === pl && seen[2] === pk && seen[3] === gm && seen[4] === 'wizard', '15-26c (SP-54): …called with (week, players, picks, games) UNCHANGED and the \'wizard\' variant');
+      assert(legacyCalls === 0, '15-26d (SP-54): …and the legacy weekHasUnresolvedTie dependency is NOT consulted when the dynamic one is present');
+      const quiet = wizard.unresolvedTieWarning({ week: wk, players: pl, picks: pk, games: gm, deps: { weekHasUnresolvedTie: () => true, finalizeTieNotice: () => ({ show: false, kind: null, text: '' }) } });
+      assert(quiet.show === false && quiet.text === '', '15-26e (SP-54): a silent notice (a true dead heat, no tie) shows nothing, even when the legacy trigger would have');
+      const malformed = wizard.unresolvedTieWarning({ week: wk, players: pl, picks: pk, games: gm, deps: { finalizeTieNotice: () => null } });
+      assert(malformed.show === false && malformed.text === '', '15-26f (SP-54): a dependency that returns nothing is a silent warning, never a throw');
+      const legacy = wizard.WIZARD_COPY.UNRESOLVED_TIE_WARNING;
+      assert(/alma mater against the spread, then the Extra Point/.test(legacy) && /Confirm Tiebreaker/.test(legacy) && !/arbitrar/i.test(legacy) && !/[\u{1F300}-\u{1FAFF}\u2600-\u27BF]/u.test(legacy),
+        `15-26g (SP-54): the LEGACY body is reworded to name what decides the tie (no "arbitrarily") and carries no written-text emoji (D-1): "${legacy}"`);
+    }
+
     // coordinator fix, item 3, REQUIRED (RG-256 class) — confirmFinalizeWeek()
     // must re-read deps.getWeek(week.weekId) || week before spreading, so
     // this step's base carries whatever Steps 1-3 already wrote onto the
@@ -888,6 +906,12 @@ console.log('\n[15] DI-359 — Finalize Week guided flow: FINALIZE_STEPS shape, 
     assert(finalizeWeekCalls === 1, '15-28: finalizeWeek() is called exactly once');
     assert(finalizeWeekArg.status === 'final' && finalizeWeekArg === store4.get('w1'),
       '15-29 (mutation guard): finalizeWeek() receives the PERSISTED (post-save) object, never the pre-transition snapshot — same invariant confirm-finalize-btn\'s own handler documents');
+    {
+      let secondArg = null;
+      const s5 = new Map([['w9', { weekId: 'w9', status: 'live', pendingFinalization: true }]]);
+      wizard.confirmFinalizeWeek({ week: s5.get('w9'), deps: { saveWeek: (w) => s5.set(w.weekId, w), getWeek: (id) => s5.get(id) || null, finalizeWeek: (w, o) => { secondArg = o; } } });
+      assert(secondArg && secondArg.settling === true, '15-29c (SP-54 / N-3): the wizard\'s Finalize IS the live-to-final transition, so finalizeWeek() is called with { settling: true }');
+    }
 
     // RG-256 mutation guard, stale-object variant for this step too.
     const staleStore4 = new Map();

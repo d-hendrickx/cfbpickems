@@ -107,6 +107,58 @@ console.log('\n[c] DI-A2 — collapseYear defaults to OFF; other callers are byt
   );
 }
 
+// ── (compact) SP-56 / DI-472 — formatWeekLabelParts(…, { compact:true }) ──
+// The Standings Weekly History's two-line week cell: the date line must fit an
+// 88 px column, so it drops the year and the spaces around the dash. Opt-in,
+// default OFF; every existing caller stays byte-identical ([a]-[c] above plus
+// the explicit literals below).
+console.log('\n[compact] SP-56 — compact:true gives the short range; compact:false/omitted is byte-identical…');
+{
+  const wk = (startDate, endDate, extra = {}) => ({ weekNumber:4, startDate, endDate, ...extra });
+  const dates = (w, o = { compact:true }) => formatWeekLabelParts(w, o).dates;
+
+  assert(dates(wk('2026-09-24', '2026-09-26')) === 'Sep 24–26', 'compact-a: same month → "Sep 24–26" (got "' + dates(wk('2026-09-24', '2026-09-26')) + '")');
+  assert(dates(wk('2026-09-03', '2026-09-07')) === 'Sep 3–7', 'compact-a2: same month, single-digit days → "Sep 3–7" (got "' + dates(wk('2026-09-03', '2026-09-07')) + '")');
+  assert(dates(wk('2026-09-30', '2026-10-02')) === 'Sep 30–Oct 2', 'compact-b: two months → "Sep 30–Oct 2" (got "' + dates(wk('2026-09-30', '2026-10-02')) + '")');
+  assert(dates(wk('2026-12-30', '2027-01-02')) === 'Dec 30–Jan 2', 'compact-b2: across a year boundary the months differ, so both are named and no year is printed (got "' + dates(wk('2026-12-30', '2027-01-02')) + '")');
+  assert(dates(wk('2026-09-24')) === 'Sep 24', 'compact-c: one date only → "Sep 24" (got "' + dates(wk('2026-09-24')) + '")');
+  assert(dates(wk('2026-09-24', '2026-09-24')) === 'Sep 24', 'compact-c2: start equals end → "Sep 24", not "Sep 24–24" (got "' + dates(wk('2026-09-24', '2026-09-24')) + '")');
+  assert(dates(wk(undefined, undefined)) === '' && dates(wk(null, null)) === '' && dates(wk('', '')) === '', 'compact-d: no dates → "" (so the caller emits no empty second line)');
+  assert(dates(wk(undefined, '2026-09-26')) === '', 'compact-d2: an end date with no start date → "" (the uncompacted path has always ignored it too)');
+  assert(dates(wk('2026-09-24', '2026-09-26', { dataSourceMode:'demo' })) === '', 'compact-e: a demo week → "" even though it carries dates (unchanged)');
+  assert(dates(wk('2027-03-14', '2027-03-14')) === 'Mar 14' && dates(wk('2026-11-01')) === 'Nov 1',
+    'compact-f: the US DST-start (Mar 14 2027) and DST-end (Nov 1 2026) days keep their own day — local-noon parse, same as fmtDate');
+
+  // Unparseable input: NEVER the string "Invalid Date".
+  const bad = [dates(wk('garbage', 'junk')), dates(wk('2026-09-24', 'junk')), dates(wk('garbage')), dates(wk('2026-13-45', '2026-13-46')), dates(wk('garbage', 'garbage'))];
+  assert(bad.every(s => typeof s === 'string' && !/Invalid Date/.test(s)),
+    'compact-g: an unparseable date never prints "Invalid Date" (got ' + JSON.stringify(bad) + ')');
+  assert(dates(wk('garbage')) === 'garbage' && dates(wk('garbage', 'junk')) === 'garbage–junk',
+    'compact-g2: …it falls back to the raw string, which is what fmtDate\'s own catch has always returned');
+  assert(dates(wk('2026-09-24', 'junk')) === 'Sep 24, 2026–junk',
+    'compact-g3: a good start with a bad end falls back to the UNCOMPACTED fmtDate result for the good half (got "' + dates(wk('2026-09-24', 'junk')) + '")');
+
+  // `name` is never touched by the option: week number, round suffix, espn override, historical label.
+  const names = [wk('2026-09-24', '2026-09-26'), wk('2026-09-24', '2026-09-26', { roundLabel:'Part 2' }),
+                 wk('2026-09-24', '2026-09-26', { espnWeekNumber:'15' }), wk('2026-09-24', '2026-09-26', { label:'Historical — 2K25' })];
+  assert(names.every(w => formatWeekLabelParts(w, { compact:true }).name === formatWeekLabelParts(w).name),
+    'compact-h: `name` is identical with and without the option (week number, "Week N, Round", the ESPN override and the historical label all pass through)');
+  assert(formatWeekLabelParts(names[1]).name === 'Week 4, Part 2' && formatWeekLabelParts(names[2], { compact:true }).name === 'Week 15',
+    'compact-h2: …and the suffix / override behave as before ("Week 4, Part 2", "Week 15")');
+
+  // Precedence + byte-identity of everything that does NOT pass compact.
+  const w = wk('2026-09-03', '2026-09-07');
+  assert(formatWeekLabelParts(w, { compact:true, collapseYear:true }).dates === 'Sep 3–7', 'compact-i: compact wins when collapseYear is also passed');
+  assert(formatWeekLabelParts(w).dates === 'Sep 3, 2026–Sep 7, 2026'
+      && formatWeekLabelParts(w, { compact:false }).dates === 'Sep 3, 2026–Sep 7, 2026'
+      && formatWeekLabelParts(w, { collapseYear:true }).dates === 'Sep 3 – Sep 7, 2026'
+      && formatWeekLabelParts(wk('2026-12-30', '2027-01-02'), { collapseYear:true }).dates === 'Dec 30, 2026–Jan 2, 2027'
+      && formatWeekLabelParts(wk('2026-09-03')).dates === 'Sep 3, 2026',
+    'compact-j: omitted / compact:false / collapseYear still return their exact prior literals (byte-identical)');
+  assert(formatWeekLabel(w) === 'Week 4 — Sep 3, 2026–Sep 7, 2026', 'compact-k: formatWeekLabel() — the ~20-caller single-line sibling — is untouched ("' + formatWeekLabel(w) + '")');
+  assert(formatWeekLabelParts(null).name === '' && formatWeekLabelParts(null, { compact:true }).dates === '', 'compact-l: a missing week is still { name:"", dates:"" }');
+}
+
 // ── (d) header markup — feedback button is its OWN element, separate from
 //        the week-range element (structurally capable of rendering on its
 //        own line beneath it, per DI-A1) ───────────────────────────────────
@@ -1012,8 +1064,11 @@ console.log('\n[sync] the header sync icon — ONE .header-sync-icon, and it is 
     `[sync-css] no rule sets a colour on .header-sync-glyph, so the glyph inherits the state colour (rules: ${JSON.stringify(glyphRules.map(m => m[1].trim() + '{' + m[2] + '}'))})`);
   assert(glyphRules.some(m => /\.header-sync-glyph svg/.test(m[1]) && /width:\s*24px/.test(m[2]) && /height:\s*24px/.test(m[2])),
     '[sync-size] and the glyph svg keeps its 24x24 box');
-  assert(/\.header-sync-icon\[data-sync="syncing"\]\{[^}]*color:var\(--gold-light\)/.test(css),
-    '[sync-state] the per-state colours still key on `.header-sync-icon[data-sync="…"]` — the element that now carries both');
+  // RE-DERIVED (SP-52 DI-454, 2026-10-01): the syncing colour read var(--gold-light); on Graphite Light's WHITE header a pale gold would vanish, so it reads
+  // the chrome token with the old value as its fallback — var(--chrome-sync-busy, var(--gold-light)) — and is byte-identical everywhere the token is unset.
+  assert(/\.header-sync-icon\[data-sync="syncing"\]\{[^}]*color:var\(--chrome-sync-busy,var\(--gold-light\)\)/.test(css)
+    && /\.header-sync-icon\[data-sync="synced"\]\{color:var\(--chrome-fg-dim\)\}/.test(css) && /\.header-sync-icon\[data-sync="offline"\]\{color:var\(--chrome-fg-faint\)\}/.test(css),
+    '[sync-state] the per-state colours still key on `.header-sync-icon[data-sync="…"]` — the element that now carries both — and read the chrome tokens (syncing keeps --gold-light as its var() fallback)');
 
   // ── DI-399(a) (UN-359, 2026-09-28) — a real tappable control ─────────────
   console.log('   #sync-badge is now role="button" — attributes per state, tap target, keyboard, inert…');
@@ -1318,8 +1373,8 @@ console.log('\n[copy] no shipped copy sends a player to a "Settings" page that n
   assert(hits.length === 0, `[copy-1] no "in Settings" / "Settings →" string remains in shipped js outside the named Admin allow-list (hits: ${JSON.stringify(hits)})`);
   const pst = readFileSync(new URL('./js/push-selftest.js', import.meta.url), 'utf8');
   const appSrc = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
-  assert((pst.match(/the menu \(top left\) → Notifications/g) || []).length === 5 && /turn this off anytime in the menu \(top left\) → Notifications/.test(appSrc),
-    '[copy-2] fixture check — the five push-selftest.js lines and the app.js opt-in line now name the menu (top left) → Notifications');
+  assert((pst.match(/the menu \(top left\) → Notifications/g) || []).length === 7 && /turn this off anytime in the menu \(top left\) → Notifications/.test(appSrc),
+    '[copy-2] fixture check — the seven push-selftest.js lines (5 -> 7 on 2026-10-02: the two Reconnect lines that still named the retired 🔔 screen) and the app.js opt-in line now name the menu (top left) → Notifications');
   // MUTANT: the old opt-in copy must trip [copy-1]'s matcher.
   assert(/in Settings\b|Settings →/.test('You can turn this off anytime in Settings.') && /in Settings\b|Settings →/.test('go to Settings → Notifications'),
     '[copy-mut] the matcher catches both old phrasings (a scan that cannot match them would pass vacuously)');

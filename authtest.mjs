@@ -2562,8 +2562,9 @@ console.log('\n[20] Reviewer N5 — the auth banner\'s z-order and nav clearance
   // `--nav-bar-clearance`, which already bakes env(safe-area-inset-bottom,
   // 0px) into itself (see css/styles.css's own :root comment) — there is no
   // longer a separate env() term alongside it in THIS rule specifically.
-  assert(/bottom:\s*var\(--nav-bar-clearance\)/.test(stackRule),
-    'and it is offset upward by var(--nav-bar-clearance) (pill height + gap + the safe-area inset, computed once), so when no gate is up it sits ABOVE the floating nav pill rather than covering it');
+  // Home wiring review N2 (2026-10-02): the stack also clears the Home disc's collar by 8 pt (+ the collar's reach + 8px); the clearance term stays the base.
+  assert(/bottom:\s*calc\(var\(--nav-bar-clearance\)\s*\+\s*var\(--nav-disc-reach\)\s*\+\s*8px\)/.test(stackRule),
+    'and it is offset upward by var(--nav-bar-clearance) + the disc collar\'s reach + 8px (pill height + gap + the safe-area inset, computed once), so when no gate is up it sits ABOVE the floating nav pill and 8 pt clear of the Home disc rather than covering either');
   assert(/env\(safe-area-inset-bottom/.test(css.match(/:root\s*\{[^}]*\}/)[0]),
     '…the iOS home-indicator inset is still accounted for — baked into --nav-bar-clearance itself now (:root), rather than repeated at every consumer');
   assert(!/position:\s*fixed/.test(ruleOf('.session-expired-banner')),
@@ -4287,8 +4288,9 @@ console.log('\n[32] DI-180l — the fail-closed HOLD GATE (A1/A2/A6), on all thr
     // (its content lives in the control-center drawer only), so the list
     // is back down to SEVEN: picks, dashboard, leaderboard, commissioner,
     // admin, rules, chat.
-    assert(app._APP_PAGE_CONTAINER_IDS_FOR_TEST.length === 7,
-      'fixture: the teardown list names all seven page containers (page-settings retired by DI-397) — a shorter list would leave a tab painted behind the gate');
+    // Home wiring (2026-10-01): page-home is the EIGHTH container (it paints league data: the Now card, the feed, SCRIBE posts, ranked news).
+    assert(app._APP_PAGE_CONTAINER_IDS_FOR_TEST.length === 8 && app._APP_PAGE_CONTAINER_IDS_FOR_TEST.includes('page-home'),
+      'fixture: the teardown list names all eight page containers (page-settings retired by DI-397; page-home added by the Home wiring) — a shorter list would leave a tab painted behind the gate');
     assert(Object.values(painted).every(el => /Kihoon/.test(el.innerHTML)),
       'fixture: every page container really is painted with league data before the hold fires');
 
@@ -4570,7 +4572,16 @@ console.log('\n[33] DI-180m + A4 + A7 — the "Sign In" affordance…');
     const variant = css.slice(css.indexOf('data-gate-state="hold"'));
     assert(/min-height:44px/.test(variant.slice(0, 900)),
       'DI-180l — the hold gate\'s button carries min-height:44px, the same tap target every other gate button has');
-    const block = variant.slice(0, variant.indexOf('/* DI-184'));
+    // v0.29.0 integration (2026-10-01): the variant ends at the '/* DI-184' comment that follows it. If that comment is renamed or moved, indexOf() returns -1 and
+    // variant.slice(0, -1) is the REST of styles.css, so the no-colour check below failed blaming the hold variant for every hex in every later block (loud, but
+    // the wrong diagnosis); and if only the first of the two '/* DI-184' comments went, the block would quietly swallow ~24k chars of other CSS. The fixture check
+    // names the real cause: the end marker is present, the bounded block holds the variant's own button rule, and it is variant-sized (486 chars today; the next
+    // '/* DI-184' is ~24k away). Without a valid end the block is empty, never end-of-file.
+    const blockEnd = variant.indexOf('/* DI-184');
+    const blockOk = blockEnd > 0 && blockEnd < 1500 && /\.site-gate-btn\{[^}]*min-height:44px/.test(variant.slice(0, blockEnd));
+    assert(blockOk,
+      `DI-180l fixture — the hold variant's CSS ends at the "/* DI-184" comment that follows it, and that bounded block is the variant itself (its .site-gate-btn rule, under 1500 chars; got ${blockEnd}). Without that end marker the colour check below would answer for the rest of styles.css`);
+    const block = blockOk ? variant.slice(0, blockEnd) : '';
     assert(!/#[0-9a-fA-F]{3,6}/.test(block) && !/rgb\(/.test(block),
       `DI-180l — and the variant introduces NO color at all (hardcoded or otherwise): it inherits .site-gate's own black/white, because a hold is informational, not an error${/#[0-9a-fA-F]{3,6}/.test(block) ? ' — found ' + JSON.stringify(block.match(/#[0-9a-fA-F]{3,6}/g)) : ''}`);
   }
@@ -8305,12 +8316,18 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
    *  REFUSE, which is the whole point — "a mock that always succeeds tests
    *  nothing" (the assessment's §10 standard). */
   function fakeClient({ fail = null, rows = {} } = {}) {
+    // SB-01 / RG-265 — hydrate() pages every read (`.order().limit()`, `.gt()` past page one) and
+    // asks page one for `count: 'exact'`. This fake serves every row in one page, so it answers the
+    // count on every read: that is what proves its single page whole, exactly as PostgREST's count
+    // does for a table under the cap. (The wrappers below forward `then` here, not `select`.)
     const thenable = (table) => ({
       select() { return this; },
       eq() { return this; },
+      order() { return this; }, limit() { return this; }, gt() { return this; },
       then(res) {
         if (fail) return res({ data: null, error: fail });
-        return res({ data: rows[table] || [], error: null });
+        const data = rows[table] || [];
+        return res({ data, error: null, count: data.length });
       },
     });
     return {
@@ -8909,8 +8926,10 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
     // rework comment + BLOCK fix (d)'s wizardSetActiveWeekId() call, both
     // inside this same scan loop, ABOVE the read) — widened to 9000; same
     // site, same text, only the distance grew.
+    // Re-derived AGAIN 2026-10-01 (Home wiring, checklist item 18 — the `else if (state.currentTab === 'home') renderHomePage();`
+    // repaint line and its comment sit inside this same loop, ABOVE the read) — widened to 9500; same site, same text.
     const fnK = appSrcK.slice(appSrcK.indexOf('export function tickAutoTransition()'),
-      appSrcK.indexOf('export function tickAutoTransition()') + 9000);
+      appSrcK.indexOf('export function tickAutoTransition()') + 9500);
     const codeK = fnK.replace(/\/\*[\s\S]*?\*\//g, ' ').split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
     const gateAt = codeK.indexOf('isSupabaseDataMode()');
     const weekAt = codeK.indexOf('const week = getCurrentWeek()');
@@ -9817,6 +9836,7 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
             from: (t) => {
               const b = inner.from(t);
               return { select() { return this; }, eq() { return this; },
+                order() { return this; }, limit() { return this; }, gt() { return this; },   // SB-01
                 then(res, rej) { return after(Promise.resolve()).then(() => b.then(res, rej)); } };
             },
             rpc: (n, a) => after(Promise.resolve()).then(() => inner.rpc(n, a)),
@@ -9930,6 +9950,7 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
             const chain = { eq() { return chain; }, select() { return refused(); } };
             return {
               select() { return this; }, eq() { return this; }, then(res, rej) { return b.then(res, rej); },
+              order() { return this; }, limit() { return this; }, gt() { return this; },   // SB-01
               insert() { return chain; }, update() { return chain; }, delete() { return chain; },
             };
           },
@@ -10023,6 +10044,7 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
         from: () => ({
           select() { return this; },
           eq() { return this; },
+          order() { return this; }, limit() { return this; }, gt() { return this; },   // SB-01
           then(res) { return failure ? res({ data: null, error: failure }) : res({ data: [], error: null }); },
         }),
         rpc: async () => (failure ? { data: null, error: failure } : { data: [], error: null }),
@@ -10145,6 +10167,7 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
         from: () => ({
           select() { return this; },
           eq() { return this; },
+          order() { return this; }, limit() { return this; }, gt() { return this; },   // SB-01
           then(res) { hook(); return res({ data: null, error: fail }); },
         }),
         rpc: async () => { hook(); return { data: null, error: fail }; },
@@ -10246,6 +10269,7 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
         from: () => ({
           select() { return this; },
           eq() { return this; },
+          order() { return this; }, limit() { return this; }, gt() { return this; },   // SB-01
           then(res) {
             if (!failNow) return res({ data: [], error: null });
             quietM(() => app.hideAuthHoldGate());      // the interleaved teardown
@@ -10348,10 +10372,13 @@ console.log('\n[45] The FRESH-DEVICE cutover boot — a device with no session m
 
   /** A PostgREST-shaped fake with exactly the surface hydrate() uses ([44]'s). */
   function fakeClient45({ rows = {} } = {}) {
+    // SB-01 — same surface as [44]'s fakeClient: the paging verbs, and the count that proves the
+    // single page whole.
     const thenable = (table) => ({
       select() { return this; },
       eq() { return this; },
-      then(res) { return res({ data: rows[table] || [], error: null }); },
+      order() { return this; }, limit() { return this; }, gt() { return this; },
+      then(res) { const data = rows[table] || []; return res({ data, error: null, count: data.length }); },
     });
     return { from: (table) => thenable(table), rpc: async () => ({ data: [], error: null }) };
   }
@@ -10595,7 +10622,7 @@ console.log('\n[46] The PRE-LINK dead end — zero memberships in the shipping f
     sb.init({
       register: auth.registerSupabaseDataBackend,
       getClient: () => (client || {
-        from: () => ({ select() { return this; }, eq() { return this; }, then(res) { return res({ data: [], error: null }); } }),
+        from: () => ({ select() { return this; }, eq() { return this; }, order() { return this; }, limit() { return this; }, gt() { return this; }, then(res) { return res({ data: [], error: null }); } }),
         rpc: async () => ({ data: [], error: null }),
       }),
       getActiveLeagueId: auth.getActiveLeagueId,
@@ -11155,8 +11182,9 @@ console.log('\n[50] RG-195 — the Picks page\'s "Log Out" button is PIN-era, an
   // ── (e) WHAT MUST NOT MOVE ───────────────────────────────────────────────
   // "Player picks are editable while the slate is open" is a locked decision,
   // and the Edit button sits in the same submitted view this section edits.
-  assert(/id="edit-picks-btn">✏️ Edit My Picks<\/button>/.test(appSrc50),
-    '[50] the submitted view\'s "Edit My Picks" button is untouched (locked decision: submitting does not lock) [structural]');
+  // Breathing Room sweep (2026-10-01): the button's ✏️ emoji became the family's pencil glyph (icon('pencil')); the id, the label and the wiring are what this guards.
+  assert(/id="edit-picks-btn">\$\{icon\('pencil'\)\} Edit My Picks<\/button>/.test(appSrc50),
+    '[50] the submitted view\'s "Edit My Picks" button is untouched (locked decision: submitting does not lock) — same id and label; only its glyph is now icon(\'pencil\') [structural]');
   assert((appSrc50.match(/document\.getElementById\('logout-btn'\)\?\.addEventListener/g) || []).length === 3,
     '[50] …and all three PIN-mode handler bindings are still wired, unchanged — the fix is a render decision, not a deleted code path (they bind nothing when the button is absent, which is what `?.` is for) [structural]');
   assert((appSrc50.match(/clearSession\(\); clearPickDraft\(\); resyncPlayerPreferences\(\); renderPicksPage\(\);/g) || []).length >= 3,
@@ -12936,6 +12964,27 @@ console.log('     Standings->League resets the offset with no transition; a CLOS
   const ov4 = mkOverlay();
   app._settleLeaguePageSwipeForTest(ov4, { dismissed: true, reducedMotion: true });
   assert(document.getElementById('league-page-overlay') === null, '63-7: under reduced motion a CLOSE removes the overlay immediately');
+  app._setLeaguePageOverlayViewForTest('league');
+  // SP-53 / DI-457 (2026-10-01) — the overlay now has a THIRD pushed view, League Settings. The one-level rule is for ANY nested view (it used to be written for Standings alone):
+  // a dismissed swipe goes back to the League view on the same node, snapped with the transition suppressed; a cancelled one springs back and stays. (A swipe with an UNSAVED rename is
+  // cancelled and raises the discard sheet — that path needs a real element tree and is driven in leaguesettingsuitest.mjs [4c], where the page state exists.)
+  resetAll();
+  app._setLeaguePageOverlayViewForTest('settings');
+  const ov5 = mkOverlay();
+  ov5.style.setProperty('--league-page-drag-x', '0.62');
+  log.length = 0;
+  app._settleLeaguePageSwipeForTest(ov5, { dismissed: true, reducedMotion: false });
+  assert(app._getLeaguePageOverlayViewForTest() === 'league' && document.getElementById('league-page-overlay') === ov5 && ov5.style['--league-page-drag-x'] === '0',
+    '63-8: a dismissed swipe from League Settings goes ONE level back to the League view (same node, offset reset) — it does not close the overlay');
+  const iNoT5 = log.indexOf('set:data-no-transition'), iZero5 = log.indexOf('--league-page-drag-x=0'), iRestore5 = log.indexOf('remove:data-no-transition');
+  assert(iNoT5 > -1 && iZero5 > iNoT5 && iRestore5 > iZero5, `63-9: …with the transition suppressed first and restored after, exactly as Standings does (order ${JSON.stringify(log)})`);
+  app._setLeaguePageOverlayViewForTest('settings');
+  const ov6 = mkOverlay();
+  ov6.style.setProperty('--league-page-drag-x', '0.2');
+  app._settleLeaguePageSwipeForTest(ov6, { dismissed: false, reducedMotion: false });
+  assert(ov6.style['--league-page-drag-x'] === '0' && app._getLeaguePageOverlayViewForTest() === 'settings', '63-10: a cancelled swipe on League Settings springs back and stays there');
+  app._leaguePageOverlayGoBackForTest();
+  assert(app._getLeaguePageOverlayViewForTest() === 'league', '63-11: the back control from League Settings is one level (to League), never out of the overlay');
   app._setLeaguePageOverlayViewForTest('league');
 }
 
@@ -15534,9 +15583,13 @@ console.log('\n[79] REVIEWER R3 — Join from the pill sheet runs the league swi
     const hydrateLeagues = [];
     const dataClient = {
       from: () => {
+        // SB-01 / RG-265 — hydrate() pages every read (order, limit, keyset gt past page one). Every
+        // table here is empty, so an empty first page ends each read: still ONE league-scoped request
+        // per table, which is what `hydrateLeagues` counts.
         const q = {
           select() { return q; },
           eq(col, val) { if (col === 'league_id') hydrateLeagues.push(val); return q; },
+          order() { return q; }, limit() { return q; }, gt() { return q; },
           then(res) { return res({ data: [], error: null }); },
         };
         return q;

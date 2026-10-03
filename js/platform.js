@@ -76,3 +76,29 @@ export function isNativeOrigin() {
 export function getAuthPath() {
   return isNativeOrigin() ? 'native' : 'web-pkce';
 }
+
+/**
+ * openExternalUrl(url) — open an https page OUTSIDE the app: the system in-app Safari sheet (the Capacitor Browser plugin, SFSafariViewController)
+ * in the native shell, a new browser tab on the web (Social Platform News, DI-378 / S-C4, 2026-10-01). PARITY-BY-DESIGN pair: native gets the
+ * real in-app browser because the plugin is installed; the web has no equivalent, so it gets the browser's own tab.
+ *
+ * GENERIC ON PURPOSE (S-C4): this function does NO host allow-listing — that belongs to the caller (js/newsCard.js's `parseArticleUrl`,
+ * which hands it only its own WHATWG-serialized output). It carries one floor of its own, independent of any caller: it opens NOTHING that
+ * is not a string starting `https://`. The web tab is opened with `noopener,noreferrer` so third-party content never receives a live
+ * `window.opener` back to this app (specified on its own security merits; the app's one other bare `window.open` is not a precedent).
+ * Returns true when an open was attempted. Never throws. Zero top-level side effects, like the rest of this file.
+ */
+export function openExternalUrl(url) {
+  if (typeof url !== 'string' || !/^https:\/\//i.test(url)) return false;
+  try {
+    if (isNativeShell() && typeof window.Capacitor.Plugins?.Browser?.open === 'function') {
+      window.Capacitor.Plugins.Browser.open({ url });
+      return true;
+    }
+    if (typeof window !== 'undefined' && typeof window.open === 'function') {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return true;
+    }
+  } catch { /* a failed open is invisible; the card stays where it was */ }
+  return false;
+}

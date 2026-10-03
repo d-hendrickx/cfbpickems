@@ -1199,19 +1199,21 @@ function quoteHTML(m) {
 export const _quoteHTMLForTest = quoteHTML;
 
 /**
- * `trailing` (2026-09-10, E1 follow-up) — extra content pinned to the RIGHT
- * end of this same row. Today its only caller passes persistentStarHTML().
- * It exists so the persistent ⭐ REUSES the existing reactions row instead of
- * adding a second footer row (explicit design input: "reuse that row, do not
- * add a new row; keep compact density per RG-20/34"). When `trailing` is ''
- * — every non-SCRIBE message, and every message with instrumentation off —
- * this function's output is byte-for-byte what it was before, including the
- * empty-string early return.
+ * `trailingButtonHTML` (2026-09-10, E1 follow-up; renamed from `trailing` for
+ * SB-24, reviewer F2, so xsstest's exact-text exemption for this markup
+ * parameter cannot silently cover some future `${trailing}`) — extra content
+ * pinned to the RIGHT end of this same row. Today its only caller passes
+ * persistentStarHTML(). It exists so the persistent ⭐ REUSES the existing
+ * reactions row instead of adding a second footer row (explicit design input:
+ * "reuse that row, do not add a new row; keep compact density per
+ * RG-20/34"). When it is '' — every non-SCRIBE message, and every message
+ * with instrumentation off — this function's output is byte-for-byte what it
+ * was before, including the empty-string early return.
  */
-function reactionsHTML(m, self, trailing = '') {
+function reactionsHTML(m, self, trailingButtonHTML = '') {
   const entries = Object.entries(m.reactions || {});
-  if (!entries.length && !trailing) return '';
-  if (!entries.length) return `<div class="chat-reactions">${trailing}</div>`;
+  if (!entries.length && !trailingButtonHTML) return '';
+  if (!entries.length) return `<div class="chat-reactions">${trailingButtonHTML}</div>`;
   // UN-114: attribution moved off `title` (removed below) and onto an
   // always-visible line — tooltips don't fire on touch, the exact
   // anti-pattern already named three times in this codebase (see
@@ -1219,7 +1221,7 @@ function reactionsHTML(m, self, trailing = '') {
   // is unchanged.
   const pills = entries.map(([emoji, who]) =>
     `<button class="chat-react-pill${who.includes(self) ? ' me' : ''}" data-react="${esc(emoji)}" data-target="${esc(m.id)}">${esc(emoji)} ${who.length}</button>`).join('');
-  return `<div class="chat-reactions">${pills}${trailing}</div>${reactionNamesHTML(entries)}`;
+  return `<div class="chat-reactions">${pills}${trailingButtonHTML}</div>${reactionNamesHTML(entries)}`;
 }
 
 /**
@@ -2327,7 +2329,7 @@ function messageHTML(m, self, showNewDivider) {
       ${m.deleted ? '' : whatsNewLinkHTML(m)}
       ${m.deleted ? '' : wagerAckHTML(m, self)}
       ${m.deleted ? '' : `<div class="chat-quick-react-row">
-        ${QUICK_REACT_PALETTE.map(em => `<button type="button" class="chat-act chat-quick-react-btn" data-quick-react="${esc(m.id)}" data-emoji="${esc(em)}" title="React ${esc(em)}">${em}</button>`).join('')}
+        ${QUICK_REACT_PALETTE.map(em => `<button type="button" class="chat-act chat-quick-react-btn" data-quick-react="${esc(m.id)}" data-emoji="${esc(em)}" title="React ${esc(em)}">${esc(em)}</button>`).join('')}
       </div>
       <div class="chat-actions">
         ${isScribeFeedbackEnabled() ? feedbackButtonHTML(m, self) : ''}
@@ -2752,15 +2754,23 @@ export function renderChatPage() {
     }
   }
 
-  // Mark read after the view has been visibly open for 1s (spec)
+  scheduleMarkRead();
+}
+
+// Mark read after the view has been visibly open for 1s (spec)
+function scheduleMarkRead() {
   clearTimeout(U.markTimer);
   U.markTimer = setTimeout(() => {
+    U.markTimer = null;
     if (!chatPageActive()) return;
     markSeen(U.filter === 'all' || U.filter === 'records' || U.filter === 'mentions' ? 'all' : U.filter);
     updateChatBadges();
     renderPillsOnly();
   }, 1000);
 }
+/** SB-20 sibling — chatscopetest §[20]: a pending mark is observable and cancellable. */
+export const _scheduleMarkReadForTest = scheduleMarkRead;
+export function _markReadPendingForTest() { return U.markTimer !== null; }
 
 function renderPillsOnly() {
   _abbrMemo.clear();                                 // per-pass cache only (see abbrMapFor)
@@ -3603,7 +3613,7 @@ function toggleMessageReactPicker(anchorEl, mid, renderFn = renderChatPage) {
   picker.className = 'reaction-picker';
   picker.id = 'chat-react-picker';
   picker.dataset.mid = mid;
-  picker.innerHTML = REACTION_PALETTE.map(em => `<button type="button" class="reaction-pick-option" data-emoji="${esc(em)}">${em}</button>`).join('');
+  picker.innerHTML = REACTION_PALETTE.map(em => `<button type="button" class="reaction-pick-option" data-emoji="${esc(em)}">${esc(em)}</button>`).join('');
   host.appendChild(picker);
   picker.querySelectorAll('[data-emoji]').forEach(opt => opt.addEventListener('click', ev => {
     ev.stopPropagation();
@@ -4272,7 +4282,7 @@ export function prefsPanelHTML() {
     <div class="chat-prefs-row"><span class="text-muted" style="font-size:.75rem">Your commissioner can also set this for you.</span></div>
     <div class="chat-prefs-row"><label>Accent</label>
       <div class="chat-accent-row">${ACCENTS.map(a =>
-        `<button class="chat-accent-swatch${a === accent ? ' active' : ''}" data-accent="${a}" style="background:${a}"></button>`).join('')}
+        `<button class="chat-accent-swatch${a === accent ? ' active' : ''}" data-accent="${esc(a)}" style="background:${esc(a)}"></button>`).join('')}
         <button class="chat-accent-swatch chat-accent-none${!accent ? ' active' : ''}" data-accent="" title="Default">∅</button></div></div>
     <!-- ── THREE ROWS HIDDEN 2026-09-24 (Option A, Drew) ─────────────────────
          "Toasts" (pref-toasts), "Stays for" (pref-toast-duration, 3s/6s/10s/
@@ -4295,7 +4305,7 @@ export function prefsPanelHTML() {
     <!-- Build 3, Group D (2026-09-11, DI-D4) — the entry point to "My SCRIBE
          File." Rationale in the JS comment above this function; note that
          this markup lives inside a template literal, so no backticks. -->
-    <div class="chat-prefs-row"><label>SCRIBE</label>
+    <div class="chat-prefs-row chat-prefs-row-wrap"><label>SCRIBE</label>
       <button class="btn btn-secondary btn-sm" id="scribe-file-btn" data-scribe-file="1">📁 My SCRIBE File</button></div>
   </div>`;
 }
@@ -5319,6 +5329,13 @@ function maybeAnniversary() {
  */
 function handleChatEvent(kind, detail) {
   if (kind === 'events') {
+    // SB-20 sibling — a mark-read scheduled for the room that was just emptied
+    // belongs to that room: it would advance the NEW room's read cursor to
+    // whatever head the store holds when it fires, before the reader has seen
+    // anything there. Cancelled; the repaint below schedules the new room's own.
+    // (chat.js markSeen() also refuses a store whose league is not the active
+    // one, which covers the switch window before this notification arrives.)
+    if (detail?.rescoped === true) { clearTimeout(U.markTimer); U.markTimer = null; }
     updateChatBadges();
     // ── BOTH IN-APP ANNOUNCEMENT PATHS REMOVED 2026-09-24 (Option A, Drew) ──
     //

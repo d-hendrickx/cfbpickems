@@ -16,7 +16,7 @@
 </head>
 <body>
   <h1>Privacy</h1>
-  <p class="muted">Munera (irbfootball.com and the Munera iPhone app) · last updated 2026-09-30</p>
+  <p class="muted">Munera (irbfootball.com and the Munera iPhone app) · last updated 2026-10-02</p>
 
   <p>Munera, first built as IRB Pick 'Ems, is a pick'em app for private leagues of friends. Leagues are private: you see a league only if you are a member, and you become a member only when its commissioner adds you or you use a code shared from inside the league. This page says plainly what the app stores, who can see it, and who helps us run it.</p>
 
@@ -24,7 +24,7 @@
   <ul>
     <li><strong>Your sign-in details.</strong> If you sign in with Google: your Google account name and email address. We never see your Google password. If you create an account with an email address instead: that email address and a password. Your password is handled by our sign-in provider (Supabase), and the app does not store it.</li>
     <li><strong>How we use your email address:</strong> to sign you in, to match you to your league record, and so your league's commissioners can manage membership. If you sign in with Google, your Google account name becomes your starting league nickname when you join a league with an invite code; you can change it.</li>
-    <li><strong>What you do in the league</strong>: your picks, tiebreaker and Extra Point guesses, chat messages and reactions, wagers you log in chat, league nickname, initials, alma mater, and your display and notification preferences. League records such as results, standings and obligations (who owes whom) are built from these.</li>
+    <li><strong>What you do in the league</strong>: your picks, tiebreaker and Extra Point guesses, chat messages and reactions, wagers you log in chat, league nickname, initials, alma mater, and your display, notification and News preferences. League records such as results, standings and obligations (who owes whom) are built from these.</li>
     <li><strong>Optional contact details</strong> you enter yourself, such as a phone number for reminders.</li>
     <li><strong>SCRIBE's notes</strong>: SCRIBE keeps notes about league moments and about each player, such as running jokes, along with the limits you set on what it says about you. Where your league shows My SCRIBE File, you and your league's commissioners can see the notes about you there, and you can delete any of them except those worked out automatically from league results.</li>
     <li><strong>Push notifications</strong>: your notification preferences and, while you are signed in, an identifier we assign and give to our push provider (OneSignal) so the right notifications reach you. That identifier is not your name or email address. If you turn on push notifications, OneSignal also receives a device token.</li>
@@ -36,7 +36,7 @@
 
   <h2>Who can see it</h2>
   <ul>
-    <li><strong>Members of your league</strong> see your name, picks (only after games go live), records, chat, standings, obligations, and your league profile (nickname, initials, alma mater, and notification and display preferences). Nobody in your league, including the commissioner, can see another player's picks while a week is still open.</li>
+    <li><strong>Members of your league</strong> see your name, picks (only after games go live), records, chat, standings, obligations, and your league profile (nickname, initials, alma mater, and notification, display and News preferences). Nobody in your league, including the commissioner, can see another player's picks while a week is still open.</li>
     <li><strong>Your league's commissioners</strong> can see your email address, any phone number you provide, the app version on your devices, and the league's history of membership changes, in order to manage membership. They can also see your SCRIBE notes.</li>
     <li><strong>The app's administrator</strong> (the person who runs the service) can see league data to fix problems.</li>
     <li><strong>SCRIBE</strong>, the league's AI character, uses league content as described below.</li>
@@ -53,7 +53,7 @@
     <li><strong>OneSignal</strong> delivers push notifications. It receives the identifier we assign, your device token if you turn push on, and each notification, which can include a league's name, the sender's nickname and a short preview of a chat message. Its software also collects technical information it needs to deliver notifications and to count how many are opened.</li>
     <li><strong>Anthropic</strong> provides the AI model behind SCRIBE, as described above.</li>
     <li><strong>GitHub Pages</strong> hosts the website.</li>
-    <li><strong>ESPN</strong> provides live scores and team logos through its public scoreboard. Your browser or phone asks ESPN for these directly, so ESPN sees your IP address as any website would; nothing about your account is sent. If the app can't reach ESPN's scoreboard or team list directly, the request may be relayed through a public relay service (allorigins, corsproxy.io or codetabs), which likewise sees your IP address and the address requested, and nothing about your account. Our server also fetches scores from ESPN on the league's behalf.</li>
+    <li><strong>ESPN</strong> provides live scores and team logos through its public scoreboard and, when News is on, sports headlines and their pictures. Your browser or phone asks ESPN for these directly, so ESPN sees your IP address as any website would; nothing about your account is sent. If the app can't reach ESPN's scoreboard or team list directly, the request may be relayed through a public relay service (allorigins, corsproxy.io or codetabs), which likewise sees your IP address and the address requested, and nothing about your account. Headlines are never relayed. Our server also fetches scores from ESPN on the league's behalf. Turning News off stops the headline requests. Tapping a headline opens ESPN's website (on iPhone, inside the app), under ESPN's own privacy policy.</li>
   </ul>
   <p>Before September 2026, IRB Pick 'Ems kept its league data in a private Google Sheet. That Sheet is now a read-only archive and receives no new data.</p>
 
@@ -66,7 +66,7 @@
 
   <h2>Your choices</h2>
   <ul>
-    <li>You can edit your league nickname, initials, alma mater, and notification settings in the app at any time.</li>
+    <li>You can edit your league nickname, initials, alma mater, and notification and News settings in the app at any time.</li>
     <li>You can turn push notifications off on your device or in the app.</li>
     <li>You can delete your account yourself in the app, under Profile → Delete Account.</li>
     <li>You can ask the commissioner to unlink your account, or ask the administrator to delete your account and personal details. Email the address below.</li>

@@ -436,7 +436,13 @@ console.log('\n[12] CSS — token-only, the sheet\'s shell, motion tokens, ≥60
   const css = src('./css/styles.css');
   const i = css.indexOf('UN-389 / DI-446 (2026-09-30) — THE DELETE ACCOUNT SHEET');
   assert(i > -1, '[12a] fixture: the Delete Account CSS block is present');
-  const block = css.slice(i);
+  // SP-56 (2026-09-30) — BOUNDED, not sliced to EOF (the layouttest A10k precedent, PASS 1b 2026-09-20). This slice used to run to the literal end of styles.css, which
+  // was harmless only until a later thread appended its own block below: DI-473's append-only `.stand-*` block carries the one white-on-maroon `color:#fff`
+  // (the same declaration `.dashboard-table th` makes) and [12b] answered for it as if the Delete Account sheet had regressed. The block ends where the next
+  // banner-style comment ("/* ── …") begins — the convention an appended block opens with; nothing inside the Delete Account block uses it.
+  const nextBanner = css.indexOf('\n/* ── ', i + 1);
+  const block = css.slice(i, nextBanner > i ? nextBanner : undefined);
+  assert(block.length > 800, '[12a2] fixture: the bounded Delete Account CSS block is non-trivial (a bound that cut it to nothing would make [12b]/[12c] vacuous)');
   const noComments = block.replace(/\/\*[\s\S]*?\*\//g, '');
   assert((noComments.match(/#[0-9a-fA-F]{3,8}\b/g) || []).length === 0, '[12b] no hardcoded hex colour in the block');
   assert((noComments.match(/rgba?\([^)]*\)/g) || []).length === 0, '[12c] no literal colour at all (the block uses tokens only)');
