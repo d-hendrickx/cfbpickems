@@ -2301,6 +2301,23 @@ function __xssNewsCanary(evil) { return \`<b>\${evil.newsText}</b>\`; }`;
     assert(!!j3 && sweepFile('js/home.js', j3).some(h => /JOIN_NUDGE_COPY\.title/.test(h.expr)), '[9c-1f-j3] MUTATION: removing escHtml() from the join nudge\'s title IS reported');
     assert(!!j4 && sweepFile('js/home.js', j4).some(h => h.expr === 'a.action'), '[9c-1f-j4] MUTATION: removing escHtml() from the button the nudge shares with every Home card (its action) IS reported');
   }
+  // W-105 (DI-W105-5, 2026-10-17): the finished-game card's team marks. home.js builds the row ONLY through keyed-list.js teamLockupHTML (which requires the injected escaper and escapes the name,
+  // the abbreviation and the logo URL at its sink). Proven three ways: a hostile name / abbreviation / URL renders inert end to end; removing escHtml() from the lockup's abbreviation, or interpolating a
+  // team name straight into the marks row in home.js, IS reported by the sweep (both files sweep at zero, so a new raw site cannot hide).
+  {
+    const homeMod = await import('./js/home.js');
+    const ATTR_PAYLOAD = '1" autofocus onfocus="alert(1)';   // the same attribute-breakout payload [18] uses (declared there, later in this file)
+    const appEsc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');   // the app's escHtml shape (no apostrophe)
+    const gf = { id: 'gf', type: 'game.final', weekId: 'w', gameId: 'g', reason: 'In this week\'s slate', sortKey: new Date().toISOString(), facts: { awayTeam: PAYLOAD, homeTeam: 'B', awayScore: 1, homeScore: 2, atsWinnerTeam: null, chips: [] } };
+    const html = homeMod.cardHTML(gf, { escHtml: appEsc, formatKickoff: String, marksFor: () => ({ away: { name: PAYLOAD, abbr: PAYLOAD, logoUrl: 'https://a.espncdn.com/x.png' + ATTR_PAYLOAD }, home: { name: ATTR_PAYLOAD, abbr: '"><svg onload=1>', logoUrl: null } }) });
+    assert(/class="feed-card-marks"/.test(html) && !html.includes(PAYLOAD) && !html.includes(ATTR_PAYLOAD) && !/<svg onload|<img src=x/i.test(html) && /&lt;IMG /.test(html) && /&quot; autofocus onfocus=&quot;/.test(html),
+      '[9c-1f-w1] W-105: a hostile team name, abbreviation and logo URL in the finished-game marks row render INERT (escaped at the lockup\'s sink)');
+    const mut = (src, from, to) => { const out = src.replace(from, to); return out !== src ? out : null; };
+    const k1 = mut(SRC['js/keyed-list.js'], '<span class="tl-abbr">${escHtml(short)}</span>', '<span class="tl-abbr">${short}</span>');
+    const h1 = mut(SRC['js/home.js'], "return joinHtml(['<div class=\"feed-card-marks\" aria-hidden=\"true\">', lockup(away), lockup(home), '</div>']);", "return `<div class=\"feed-card-marks\" aria-hidden=\"true\">${away.name}${lockup(away)}${lockup(home)}</div>`;");
+    assert(!!k1 && sweepFile('js/keyed-list.js', k1).some(h => h.expr === 'short'), '[9c-1f-w2] MUTATION: removing escHtml() from the lockup\'s abbreviation (the marks row\'s text) IS reported by the sweep');
+    assert(!!h1 && sweepFile('js/home.js', h1).some(h => h.expr === 'away.name'), '[9c-1f-w3] MUTATION: a team name interpolated straight into home.js\'s marks row IS reported by the sweep');
+  }
   // D1 Lane C (2026-10-08): the two Admin card renderers and the chips sweep clean at ZERO with no exemptions - the same loop, the same canary - and the zero is a REAL zero for the fields that matter:
   // remove the esc() from the class label, the tier pill, the sheet's class attribute, the status row's id/label or a chip's publisher label in a scratch copy and the sweep REPORTS that site.
   for (const f of ['js/scribe-routes-card.js', 'js/content-status-card.js', 'js/source-chips.js']) {

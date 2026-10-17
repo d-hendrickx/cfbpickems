@@ -941,6 +941,40 @@ try {
     const ms = await measure(page(PUSHED_WRAP(CARD_DETAIL.actions), { css: short }), cdActionsMeasure, { w: 375 });
     assert(ms.minH >= 0, `[10h] (the shipped .btn already floors at 46 pt, so dropping the detail's own 44 pt rule alone changes nothing: ${ms.minH} pt — the 44 pt floor holds twice)`);
   }
+
+  // ── [11] W-105 (DI-W105-5, 2026-10-17): the finished-game card's team marks, the REAL cardHTML with marksFor, in Home's feed chain ─────────────────────────────────────────
+  console.log('\n[11] The finished-game card\'s team marks: 8 pt under the eyebrow and above the title, two 48 pt lockups 8 pt apart, leading-aligned 16 pt in, at 320 / 375 and 1x / 2x…');
+  {
+    const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const gf = { id: 'gf_w105', type: 'game.final', sport: 'cfb', weekId: 'w7', gameId: 'g1', reason: "In this week's slate", sortKey: '2026-10-17T20:00:00.000Z',
+      facts: { awayTeam: 'Texas', homeTeam: 'Oklahoma', awayScore: 31, homeScore: 24, atsWinnerTeam: 'Texas', marginCovered: '4', chips: [{ playerId: 'p1', initials: 'DH', result: 'win' }, { playerId: 'p2', initials: 'KL', result: 'loss' }] } };
+    const marksFor = () => ({ away: { name: 'Texas', abbr: 'TEX', logoUrl: 'https://a.espncdn.com/i/teamlogos/ncaa/500/251.png' }, home: { name: 'Oklahoma', abbr: 'OU', logoUrl: null } });
+    const cardMarkup = HOMEMOD.cardHTML(gf, { escHtml: esc, formatKickoff: String, now: Date.parse('2026-10-17T21:00:00.000Z'), formatDate: HOMEMOD.dateFormatterFor('ET'), marksFor });
+    assert(/class="feed-card-marks"/.test(cardMarkup) && (cardMarkup.match(/data-team-lockup/g) || []).length === 2, '[11-0] fixture: the REAL cardHTML drew a marks row with two lockups (one with its logo, one the abbreviation circle)');
+    const feedWrap = (inner) => mainWrap(`<div id="home-root"><div class="home-feed"><div class="feed-item">${inner}</div></div></div>`);
+    const marksMeasure = () => {
+      const card = document.querySelector('.feed-card'), eb = card.querySelector('.feed-card-eyebrow'), row = card.querySelector('.feed-card-marks'), title = card.querySelector('.feed-card-title');
+      const tls = [...row.querySelectorAll('.tl')].map(R), cb = contentBox(card), rr = R(row);
+      const lockTop = Math.min(...tls.map((t) => t.t)), lockBottom = Math.max(...tls.map((t) => t.b));   // the LOCKUPS (what the eye sees), not the row's box
+      return { above: +(lockTop - R(eb).b).toFixed(2), below: +(R(title).t - lockBottom).toFixed(2), sizes: tls.map((t) => `${+t.w.toFixed(1)}x${+t.h.toFixed(1)}`), between: tls.length === 2 ? +(tls[1].l - tls[0].r).toFixed(2) : null,
+        leftInset: +(tls[0].l - cb.l).toFixed(2), cardInset: +(cb.l - R(card).l).toFixed(2), overflowX: document.documentElement.scrollWidth > innerWidth + 1, insideCard: rr.r <= cb.r + 0.5 };
+    };
+    const marksOk = (m) => Math.abs(m.above - 8) < 0.6 && Math.abs(m.below - 8) < 0.6 && m.sizes.length === 2 && m.sizes.every((x) => x === '48x48') && Math.abs(m.between - 8) < 0.6 && Math.abs(m.leftInset) < 0.6 && m.cardInset >= 15.5 && !m.overflowX && m.insideCard;
+    for (const mode of MODES) {
+      for (const w of [320, 375]) {
+        for (const scale of [1, 2]) {
+          const m = await measure(page(feedWrap(cardMarkup), { attrs: mode.attrs }), marksMeasure, { w, scale });
+          assert(marksOk(m), `[11a] ${mode.name}, ${w} wide, ${scale}x: the marks row sits ${m.above} pt under the eyebrow and ${m.below} pt above the title (8/8), the lockups are ${m.sizes.join(' and ')} (48 pt), ${m.between} pt apart (8), leading-aligned ${m.leftInset} from the content edge, ${m.cardInset} pt from the card edge (16); no overflow`);
+        }
+      }
+    }
+    const tight = sheet((c) => c.replace('.feed-card-marks{display:flex;align-items:center;gap:8px}', '.feed-card-marks{display:flex;align-items:center;gap:0}'));
+    const mt = await measure(page(feedWrap(cardMarkup), { css: tight }), marksMeasure, { w: 375 });
+    assert(!marksOk(mt) && mt.between < 1, `[11b] anti-vacuity: with the row's gap removed the two lockups touch (${mt.between} pt) and the detector goes red`);
+    const shoved = sheet((c) => c.replace('.feed-card-marks{display:flex;align-items:center;gap:8px}', '.feed-card-marks{display:flex;align-items:center;gap:8px;padding-top:8px}'));
+    const ms = await measure(page(feedWrap(cardMarkup), { css: shoved }), marksMeasure, { w: 375 });
+    assert(!marksOk(ms) && ms.above > 15, `[11c] anti-vacuity: a row that pads its own top puts the lockups ${ms.above} pt under the eyebrow (not 8) and the detector goes red`);
+  }
 } catch (e) {
   fail++;
   console.error('  ❌ the engine section threw: ' + (e && e.stack || e));

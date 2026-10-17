@@ -4,8 +4,9 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.30.1';
-// v0.30.1 (W-92, the Home feed fix) ships 2026-10-17 (Drew: "Tonight (~3:30–4 AM)"); if the deploy lands on a different day, set this and WHATS_NEW_RELEASES[0].date to that day together (whatsnewtest pins them equal).
+export const APP_VERSION = 'v0.30.2';
+// v0.30.2 (W-105, the Home visuals: whole news headlines, team marks on finished-game cards, the news picture rhythm) ships 2026-10-17; if the deploy lands on a different
+// day, set this and WHATS_NEW_RELEASES[0].date to that day together (whatsnewtest pins them equal). v0.30.1 (W-92, the Home feed fix) shipped 2026-10-17.
 export const APP_VERSION_DATE = '2026-10-17';
 
 /**
@@ -139,7 +140,19 @@ export const APP_VERSION_DATE = '2026-10-17';
 // out of the player list on purpose, as in v0.25.0.
 // Release v0.30.1 (2026-10-17) — W-92, the Home feed fix (Drew "approve M-61"). ONE line, the coordinator's, which Drew sees before the deploy. It is the
 // FIRST `added` item, so it is also SCRIBE's chat-post headline (whatsNewHeadline()'s 90-character cut: it is 72). Nothing else ships in this release.
+// Release v0.30.2 (2026-10-17) — W-105, the Home visuals (Drew "approve M-62 to M-65 as recommended"). The DI's FALLBACK first line ships: the photo claim
+// ("Home shows more photos, …") waits until the news-site picture pins (DI-W105-6, Drew-run SQL) are run and the live check shows pictures (the coordinator's
+// ruling 3). The first line is SCRIBE's chat-post headline (42 characters, inside the 90-character cut).
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.30.2',
+    date: '2026-10-17',
+    added: [
+      'News headlines on Home now appear in full.',
+      'With Team logos on, finished-game cards on Home show both teams\' logos.',
+    ],
+    fixed: [],
+  },
   {
     version: 'v0.30.1',
     date: '2026-10-17',
@@ -1133,7 +1146,7 @@ import * as LC from './league-create.js';
 import * as AX from './account-exit.js'; import * as LS from './league-settings.js'; import * as LSV from './league-settings-view.js'; import { waiveControlsHTML } from './league-settings-view.js'; // SP-53 (2026-10-01): League Settings — the pure text half, then the rendered half (kept on this line so no pinned line number below it moves)
 import { listProfiles, getProfile } from './sports/index.js';
 // Social Platform Home (v0.29.0, DI-366/370/372, HOME_WIRING_CHECKLIST_100126): the Home renderer and its chat-candidate source. Built lazily by getHomeWiring() below, never at module scope.
-import { createHome, makeChatCandidateSource, shortWhen } from './home.js';
+import { createHome, makeChatCandidateSource, shortWhen, scrollPageBy } from './home.js';
 // D1 Lane B (2026-10-07, DI-570 / DI-579): the one game-state vocabulary (stale / awaiting / no-score are honest words, not silence) and the viewer's game ORDER (Kickoff · Live first · My order).
 // Both are pure leaf modules; the preference's seam is storage.js (the player record, never the league-shared settings).
 import { gameStateOf } from './game-state.js';
@@ -6165,10 +6178,18 @@ function ensureHomeRoot() {
     root = page.querySelector('#home-root');
   }
   if (root && _homeBoundRoot !== root && _homeWiring) {
-    try { _homeWiring.homeNews.bindEvents(root); } catch (e) { console.warn('[home] news events could not be bound', e); }   // default opener only: no custom onOpen (security C2)
+    // default opener only: no custom onOpen (security C2). W-105 (DI-W105-4): a news picture that fails ABOVE the viewport is removed at once and the page scrolls up by
+    // exactly its height (instant, through home.js's scrollPageBy, which pauses the tab bar's hide-on-scroll), so what the reader is looking at does not move.
+    try { _homeWiring.homeNews.bindEvents(root, { onPictureRemoved: holdHomePlaceForPicture }); } catch (e) { console.warn('[home] news events could not be bound', e); }
     _homeBoundRoot = root;
   }
   return root;
+}
+
+/** W-105 (DI-W105-4): the news binder's `onPictureRemoved` hook on Home — only a picture removed ABOVE the viewport moves the page, by exactly its height, upward and instantly. */
+function holdHomePlaceForPicture({ removedPx, aboveViewport } = {}) {
+  if (aboveViewport !== true || !Number.isFinite(removedPx) || removedPx <= 0) return false;
+  return scrollPageBy(-removedPx, 'instant');
 }
 
 /** Home's two actions (HOME_ACTIONS): the renderer has already validated the action and the tab against its allow-lists before this runs. */
@@ -34105,6 +34126,17 @@ export function refreshAuthUI(event, payload) {
   // closed, which loses nothing and leaks nothing.
   const discard = (event === 'SIGNED_OUT' && !expiry) || event === 'SWITCH_END';
   applyIdentityDeltaIfChanged(`event:${event}`, { expiry, discard });
+  // ── THE PLATFORM_KV RE-READ THE CHOKEPOINT RE-ARMS (bugfix 2026-10-17, authtest [56c]) ──
+  // The chokepoint clears every platform_kv value (offered sports, the creation gate, the banner) and re-arms the fetch latch, synchronously and with no network
+  // call (S-4). The boot tail was the only fetch trigger, and on every cold load of a player IN a league the membership read moves the tuple (player null -> id)
+  // AFTER the boot read has answered, so offered_sports sat at [] for the page load and the commissioner's Add a sport never drew. Re-read here, on the event
+  // the chokepoint just handled, under the boot tail's own guard (one read per re-arm, not per event), for a signed-in account (anon has no grant) whose
+  // memberships have resolved (before that the tuple is still moving, and the next event re-arms it again).
+  if (getAuthMode() === 'supabase' && !hasAttemptedMaintenanceBannerFetch() && !!getAccountUserId() && hasResolvedMemberships()) {
+    refreshMaintenanceBannerCache()
+      .then(() => _repaintMaintenanceBannerSurface())
+      .catch((e) => console.warn('[auth] platform_kv re-read after an identity change failed', e));
+  }
   // ── C-U3 — A RESOLVED MEMBERSHIP LIST CAN END THE CHAT STORE'S LEAGUE ──────
   // A leave or a removal that leaves 0 or 2+ leagues drops the pointer to null,
   // and chat.js must read a null league as "not resolved yet" (it HOLDS through a

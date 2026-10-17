@@ -1,0 +1,95 @@
+{
+ "comment": "Add-a-sport row bugfix mutation kit (S-3), fix/add-sport-row, 2026-10-17. Run with tests/kits/addsport-row-mutants.mjs. Each mutant is one exact-text replacement in js/app.js and names the suites that must go RED; `red` is the total red count observed when recorded. Recorded 2026-10-17 on ce52469f: 7 run, 7 RED (A1 authtest 4 + boottest 2; A2 5+1; A3 1+1; A4 1+1; A5 5+1; A6 boottest 1; A7 boottest 6 + authtest 10), 0 survivors, tree restored byte-identical.",
+ "mutants": [
+  {
+   "id": "A1",
+   "group": "fix",
+   "what": "the fix reverted: refreshAuthUI makes no platform_kv re-read after the chokepoint (the shipped v0.30.1 code)",
+   "file": "js/app.js",
+   "old": "  if (getAuthMode() === 'supabase' && !hasAttemptedMaintenanceBannerFetch() && !!getAccountUserId() && hasResolvedMemberships()) {\n    refreshMaintenanceBannerCache()\n      .then(() => _repaintMaintenanceBannerSurface())\n      .catch((e) => console.warn('[auth] platform_kv re-read after an identity change failed', e));\n  }\n",
+   "new": "",
+   "suites": [
+    "authtest.mjs",
+    "boottest.mjs"
+   ],
+   "red": 6
+  },
+  {
+   "id": "A2",
+   "group": "guard",
+   "what": "the latch guard dropped: the re-read fires on every auth event, not once per re-arm",
+   "file": "js/app.js",
+   "old": "!hasAttemptedMaintenanceBannerFetch() && !!getAccountUserId() && hasResolvedMemberships()) {\n    refreshMaintenanceBannerCache()",
+   "new": "!!getAccountUserId() && hasResolvedMemberships()) {\n    refreshMaintenanceBannerCache()",
+   "suites": [
+    "authtest.mjs",
+    "boottest.mjs"
+   ],
+   "red": 6
+  },
+  {
+   "id": "A3",
+   "group": "guard",
+   "what": "the resolved-memberships guard dropped: the re-read fires while the tuple is still moving (account adopted, membership read out) (authtest's [30](b) fixture throws at top level: one crash, counted as 1)",
+   "file": "js/app.js",
+   "old": " && hasResolvedMemberships()) {\n    refreshMaintenanceBannerCache()",
+   "new": ") {\n    refreshMaintenanceBannerCache()",
+   "suites": [
+    "authtest.mjs",
+    "boottest.mjs"
+   ],
+   "red": 2
+  },
+  {
+   "id": "A4",
+   "group": "guard",
+   "what": "the signed-in-account guard dropped (killed by the source pin and by authtest)",
+   "file": "js/app.js",
+   "old": " && !!getAccountUserId() && hasResolvedMemberships()) {",
+   "new": " && hasResolvedMemberships()) {",
+   "suites": [
+    "authtest.mjs",
+    "boottest.mjs"
+   ],
+   "red": 2
+  },
+  {
+   "id": "A5",
+   "group": "order",
+   "what": "the re-read moved BEFORE the chokepoint (the chokepoint then clears what it just asked for)",
+   "file": "js/app.js",
+   "old": "  applyIdentityDeltaIfChanged(`event:${event}`, { expiry, discard });\n  // ── THE PLATFORM_KV RE-READ THE CHOKEPOINT RE-ARMS (bugfix 2026-10-17, authtest [56c]) ──\n  // The chokepoint clears every platform_kv value (offered sports, the creation gate, the banner) and re-arms the fetch latch, synchronously and with no network\n  // call (S-4). The boot tail was the only fetch trigger, and on every cold load of a player IN a league the membership read moves the tuple (player null -> id)\n  // AFTER the boot read has answered, so offered_sports sat at [] for the page load and the commissioner's Add a sport never drew. Re-read here, on the event\n  // the chokepoint just handled, under the boot tail's own guard (one read per re-arm, not per event), for a signed-in account (anon has no grant) whose\n  // memberships have resolved (before that the tuple is still moving, and the next event re-arms it again).\n  if (getAuthMode() === 'supabase' && !hasAttemptedMaintenanceBannerFetch() && !!getAccountUserId() && hasResolvedMemberships()) {\n    refreshMaintenanceBannerCache()\n      .then(() => _repaintMaintenanceBannerSurface())\n      .catch((e) => console.warn('[auth] platform_kv re-read after an identity change failed', e));\n  }\n",
+   "new": "  // ── THE PLATFORM_KV RE-READ THE CHOKEPOINT RE-ARMS (bugfix 2026-10-17, authtest [56c]) ──\n  // The chokepoint clears every platform_kv value (offered sports, the creation gate, the banner) and re-arms the fetch latch, synchronously and with no network\n  // call (S-4). The boot tail was the only fetch trigger, and on every cold load of a player IN a league the membership read moves the tuple (player null -> id)\n  // AFTER the boot read has answered, so offered_sports sat at [] for the page load and the commissioner's Add a sport never drew. Re-read here, on the event\n  // the chokepoint just handled, under the boot tail's own guard (one read per re-arm, not per event), for a signed-in account (anon has no grant) whose\n  // memberships have resolved (before that the tuple is still moving, and the next event re-arms it again).\n  if (getAuthMode() === 'supabase' && !hasAttemptedMaintenanceBannerFetch() && !!getAccountUserId() && hasResolvedMemberships()) {\n    refreshMaintenanceBannerCache()\n      .then(() => _repaintMaintenanceBannerSurface())\n      .catch((e) => console.warn('[auth] platform_kv re-read after an identity change failed', e));\n  }\n  applyIdentityDeltaIfChanged(`event:${event}`, { expiry, discard });\n",
+   "suites": [
+    "authtest.mjs",
+    "boottest.mjs"
+   ],
+   "red": 6
+  },
+  {
+   "id": "A6",
+   "group": "pin",
+   "what": "P-11 plant: a THIRD refreshMaintenanceBannerCache() call site, inside _repaintMaintenanceBannerSurface()",
+   "file": "js/app.js",
+   "old": "function _repaintMaintenanceBannerSurface() {\n  if (getAuthMode() !== 'supabase') return;\n",
+   "new": "function _repaintMaintenanceBannerSurface() {\n  if (getAuthMode() !== 'supabase') return;\n  if (state.__never) refreshMaintenanceBannerCache();\n",
+   "suites": [
+    "boottest.mjs"
+   ],
+   "red": 1
+  },
+  {
+   "id": "A7",
+   "group": "pin",
+   "what": "P-11 pinned line disappears: the boot-tail call removed (only refreshAuthUI's would remain)",
+   "file": "js/app.js",
+   "old": "      if (authMode === 'supabase' && sdkReady && !hasAttemptedMaintenanceBannerFetch()) {\n        refreshMaintenanceBannerCache()",
+   "new": "      if (authMode === 'supabase' && sdkReady && !hasAttemptedMaintenanceBannerFetch()) {\n        Promise.resolve()",
+   "suites": [
+    "boottest.mjs",
+    "authtest.mjs"
+   ],
+   "red": 16
+  }
+ ]
+}

@@ -96,7 +96,8 @@ export const KIT_MUTANTS = {
   'feed-retry-unrouted': ['js/newsFeed.js', "onRetry: () => { if (_openers.retryContent) _openers.retryContent(); }", 'onRetry: () => {}'],
   'feed-unbind-content-kept': ['js/newsFeed.js', "return () => { try { unNews(); } finally { unContent(); } };", 'return () => { unNews(); };'],
   'home-news-error-dropped': ['js/home.js', "    if (newsFailed) notes.push({ kind: 'news-error', key: 'news-error' });", "    if (false) notes.push({ kind: 'news-error', key: 'news-error' });"],
-  'home-story-in-slots': ['js/home.js', 'const items = eligibleNews(all.filter(it => !(it && it.cardKind)), now).slice(0, newsSlotCount(errorEntry.length + timed.length));', 'const items = eligibleNews(all.filter(it => !(it && it.cardKind)), now).slice(0, Math.max(0, newsSlotCount(errorEntry.length + timed.length) - all.filter(it => it && it.cardKind).length));'],
+  // W-105 (DI-W105-2, 2026-10-17): the pinned line is now the selectNews call (the count is still newsSlotCount over the ordinary cards; storylines and content never take a slot)
+  'home-story-in-slots': ['js/home.js', 'const items = selectNews(eligibleNews(all.filter(it => !(it && it.cardKind)), now), newsSlotCount(errorEntry.length + timed.length), newsAnchorTimes(timed, now));', 'const items = selectNews(eligibleNews(all.filter(it => !(it && it.cardKind)), now), Math.max(0, newsSlotCount(errorEntry.length + timed.length) - all.filter(it => it && it.cardKind).length), newsAnchorTimes(timed, now));'],
 };
 const mutateArg = (process.argv.find((a) => a.startsWith('--mutate=')) || '').slice(9);
 

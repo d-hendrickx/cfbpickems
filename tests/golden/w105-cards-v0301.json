@@ -1,0 +1,101 @@
+{
+  "generatedFrom": "main cd0c0702 (v0.30.1 code), js/home.js cardHTML, before W-105",
+  "now": "2026-10-17T20:00:00.000Z",
+  "cards": [
+    {
+      "id": "gf1",
+      "type": "game.final",
+      "sport": "cfb",
+      "weekId": "w7",
+      "gameId": "g1",
+      "reason": "In this week's slate",
+      "sortKey": "2026-10-17T19:20:00.000Z",
+      "facts": {
+        "awayTeam": "Texas",
+        "homeTeam": "Oklahoma",
+        "awayScore": 31,
+        "homeScore": 24,
+        "atsWinnerTeam": "Texas",
+        "marginCovered": "4",
+        "chips": [
+          {
+            "playerId": "p1",
+            "initials": "DH",
+            "result": "win"
+          },
+          {
+            "playerId": "p2",
+            "initials": "KL",
+            "result": "loss"
+          }
+        ]
+      }
+    },
+    {
+      "id": "gf2",
+      "type": "game.final",
+      "sport": "cfb",
+      "weekId": "w7",
+      "gameId": "g2",
+      "reason": "In this week's slate",
+      "sortKey": "2026-10-17T17:00:00.000Z",
+      "facts": {
+        "awayTeam": "Clemson",
+        "homeTeam": "Duke",
+        "awayScore": 10,
+        "homeScore": 27,
+        "atsWinnerTeam": "Duke",
+        "chips": [],
+        "standout": {
+          "kind": "called",
+          "names": [
+            {
+              "playerId": "p3",
+              "playerName": "Kevin"
+            }
+          ],
+          "team": "Duke",
+          "spreadDisplay": "+7"
+        }
+      }
+    },
+    {
+      "id": "gf3",
+      "type": "game.final",
+      "sport": "cfb",
+      "weekId": "w7",
+      "gameId": "g3",
+      "reason": "In this week's slate",
+      "sortKey": "2026-10-16T18:00:00.000Z",
+      "facts": {
+        "awayTeam": "<script>alert(1)</script>",
+        "homeTeam": "Iowa \"Hawk\" & Co",
+        "awayScore": 7,
+        "homeScore": 7,
+        "atsWinnerTeam": null,
+        "chips": []
+      }
+    },
+    {
+      "id": "wr1",
+      "type": "week.result",
+      "sport": "cfb",
+      "weekId": "w6",
+      "reason": "In your league",
+      "sortKey": "2026-10-15T20:00:00.000Z",
+      "facts": {
+        "weekN": 6,
+        "winnerName": "Drew",
+        "winnerScore": 7,
+        "loserName": "Kevin",
+        "loserScore": 2
+      }
+    }
+  ],
+  "html": {
+    "gf1": "<article class=\"card feed-card feed-card--tap\" role=\"button\" tabindex=\"0\" data-card-type=\"game.final\" data-home-action=\"open-card\" data-card-id=\"gf1\" data-haptic=\"light\" data-feed-label=\"Texas 31, Oklahoma 24 (Final) — Texas covered by 4.\" aria-label=\"Texas 31, Oklahoma 24 (Final) — Texas covered by 4. 40 minutes ago. Opens details.\"><div class=\"feed-card-eyebrow\"><span class=\"feed-card-icon\" aria-hidden=\"true\"><svg aria-hidden=\"true\" focusable=\"false\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 4h8v5a4 4 0 0 1-8 0z\"/><path d=\"M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4\"/><line x1=\"12\" y1=\"13\" x2=\"12\" y2=\"17\"/><line x1=\"8\" y1=\"20\" x2=\"16\" y2=\"20\"/></svg></span><span class=\"feed-card-reason\">In this week&#39;s slate</span><span class=\"feed-card-trail\"><time class=\"feed-card-time\" datetime=\"2026-10-17T19:20:00.000Z\" data-feed-time=\"2026-10-17T19:20:00.000Z\" aria-label=\"40 minutes ago\">40m ago</time><span class=\"feed-card-chev\" aria-hidden=\"true\"><svg aria-hidden=\"true\" focusable=\"false\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"9 6 15 12 9 18\"/></svg></span></span></div><h3 class=\"feed-card-title\">Texas 31, Oklahoma 24 (Final) — Texas covered by 4.</h3><div class=\"feed-card-chips\"><span class=\"badge feed-chip badge-win\"><span class=\"feed-chip-glyph\" aria-hidden=\"true\"><svg aria-hidden=\"true\" focusable=\"false\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"5 12.5 10 17.5 19 7\"/></svg></span>DH<span class=\"sr-only\"> covered</span></span><span class=\"badge feed-chip badge-loss\"><span class=\"feed-chip-glyph\" aria-hidden=\"true\"><svg aria-hidden=\"true\" focusable=\"false\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><line x1=\"6\" y1=\"6\" x2=\"18\" y2=\"18\"/><line x1=\"18\" y1=\"6\" x2=\"6\" y2=\"18\"/></svg></span>KL<span class=\"sr-only\"> missed</span></span></div></article>",
+    "gf2": "<article class=\"card feed-card feed-card--tap\" role=\"button\" tabindex=\"0\" data-card-type=\"game.final\" data-home-action=\"open-card\" data-card-id=\"gf2\" data-haptic=\"light\" data-feed-label=\"Clemson 10, Duke 27 (Final) — Duke covered. Kevin called it: Duke +7 won outright.\" aria-label=\"Clemson 10, Duke 27 (Final) — Duke covered. Kevin called it: Duke +7 won outright. 3 hours ago. Opens details.\"><div class=\"feed-card-eyebrow\"><span class=\"feed-card-icon\" aria-hidden=\"true\"><svg aria-hidden=\"true\" focusable=\"false\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 4h8v5a4 4 0 0 1-8 0z\"/><path d=\"M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4\"/><line x1=\"12\" y1=\"13\" x2=\"12\" y2=\"17\"/><line x1=\"8\" y1=\"20\" x2=\"16\" y2=\"20\"/></svg></span><span class=\"feed-card-reason\">In this week&#39;s slate</span><span class=\"feed-card-trail\"><time class=\"feed-card-time\" datetime=\"2026-10-17T17:00:00.000Z\" data-feed-time=\"2026-10-17T17:00:00.000Z\" aria-label=\"3 hours ago\">3h ago</time><span class=\"feed-card-chev\" aria-hidden=\"true\"><svg aria-hidden=\"true\" focusable=\"false\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"9 6 15 12 9 18\"/></svg></span></span></div><h3 class=\"feed-card-title\">Clemson 10, Duke 27 (Final) — Duke covered.</h3><p class=\"feed-card-body\">Kevin called it: Duke +7 won outright.</p></article>",
+    "gf3": "<article class=\"card feed-card feed-card--tap\" role=\"button\" tabindex=\"0\" data-card-type=\"game.final\" data-home-action=\"open-card\" data-card-id=\"gf3\" data-haptic=\"light\" data-feed-label=\"&lt;script&gt;alert(1)&lt;/script&gt; 7, Iowa &quot;Hawk&quot; &amp; Co 7 (Final).\" aria-label=\"&lt;script&gt;alert(1)&lt;/script&gt; 7, Iowa &quot;Hawk&quot; &amp; Co 7 (Final). yesterday. Opens details.\"><div class=\"feed-card-eyebrow\"><span class=\"feed-card-icon\" aria-hidden=\"true\"><svg aria-hidden=\"true\" focusable=\"false\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 4h8v5a4 4 0 0 1-8 0z\"/><path d=\"M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4\"/><line x1=\"12\" y1=\"13\" x2=\"12\" y2=\"17\"/><line x1=\"8\" y1=\"20\" x2=\"16\" y2=\"20\"/></svg></span><span class=\"feed-card-reason\">In this week&#39;s slate</span><span class=\"feed-card-trail\"><time class=\"feed-card-time\" datetime=\"2026-10-16T18:00:00.000Z\" data-feed-time=\"2026-10-16T18:00:00.000Z\" aria-label=\"yesterday\">Yesterday</time><span class=\"feed-card-chev\" aria-hidden=\"true\"><svg aria-hidden=\"true\" focusable=\"false\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"9 6 15 12 9 18\"/></svg></span></span></div><h3 class=\"feed-card-title\">&lt;script&gt;alert(1)&lt;/script&gt; 7, Iowa &quot;Hawk&quot; &amp; Co 7 (Final).</h3></article>",
+    "wr1": "<article class=\"card feed-card feed-card--tap\" role=\"button\" tabindex=\"0\" data-card-type=\"week.result\" data-home-action=\"open-card\" data-card-id=\"wr1\" data-haptic=\"light\" data-feed-label=\"Week 6 is final. took it, ; finished .\" aria-label=\"Week 6 is final. took it, ; finished . 2 days ago. Opens details.\"><div class=\"feed-card-eyebrow\"><span class=\"feed-card-icon\" aria-hidden=\"true\"><svg aria-hidden=\"true\" focusable=\"false\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 4h8v5a4 4 0 0 1-8 0z\"/><path d=\"M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4\"/><line x1=\"12\" y1=\"13\" x2=\"12\" y2=\"17\"/><line x1=\"8\" y1=\"20\" x2=\"16\" y2=\"20\"/></svg></span><span class=\"feed-card-reason\">In your league</span><span class=\"feed-card-trail\"><time class=\"feed-card-time\" datetime=\"2026-10-15T20:00:00.000Z\" data-feed-time=\"2026-10-15T20:00:00.000Z\" aria-label=\"2 days ago\">2d ago</time><span class=\"feed-card-chev\" aria-hidden=\"true\"><svg aria-hidden=\"true\" focusable=\"false\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"9 6 15 12 9 18\"/></svg></span></span></div><h3 class=\"feed-card-title\">Week 6 is final.</h3><p class=\"feed-card-body\"> took it, ;  finished .</p></article>"
+  }
+}

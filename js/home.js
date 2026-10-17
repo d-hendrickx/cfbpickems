@@ -109,6 +109,7 @@ import { picksRowHTML } from './pick-groups.js';
 import { nextOpportunity, nextLine, nextShort, nextAction } from './next-up.js';   // D1 Lane B fix round 2 (DI-599): "What's next" — a pure leaf
 import { validShareRef, shareLine } from './chat-share.js';   // D1 Lane B (DI-597): Share to chat — the reference's one gate and the headline (a pure leaf)
 import { joinClosedCaption } from './sport-status.js';   // DESIGN_D1_E (DI-E1.7): the closed Join's sentence, ONE string shared with the league overview (a pure leaf)
+import { teamLockupHTML } from './keyed-list.js';   // W-105 (DI-W105-5): a finished game's two team marks are the SHIPPED 48 pt lockup (DI-572), never a second logo component
 
 // ═══ constants (every number the screen's behaviour hangs on is named, exported and tested) ═══════════════════════
 
@@ -144,10 +145,11 @@ export const TIME_TICK_MS = 60 * 1000;
 /** W-92 (DI-W92-8): a tappable card's VoiceOver label ("{headline}. {supporting line}.") is trimmed to this BEFORE its time is added, so the time is never cut. */
 export const CARD_LABEL_MAX = 160;
 export const NEWS_SKELETON_COUNT = 2;
-/** UX-2's density rule (News needs doc, Open Decision #8): at most ONE news card per four non-news cards… */
-export const NEWS_PER_NON_NEWS = 4;
-/** …cap of EIGHT before the end marker… */
-export const NEWS_MAX_CARDS = 8;
+/** UX-2's density rule (News needs doc, Open Decision #8), re-set by W-105 (DI-W105-1; Drew's Decision 3, "approve M-62 to M-65 as recommended", 2026-10-17: merging the weekly cards
+ *  in v0.30.1 cut the other cards, and with them the news): at most ONE news card per THREE non-news cards (was four)… */
+export const NEWS_PER_NON_NEWS = 3;
+/** …cap of TEN before the end marker (was eight)… */
+export const NEWS_MAX_CARDS = 10;
 /** …and nothing older than 48 hours (rankNews already filters; the merge re-checks). */
 export const NEWS_FRESHNESS_MS = 48 * 60 * 60 * 1000;
 export const NEWS_FUTURE_SKEW_MS = 5 * 60 * 1000;
@@ -701,6 +703,28 @@ export function gameDayInputFor(s, nowModel, { viewerId = null, isCommissioner =
 
 const numOrNull = (v) => { if (v === null || v === undefined || String(v).trim() === '') return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
 const safeLogo = (fn, game, side) => { try { const u = fn(game, side); return typeof u === 'string' && /^https:\/\//i.test(u) ? u : null; } catch { return null; } };
+/**
+ * W-105 (DI-W105-5): `marksFor` for one paint — a game.final card's game, found by its OWN week and game id in THIS snapshot (never the DOM), as the two teams' public
+ * fields plus the logo the app's gate allows (safeLogo over the injected logoUrlFor: Team logos on, not manual, logoOk, not known-failed). The abbreviations are the
+ * Game view's (buildAbbrMap over the game's week). Nothing about a pick, a side or a member is read.
+ */
+function gameMarksSource(snapshot, logoUrlFor) {
+  const games = new Map();
+  for (const g of asArray(snapshot && snapshot.games)) if (g && g.gameId !== undefined && g.gameId !== null) games.set(`${g.weekId}|${g.gameId}`, g);
+  const abbrByWeek = new Map();
+  const abbrOf = (weekId, team) => {
+    if (!abbrByWeek.has(weekId)) abbrByWeek.set(weekId, buildAbbrMap(asArray(snapshot.games).filter(x => x && x.weekId === weekId)));
+    return abbrByWeek.get(weekId).get(team) || String(team || '').slice(0, 4).toUpperCase();
+  };
+  return (card) => {
+    const game = card && card.type === 'game.final' ? games.get(`${card.weekId}|${card.gameId}`) : null;
+    if (!game) return null;
+    return {
+      away: { name: game.awayTeam, abbr: abbrOf(game.weekId, game.awayTeam), logoUrl: safeLogo(logoUrlFor, game, 'away') },
+      home: { name: game.homeTeam, abbr: abbrOf(game.weekId, game.homeTeam), logoUrl: safeLogo(logoUrlFor, game, 'home') },
+    };
+  };
+}
 
 /** The root text scale (Dynamic Type): at accessibility sizes the pill rail is not drawn at all (DI-603). 1 when it cannot be measured. */
 function rootTextScale() {
@@ -1331,11 +1355,80 @@ export function eligibleContent(items, now) {
 
 /**
  * How many news cards the feed carries: UX-2's density rule (News needs doc, Open Decision #8), kept as a SELECTION rule since FB-010 —
- * one per four ordinary cards, the midweek exception (fewer than four: news fills up to the cap), and the cap of eight.
+ * one per THREE ordinary cards (W-105, DI-W105-1), the midweek exception (fewer than three: news fills up to the cap), and the cap of ten.
  */
 export function newsSlotCount(ordinaryCount) {
   const n = Math.max(0, Number(ordinaryCount) || 0);
   return n < NEWS_PER_NON_NEWS ? NEWS_MAX_CARDS : Math.min(NEWS_MAX_CARDS, Math.floor(n / NEWS_PER_NON_NEWS));
+}
+
+// ═══ W-105 (DI-W105-2, 2026-10-17): which stories fill the news slots, so the pictures are SPREAD through the feed ═══════════════════════════════════
+// Drew: "I really liked how it included some photos every few cards". FB-010 placed every story at its own publish time, so the old rhythm (one news card after every
+// fourth card, by POSITION) is gone for good; the rhythm now comes from WHICH stories are chosen. A fixed, pure, deterministic rule (SP-18: no clock, no random value, no
+// model): about two of every three slots go to stories that carry a picture, each aimed at an evenly spaced place in the feed; the rest are today's relevance order. The
+// placement is untouched: mergeFeed still puts each chosen story at its own time.
+
+/** DI-W105-2 step 1: a story "has a picture" when its imageUrl is a non-empty string beginning https:// (the transport admitted it only for a pinned host; the card re-validates it at render). */
+export function hasPicture(item) { return !!item && typeof item === 'object' && typeof item.imageUrl === 'string' && item.imageUrl.indexOf('https://') === 0; }
+/** An ISO instant as milliseconds, or NaN. PARSING only (never a clock): selectNews's static guard pins this body. */
+function instantOf(v) { const ms = typeof v === 'string' ? Date.parse(v) : NaN; return Number.isFinite(ms) ? ms : NaN; }
+/** Which publisher a story counts against for the guard (the registry's name; the ESPN contingency carries `source`). */
+function publisherOf(item) { return String(item.publisher || item.source || ''); }
+
+/**
+ * DI-W105-2 — choose `k` stories from `eligible` (eligibleNews's output: unique, fresh, already in UX-2's relevance order). `anchorTimes` are the ISO times of the
+ * ordinary cards inside the news window. Returns the chosen stories in relevance order (never more than k, never one twice):
+ *   2. wantP = min(pictured stories, ceil(2k / 3)). With no pictured story the result IS today's selection with the new count (the first k by relevance).
+ *   3. anchors: with m anchor times (newest first), anchor j (0..wantP-1) is anchorTimes[min(m-1, floor((j + 0.5) * m / wantP))] — evenly spaced places in the feed.
+ *   4. for each anchor in order, the unused pictured story whose publish time is NEAREST it (a tie keeps the earlier in relevance order), among only the first 3 * wantP
+ *      pictured stories in relevance order (a low-relevance story is never chosen on time alone). With no anchor the first wantP pictured stories by relevance are taken.
+ *   5. the publisher guard: no publisher supplies more than max(2, ceil(k / 3)) of the chosen stories; a candidate over the cap is skipped for the next nearest.
+ *      If the anchors could not place wantP pictures (the window ran dry under the guard), the next pictured stories in relevance order make up the difference.
+ *   6. the remaining slots are filled with the unused stories in relevance order, pictured or not (so text-only sites such as ESPN still appear), under the same guard;
+ *      the guard PREFERS other sites but never leaves a slot empty: when only an over-cap site's stories are left, they fill the rest in relevance order (otherwise pinning
+ *      one site's pictures could SHRINK the news count — one pictured story would cap ESPN's text stories at two).
+ * Whatever order `anchorTimes` arrives in, it is read newest first; a story offered twice (by id, or the same object) counts once. Pure: no clock, no random value, no DOM,
+ * no storage (hometest pins the body; newspicturestest proves it).
+ */
+export function selectNews(eligible, k, anchorTimes) {
+  const seenIds = new Set();
+  const pool = asArray(eligible).filter(it => { if (!it || typeof it !== 'object') return false; const id = it.id === undefined || it.id === null ? it : String(it.id); if (seenIds.has(id)) return false; seenIds.add(id); return true; });
+  const slots = Math.max(0, Math.floor(Number(k) || 0));
+  if (!slots || !pool.length) return [];
+  const pictured = pool.filter(hasPicture);
+  const wantP = Math.min(pictured.length, Math.ceil((2 * slots) / 3));
+  if (wantP === 0) return pool.slice(0, slots);                                  // the DI's edge: no pictured story -> today's selection, with the new count
+  const cap = Math.max(2, Math.ceil(slots / 3));
+  const used = new Set();
+  const perPublisher = new Map();
+  const fits = (it) => (perPublisher.get(publisherOf(it)) || 0) < cap;
+  const take = (it) => { used.add(it); perPublisher.set(publisherOf(it), (perPublisher.get(publisherOf(it)) || 0) + 1); };
+  const anchors = asArray(anchorTimes).map(instantOf).filter(ms => Number.isFinite(ms)).sort((a, b) => b - a);
+  const m = anchors.length;
+  let placed = 0;
+  if (m > 0) {
+    const nearPool = pictured.slice(0, 3 * wantP);
+    for (let j = 0; j < wantP; j++) {
+      const at = anchors[Math.min(m - 1, Math.floor(((j + 0.5) * m) / wantP))];
+      let best = null, bestGap = Infinity;
+      for (const it of nearPool) {
+        if (used.has(it) || !fits(it)) continue;
+        const t = instantOf(it.publishedAt);
+        const gap = Number.isFinite(t) ? Math.abs(t - at) : Infinity;
+        if (best === null || gap < bestGap) { best = it; bestGap = gap; }        // strictly nearer only: a tie keeps the earlier one in relevance order
+      }
+      if (best) { take(best); placed++; }
+    }
+  }
+  for (const it of pictured) { if (placed >= wantP) break; if (!used.has(it) && fits(it)) { take(it); placed++; } }
+  for (const it of pool) { if (used.size >= slots) break; if (!used.has(it) && fits(it)) take(it); }
+  for (const it of pool) { if (used.size >= slots) break; if (!used.has(it)) take(it); }   // the guard never empties a slot a story could fill
+  return pool.filter(it => used.has(it));
+}
+
+/** DI-W105-2: the anchors are the ordinary cards' own times inside the news window (the last 48 hours), newest first — where in the feed a picture can sit. */
+function newsAnchorTimes(timed, now) {
+  return asArray(timed).map(e => e && e.t).filter(t => { const ms = instantOf(t); return Number.isFinite(ms) && ms <= now + NEWS_FUTURE_SKEW_MS && now - ms <= NEWS_FRESHNESS_MS; });
 }
 
 /** An entry's place in the one chronology: an ISO-8601 instant (card.sortKey is always isoAt() output; a news publishedAt is normalised the same way), so a plain string comparison is a time comparison. */
@@ -1349,8 +1442,9 @@ const newestFirst = (a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0) || (a.tie - b
  *      "Feed should always be new cards on top, so if a game ends and you provide an update that should be on top"). It is never grouped by
  *      week (that lifted a newer week's old cards, and every week-less SCRIBE post, above a game that had just ended), and news is never slotted
  *      by POSITION (one after every fourth card was the "interjected like 5 cards down"). A tie in time breaks card-before-news, then by key;
- *   4. news: <=1 per 4 ordinary cards (filling when thin, cap 8, 48 h) is how MANY (newsSlotCount), chosen in UX-2's relevance order — relevance
- *      selects, the publish time places; renders any time, not gated on this week's slate (UX-2 N2);
+ *   4. news: <=1 per 3 ordinary cards (filling when thin, cap 10, 48 h; W-105) is how MANY (newsSlotCount); selectNews chooses WHICH — about two of three slots
+ *      to stories with a picture, aimed at evenly spaced places in the feed, the rest in UX-2's relevance order (W-105, DI-W105-2) — and the publish time alone
+ *      places each one; renders any time, not gated on this week's slate (UX-2 N2);
  *   5. the news slot's calm states (loading skeletons, error, empty) have no time: they follow the ordinary feed;   6. the end marker, last.
  * The newest FEED_CARD_CAP cards are kept (DI-586; when more exist the end marker says so), a second occurrence of any key is dropped, and every card / news entry keeps its event time as `t`
  * (DI-587 reads it). Deterministic: the same inputs give the same array in the same order, whatever order `cards` arrives in.
@@ -1373,7 +1467,7 @@ export function mergeFeed({ now = Date.now(), cards = [], nudge = null, news = n
     const newsFailed = asArray(news.items).some(it => it && it.cardKind === 'news-error');    // D1 Lane C (review B3): the headlines failed, the content cards stood
     const all = asArray(news.items).filter(it => !(it && it.cardKind === 'news-error'));
     const special = eligibleContent(all.filter(it => it && it.cardKind), now);                   // D1 Lane C: storylines and content, their own windows (see eligibleContent)
-    const items = eligibleNews(all.filter(it => !(it && it.cardKind)), now).slice(0, newsSlotCount(errorEntry.length + timed.length));
+    const items = selectNews(eligibleNews(all.filter(it => !(it && it.cardKind)), now), newsSlotCount(errorEntry.length + timed.length), newsAnchorTimes(timed, now));   // W-105 (DI-W105-2): how MANY is the count above; WHICH spreads the pictures
     if (items.length) items.forEach(it => timed.push({ kind: 'news', key: `news:${String(it.id)}`, item: it, t: newsTime(it), tie: 1 }));
     special.cards.forEach(it => timed.push({ kind: 'news', key: `news:${String(it.id)}`, item: it, tie: 1, t: newsTime(it) }));   // placed by its own event time, like every card (FB-010)
     special.notes.forEach(it => notes.push({ kind: 'news', key: `news:${String(it.id)}`, item: it }));
@@ -1496,8 +1590,10 @@ const asSentence = (x) => { const v = String(x ?? '').replace(/\s+/g, ' ').trim(
  * W-92: `now` and `formatDate` (the viewer's zone) date the card — DI-W92-8: ONE <time> on the eyebrow's trailing edge from the card's own
  * event time (`sortKey`, the time the feed sorts by), and the tappable card's VoiceOver label "{headline}. {supporting line}. {spoken time}.
  * Opens details."; DI-W92-5: at most ONE supporting line, and a SCRIBE caption only where it adds a fact (CAPTION_TYPES_THAT_ADD_A_FACT).
+ * W-105 (DI-W105-5): `marksFor(card)` — optional, Home's own paint passes it, the Game view's Related list does not — draws a finished game's two team marks under the
+ * eyebrow (gameMarksHTML); absent, or no usable logo, and the card is byte-for-byte what v0.30.1 drew.
  */
-export function cardHTML(card, { escHtml, formatKickoff, now = Date.now(), formatDate } = {}) {
+export function cardHTML(card, { escHtml, formatKickoff, now = Date.now(), formatDate, marksFor } = {}) {
   requireEscHtml(escHtml, 'cardHTML');
   let copy;
   try { copy = cardCopy(card, { escHtml: plainText, formatKickoff, sportCode: typeof card.sportCode === 'string' ? card.sportCode : '' }); } catch (e) { console.error('[home] cardCopy failed', e); return ''; }
@@ -1542,7 +1638,27 @@ export function cardHTML(card, { escHtml, formatKickoff, now = Date.now(), forma
   const body = showBody ? `<p class="feed-card-body${card.type === 'scribe.post' ? ' feed-card-body--scribe' : ''}">${escHtml(copy.body)}</p>` : '';
   const chips = asArray(copy.chips).length ? joinHtml(['<div class="feed-card-chips">', joinHtml(asArray(copy.chips).map(c => chipHTML(c, { escHtml }))), '</div>']) : '';
   const caption = showCaption ? `<p class="feed-card-caption">${captionHtml}</p>` : '';
-  return joinHtml([open, eyebrow, title, body, chips, caption, '</article>']);
+  const marks = card.type === 'game.final' && typeof marksFor === 'function' ? gameMarksHTML(card, marksFor, { escHtml }) : '';   // W-105 (DI-W105-5): under the eyebrow, above the title
+  return joinHtml([open, eyebrow, marks, title, body, chips, caption, '</article>']);
+}
+
+/**
+ * W-105 (DI-W105-5; Drew's Decision 4) — both teams' marks on a finished game's card: ONE row, away then home, each the shipped 48 pt lockup (keyed-list.js teamLockupHTML,
+ * `size: 'md'`, no rank badge), leading-aligned 8 pt apart; the card's own 8 pt column gap places it under the eyebrow and above the title. `marksFor(card)` returns
+ * `{ away: { name, abbr, logoUrl }, home: { … } }` or null, from the game's PUBLIC fields only (never a pick): Home builds it from this paint's snapshot and the app's own logo
+ * gate (`logoUrlFor`: the Team logos switch, not a manual game, logoOk, not already failed). A row is drawn only when at least one side has a vetted https logo; a side
+ * without one shows the lockup's own abbreviation circle. Nothing else changes: no winner emphasis, no colour, no label (the card's VoiceOver label already names both teams;
+ * the lockups are aria-hidden). Every string crosses the injected escaper inside teamLockupHTML.
+ */
+function gameMarksHTML(card, marksFor, { escHtml }) {
+  let m = null;
+  try { m = marksFor(card); } catch { m = null; }                          // a failing lookup costs the row, never the card
+  if (!m || typeof m !== 'object') return '';
+  const vetted = (u) => (typeof u === 'string' && /^https:\/\//i.test(u) ? u : null);
+  const away = m.away && typeof m.away === 'object' ? m.away : {}, home = m.home && typeof m.home === 'object' ? m.home : {};
+  if (!vetted(away.logoUrl) && !vetted(home.logoUrl)) return '';            // neither side has a usable logo (or Team logos is off): no row, the v0.30.1 card
+  const lockup = (t) => teamLockupHTML({ name: String(t.name ?? ''), abbr: String(t.abbr ?? ''), rank: null, logoUrl: vetted(t.logoUrl), escHtml, size: 'md' });
+  return joinHtml(['<div class="feed-card-marks" aria-hidden="true">', lockup(away), lockup(home), '</div>']);
 }
 
 /** A spoken label stays short: a SCRIBE post can be a paragraph. */
@@ -1729,8 +1845,9 @@ export function withSeenDividers(visible, all, baselineMs) {
  * D1 Lane B Game Day (DI-605, DI-610): the page moves only by what the member just asked for, and only as far as needed, through the house helper — a tapped pill's row brought above the tab bar, a collapsed
  * card's header brought back under the top of the window, "See all on Home" centring its card, and the belt that puts the page back where it was if a card change shifted it. `behavior` is 'instant' under
  * Reduce Motion (the callers ask prefersReducedMotion()). The tab bar's hide-on-scroll is paused for it: this scroll is the app's, not the reader's.
+ * Exported for W-105 (DI-W105-4): js/app.js's news-binder hook holds the reader's place, instantly, when a news picture ABOVE the viewport fails and is removed.
  */
-function scrollPageBy(delta, behavior = 'instant') {
+export function scrollPageBy(delta, behavior = 'instant') {
   const win = viewportWindow();
   if (!win || !Number.isFinite(delta) || Math.abs(delta) < 1) return false;
   pauseNavHide();
@@ -1829,7 +1946,7 @@ export function createHome(deps) {
       case 'now': return ctx.nowEntry || '';
       case 'nudge': return nudgeHTML(e.nudge, { escHtml });
       case 'join': return joinNudgeHTML(e.offer, { escHtml });          // DESIGN_D1_E: one per sport the viewer has not joined, placed by placeJoinNudges
-      case 'card': return cardHTML(e.card, { escHtml, formatKickoff: ctx.formatKickoff, now: ctx.now, formatDate: ctx.formatDate });
+      case 'card': return cardHTML(e.card, { escHtml, formatKickoff: ctx.formatKickoff, now: ctx.now, formatDate: ctx.formatDate, marksFor: ctx.marksFor });   // W-105: marks on Home's game cards only
       case 'news': {
         let html = '';
         if (d.renderNewsCard) { try { const out = d.renderNewsCard(e.item); html = typeof out === 'string' ? out : ''; } catch { html = ''; } }
@@ -1878,6 +1995,7 @@ export function createHome(deps) {
     const formatKickoff = (iso) => formatGameTime(iso, tzKey);
     const formatDate = dateFormatterFor(tzKey);                              // W-92: a card's date is the VIEWER's day
     tickFormat = formatDate;
+    const marksFor = d.logoUrlFor ? gameMarksSource(snapshot, d.logoUrlFor) : null;   // W-105 (DI-W105-5): no logo gate injected, no marks
 
     const isOrdinary = (e) => e.kind === 'card' || e.kind === 'news' || e.kind === 'error';
     const isPinned = (e) => e.kind === 'now' || e.kind === 'nudge';
@@ -1908,7 +2026,7 @@ export function createHome(deps) {
 
     const items = [];
     for (const e of entries) {
-      const html = orderedEntryHtml(e, { nowEntry, formatKickoff, now, formatDate });
+      const html = orderedEntryHtml(e, { nowEntry, formatKickoff, now, formatDate, marksFor });
       if (html) items.push({ key: e.key, html });
     }
     return { items, state: nowState, ordinaryKeys: visible.map(e => e.key), heldCount: held.size, hasMore, now };

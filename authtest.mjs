@@ -11972,6 +11972,86 @@ console.log('     once AFTER the SDK lands, and still only once across a repeate
   }
 }
 
+// [56c] (bugfix, 2026-10-17, Drew on v0.30.1: "No Add a sport row on the league page either") — THE PLATFORM_KV ANSWER SURVIVES THE BOOT'S OWN IDENTITY CHANGE. A REAL COLD LOAD of a
+// commissioner who is IN a league (IRB: pilot, commissioner, only the cfb competition; platform_kv.offered_sports = cfb + nfl), in the order production runs it: the boot-tail platform_kv
+// read goes out, the SDK's INITIAL_SESSION is the chokepoint's first evaluation (account and the remembered league known, player NOT yet: the membership read is still out), the one small
+// platform_kv read answers FIRST, and only then does the membership read resolve, which moves the identity tuple (player null -> p1). The chokepoint clears every platform_kv value and
+// re-arms the fetch latch on that move; before this fix nothing re-read it, so offered_sports stayed [] for the whole page load and the League Page card / the overview row was absent.
+// Nothing here calls the cache refresh: only the real boot and auth-event chain may bring the answer back.
+console.log('\n[56c] a cold load of a commissioner in a league: the platform_kv answer survives the membership read\'s identity change (Add a sport stays reachable)…');
+{
+  resetAll();
+  app._resetAuthHoldForTest();
+  app._resetSupabaseSdkLoaderForTest();
+  auth._resetMaintenanceBannerCacheForTest();
+  auth._setHasSupabaseDataBackendForTest(true);
+  const IRB56c = 'L_IRB_56c';
+  const session56c = { access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: 'u_drew_56c', email: 'drew@example.test' } };
+  const kvRows56c = { data: [{ key: 'offered_sports', value: ['cfb', 'nfl'] }, { key: 'league_creation_open', value: true }, { key: 'league_creation_scope', value: 'admins' }, { key: 'signups_open', value: true }, { key: 'maintenance_banner', value: '' }], error: null };
+  let kvCalls56c = 0, releaseKv56c, releaseMembers56c, client56c = null;
+  const kvHeld56c = new Promise((r) => { releaseKv56c = r; });
+  const membersHeld56c = new Promise((r) => { releaseMembers56c = r; });
+  const overrides56c = {
+    session: session56c,
+    from: (table) => {
+      if (table === 'platform_kv') { kvCalls56c++; return kvCalls56c === 1 ? kvHeld56c : kvRows56c; }   // the boot read is HELD; any later read answers at once
+      if (table === 'league_members') return membersHeld56c;                                             // the membership read is HELD too
+      return { data: [], error: null };
+    },
+    rpc: () => ({ data: null, error: null }),
+  };
+  globalThis.window.supabase = undefined;                                                                   // the cold-load case
+  const realFetch56c = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('config.json')) return { ok: true, json: async () => ({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' }) };
+    throw new Error('no network');
+  };
+  const realWarn56c = console.warn; console.warn = () => {};
+  const realInfo56c = console.info; console.info = () => {};
+  try {
+    storeValidSession();                                                                                    // a signed-in device...
+    auth.setActiveLeagueId(IRB56c);                                                                         // ...that remembers its league (the persisted pointer)
+    const before56c = createdScripts.length;
+    const pending = app._applyAuthModeDecisionForTest();                                                    // NOT awaited - the SDK has not arrived
+    for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+    const injected = createdScripts.slice(before56c).find((el) => /supabase/.test(String(el.src || '')));
+    assert(!!injected, 'fixture 56c: the vendored SDK script was injected (cold load)');
+    globalThis.window.supabase = { createClient() { client56c = makeFakeClient(overrides56c); return client56c; } };
+    injected.dispatch('load', {});
+    await pending;
+    for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(kvCalls56c === 1 && auth.getCachedOfferedSports().length === 0, '56c-0: the boot-tail read asked platform_kv once and its answer is still HELD (offered_sports unread)');
+    client56c._fire('INITIAL_SESSION', session56c);                                                         // the SDK's local rehydrate: the chokepoint's FIRST evaluation
+    for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+    releaseKv56c(kvRows56c);                                                                                // the one small read answers first...
+    for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(auth.getCachedOfferedSports().join(',') === 'cfb,nfl' && storage.getSession().playerId == null,
+      `56c-1: platform_kv answered (offered ${JSON.stringify(auth.getCachedOfferedSports())}) while the membership read is still out (player ${storage.getSession().playerId})`);
+    releaseMembers56c({ data: [{ league_id: IRB56c, id: 'p1', role: 'commissioner', display_name: 'Drew', active: true, leagues: { name: 'IRB', pilot: true, status: 'active', sport_default: 'cfb' } }], error: null });
+    for (let i = 0; i < 24; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(storage.getSession().playerId === 'p1' && storage.getSession().isAdmin === true,
+      `fixture 56c: the membership read resolved Drew as IRB's commissioner p1 (player ${storage.getSession().playerId}, isAdmin ${storage.getSession().isAdmin})`);
+    assert(auth.getCachedOfferedSports().join(',') === 'cfb,nfl',
+      `56c-2: after the membership read moved the identity tuple, offered_sports is still cfb + nfl (got ${JSON.stringify(auth.getCachedOfferedSports())}) — the chokepoint's clear was followed by a real re-read, not left empty for the page load`);
+    assert(auth.getCachedLeagueCreationOpen() === true,
+      `56c-3: …and the other values on the same read came back with it (league_creation_open ${auth.getCachedLeagueCreationOpen()})`);
+    storage.saveCompetition({ id: 'cccccccc-0000-0000-0000-00000000056c', sport: 'cfb', isDefault: true, enrollment: 'all', kind: 'season' });   // IRB runs college football only
+    assert(app._addSportAvailableForTest() === true,
+      '56c-4: IRB\'s commissioner, offered cfb + nfl, running cfb only: Add a sport is AVAILABLE (the League Page card and the overview row draw)');
+    const kvAfter56c = kvCalls56c;
+    client56c._fire('TOKEN_REFRESHED', session56c);                                                         // an ordinary later auth event, same identity
+    for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(kvCalls56c === kvAfter56c && kvAfter56c === 2,
+      `56c-5: one re-read per identity change, not per auth event (platform_kv reads ${kvAfter56c} after the identity settled, ${kvCalls56c} after a same-identity TOKEN_REFRESHED; want 2 and 2)`);
+  } finally {
+    globalThis.fetch = realFetch56c;
+    console.warn = realWarn56c;
+    console.info = realInfo56c;
+    auth._resetMaintenanceBannerCacheForTest();
+    auth.setActiveLeagueId(null);
+  }
+}
+
 // S2-1 unit half (2026-09-26) — auth.js's own latch, independent of app.js's
 // call site: a refresh with NO client (SDK not on the page) must not latch
 // `_maintenanceBannerAttempted`, so a later real attempt is still possible.

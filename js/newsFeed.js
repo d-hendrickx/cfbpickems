@@ -373,7 +373,8 @@ export function createHomeNews(deps = {}) {
     /** One delegated binding on Home's container (the same element Home paints into). Re-binding replaces the earlier one. The news and the content cards each have their
      *  own dispatcher (a news card is a link to the publisher; a content card opens its detail): neither reacts to the other's markup. */
     bindEvents: (rootEl, opts = {}) => {
-      const unNews = bindNewsCardEvents(rootEl, { items: currentItems, onOpen: opts.onOpen, onAlsoFrom: (item) => { if (_openers.alsoFrom) _openers.alsoFrom(item); } });
+      // W-105 (DI-W105-4): `opts.onPictureRemoved` is forwarded as-is (Home's wiring holds the reader's place when a picture above the viewport fails)
+      const unNews = bindNewsCardEvents(rootEl, { items: currentItems, onOpen: opts.onOpen, onAlsoFrom: (item) => { if (_openers.alsoFrom) _openers.alsoFrom(item); }, onPictureRemoved: opts.onPictureRemoved });
       const unContent = bindContentCardEvents(rootEl, { items: currentItems, onOpen: (item) => { if (_openers.content) _openers.content(item); }, onRetry: () => { if (_openers.retryContent) _openers.retryContent(); } });
       return () => { try { unNews(); } finally { unContent(); } };
     },

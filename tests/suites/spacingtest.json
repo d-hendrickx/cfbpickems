@@ -3,11 +3,11 @@
   "script": "spacingtest.mjs",
   "label": "134",
   "summary": "strict",
-  "floor": 309,
+  "floor": 320,
   "tags": [
     "browser",
     "tz"
   ],
   "expectedMs": 2400,
-  "note": "RAISED from 272 by the v0.29.0 Home wiring window (2026-10-01): the News feed's article card ('card news-card', padding 0/0/0/0 because the picture is full-bleed) is pinned by exact class list, and [2i] x5 (its .news-card__body keeps >= 16 pt on every side, light 320/375/430/600 …"
+  "note": "W-105 (v0.30.2, 2026-10-17): RAISED from 309 to 320 - [11] the finished-game marks row measured in Chromium (8 pt under the eyebrow and above the title, two 48 pt lockups 8 pt apart, 16 pt in; 320/375, 1x/2x, light/dark) with two anti-vacuity canaries. | RAISED from 272 by the v0.29.0 Home wiring window (2026-10-01): the News feed's article card ('card news-card', padding 0/0/0/0 because the picture is full-bleed) is pinned by exact class list, and [2i] x5 (its .news-card__body keeps >= 16 pt on every side, light 320/375/430/600 …"
 }

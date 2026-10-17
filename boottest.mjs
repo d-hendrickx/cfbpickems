@@ -6302,9 +6302,27 @@ console.log('     AFTER authMode resolves, asserted against the REAL boot orderi
   // only — the file's own prose mentions this exact name several times
   // (this section's fixture message, `renderMaintenanceBannerIfNeeded()`'s
   // doc comment) and those must not inflate the count.
-  const oldSiteHits = (src32.match(/refreshMaintenanceBannerCache\(\)/g) || []).length;
-  assert(oldSiteHits === 1,
-    `[32e] refreshMaintenanceBannerCache() is CALLED from exactly ONE place in js/app.js (got ${oldSiteHits}, comments excluded) — a second call site (e.g. a resurrected boot-early one) would be an untested, possibly mis-ordered duplicate`);
+  //
+  // AMENDED 2026-10-17 (bugfix, authtest [56c]) — an ALLOW-LIST of exactly the two call sites that exist (P-11), not a count of one: the boot tail above, and the
+  // re-read refreshAuthUI() makes right after the identity chokepoint re-arms the latch (without it, the membership read's identity change on every cold load of a
+  // player in a league left offered_sports [] for the page load and hid Add a sport). Any third call site fails, and so does either pinned one going missing.
+  const hits32 = [...src32.matchAll(/refreshMaintenanceBannerCache\(\)/g)].map((m) => m.index);
+  const authUiStart32 = src32.indexOf('export function refreshAuthUI(event, payload) {');
+  const authUiEnd32 = (() => {
+    const ends = ['\nexport function ', '\nfunction ', '\nasync function ', '\nexport async function '].map((s) => src32.indexOf(s, authUiStart32 + 10)).filter((n) => n > -1);
+    return ends.length ? Math.min(...ends) : src32.length;
+  })();
+  const inBoot32 = hits32.filter((i) => i >= fnStart && i < fnEnd).length;
+  const inAuthUi32 = authUiStart32 > -1 ? hits32.filter((i) => i >= authUiStart32 && i < authUiEnd32).length : 0;
+  assert(hits32.length === 2 && inBoot32 === 1 && inAuthUi32 === 1,
+    `[32e] refreshMaintenanceBannerCache() is CALLED from exactly the TWO pinned places in js/app.js, comments excluded: applyAuthModeDecision()'s boot tail and refreshAuthUI()'s post-chokepoint re-read (got ${hits32.length} total: ${inBoot32} in the boot tail, ${inAuthUi32} in refreshAuthUI) — any other call site (e.g. a resurrected boot-early one) would be an untested, possibly mis-ordered duplicate`);
+  const authUiBody32 = authUiStart32 > -1 ? src32.slice(authUiStart32, authUiEnd32) : '';
+  const choke32 = authUiBody32.indexOf('applyIdentityDeltaIfChanged(`event:${event}`, { expiry, discard });');
+  const guardLine32 = "if (getAuthMode() === 'supabase' && !hasAttemptedMaintenanceBannerFetch() && !!getAccountUserId() && hasResolvedMemberships()) {";
+  const guard32 = authUiBody32.indexOf(guardLine32);
+  const refetch32 = authUiBody32.indexOf('refreshMaintenanceBannerCache()');
+  assert(choke32 > -1 && guard32 > choke32 && refetch32 > guard32 && /^\s*$/.test(authUiBody32.slice(guard32 + guardLine32.length, refetch32)),
+    `[32e2] refreshAuthUI()'s re-read sits AFTER the identity chokepoint, directly under the boot tail's own latch guard plus a signed-in account with resolved memberships (chokepoint ${choke32}, guard ${guard32}, call ${refetch32}) — before the chokepoint it would be cleared by it; without the latch it would read platform_kv on every auth event`);
 
   // SECURITY GATE NOTE D (2026-09-25) — `id="maintenance-banner"` is
   // DELIBERATELY non-unique across containers (renderMaintenanceBannerHTML()'s

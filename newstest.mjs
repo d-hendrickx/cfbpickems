@@ -1182,7 +1182,17 @@ console.log('\n[9b] The CSS block — tokens only, neutral third-party content, 
   const chipPress = rules.find(r => r.sel === '.news-chip:active');
   assert(!!chipPress && /scale\(\.97\)/.test(chipPress.body) && /min-height:44px/.test(rules.find(r => r.sel === '.news-chip').body), '9b-6: a chip presses to 97% and is a 44 pt tap target (CONVENTIONS #17)');
   assert(/aspect-ratio:16\/9/.test(rules.find(r => r.sel === '.news-card__image').body) && /\.news-card__image--failed/.test(block) && /display:none/.test(rules.find(r => r.sel === '.news-card__image--failed').body), '9b-7: the picture has a reserved 16:9 box (nothing jumps while it loads) and a failed one is removed');
-  assert(/-webkit-line-clamp:2/.test(rules.find(r => r.sel === '.news-card__headline').body), '9b-8: the headline clamps to two lines');
+  // W-105 (DI-W105-3, Drew: "include the whole headline for each news site"; was "the headline clamps to two lines"). P-11 allow-list form: the headline rule's body is EXACTLY
+  // the pinned property list (nothing clips it, nothing truncates it), and every line-clamp left in the WHOLE stylesheet sits on a pinned list of selectors that excludes it.
+  const HEADLINE_BODY = 'margin:0;font-size:1rem;font-weight:600;line-height:1.35;color:var(--text-primary);overflow-wrap:anywhere;min-width:0';
+  const headlineRules = rules.filter(r => r.sel.split(',').map(x => x.trim()).includes('.news-card__headline'));
+  assert(headlineRules.length === 1 && headlineRules[0].body.trim() === HEADLINE_BODY, `9b-8: the headline has NO line clamp — its one rule is exactly "${HEADLINE_BODY}" (got ${headlineRules.map(r => JSON.stringify(r.body.trim())).join(' | ') || 'none'})`);
+  const LINE_CLAMP_SELECTORS = ['.chat-search-result-body'];   // the only line-clamp in styles.css today (a chat search result's two-line preview); the news headline is NOT on it
+  const allRules = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m => ({ sel: m[1].trim(), body: m[2] }));
+  const clamped = allRules.filter(r => /line-clamp/.test(r.body)).map(r => r.sel);
+  assert(JSON.stringify(clamped) === JSON.stringify(LINE_CLAMP_SELECTORS) && !LINE_CLAMP_SELECTORS.some(x => /news-card|news-also|headline/.test(x)),
+    `9b-8b: every line-clamp in styles.css is on the pinned list (${LINE_CLAMP_SELECTORS.join(', ')}), which holds no news selector (found: ${clamped.join(', ') || 'none'})`);
+  assert(!/news-card__headline[^{]*\{[^}]*(text-overflow|max-height|-webkit-box|white-space:nowrap)/.test(css.replace(/\/\*[\s\S]*?\*\//g, '')), '9b-8c: no other rule anywhere gives the news headline an ellipsis, a max height, a -webkit-box or nowrap');
   const reduce = [...block.matchAll(/@media \(prefers-reduced-motion:reduce\)\{([\s\S]*?)\n\}/g)].flatMap(m => [...m[1].matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(x => ({ sel: x[1].trim(), body: x[2] })));
   assert(['.news-card', '.news-chip'].every(sel => reduce.some(r => r.sel === sel && /transition:none/.test(r.body))), '9b-9: Reduce Motion removes the press transition for EACH animated selector (.news-card, .news-chip), one rule per selector');
   const spacing = [...block.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/(?:padding|margin|gap)\s*:\s*([^;}]+)/g)].flatMap(m => m[1].match(/-?\d+(?:\.\d+)?px/g) || []).map(v => Math.abs(parseFloat(v)));

@@ -707,11 +707,13 @@ console.log('[1] Static contract — imports, no writes, no canViewOtherPicks, m
   // './chat-share.js' joined 2026-10-08 (D1 Lane B, DI-597 Share to chat): the reference's one gate and the headline — a pure leaf that imports nothing (not chat.js: S-C8 below still holds).
   // './sport-status.js' joined 2026-10-15 (DESIGN_D1_E, DI-E1.7): the closed Join's one sentence (joinClosedCaption), shared with the league overview - a pure leaf that imports nothing.
   // './feed-time.js' joined 2026-10-17 (W-92, DI-W92-7/8/10): the one "when did this happen" vocabulary — a pure leaf that imports nothing (no DOM, no storage, no timer).
-  const ALLOWED = ['./storage.js', './auth.js', './competition.js', './home-sports.js', './feed-cards.js', './feed-time.js', './feed-caption-lines.js', './reminder-rules.js', './notify-copy.js', './scoring.js', './stats.js', './data-model.js', './icons.js', './week-lock.js', './haptics.js', './section-drag.js', './game-order.js', './game-state.js', './card-detail.js', './nav-gestures.js', './gameday.js', './gameday-sheet.js', './gameday-dom.js', './game-view.js', './pick-groups.js', './next-up.js', './chat-share.js', './sport-status.js'];   // + D1 Lane B Game Day (2026-10-08): the card's model + collapsed markup, its open body, its DOM half, the Game view's markup, the By person / By team renderer and next-up (DI-599) — all leaves; none imports a pick reader (loadtest's DI-540 scan asserts it)
+  // './keyed-list.js' joined 2026-10-17 (W-105, DI-W105-5): a finished game's two team marks are the SHIPPED 48 pt lockup — imported for teamLockupHTML ALONE (1-1c), a leaf that imports nothing.
+  const ALLOWED = ['./storage.js', './auth.js', './competition.js', './home-sports.js', './feed-cards.js', './feed-time.js', './feed-caption-lines.js', './reminder-rules.js', './notify-copy.js', './scoring.js', './stats.js', './data-model.js', './icons.js', './week-lock.js', './haptics.js', './section-drag.js', './game-order.js', './game-state.js', './card-detail.js', './nav-gestures.js', './gameday.js', './gameday-sheet.js', './gameday-dom.js', './game-view.js', './pick-groups.js', './next-up.js', './chat-share.js', './sport-status.js', './keyed-list.js'];   // + D1 Lane B Game Day (2026-10-08): the card's model + collapsed markup, its open body, its DOM half, the Game view's markup, the By person / By team renderer and next-up (DI-599) — all leaves; none imports a pick reader (loadtest's DI-540 scan asserts it)
   assert(imps.every(i => ALLOWED.includes(i.from)), `1-1: home.js imports ONLY ${ALLOWED.length} known modules (got ${imps.map(i => i.from).join(', ')})`);
   const compNames = from('./competition.js').flatMap(i => i.names.replace(/[{}]/g, '').split(',').map(s => s.trim()).filter(Boolean)).sort();
   assert(JSON.stringify(compNames) === JSON.stringify(['homeFeedContexts', 'playersForWeek']) && from('./home-sports.js').length === 1 && JSON.stringify(from('./home-sports.js')[0].names.replace(/[{}]/g, '').split(',').map(x => x.trim()).filter(Boolean).sort()) === JSON.stringify(['cleanJoinOffers', 'deriveFeedCards', 'placeJoinNudges']) && from('./sport-status.js').length === 1 && /^\s*\{?\s*joinClosedCaption\s*\}?\s*$/.test(from('./sport-status.js')[0].names),
     `1-1b: D1 DI-528 - competition.js is imported for exactly homeFeedContexts + playersForWeek (got ${compNames.join(', ')}), home-sports.js for deriveFeedCards + (DESIGN_D1_E) cleanJoinOffers + placeJoinNudges alone, and sport-status.js for joinClosedCaption alone`);
+  assert(from('./keyed-list.js').length === 1 && /^\s*\{\s*teamLockupHTML\s*\}\s*$/.test(from('./keyed-list.js')[0].names), `1-1c: W-105 — keyed-list.js is imported for teamLockupHTML ALONE (got ${from('./keyed-list.js').map(i => i.names).join(' | ') || 'nothing'})`);
   assert(!imps.some(i => /chat\.js|chatTransport|supabase-backend|app\.js|backend\.js/.test(i.from)), '1-2: S-C8 — no import of chat.js / chatTransport / the adapter / app.js (the chat primitives are INJECTED)');
   const storageNames = from('./storage.js').flatMap(i => i.names.replace(/[{}]/g, '').split(',').map(s => s.trim()).filter(Boolean));
   const WRITERS = /^(save|set|add|delete|toggle|upsert|record|clear|send|post|mark|reset|update|create)\w*/;
@@ -721,6 +723,20 @@ console.log('[1] Static contract — imports, no writes, no canViewOtherPicks, m
   assert(!/canViewOtherPicks/.test(HOME_CODE), '1-6: S-C1 — home.js never names canViewOtherPicks (the commissioner no-stake bypass must not reach a passively-scrolled feed)');
   assert(!/Math\.random|Date\.now\(\)\s*\+/.test(HOME_CODE) && !/Math\.random/.test(HOME_CODE), '1-7: no Math.random anywhere (the feed is deterministic)');
   assert(!/Object\.hasOwn\b|\.at\(|\.findLast\(|\.findLastIndex\(|structuredClone|replaceChildren|:has\(/.test(HOME_CODE), '1-8: iOS 15.0 — no Object.hasOwn / .at() / findLast / structuredClone');
+  {
+    // W-105 (DI-W105-2, static guard 4, P-11 allow-list form): selectNews reads no clock and no random value. Its body holds no Date / Math.random / crypto / performance token,
+    // and the ONLY functions it calls are the pinned list (two constructors, Number, the module's asArray and its own pinned helpers; hasPicture is passed to filter); the
+    // one that parses a time (instantOf) has EXACTLY the pinned body (Date.parse of a string, never a clock).
+    const body = (name) => { const a = HOME_CODE.indexOf(`function ${name}(`); if (a < 0) return ''; const open = HOME_CODE.indexOf('{', a); let depth = 0; for (let i = open; i < HOME_CODE.length; i++) { if (HOME_CODE[i] === '{') depth++; else if (HOME_CODE[i] === '}') { depth--; if (depth === 0) return HOME_CODE.slice(open, i + 1); } } return ''; };
+    const sel = body('selectNews');
+    const calls = [...new Set([...sel.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(/g)].map(m => m[1]).filter(n => !['if', 'for', 'return', 'while', 'switch', 'catch', 'function'].includes(n)))].sort();
+    const SELECT_CALLS = ['Map', 'Number', 'Set', 'String', 'asArray', 'fits', 'instantOf', 'publisherOf', 'take'].sort();
+    assert(sel.length > 200 && !/\bDate\b|Math\.random|\bcrypto\b|\bperformance\b/.test(sel) && JSON.stringify(calls) === JSON.stringify(SELECT_CALLS) && /pool\.filter\(hasPicture\)/.test(sel),
+      `1-8b: W-105 — selectNews names no Date, Math.random, crypto or performance, and calls ONLY ${SELECT_CALLS.join(', ')} (got ${calls.join(', ')})`);
+    assert(body('instantOf') === "{ const ms = typeof v === 'string' ? Date.parse(v) : NaN; return Number.isFinite(ms) ? ms : NaN; }" && body('publisherOf') === "{ return String(item.publisher || item.source || ''); }"
+      && body('hasPicture') === "{ return !!item && typeof item === 'object' && typeof item.imageUrl === 'string' && item.imageUrl.indexOf('https://') === 0; }",
+      '1-8c: W-105 — the helpers selectNews calls are exactly the pinned bodies (instantOf only PARSES a time; publisherOf; hasPicture — https:// and nothing else)');
+  }
   assert(!/(^|[^\w$.])var\s/.test(HOME_CODE) && !/\.then\(/.test(HOME_CODE), '1-9: no var and no .then() chains (CONVENTIONS #2 / #4)');
   const concats = [...HOME_CODE.matchAll(/'<[^'\n]*'\s*\+|\+\s*'<[^'\n]*'|"<[^"\n]*"\s*\+|\+\s*"<[^"\n]*"/g)];
   assert(concats.length === 0, `1-10: S-C6 — markup is never built by string '+' concatenation (found ${concats.length})`);
@@ -870,11 +886,11 @@ function mergeChecks(mod) {
     const weeks4 = [...weeks, fx.mkWeek({ id: 'w4', n: 4, status: 'open' })];
     const justEnded = card('final-now', 'w3', iso(NOW - MIN), 'game.final');
     const older = [card('w4-slate', 'w4', iso(NOW - 12 * HOUR), 'slate.published'), ...Array.from({ length: 4 }, (_, i) => card('scribe' + i, null, iso(NOW - (i + 1) * DAY), 'scribe.post')), card('w3-revealed', 'w3', iso(NOW - 5 * HOUR), 'week.revealed')];
-    // seven ordinary cards -> ONE news slot (1 per 4): relevance picks nx, its publish time places it
+    // seven ordinary cards -> TWO news slots (1 per 3 since W-105, DI-W105-1): relevance picks nx and ny, each publish time places it
     const mm = mod.mergeFeed({ now: NOW, cards: [...older, justEnded], weeks: weeks4, news: { status: 'ready', items: [{ id: 'nx', publishedAt: iso(NOW - 30 * MIN) }, { id: 'ny', publishedAt: iso(NOW - 3 * HOUR) }] } });
     const ordinary = mm.filter(e => e.kind === 'card' || e.kind === 'news').map(e => e.key);
     out['M2c FB-010 acceptance 1: a game that just ended is FIRST in the ordinary feed (directly under the pinned cards) — not fifth below next week\'s older slate card and week-old SCRIBE posts'] =
-      ordinary[0] === 'final-now' && mm[0].kind === 'now' && JSON.stringify(ordinary) === '["final-now","news:nx","w3-revealed","w4-slate","scribe0","scribe1","scribe2","scribe3"]';
+      ordinary[0] === 'final-now' && mm[0].kind === 'now' && JSON.stringify(ordinary) === '["final-now","news:nx","news:ny","w3-revealed","w4-slate","scribe0","scribe1","scribe2","scribe3"]';
   }
   out['M3 a sortKey tie breaks on id (deterministic)'] = JSON.stringify(keys(mod.mergeFeed({ cards: [card('z', 'w2', 'S'), card('y', 'w2', 'S'), card('x', 'w2', 'S')], weeks }))) === '["x","y","z"]';
   out['M3b a card and a news item at the SAME instant: the card first, then the news (a stable tie-break, never input order)'] = (() => {
@@ -892,22 +908,40 @@ function mergeChecks(mod) {
   const news = (n, o = {}) => ({ status: 'ready', items: Array.from({ length: n }, (_, i) => ({ id: 'n' + (i + 1), publishedAt: iso(NOW - (i + 1) * HOUR), ...o })) });
   const shape = (m) => m.filter(e => e.kind === 'card' || e.kind === 'news').map(e => (e.kind === 'news' ? 'N' : 'c')).join('');
   // FB-010: news joins the ONE chronology at its publish time ("new posts like game updates and other insights are being interjected like 5 cards down" was news slotted
-  // by POSITION, one after every fourth card). UX-2's density rule survives as a SELECTION rule — how many news cards (1 per 4 ordinary cards, filling a thin feed,
-  // cap 8), chosen in UX-2's relevance order — and the publish time alone decides where each one sits.
+  // by POSITION, one after every fourth card). UX-2's density rule survives as a SELECTION rule — how many news cards (1 per 3 ordinary cards since W-105, filling a thin
+  // feed, cap 10; DI-W105-1, Drew's Decision 3), chosen by selectNews (relevance order when no story has a picture) — and the publish time alone decides where each one sits.
   const timed = (n) => Array.from({ length: n }, (_, i) => card('c' + String(i).padStart(2, '0'), 'w3', iso(NOW - (2 * i + 1) * 30 * MIN)));   // c00 -30m, c01 -90m, c02 -150m …
   const nN = (m) => (shape(m).match(/N/g) || []).length;
-  out['M5 FB-010: news is placed by its PUBLISH TIME among the cards, newest first (c -30m, N -1h, c -90m, N -2h, then the older cards) — never one-after-every-fourth by position'] =
-    shape(mod.mergeFeed({ now: NOW, cards: timed(9), weeks, news: news(8) })) === 'cNcNccccccc';
-  out['M5 density (selection): nine cards, plenty of news -> TWO news cards (1 per 4 ordinary cards)'] = nN(mod.mergeFeed({ now: NOW, cards: nonNews(9), weeks, news: news(8) })) === 2;
-  out['M5b the midweek exception: fewer than four cards -> news FILLS the feed, up to the cap of 8'] = nN(mod.mergeFeed({ now: NOW, cards: nonNews(3), weeks, news: news(12) })) === 8 && shape(mod.mergeFeed({ now: NOW, cards: nonNews(3), weeks, news: news(12) })).replace(/N/g, '') === 'ccc';
-  out['M5c exactly four cards -> exactly one news card (the 1-in-4 ratio resumes)'] = nN(mod.mergeFeed({ now: NOW, cards: nonNews(4), weeks, news: news(5) })) === 1;
-  out['M5d no cards at all -> the feed is the news (still capped at 8), newest first'] = shape(mod.mergeFeed({ now: NOW, cards: [], weeks: [], news: news(10) })) === 'N'.repeat(8)
-    && JSON.stringify(keys(mod.mergeFeed({ now: NOW, cards: [], weeks: [], news: news(10) }), 'news')) === JSON.stringify(Array.from({ length: 8 }, (_, i) => 'news:n' + (i + 1)));
-  out['M5e the cap of 8 holds in a long feed too (40 cards, 12 news -> 8 news)'] = nN(mod.mergeFeed({ now: NOW, cards: nonNews(40), weeks, news: news(12) })) === 8;
+  out['M5 FB-010: news is placed by its PUBLISH TIME among the cards, newest first (c -30m, N -1h, c -90m, N -2h, c -150m, N -3h, then the older cards) — never one-after-every-fourth by position'] =
+    shape(mod.mergeFeed({ now: NOW, cards: timed(9), weeks, news: news(8) })) === 'cNcNcNcccccc';
+  out['M5 density (selection): nine cards, plenty of news -> THREE news cards (1 per 3 ordinary cards, W-105)'] = nN(mod.mergeFeed({ now: NOW, cards: nonNews(9), weeks, news: news(8) })) === 3
+    && nN(mod.mergeFeed({ now: NOW, cards: nonNews(8), weeks, news: news(8) })) === 2;
+  out['M5b the midweek exception: fewer than three cards -> news FILLS the feed, up to the cap of 10'] = nN(mod.mergeFeed({ now: NOW, cards: nonNews(2), weeks, news: news(12) })) === 10 && shape(mod.mergeFeed({ now: NOW, cards: nonNews(2), weeks, news: news(12) })).replace(/N/g, '') === 'cc';
+  out['M5c exactly three cards -> exactly one news card (the 1-in-3 ratio resumes)'] = nN(mod.mergeFeed({ now: NOW, cards: nonNews(3), weeks, news: news(5) })) === 1;
+  out['M5d no cards at all -> the feed is the news (still capped at 10), newest first'] = shape(mod.mergeFeed({ now: NOW, cards: [], weeks: [], news: news(12) })) === 'N'.repeat(10)
+    && JSON.stringify(keys(mod.mergeFeed({ now: NOW, cards: [], weeks: [], news: news(12) }), 'news')) === JSON.stringify(Array.from({ length: 10 }, (_, i) => 'news:n' + (i + 1)));
+  out['M5e the cap of 10 holds in a long feed too (40 cards, 12 news -> 10 news)'] = nN(mod.mergeFeed({ now: NOW, cards: nonNews(40), weeks, news: news(12) })) === 10;
   {
     const ranked = { status: 'ready', items: [{ id: 'n1', publishedAt: iso(NOW - 5 * HOUR) }, { id: 'n2', publishedAt: iso(NOW - HOUR) }, { id: 'n3', publishedAt: iso(NOW - 10 * MIN) }] };
     out['M5f relevance SELECTS, time PLACES: three items into two slots takes UX-2\'s first two (n1, n2 — not the newer n3), and the newer of the two sits higher'] =
-      JSON.stringify(keys(mod.mergeFeed({ now: NOW, cards: timed(9), weeks, news: ranked }), 'news')) === '["news:n2","news:n1"]';
+      JSON.stringify(keys(mod.mergeFeed({ now: NOW, cards: timed(6), weeks, news: ranked }), 'news')) === '["news:n2","news:n1"]';
+  }
+  // W-105 (DI-W105-2): which stories — pictures are preferred and spread; the placement is still the publish time (the end-to-end proofs are newspicturestest's)
+  {
+    const pic = (id, hAgo, publisher, o = {}) => ({ id, publishedAt: iso(NOW - hAgo * HOUR), publisher, imageUrl: `https://images.example/${id}.jpg`, ...o });
+    const txt = (id, hAgo, publisher = 'ESPN') => ({ id, publishedAt: iso(NOW - hAgo * HOUR), publisher, imageUrl: null });
+    const pool = [txt('t1', 1), txt('t2', 2), txt('t3', 3), txt('t4', 4), pic('p1', 2, 'Fox News'), pic('p2', 9, 'NCAA.com'), pic('p3', 15, 'Sports Illustrated'), pic('p4', 21, 'Fox News'), pic('p5', 5, 'NCAA.com'), pic('p6', 12, 'Sports Illustrated')];
+    const cards18 = Array.from({ length: 18 }, (_, i) => card('c' + String(i).padStart(2, '0'), 'w3', iso(NOW - (i * 80 + 20) * MIN)));
+    const merged = mod.mergeFeed({ now: NOW, cards: cards18, weeks, news: { status: 'ready', items: pool } });
+    const chosen = keys(merged, 'news');
+    const pictured = chosen.filter(k => /^news:p/.test(k));
+    out['M5g W-105: eighteen cards -> six news slots, at least FOUR of them stories with a picture (two of every three), the rest by relevance (text-only ESPN still appears)'] =
+      chosen.length === 6 && pictured.length >= 4 && chosen.some(k => /^news:t/.test(k));
+    out['M5h W-105: a chosen story still sits at its OWN publish time (the merged list stays newest first by time; nothing moves a card)'] =
+      (() => { const ts = merged.filter(e => e.kind === 'card' || e.kind === 'news').map(e => e.t); return ts.every((t, i) => i === 0 || ts[i - 1] >= t); })()
+      && JSON.stringify(merged.filter(e => e.kind === 'card').map(e => e.key)) === JSON.stringify(cards18.map(c => c.id));
+    out['M5i W-105: with NO story carrying a picture the choice is today\'s (the first k by relevance, in the new count)'] =
+      JSON.stringify(mod.selectNews(pool.filter(it => !it.imageUrl), 3, cards18.map(c => c.sortKey)).map(it => it.id)) === '["t1","t2","t3"]';
   }
   // freshness (the boundary), future-dated, junk, duplicates
   const fresh = (ms) => keys(mod.mergeFeed({ now: NOW, cards: [], weeks: [], news: { status: 'ready', items: [{ id: 'x', publishedAt: iso(NOW - ms) }] } }), 'news').length === 1;
@@ -928,7 +962,9 @@ function mergeChecks(mod) {
   out['M9b DI-586: a second occurrence of a key is dropped (the guard behind "no duplicates, no gaps"), and every card keeps its event time as `t` (DI-587 reads it)'] = (() => { const cs = nonNews(5); const m = mod.mergeFeed({ now: NOW, cards: [...cs, cs[2], cs[0]], weeks }); const k = keys(m); return k.length === 5 && new Set(k).size === 5 && m.filter(e => e.kind === 'card').every(e => typeof e.t === 'string' && e.t.length > 0); })();
   out['M10 a failed derivation puts ONE calm error entry where the cards would be (never a blank feed) and NO end marker ("You\'re all caught up." is false after an error)'] = JSON.stringify(kinds(mod.mergeFeed({ now: NOW, cards: nonNews(5), weeks, feedError: true }))) === '["now","error"]';
   out['M11 a brand-new league\'s end marker is its own variant'] = mod.mergeFeed({ now: NOW, emptyLeague: true }).slice(-1)[0].variant === 'new-league' && mod.mergeFeed({ now: NOW }).slice(-1)[0].variant === 'caught-up';
-  out['M12 the constants are the DI\'s: 1 per 4, cap 8, 48 h, 15 min TTL, pages of 20, cap 200'] = home.NEWS_PER_NON_NEWS === 4 && home.NEWS_MAX_CARDS === 8 && home.NEWS_FRESHNESS_MS === 48 * HOUR && home.NEWS_STALE_MS === 15 * MIN && home.FEED_PAGE_SIZE === 20 && home.FEED_CARD_CAP === 200 && home.FEED_CARD_LIMIT === undefined;
+  out['M12b W-105 (DI-W105-1) the count table: 0, 1, 2 -> 10; 3 -> 1; 8 -> 2; 9 -> 3; 17 -> 5; 29 -> 9; 30 -> 10; 60 -> 10'] =
+    [[0, 10], [1, 10], [2, 10], [3, 1], [8, 2], [9, 3], [17, 5], [29, 9], [30, 10], [60, 10]].every(([n, k]) => mod.newsSlotCount(n) === k);
+  out['M12 the constants are the DI\'s: 1 per 3, cap 10 (W-105, DI-W105-1), 48 h, 15 min TTL, pages of 20, cap 200'] = home.NEWS_PER_NON_NEWS === 3 && home.NEWS_MAX_CARDS === 10 && home.NEWS_FRESHNESS_MS === 48 * HOUR && home.NEWS_STALE_MS === 15 * MIN && home.FEED_PAGE_SIZE === 20 && home.FEED_CARD_CAP === 200 && home.FEED_CARD_LIMIT === undefined;
   return out;
 }
 
@@ -1225,6 +1261,9 @@ async function asyncChecks(mod) {
     return e;
   }
   const newsCount = (html) => (html.match(/data-news-id="/g) || []).length;
+  // W-105 (DI-W105-1): how many of two offered stories the feed carries follows the count rule over the ordinary cards on the page (1 per 3; fewer than three: fill)
+  const ordinaryOn = (html) => keysOf(html).filter(k => !/^(now|nudge|news|news-skel|news-empty|news-error|caught-up|seen-|sentinel|home-error|join)/.test(k)).length;
+  const expectNews = (html, offered) => Math.min(offered, mod.newsSlotCount(ordinaryOn(html)));
   // — arrival
   {
     const d = deferred();
@@ -1236,7 +1275,7 @@ async function asyncChecks(mod) {
     d.resolve(mkItems(2)); await flush();
     const done = e.container.innerHTML;
     out['A1b the news ARRIVES: skeletons replaced by UX-2\'s cards, spliced verbatim (their markup untouched), the new items fade in'] =
-      newsCount(done) === 2 && !done.includes('news-skel') && done.includes('<i data-fake-news="n1"></i>') && e.calls.newsRender.includes('n1') && /feed-item--enter" data-card-key="news:n1"/.test(done) && e.home._newsStateForTest().status === 'ready';
+      expectNews(done, 2) >= 1 && newsCount(done) === expectNews(done, 2) && !done.includes('news-skel') && done.includes('<i data-fake-news="n1"></i>') && e.calls.newsRender.includes('n1') && /feed-item--enter" data-card-key="news:n1"/.test(done) && e.home._newsStateForTest().status === 'ready';
     const w = e.container.writes;
     e.home.renderHome();
     out['A1c a later render does NOT refetch while the slot is fresh (UX-2\'s TTL is theirs; Home asks once)'] = e.calls.fetch.length === 1 && e.container.writes === w;
@@ -1294,7 +1333,7 @@ async function asyncChecks(mod) {
       return { e, r, html: e.container.innerHTML };
     };
     const ok = await run(false);
-    out['A6 pull-to-refresh, news fine: the news is re-fetched with {force:true}, the page repaints, the promise RESOLVES to TRUE'] = ok.r === true && newsCount(ok.html) === 2 && ok.e.calls.fetch.length === 2 && ok.e.calls.fetch[1].force === true;
+    out['A6 pull-to-refresh, news fine: the news is re-fetched with {force:true}, the page repaints, the promise RESOLVES to TRUE'] = ok.r === true && expectNews(ok.html, 2) >= 1 && newsCount(ok.html) === expectNews(ok.html, 2) && ok.e.calls.fetch.length === 2 && ok.e.calls.fetch[1].force === true;
     const nf = await run(true);
     out['A6b NEWS fails: the news slot shows its own calm error (with Retry) and the rest of the page is intact; the refresh still resolves TRUE — and there is no banner path in Home to raise (hometest [1-30] pins that structurally)'] =
       nf.r === true && nf.html.includes('News is temporarily unavailable.') && nf.html.includes('data-home-action="retry-news"') && nf.html.includes('data-card-type="slate.published"') && nf.e.home._newsStateForTest().status === 'error';
@@ -1535,6 +1574,64 @@ for (const [label, ok] of Object.entries(PAINT_RES)) assert(ok === true, `7: ${l
   const ow = world({ status: 'open', lockIn: 30 * HOUR, p1: ['Texas'] });
   const ec = mkEnv(home, ow, { admin: true, read: { currentWeek: () => ow.weeks[0] } }); ec.home.renderHome();
   assert(!ec.container.innerHTML.includes('feed-nudge') && keysOf(ec.container.innerHTML)[0] === 'now', '7-16: no nudge when nothing is due, even for the commissioner');
+}
+{
+  // ── W-105 (DI-W105-5; Drew's Decision 4): both teams' marks on a finished game's card, for a player with Team logos on ──────────────────────────────────────────
+  const L = fx.buildLeague({ w2: 'final', calculateWeeklyResults });
+  const LOGO = (team) => `https://a.espncdn.com/i/teamlogos/ncaa/500/${encodeURIComponent(String(team).toLowerCase().replace(/\s+/g, '-'))}.png`;
+  // the app's own gate, modelled whole (js/app.js createHome's logoUrlFor): the switch, not a manual game, a usable (https) URL, not already failed
+  const gate = ({ on = true, missing = new Set(), failed = new Set() } = {}) => (game, side) => {
+    if (!on || !game || game.isManual) return null;
+    const team = side === 'home' ? game.homeTeam : game.awayTeam;
+    const u = missing.has(team) ? null : LOGO(team);
+    return u && !failed.has(u) ? u : null;
+  };
+  const page = (o = {}) => { const e = mkEnv(home, o.world || L, { read: { currentWeek: () => (o.world || L).weeks[1] || (o.world || L).weeks[0] }, deps: o.logoUrlFor === undefined ? {} : { logoUrlFor: o.logoUrlFor } }); paintAll(e); return e.container.innerHTML; };
+  const finals = (html) => [...html.matchAll(/<article class="card feed-card(?: feed-card--tap)?"[^>]*data-card-type="game\.final"[\s\S]*?<\/article>/g)].map(m => m[0]);
+  const on = page({ logoUrlFor: gate() });
+  const onFinals = finals(on);
+  const first = onFinals[0] || '';
+  const g1 = L.games.find(g => first.includes(`data-card-id="`) && first.includes(esc(g.awayTeam)) && first.includes(esc(g.homeTeam))) || null;
+  assert(onFinals.length >= 2 && onFinals.every(h => (h.match(/class="feed-card-marks"/g) || []).length === 1 && (h.match(/data-team-lockup/g) || []).length === 2 && (h.match(/<img class="matrix-hdr-logo"/g) || []).length === 2),
+    `7-17: W-105 — Team logos ON: every finished game's card (${onFinals.length}) carries ONE marks row with TWO lockups, each with its logo`);
+  assert(!!g1 && first.indexOf(LOGO(g1.awayTeam)) > 0 && first.indexOf(LOGO(g1.awayTeam)) < first.indexOf(LOGO(g1.homeTeam)) && first.indexOf('feed-card-eyebrow') < first.indexOf('feed-card-marks') && first.indexOf('feed-card-marks') < first.indexOf('feed-card-title'),
+    '7-18: …away first, then home; the row sits directly under the eyebrow and above the title, inside the card\'s own <article> (one tap target)');
+  assert(!/tl-rank/.test(onFinals.join('')) && /class="feed-card-marks" aria-hidden="true"/.test(first) && onFinals.every(h => /<span class="tl" data-team-lockup aria-hidden="true">/.test(h)), '7-19: the shipped 48 pt lockup (size md, no rank badge), aria-hidden: the card\'s VoiceOver label already names both teams');
+  const off = page({ logoUrlFor: gate({ on: false }) }), none = page({});
+  assert(!/feed-card-marks|data-team-lockup/.test(off) && off === none, '7-20: Team logos OFF: no marks anywhere, and the page is byte-for-byte the page with no logo gate injected at all');
+  assert(finals(on).filter(h => !h.includes('feed-card-marks')).length === 0 && on.replace(/<div class="feed-card-marks"[\s\S]*?<\/span><\/span><\/div>/g, '') === none, '7-21: …and with Team logos ON the page differs from it by the marks rows ALONE (nothing else on any card moved)');
+  const oneMissing = finals(page({ logoUrlFor: gate({ missing: new Set([g1 && g1.homeTeam]) }) })).find(h => h.includes(esc(g1.homeTeam)) && h.includes(esc(g1.awayTeam))) || '';
+  assert((oneMissing.match(/data-team-lockup/g) || []).length === 2 && (oneMissing.match(/<img class="matrix-hdr-logo"/g) || []).length === 1 && /<span class="tl" data-team-lockup aria-hidden="true"><span class="tl-abbr">[^<]+<\/span><\/span><\/div>/.test(oneMissing),
+    '7-22: one side without a usable logo shows that side\'s abbreviation circle (the lockup\'s built-in fallback); the other keeps its logo');
+  const bothMissing = finals(page({ logoUrlFor: gate({ missing: new Set([g1.homeTeam, g1.awayTeam]) }) })).find(h => h.includes(esc(g1.homeTeam)) && h.includes(esc(g1.awayTeam))) || '';
+  const failedBoth = finals(page({ logoUrlFor: gate({ failed: new Set([LOGO(g1.homeTeam), LOGO(g1.awayTeam)]) }) })).find(h => h.includes(esc(g1.homeTeam)) && h.includes(esc(g1.awayTeam))) || '';
+  assert(!!bothMissing && !bothMissing.includes('feed-card-marks') && !!failedBoth && !failedBoth.includes('feed-card-marks'), '7-23: neither side usable (no logo, or both already failed on this page): no row');
+  const manualL = { ...L, games: L.games.map(g => ({ ...g, isManual: true })) };
+  assert(!/feed-card-marks/.test(page({ world: manualL, logoUrlFor: gate() })) && finals(page({ world: manualL, logoUrlFor: gate() })).length >= 2, '7-24: a manual game (the gate refuses its logos): its card draws no row');
+  const http = page({ logoUrlFor: (g, side) => (side === 'home' ? 'http://a.espncdn.com/x.png' : 'javascript:alert(1)') });
+  assert(!/feed-card-marks|javascript:|http:\/\/a\.espncdn/.test(http), '7-25: a gate that hands back anything but an https URL draws nothing (safeLogo, then the row\'s own https check)');
+  const throwing = page({ logoUrlFor: () => { throw new Error('boom'); } });
+  assert(finals(throwing).length === finals(none).length && !/feed-card-marks/.test(throwing), '7-26: a throwing logo gate costs the row, never the card');
+  const ow = world({ status: 'open', lockIn: 30 * HOUR, p1: ['Texas'] });
+  const openPage = page({ world: ow, logoUrlFor: gate() });
+  assert(!/feed-card-marks|data-team-lockup/.test(openPage.replace(/<section class="gd[\s\S]*?<\/section>/, '')) && !/data-card-type="game\.final"/.test(openPage), '7-27: [BLIND-RULE] an OPEN week has no game result card, so no marks row on the feed (the row renders only where the card itself renders: after the reveal and othersConfirmed)');
+  // the escaper: a hostile team name reaches the row only through escHtml (teamLockupHTML requires it)
+  const hostile = { id: 'gfx', type: 'game.final', weekId: 'w', gameId: 'g', reason: 'r', sortKey: iso(NOW - HOUR), facts: { awayTeam: 'A', homeTeam: 'B', awayScore: 1, homeScore: 2, atsWinnerTeam: null, chips: [] } };
+  const hostileHtml = home.cardHTML(hostile, { escHtml: esc, formatKickoff: String, now: NOW, formatDate: home.dateFormatterFor('ET'), marksFor: () => ({ away: { name: '<script>x()</script>', abbr: '<img src=x onerror=y>', logoUrl: 'https://a.espncdn.com/"><script>z()</script>.png' }, home: { name: 'B', abbr: 'B', logoUrl: null } }) });
+  assert(/feed-card-marks/.test(hostileHtml) && !/<script>|<img src=x|"><script>/.test(hostileHtml) && /&lt;IMG/.test(hostileHtml) && /&quot;&gt;&lt;script&gt;/.test(hostileHtml), '7-28: a hostile team name, abbreviation and logo URL render INERT in the marks row (escaped at the sink)');
+  // only game.final, and only where marksFor is handed in (the Game view's Related list hands none)
+  const other = { ...hostile, id: 'wr', type: 'week.result', facts: { weekN: 3, winnerName: 'Drew', winnerScore: 5, loserName: 'Kevin', loserScore: 1 } };
+  assert(!home.cardHTML(other, { escHtml: esc, formatKickoff: String, now: NOW, marksFor: () => ({ away: { name: 'A', logoUrl: LOGO('a') }, home: { name: 'B', logoUrl: LOGO('b') } }) }).includes('feed-card-marks')
+    && !home.cardHTML(hostile, { escHtml: esc, formatKickoff: String, now: NOW }).includes('feed-card-marks'), '7-29: a card that is not game.final never draws the row, and a game card with no marksFor (the Game view\'s Related list) draws none');
+  const relatedCalls = [...HOME_CODE.matchAll(/cardHTML\(([^)]*\{[^}]*\})\)/g)].map(m => m[1]);
+  assert(relatedCalls.length === 2 && relatedCalls.filter(c => /marksFor/.test(c)).length === 1 && /case 'card': return cardHTML\(e\.card, \{[^}]*marksFor: ctx\.marksFor/.test(HOME_CODE) && !/<div class="gv-rel"[^`]*marksFor/.test(HOME_CODE),
+    `7-30: exactly TWO cardHTML call sites (Home's paint, the Game view's Related list) and ONLY Home's passes marksFor (${relatedCalls.length} sites)`);
+  // the v0.30.1 golden (tests/golden/w105-cards-v0301.json, generated from main cd0c0702 BEFORE W-105): logos off / no marksFor -> byte-for-byte what v0.30.1 drew
+  const GOLD = JSON.parse(await read('./tests/golden/w105-cards-v0301.json'));
+  const GNOW = Date.parse(GOLD.now);
+  const same = GOLD.cards.every(c => home.cardHTML(c, { escHtml: (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'), formatKickoff: String, now: GNOW, formatDate: home.dateFormatterFor('ET') }) === GOLD.html[c.id]
+    && home.cardHTML(c, { escHtml: (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'), formatKickoff: String, now: GNOW, formatDate: home.dateFormatterFor('ET'), marksFor: () => ({ away: { name: 'X', logoUrl: null }, home: { name: 'Y', logoUrl: null } }) }) === GOLD.html[c.id]);
+  assert(GOLD.cards.length === 4 && GOLD.cards.filter(c => c.type === 'game.final').length === 3 && same, '7-31: the v0.30.1 GOLDEN — with no marksFor, or with no usable logo, every golden card (three game results, one week result) is byte-for-byte what v0.30.1 drew');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1781,7 +1878,7 @@ async function mutantOf(label, edits, mustFail) {
 
   // — the merge
   await mutantOf('12-28: M28 the Now card is no longer pinned first', [["  const out = [{ kind: 'now', key: 'now' }];", '  const out = [];']], ['M1 the Now card', 'M1b']);
-  await mutantOf('12-29: M29 news density is 1 per 2 instead of 1 per 4 (the selection rule)', [['Math.floor(n / NEWS_PER_NON_NEWS)', 'Math.floor(n / 2)']], ['M5 density']);
+  await mutantOf('12-29: M29 news density is 1 per 2 instead of 1 per 3 (the selection rule, W-105)', [['Math.floor(n / NEWS_PER_NON_NEWS)', 'Math.floor(n / 2)']], ['M5 density']);
   await mutantOf('12-30: M30 the 48-hour freshness filter is gone', [['    if (!Number.isFinite(ms) || ms > now + NEWS_FUTURE_SKEW_MS || now - ms > NEWS_FRESHNESS_MS) continue;', '    if (!Number.isFinite(ms) || ms > now + NEWS_FUTURE_SKEW_MS) continue;']], ['M6 48-hour']);
   // FB-010 (D1 batch H): the pre-fix merge, put back — cards grouped by week (newest week first, week-less cards joining it), news riding the newest group
   await mutantOf('12-31: M31 FB-010 the merge groups by WEEK again (the newest week\'s older cards and every week-less SCRIBE post above a game that just ended)', [

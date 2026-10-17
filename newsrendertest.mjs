@@ -17,6 +17,9 @@
  *       a sheet row opens THAT alternate's validated URL; Enter on the focused main block opens it too; a focused main block shows its focus ring INSIDE the card's clip
  *   [E] MEASUREMENT CANARIES (anti-vacuity): a 30 pt "Also from" button, a 0-gap sheet list and a 0-inset row are each REPORTED by the same measurement code
  *   [F] the sheet shell this page builds is the markup js/app.js really emits (source-text pins on mountSheetShell and openNewsAlsoSheet), so the replica cannot drift
+ *   [W] W-105 (v0.30.2): the WHOLE news headline at 375 / 320 pt and 1x / 2x text (nothing hidden, no clamp; a canary re-adds v0.30.1's clamp); the picture's fade (progressive
+ *       enhancement, the entrance fade, the instant repaint, Reduce Motion); a REAL failing picture below, on and above the viewport (the collapse; the scroll hold through home.js's
+ *       real scrollPageBy, the reader's content not moving; a canary without the hold); the 16:9 skeleton against the real picture box
  *
  * WHAT THIS DOES NOT PROVE, said plainly: it is Chromium, not WKWebView on a handset. Real touch, the iOS safe areas, VoiceOver, the light haptic, the swipe-down physics of the sheet
  * and Dynamic Type's own scaling are device checks (the hand-off names them). A missing browser is a FAILURE here, never a skip.
@@ -145,6 +148,136 @@ window.__ready = true;
   return f;
 };
 const PAGES = { light: pageFor('class="theme-neutral" data-color-scheme="light"'), dark: pageFor('class="theme-neutral" data-color-scheme="dark"') };
+
+// ── W-105 (v0.30.2; DI-W105-3 / DI-W105-4): the whole headline, the picture's life and the 16:9 skeleton, on their own page. The cards are the REAL renderNewsCard /
+// renderStorylineCard output; the binder is the REAL bindNewsCardEvents; the scroll hold is the REAL home.js scrollPageBy, called by a replica of js/app.js's
+// holdHomePlaceForPicture whose source text [F] pins. The only test-side change to a card is WHEN its picture starts loading (src moved to data-w-src and set back later),
+// so a failure can be placed below, on and above the viewport on purpose; the browser is launched with every host unresolvable, so every https picture FAILS for real.
+const H137 = 'Arch Manning throws three touchdowns as No. 6 Texas holds off No. 15 Oklahoma 34-31 in a Red River thriller that tightens the SEC playoff';
+const H300 = ('Oregon State quarterback Braden Atkinson throws for 427 yards and five touchdowns as the Beavers beat Colorado State 56-26, '
+  + 'and the Mountain West race opens up with three teams tied at the top after a wild Saturday night that also saw Boise State fall at home to an unranked rival in overtime tonight');
+const W_PAGE = join(tmp, 'news-w105.html');
+const W_GIF = join(tmp, 'w105-picture.gif');
+writeFileSync(W_GIF, Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+writeFileSync(W_PAGE, `<!DOCTYPE html><html class="theme-neutral" data-color-scheme="light"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="stylesheet" href="${cssHref}"></head>
+<body data-tab="home">
+<main class="main-content"><section class="page-section active" id="page-home"><div id="home-root"></div></section></main>
+<script type="module">
+import { renderNewsCard, renderStorylineCard, bindNewsCardEvents } from '${jsBase}newsCard.js';
+import { scrollPageBy } from '${jsBase}home.js';
+const NOW = Date.now();
+const iso = (ms) => new Date(ms).toISOString();
+const GIF = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+const FILE_GIF = ${JSON.stringify('file://' + W_GIF)};
+let loads = 0;
+const H137 = ${JSON.stringify(H137)};
+const H300 = ${JSON.stringify(H300)};
+const base = (id, o = {}) => ({ id, url: 'https://www.foxnews.com/sports/' + id, source: 'Fox News', publisher: 'Fox News', headline: H137, imageUrl: 'https://a57.foxnews.com/static/' + id + '.jpg',
+  imageHosts: ['a57.foxnews.com'], linkHosts: ['www.foxnews.com'], publishedAt: iso(NOW - 2 * 3600e3), updatedAt: null, sport: 'cfb', reason: "In this week's slate", ...o });
+const root = () => document.getElementById('home-root');
+const item = (key, html) => '<div class="feed-item" data-card-key="' + key + '">' + html + '</div>';
+const withGif = (html) => html.replace(/src="https:[^"]*"/, 'src="' + GIF + '"');
+const deferPicture = (html) => html.replace(/ src="(https:[^"]*)"/, ' data-w-src="$1"');
+// the app's hook, exactly as js/app.js holdHomePlaceForPicture ([F] pins that text): only a picture ABOVE the viewport moves the page, by -removedPx, instantly
+window.__hookCalls = [];
+const holdHomePlaceForPicture = ({ removedPx, aboveViewport } = {}) => {
+  window.__hookCalls.push({ removedPx, aboveViewport });
+  if (aboveViewport !== true || !Number.isFinite(removedPx) || removedPx <= 0) return false;
+  return scrollPageBy(-removedPx, 'instant');
+};
+let unbind = null;
+const bind = () => { if (unbind) unbind(); unbind = bindNewsCardEvents(root(), { items: [], onPictureRemoved: holdHomePlaceForPicture }); };
+window.__W = {
+  // [W1] the whole headline: with a picture (a loaded GIF in its 16:9 box), without one, grouped, a storyline, and the 300-character data limit
+  headlines() {
+    if (unbind) { unbind(); unbind = null; }
+    const alt = { id: 'w_alt', publisher: 'Yahoo Sports', via: null, headline: 'Texas holds off Oklahoma', publishedAt: iso(NOW - 3 * 3600e3), url: 'https://sports.yahoo.com/a.html', linkHosts: ['sports.yahoo.com'] };
+    root().innerHTML = '<div class="home-feed" aria-busy="false">'
+      + item('news:w_pic', withGif(renderNewsCard(base('w_pic'))))
+      + item('news:w_txt', renderNewsCard(base('w_txt', { imageUrl: null })))
+      + item('news:w_grp', withGif(renderNewsCard(base('w_grp', { alsoFrom: [alt] }))))
+      + item('news:w_sty', withGif(renderStorylineCard(base('w_sty', { cardKind: 'storyline', storyline: { tag: 'Oklahoma at Texas · Sat', gameId: 'g1' } }))))
+      + item('news:w_300', renderNewsCard(base('w_300', { imageUrl: null, headline: H300 })))
+      + '</div>';
+    return document.querySelectorAll('.news-card__headline').length;
+  },
+  measureHeadlines() {
+    const out = [...document.querySelectorAll('.news-card__headline')].map((h) => {
+      const cs = getComputedStyle(h), r = h.getBoundingClientRect(), c = h.closest('.news-card').getBoundingClientRect();
+      const range = document.createRange(); range.selectNodeContents(h); const rects = [...range.getClientRects()];
+      const last = rects.length ? rects[rects.length - 1] : null;
+      return { sh: h.scrollHeight, ch: h.clientHeight, text: h.textContent, lines: Math.round(r.height / parseFloat(cs.lineHeight)), clamp: cs.webkitLineClamp, display: cs.display, overflow: cs.overflow, textOverflow: cs.textOverflow,
+        inside: r.right <= c.right + 0.5 && r.left >= c.left - 0.5, lastInside: !!last && last.bottom <= c.bottom + 0.5 && last.right <= c.right + 0.5, cardH: c.height, card: h.closest('.news-card').className };
+    });
+    return { rows: out, docOverflowX: document.documentElement.scrollWidth - innerWidth };
+  },
+  // [W2] the picture's fade: an unbound root shows a not-yet-loaded picture as before; a bound root hides it until it loads; a load fades it in; a Home repaint shows the loaded one at once
+  fadeSetup(bound) {
+    if (unbind) { unbind(); unbind = null; }
+    root().innerHTML = '<div class="home-feed" aria-busy="false"><div style="height:6000px"></div>' + item('news:w_lazy', renderNewsCard(base('w_lazy'))) + '</div>';
+    if (bound) bind();
+    const img = document.querySelector('.news-card__image');
+    const cs = getComputedStyle(img);
+    return { opacity: cs.opacity, complete: img.complete, loaded: img.classList.contains('is-loaded'), rootBound: root().classList.contains('news-images-bound'), transition: cs.transitionProperty + ' ' + cs.transitionDuration };
+  },
+  async fadeLoad() {
+    bind();
+    const src = FILE_GIF + '?load=' + (++loads);              // a file the page has not loaded yet: it arrives ASYNCHRONOUSLY (a data: URL is available at once, which is the instant path)
+    root().innerHTML = '<div class="home-feed" aria-busy="false">' + item('news:w_gif', renderNewsCard(base('w_gif')).replace(/src="https:[^"]*"/, 'src="' + src + '"')) + '</div>';
+    await Promise.resolve();                                  // the observer has run: a picture still on its way is NOT marked instant
+    const img = document.querySelector('.news-card__image');
+    const before = getComputedStyle(img).opacity;
+    const instantAtPaint = img.classList.contains('news-card__image--instant');
+    for (let i = 0; i < 60 && !img.classList.contains('is-loaded'); i++) await new Promise((r) => setTimeout(r, 20));
+    const at = { loaded: img.classList.contains('is-loaded'), instant: img.classList.contains('news-card__image--instant'), duration: getComputedStyle(img).transitionDuration, prop: getComputedStyle(img).transitionProperty, timing: getComputedStyle(img).transitionTimingFunction };
+    await new Promise((r) => setTimeout(r, 400));
+    return { before, instantAtPaint, ...at, after: getComputedStyle(img).opacity };
+  },
+  bindNoHold() { if (unbind) unbind(); unbind = bindNewsCardEvents(root(), { items: [], onPictureRemoved: () => {} }); return true; },
+  async repaint() {
+    const html = root().innerHTML.replace(/ class="news-card__image[^"]*"/, ' class="news-card__image"');
+    root().innerHTML = html;                                   // a Home repaint: a NEW <img> for a file that has already loaded here
+    await Promise.resolve();                                   // the observer's microtask, before the next frame
+    const img = document.querySelector('.news-card__image');
+    const cs = getComputedStyle(img);
+    return { loaded: img.classList.contains('is-loaded'), instant: img.classList.contains('news-card__image--instant'), opacity: cs.opacity, duration: cs.transitionDuration, anims: document.getAnimations().length };
+  },
+  // [W3] failures, placed on purpose: A above the viewport, B on screen, C below
+  failSetup() {
+    window.__hookCalls = [];
+    bind();
+    const card = (id) => deferPicture(renderNewsCard(base(id, { headline: 'Card ' + id + ': ' + H137 })));
+    root().innerHTML = '<div class="home-feed" aria-busy="false">' + item('news:A', card('A')) + '<div style="height:1400px"></div>' + item('news:B', card('B'))
+      + '<div class="w-anchor" style="height:40px"></div><div style="height:2600px"></div>' + item('news:C', card('C')) + '<div style="height:1200px"></div></div>';
+    return document.querySelectorAll('[data-w-src]').length;
+  },
+  place(id, top) { const el = document.querySelector('[data-card-key="news:' + id + '"]'); window.scrollTo({ top: Math.max(0, window.scrollY + el.getBoundingClientRect().top - top), behavior: 'instant' }); return Math.round(el.getBoundingClientRect().top); },
+  state(id) {
+    const wrap = document.querySelector('[data-card-key="news:' + id + '"]'), img = wrap.querySelector('.news-card__image'), card = wrap.querySelector('.news-card');
+    return { failed: img.classList.contains('news-card__image--failed'), collapsing: img.classList.contains('news-card__image--collapsing'), imgH: +img.getBoundingClientRect().height.toFixed(2), imgTop: +img.getBoundingClientRect().top.toFixed(2),
+      cardH: +card.getBoundingClientRect().height.toFixed(2), display: getComputedStyle(img).display, scrollY: window.scrollY, anchorTop: +document.querySelector('.w-anchor').getBoundingClientRect().top.toFixed(2), duration: getComputedStyle(img).transitionDuration };
+  },
+  async fail(id) {
+    const img = document.querySelector('[data-card-key="news:' + id + '"] .news-card__image');
+    const failed = new Promise((res) => img.addEventListener('error', () => res(true), { once: true }));
+    img.loading = 'eager';
+    img.src = img.getAttribute('data-w-src');
+    return Promise.race([failed, new Promise((r) => setTimeout(() => r(false), 5000))]);
+  },
+  // [W4] the skeleton (the markup home.js skeletonCardHTML({ withImage: true }) emits; [F] pins it) against a real card with a picture and a two-line headline
+  skeleton() {
+    if (unbind) { unbind(); unbind = null; }
+    root().innerHTML = '<div class="home-feed" aria-busy="true">' + item('news-skel:0', ${JSON.stringify('<article class="card feed-card feed-skel" aria-hidden="true"><div class="feed-skel-image"></div><div class="feed-skel-line feed-skel-line--narrow"></div><div class="feed-skel-line feed-skel-line--full"></div><div class="feed-skel-line feed-skel-line--wide"></div></article>')})
+      + item('news:w_real', withGif(renderNewsCard(base('w_real', { headline: 'Texas holds off Oklahoma late in the Red River Rivalry at the Cotton Bowl' })))) + '</div>';
+    const sk = document.querySelector('.feed-skel-image'), skCard = document.querySelector('.feed-skel'), real = document.querySelector('.news-card'), realImg = real.querySelector('.news-card__image');
+    const r = (e) => e.getBoundingClientRect();
+    return { skRatio: +(r(sk).height / r(sk).width).toFixed(4), realRatio: +(r(realImg).height / r(realImg).width).toFixed(4), skImgH: +r(sk).height.toFixed(1), realImgH: +r(realImg).height.toFixed(1), skCardH: +r(skCard).height.toFixed(1), realCardH: +r(real).height.toFixed(1), aspect: getComputedStyle(sk).aspectRatio };
+  },
+};
+window.__ready = true;
+</script></body></html>`);
 
 // ── the CDP client (the shape adminairendertest.mjs uses) ──
 function launch() {
@@ -516,6 +649,115 @@ try {
     const mc = await evaluate(contentMeasure);
     assert(mc.cards.every((c) => c.pad === '10/10/10/10') && mc.plainFeedCardPad.v === '16/16/16/16', `E canary 4: a content card forced to 10 pt padding measures 10 against the plain feed card's 16 (the [G] comparison would report it)`);
   }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  console.log('\n[W] W-105 (v0.30.2): the WHOLE headline, the picture\'s fade, a failed picture below / on / above the viewport, the 16:9 skeleton — measured in Chromium…');
+  const openW = async (w, h, { text = 1, reducedMotion = false } = {}) => {
+    await pg.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: true });
+    await pg.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: reducedMotion ? 'reduce' : 'no-preference' }] });
+    const loaded = pg.once('Page.loadEventFired');
+    await pg.send('Page.navigate', { url: 'file://' + W_PAGE });
+    await loaded;
+    for (let i = 0; i < 100 && !(await evaluate('!!window.__ready')); i++) await sleep(50);
+    assert(await evaluate('!!window.__ready'), `W page ready at ${w} pt (the real newsCard.js and home.js loaded in the page)`);
+    await evaluate(`document.documentElement.style.fontSize = '${text * 100}%'`);
+  };
+  // [W1] DI-W105-3: nothing hidden, no clamp, no ellipsis, nothing past the card, at 375 pt, standard and 200% text
+  const lines = {};
+  for (const text of [1, 2]) {
+    for (const w of [375, 320]) {
+      await openW(w, 812, { text });
+      const n = await evaluate('__W.headlines()'); await settle();
+      const m = await evaluate('__W.measureHeadlines()');
+      const bad = m.rows.filter((r) => r.sh > r.ch + 0.5 || r.clamp !== 'none' || r.display === '-webkit-box' || r.overflow === 'hidden' || !r.inside || !r.lastInside);
+      if (bad.length) console.error('     W1 ' + w + ' ' + text + 'x → ' + JSON.stringify(bad).slice(0, 600));
+      assert(n === 5 && bad.length === 0 && m.docOverflowX <= 0.5, `W1 ${w} pt, ${text}x text: all five headlines (with a picture, without, grouped, storyline, 300 characters) show WHOLE — scrollHeight equals clientHeight, no line clamp, no hidden overflow, the last line inside its card, no sideways scroll`);
+      assert(m.rows.slice(0, 4).every((r) => r.text === H137) && m.rows[4].text === H300 && H300.length === 300 && H137.length === 137, `W1b ${w} pt, ${text}x: the text is the publisher's whole headline, to the last word ("…${H137.split(' ').pop()}"; the 300-character one in full)`);
+      if (w === 375) lines[text] = m.rows[0].lines;
+    }
+  }
+  assert(lines[1] >= 3 && lines[2] > lines[1], `W1c the 137-character headline wraps to ${lines[1]} lines at 375 pt (was cut at 2 with "…") and to ${lines[2]} at 200% text — the card simply grows`);
+  {
+    await openW(375, 812);
+    await evaluate('__W.headlines()');
+    await evaluate("(() => { const s = document.createElement('style'); s.textContent = '.news-card__headline{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}'; document.head.appendChild(s); })()");
+    await settle();
+    const m = await evaluate('__W.measureHeadlines()');
+    assert(m.rows[0].sh > m.rows[0].ch + 0.5 && m.rows[0].lines === 2, `W1d canary: with v0.30.1's clamp re-added, the SAME measurement reads the 137-character headline as cut (scrollHeight ${m.rows[0].sh} > clientHeight ${m.rows[0].ch}, 2 lines) — so W1 is a measurement`);
+  }
+  // [W2] DI-W105-4: the fade, progressive enhancement, the instant repaint
+  {
+    await openW(375, 812);
+    const unboundState = await evaluate('__W.fadeSetup(false)');
+    const boundState = await evaluate('__W.fadeSetup(true)');
+    assert(!unboundState.rootBound && !unboundState.complete && unboundState.opacity === '1' && boundState.rootBound && !boundState.complete && boundState.opacity === '0',
+      `W2a a picture that has not loaded: in a root WITHOUT the binder it shows as before (opacity ${unboundState.opacity}); inside the bound root it waits hidden in its reserved box (opacity ${boundState.opacity})`);
+    const f = await evaluate('__W.fadeLoad()');
+    assert(f.before === '0' && !f.instantAtPaint && f.loaded && !f.instant && f.prop === 'opacity' && f.duration === '0.15s' && /cubic-bezier\(0\.16, 1, 0\.3, 1\)/.test(f.timing) && f.after === '1',
+      `W2b a picture that loads fades in: hidden first (${f.before}), then is-loaded with a ${f.prop} transition of ${f.duration} on the entrance ease, fully shown after (${f.after})`);
+    const rp = await evaluate('__W.repaint()');
+    assert(rp.loaded && rp.instant && rp.opacity === '1' && rp.duration === '0s', `W2c a Home repaint (a NEW <img> for a file already loaded here) shows it AT ONCE: is-loaded and instant within the observer's microtask, opacity ${rp.opacity}, transition ${rp.duration} (never re-faded)`);
+    await openW(375, 812, { reducedMotion: true });
+    const rm = await evaluate('__W.fadeLoad()');
+    assert(rm.loaded && rm.duration === '0s' && rm.after === '1', `W2d Reduce Motion: no fade (transition ${rm.duration})`);
+  }
+  // [W3] DI-W105-4: a failed picture leaves quietly, wherever it is
+  for (const reducedMotion of [false, true]) {
+    await openW(375, 812, { reducedMotion });
+    assert(await evaluate('__W.failSetup()') === 3, 'W3 three cards with deferred pictures are mounted (bound root)');
+    // C below the viewport
+    await evaluate("__W.place('B', 300)");
+    const c0 = await evaluate("__W.state('C')");
+    assert(c0.imgTop > 812, `W3 the C picture is wholly below the viewport (top ${c0.imgTop})`);
+    const okC = await evaluate("__W.fail('C')"); await sleep(60);
+    const c1 = await evaluate("__W.state('C')"), hooksC = await evaluate('window.__hookCalls');
+    assert(okC && c1.failed && !c1.collapsing && c1.display === 'none' && c1.scrollY === c0.scrollY && hooksC.length === 1 && hooksC[0].aboveViewport === false,
+      `W3a${reducedMotion ? ' (Reduce Motion)' : ''} BELOW the viewport: removed at once, nothing scrolls (${c0.scrollY} -> ${c1.scrollY}), the hook told aboveViewport false`);
+    // B on screen
+    const b0 = await evaluate("__W.state('B')");
+    const okB = await evaluate("__W.fail('B')"); await sleep(40);
+    const b1 = await evaluate("__W.state('B')");
+    if (!reducedMotion) {
+      assert(okB && b1.collapsing && !b1.failed && b1.imgH < b0.imgH && b1.scrollY === b0.scrollY, `W3b ON SCREEN: the picture's space COLLAPSES (${b0.imgH} -> ${b1.imgH} pt after 40 ms, --collapsing), the page does not scroll`);
+      await sleep(500);
+      const b2 = await evaluate("__W.state('B')");
+      assert(b2.failed && !b2.collapsing && b2.display === 'none' && Math.abs((b0.cardH - b2.cardH) - b0.imgH) < 1 && b2.scrollY === b0.scrollY, `W3c …and after --motion-large it is gone: a clean text card ${b0.imgH} pt shorter (${b0.cardH} -> ${b2.cardH}), no scroll`);
+    } else {
+      assert(okB && b1.failed && !b1.collapsing && b1.display === 'none' && b1.scrollY === b0.scrollY, 'W3b (Reduce Motion) ON SCREEN: removed at once, no collapse animation');
+    }
+    // A above the viewport: the reader's place holds
+    await evaluate("__W.place('B', 200)");
+    const a0 = await evaluate("__W.state('A')");
+    assert(a0.imgTop + a0.imgH <= 0 && a0.imgH > 150, `W3 the A picture is wholly ABOVE the viewport (bottom ${+(a0.imgTop + a0.imgH).toFixed(1)}), ${a0.imgH} pt tall`);
+    const okA = await evaluate("__W.fail('A')"); await sleep(80);
+    const a1 = await evaluate("__W.state('A')"), hooksA = await evaluate('window.__hookCalls');
+    const last = hooksA[hooksA.length - 1];
+    assert(okA && a1.failed && !a1.collapsing && Math.abs((a0.scrollY - a1.scrollY) - a0.imgH) < 1 && Math.abs(a1.anchorTop - a0.anchorTop) < 1 && last.aboveViewport === true && Math.abs(last.removedPx - a0.imgH) < 0.01,
+      `W3d${reducedMotion ? ' (Reduce Motion)' : ''} ABOVE the viewport: removed at once and the page scrolls up by exactly its height (${a0.scrollY} -> ${a1.scrollY}, the picture ${a0.imgH}); what the reader is looking at does not move (${a0.anchorTop} -> ${a1.anchorTop})`);
+  }
+  {
+    // canary: without the hold (the hook doing nothing) the SAME measurement sees the jump
+    await openW(375, 812);
+    await evaluate('__W.failSetup()');
+    await evaluate('__W.bindNoHold()');                       // the REAL binder, with a hook that holds nothing
+    await evaluate("window.scrollTo({ top: 0 }); __W.place('B', 200)");
+    const a0 = await evaluate("__W.state('A')");
+    await evaluate("__W.fail('A')"); await sleep(80);
+    const a1 = await evaluate("__W.state('A')");
+    assert(a1.failed && Math.abs((a0.anchorTop - a1.anchorTop) - a0.imgH) < 1 && a1.scrollY === a0.scrollY, `W3e canary: the same removal WITHOUT the hold moves the reader's content up by the picture's height (${a0.anchorTop} -> ${a1.anchorTop}) — the jump W3d prevents is real`);
+  }
+  // [W4] DI-W105-4: the skeleton's picture box is the real card's 16:9
+  for (const w of [375, 320]) {
+    await openW(w, 812);
+    await sleep(100);
+    const k = await evaluate('__W.skeleton()');
+    await evaluate("(() => { const s = document.createElement('style'); s.id = 'old-skel'; s.textContent = '.feed-skel-image{height:96px !important;aspect-ratio:auto !important}'; document.head.appendChild(s); })()");
+    const old = await evaluate("(() => { const sk = document.querySelector('.feed-skel'), real = document.querySelector('.news-card'); return { skImgH: document.querySelector('.feed-skel-image').getBoundingClientRect().height, skCardH: sk.getBoundingClientRect().height, realCardH: real.getBoundingClientRect().height }; })()");
+    const dImgNew = Math.abs(k.realImgH - k.skImgH), dImgOld = Math.abs(k.realImgH - old.skImgH);
+    const dNew = Math.abs(k.realCardH - k.skCardH), dOld = Math.abs(old.realCardH - old.skCardH);
+    assert(Math.abs(k.skRatio - 0.5625) < 0.01 && Math.abs(k.realRatio - 0.5625) < 0.01 && /16 \/ 9/.test(k.aspect) && dImgNew <= 40 && dImgOld > dImgNew + 40 && dNew < dOld - 40,
+      `W4 ${w} pt: the news skeleton's picture box is 16:9 (${k.skRatio}; the real picture ${k.realRatio}): ${k.skImgH} pt against the real ${k.realImgH} (inside the card's 16 pt inset), where the old 96 pt box was ${dImgOld.toFixed(1)} pt short; the whole skeleton card is ${dNew.toFixed(1)} pt from the real one (was ${dOld.toFixed(1)})`);
+  }
 } catch (e) {
   assert(false, 'the browser run completed without throwing — ' + String((e && e.message) || e).slice(0, 300));
 }
@@ -532,6 +774,13 @@ console.log('\n[F] THE REPLICA IS THE APP\'S MARKUP (source-text pins on js/app.
     && /bodyId: 'news-also-sheet-body'/.test(sheet) && /renderAlsoFromSheet\(item\)/.test(sheet) && /bindAlsoFromSheetEvents\(wrap, item,/.test(sheet),
     'F openNewsAlsoSheet: the same ids, dialog attributes, title, close button, body and the SAME two newsCard.js functions the replica calls');
   assert(/const NEWS_ALSO_SHEET_WRAP_ID = 'news-also-sheet-wrap';/.test(APP_SRC), 'F the wrap id is news-also-sheet-wrap');
+  // W-105: the [W] page's two replicas are the app's own text
+  const hold = APP_SRC.slice(APP_SRC.indexOf('function holdHomePlaceForPicture('), APP_SRC.indexOf('\n}\n', APP_SRC.indexOf('function holdHomePlaceForPicture(')) + 2);
+  assert(hold === "function holdHomePlaceForPicture({ removedPx, aboveViewport } = {}) {\n  if (aboveViewport !== true || !Number.isFinite(removedPx) || removedPx <= 0) return false;\n  return scrollPageBy(-removedPx, 'instant');\n}"
+    && /_homeWiring\.homeNews\.bindEvents\(root, \{ onPictureRemoved: holdHomePlaceForPicture \}\)/.test(APP_SRC), 'F W-105: js/app.js holdHomePlaceForPicture is the [W] page\'s hook, text for text, and it is what Home\'s news binding passes');
+  const HOME_SRC = readFileSync(join(here, 'js', 'home.js'), 'utf8');
+  assert(HOME_SRC.includes("const image = withImage ? '<div class=\"feed-skel-image\"></div>' : '';") && HOME_SRC.includes('return `<article class="card feed-card feed-skel" aria-hidden="true">${image}<div class="feed-skel-line feed-skel-line--narrow"></div><div class="feed-skel-line feed-skel-line--full"></div><div class="feed-skel-line feed-skel-line--wide"></div></article>`;'),
+    'F W-105: home.js skeletonCardHTML({ withImage: true }) emits exactly the [W4] markup');
 }
 
 await tallyAndExit();

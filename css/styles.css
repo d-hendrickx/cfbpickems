@@ -7980,13 +7980,25 @@ body.native-shell #ls-sheet .chat-sheet-header{position:relative;padding-top:14p
 /* a reserved 16:9 box: nothing jumps when the picture arrives; a picture that fails to load is removed (js adds --failed), never left as a broken-image glyph */
 .news-card__image{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:var(--bg-input)}
 .news-card__image--failed{display:none}
+/* W-105 (DI-W105-4): the picture's life, keyed on the root js/newsCard.js's binder marks (.news-images-bound), so a root WITHOUT the binder shows its pictures as before.
+   Hidden in its reserved box until it loads, then a 150 ms fade (--motion-fast, small feedback, the entrance ease); one already loaded when its node arrived (a cached
+   file, a Home repaint) shows at once (--instant: no transition, a repaint never re-fades it). One that FAILS on screen collapses its space over --motion-large (350 ms,
+   a large layout transition, the native ease) while it fades, then --failed removes it: a clean text card. Reduce Motion: neither the fade nor the collapse animates. */
+.news-images-bound .news-card__image{opacity:0;transition:opacity var(--motion-fast) var(--ease-entrance)}
+.news-images-bound .news-card__image.is-loaded{opacity:1}
+.news-images-bound .news-card__image.news-card__image--instant{transition:none}
+.news-card__image.news-card__image--collapsing{opacity:0;transition:height var(--motion-large) var(--ease-native),opacity var(--motion-large) var(--ease-native)}
 .news-card__body{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:16px;min-width:0}
-.news-card__headline{margin:0;font-size:1rem;font-weight:600;line-height:1.35;color:var(--text-primary);overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+/* W-105 (DI-W105-3, Drew: "include the whole headline for each news site"): the publisher's WHOLE headline, wrapped onto as many lines as it needs at every text size
+   (no line clamp, no ellipsis; the 300-character data limit is the only bound). min-width:0 so a long word can never widen the card. newstest 9b-8 pins this body. */
+.news-card__headline{margin:0;font-size:1rem;font-weight:600;line-height:1.35;color:var(--text-primary);overflow-wrap:anywhere;min-width:0}
 .news-card__meta{display:flex;align-items:center;flex-wrap:wrap;gap:8px;width:100%;font-size:.75rem;line-height:1.35;color:var(--text-secondary)}
 .news-card__pub{font-weight:600}
 .news-card__sport{margin-left:auto}
 @media (prefers-reduced-motion:reduce){
   .news-card{transition:none}
+  .news-images-bound .news-card__image{transition:none}
+  .news-card__image.news-card__image--collapsing{transition:none}
 }
 /* --- D1 LANE C (DI-663 storyline card, DI-672 grouped card + "Also from" sheet, 2026-10-08) --- the same card shell and tokens; nothing new in colour or weight.
    A GROUPED card moves the link role to .news-card__main, so the "Also from" control is a SIBLING (never a button nested in a link). The main block presses like
@@ -9145,6 +9157,9 @@ body.native-shell #swap-picker-sheet .chat-sheet-header{position:relative;paddin
 .feed-card-body--scribe{white-space:pre-line}
 .feed-card-caption{margin:0;font-size:.8125rem;line-height:1.45;color:var(--text-secondary)}
 .feed-card-chips{display:flex;flex-wrap:wrap;gap:8px}
+/* W-105 (DI-W105-5): a finished game's two team marks (the shipped 48 pt .tl lockup, away then home), leading-aligned 8 pt apart; the card's own 8 pt column gap sets it
+   under the eyebrow and above the title (no margin, no new spacing rule) */
+.feed-card-marks{display:flex;align-items:center;gap:8px}
 .feed-chip{gap:4px}
 .feed-chip-glyph{display:inline-flex;width:12px;height:12px}
 .feed-chip-glyph svg{width:12px;height:12px}
@@ -9189,7 +9204,8 @@ body.native-shell #swap-picker-sheet .chat-sheet-header{position:relative;paddin
 .feed-skel-line--narrow{width:35%}
 .feed-skel-line--wide{width:60%}
 .feed-skel-line--full{width:90%}
-.feed-skel-image{height:96px;border-radius:var(--btn-radius);background:var(--border-strong);opacity:.5;animation:feed-skel-pulse var(--skeleton-shimmer,1400ms) ease-in-out infinite}
+/* W-105 (DI-W105-4): the news skeleton's picture is the real card's 16:9 box (was a fixed 96 pt), so the first real card does not change height by about 100 pt on arrival */
+.feed-skel-image{height:auto;aspect-ratio:16/9;border-radius:var(--btn-radius);background:var(--border-strong);opacity:.5;animation:feed-skel-pulse var(--skeleton-shimmer,1400ms) ease-in-out infinite}
 @keyframes feed-skel-pulse{0%,100%{opacity:.5}50%{opacity:.9}}
 
 /* ── D1 Lane B additions to the Home feed (2026-10-07) ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

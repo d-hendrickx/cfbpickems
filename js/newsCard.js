@@ -158,7 +158,8 @@ function newsCardHTML(item, { tag = '' } = {}) {
   const pubMs = Date.parse(item.publishedAt);
   if (!Number.isFinite(pubMs)) return '';
   const reason = !tag && NEWS_CARD_REASONS.indexOf(item.reason) >= 0 ? item.reason : '';
-  const imageSrc = isAllowedNewsImageUrl(item.imageUrl, Array.isArray(item.imageHosts) ? item.imageHosts : null);
+  const allowedSrc = isAllowedNewsImageUrl(item.imageUrl, Array.isArray(item.imageHosts) ? item.imageHosts : null);
+  const imageSrc = allowedSrc && !failedPictures.has(allowedSrc) ? allowedSrc : null;   // W-105 (DI-W105-4): a picture that already failed here is not drawn again (no box, no request, no jump on a repaint)
   const when = relativeTime(item.publishedAt);
   const updMs = Date.parse(item.updatedAt);
   const updated = Number.isFinite(updMs) && updMs - pubMs >= NEWS_UPDATED_MIN_MS ? shortDate(item.updatedAt) : '';
@@ -236,6 +237,66 @@ export function openNewsArticle(href) {
   return openExternalUrl(href);
 }
 
+// ─── the picture's life on the card (W-105, DI-W105-4, 2026-10-17) ─────────────────────────────────────────────────────────────────────
+// Design Philosophy, Loading States: "Avoid sudden layout jumps. Content popping into existence." The 16:9 box is reserved in the markup (no jump when the picture
+// arrives). Inside a root the binder has bound (`.news-images-bound`, set below; css/styles.css keys the hidden-until-loaded rule on it, so a root WITHOUT the binder shows
+// the picture exactly as before), a picture is hidden until it loads and then fades in over --motion-fast; one that was already loaded when its node arrived (a cached
+// file, a Home repaint: Home rewrites its root on most paints) is shown at once with no transition, so a repaint never re-fades it. A picture that FAILS leaves a clean
+// text card: where it sits decides how (the picture's own box against the viewport, measured before anything changes) — wholly below the viewport: removed at once (no
+// one sees it); on screen: its space collapses over --motion-large while it fades (instant under Reduce Motion); wholly above the viewport: removed at once and the
+// optional `onPictureRemoved({ removedPx, aboveViewport })` hook lets Home scroll by the removed height so the reader's place holds (Home's #page-home has
+// overflow-anchor:none: nothing else does it). A card that is partly on screen with its picture already scrolled above the top counts as ABOVE: removing that picture by
+// collapsing it would slide the text the reader is looking at (the DI's "Fails if: the visible content jumps when a picture above the reader fails").
+// A picture that failed is remembered for this page's life (URLs only, in memory, capped, never persisted; nothing is remembered while the device is offline), and the
+// card is drawn without it from then on, so Home's next repaint does not bring the empty box back. No timer, no new import, no inline handler, no style attribute in markup.
+const PICTURE_CLASS = 'news-card__image';
+const PICTURES_BOUND_CLASS = 'news-images-bound';
+const PICTURE_LOADED = 'is-loaded';
+const PICTURE_INSTANT = 'news-card__image--instant';
+const PICTURE_COLLAPSING = 'news-card__image--collapsing';
+const PICTURE_FAILED = 'news-card__image--failed';
+export const FAILED_PICTURES_CAP = 200;
+const failedPictures = new Set();
+/** Test seam: the remembered failures (read-only use in tests; `clear()` between cases). */
+export const _failedPicturesForTest = failedPictures;
+
+const hasClass = (el, c) => !!el && !!el.classList && typeof el.classList.contains === 'function' && el.classList.contains(c);
+const isPicture = (el) => hasClass(el, PICTURE_CLASS);
+function addClass(el, ...names) { try { names.forEach((n) => el.classList.add(n)); } catch { /* a detached or fake node */ } }
+function removeClass(el, ...names) { try { names.forEach((n) => el.classList.remove(n)); } catch { /* a detached or fake node */ } }
+
+function rememberFailedPicture(img) {
+  try {
+    if (typeof navigator !== 'undefined' && navigator && navigator.onLine === false) return;   // offline: every picture fails; none of them is broken
+    const src = typeof img.getAttribute === 'function' ? img.getAttribute('src') : null;
+    if (typeof src === 'string' && src && failedPictures.size < FAILED_PICTURES_CAP) failedPictures.add(src);
+  } catch { /* nothing to remember */ }
+}
+function prefersLessMotion() {
+  try { return typeof window !== 'undefined' && !!window && typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches === true; } catch { return false; }
+}
+/** The picture's box against the viewport, measured BEFORE anything changes: its height, and whether it lies wholly above or wholly below what the reader can see. */
+function pictureGeometry(img) {
+  let r = null;
+  try { r = typeof img.getBoundingClientRect === 'function' ? img.getBoundingClientRect() : null; } catch { r = null; }
+  const height = r && Number.isFinite(r.height) && r.height > 0 ? r.height : 0;
+  let viewH = NaN;
+  try { const doc = img.ownerDocument; const win = doc && doc.defaultView ? doc.defaultView : (typeof window !== 'undefined' ? window : null); viewH = win ? Number(win.innerHeight) : NaN; } catch { viewH = NaN; }
+  const above = !!r && height > 0 && r.bottom <= 0;
+  const below = !!r && height > 0 && Number.isFinite(viewH) && r.top >= viewH;
+  return { height, above, below };
+}
+/** A picture that was already loaded when its node arrived shows at once, with no fade (a repaint never re-fades a loaded picture). */
+function showLoadedPictures(node) {
+  if (!node || typeof node.querySelectorAll !== 'function') return;
+  let list = [];
+  try { list = Array.from(node.querySelectorAll('img.news-card__image')); if (isPicture(node)) list.push(node); } catch { list = []; }
+  for (const img of list) {
+    if (hasClass(img, PICTURE_LOADED) || hasClass(img, PICTURE_FAILED) || hasClass(img, PICTURE_COLLAPSING)) continue;
+    if (img.complete === true && Number(img.naturalWidth) > 0) addClass(img, PICTURE_INSTANT, PICTURE_LOADED);
+  }
+}
+
 const bound = new WeakMap();
 
 /**
@@ -243,8 +304,11 @@ const bound = new WeakMap();
  * against the CURRENT items (`items` is an array or a function returning one, so a refresh needs no rebind), re-validates that item's url
  * with parseArticleUrl, and hands `onOpen` the validated href — never a URL read from the DOM, never `item.url` itself. A card whose id is
  * unknown, or whose url fails, opens nothing. Binding the same root twice REPLACES the earlier binding (no double open). Returns an unbind.
+ * W-105 (DI-W105-4): the binder also owns the picture's life (see above) — `load` / `error` capture listeners, `.news-images-bound` on the root, an observer that shows an
+ * already-loaded picture at once after a repaint — and the optional `onPictureRemoved({ removedPx, aboveViewport })` hook, called once per removed picture (a throw is logged,
+ * never thrown into the binder). Unbinding removes all of it, the root class included.
  */
-export function bindNewsCardEvents(rootEl, { items, onOpen, onAlsoFrom } = {}) {
+export function bindNewsCardEvents(rootEl, { items, onOpen, onAlsoFrom, onPictureRemoved } = {}) {
   if (!rootEl || typeof rootEl.addEventListener !== 'function') return () => {};
   if (bound.has(rootEl)) { try { bound.get(rootEl)(); } catch { /* detached */ } }
   const getItems = typeof items === 'function' ? items : () => items;
@@ -294,17 +358,60 @@ export function bindNewsCardEvents(rootEl, { items, onOpen, onAlsoFrom } = {}) {
     if (typeof e.preventDefault === 'function') e.preventDefault();
     activate(card);
   };
-  // A picture that fails to load is REMOVED, not left as a broken-image glyph (an inline onerror is forbidden, so this is a delegated
-  // capture listener: error events do not bubble).
-  const onImageError = (e) => {
-    const t = e && e.target;
-    if (t && t.classList && typeof t.classList.contains === 'function' && t.classList.contains('news-card__image')) t.classList.add('news-card__image--failed');
+  // W-105 (DI-W105-4): the picture's life. Load and error events do not bubble, so both are delegated CAPTURE listeners (an inline onload / onerror is forbidden).
+  const pictureRemoved = (removedPx, aboveViewport) => {
+    if (typeof onPictureRemoved !== 'function') return;
+    try { onPictureRemoved({ removedPx, aboveViewport }); } catch (err) { console.warn('[news] the picture-removed hook failed', err && err.name); }
   };
+  const onImageLoad = (e) => {
+    const img = e && e.target;
+    if (isPicture(img) && !hasClass(img, PICTURE_FAILED) && !hasClass(img, PICTURE_COLLAPSING)) addClass(img, PICTURE_LOADED);   // the 150 ms fade (css), or nothing to do for an instant one
+  };
+  // A picture that fails to load is REMOVED, never left as a grey box or a broken-image glyph, and never with a visible jump.
+  const onImageError = (e) => {
+    const img = e && e.target;
+    if (!isPicture(img) || hasClass(img, PICTURE_FAILED) || hasClass(img, PICTURE_COLLAPSING)) return;
+    rememberFailedPicture(img);
+    const { height, above, below } = pictureGeometry(img);
+    if (above || below || height === 0 || prefersLessMotion()) {
+      addClass(img, PICTURE_FAILED);                                         // at once: nobody sees it go (below / above), or Reduce Motion
+      pictureRemoved(height, above);                                         // above the viewport: Home scrolls up by exactly this, so the reader's place holds
+      return;
+    }
+    // on screen: the space collapses over --motion-large while it fades, then the picture is gone (a clean text card)
+    const done = (ev) => {
+      if (ev && ev.target !== img) return;
+      try { img.removeEventListener('transitionend', done); } catch { /* detached */ }
+      removeClass(img, PICTURE_COLLAPSING);
+      addClass(img, PICTURE_FAILED);
+      try { img.style.height = ''; } catch { /* detached */ }
+    };
+    try {
+      img.style.height = `${height}px`;                                      // the measured start, so the height can animate (the box is otherwise aspect-ratio sized)
+      void img.offsetHeight;                                                 // commit the start before the change
+      addClass(img, PICTURE_COLLAPSING);
+      img.style.height = '0px';
+      img.addEventListener('transitionend', done);
+    } catch { done(); }
+    pictureRemoved(height, false);
+  };
+  addClass(rootEl, PICTURES_BOUND_CLASS);
+  showLoadedPictures(rootEl);
+  let observer = null;
+  try {
+    if (typeof MutationObserver === 'function') {
+      observer = new MutationObserver((records) => { for (const r of records) for (const n of Array.from(r.addedNodes || [])) { if (n && n.nodeType === 1) showLoadedPictures(n); } });
+      observer.observe(rootEl, { childList: true, subtree: true });            // a microtask after the repaint's write, before the next frame
+    }
+  } catch { observer = null; }                                               // not a Node (the unit-test fakes): the load listener alone
   rootEl.addEventListener('click', onClick);
   rootEl.addEventListener('keydown', onKeydown);
+  rootEl.addEventListener('load', onImageLoad, true);
   rootEl.addEventListener('error', onImageError, true);
   const unbind = () => {
-    try { rootEl.removeEventListener('click', onClick); rootEl.removeEventListener('keydown', onKeydown); rootEl.removeEventListener('error', onImageError, true); } catch { /* detached */ }
+    try { rootEl.removeEventListener('click', onClick); rootEl.removeEventListener('keydown', onKeydown); rootEl.removeEventListener('load', onImageLoad, true); rootEl.removeEventListener('error', onImageError, true); } catch { /* detached */ }
+    try { if (observer) observer.disconnect(); } catch { /* detached */ }
+    removeClass(rootEl, PICTURES_BOUND_CLASS);                               // a root without the binder shows its pictures as before (progressive enhancement)
     bound.delete(rootEl);
   };
   bound.set(rootEl, unbind);

@@ -1,0 +1,29 @@
+{
+  "id": "newspicturestest",
+  "script": "newspicturestest.mjs",
+  "summary": "strict",
+  "floor": 58,
+  "tags": [
+    "quick"
+  ],
+  "forbid": [
+    {
+      "regex": "ERR_MODULE_NOT_FOUND",
+      "flags": "",
+      "label": "newspicturestest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)"
+    }
+  ],
+  "deps": [
+    "js/home.js",
+    "js/newsCard.js",
+    "js/newsFeed.js",
+    "js/newsRules.js",
+    "js/newsTransport.js",
+    "js/keyed-list.js",
+    "js/nav-gestures.js",
+    "js/app.js",
+    "js/*.js"
+  ],
+  "expectedMs": 1500,
+  "note": "W-105 (v0.30.2, DI-W105-1/2/4): the news count, selectNews (pictures spread, the publisher guard, determinism, no clock or random value at run time), the news binder's picture life with fake geometry (fade, instant, below / on screen / above, Reduce Motion, the hook, the failed-picture memory), the scroll-hold wiring, and the P-11 allow-list guards (marks emitter, image-validator call sites, host lists, img sinks)."
+}

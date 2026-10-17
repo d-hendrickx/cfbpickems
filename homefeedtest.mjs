@@ -117,6 +117,23 @@ console.log('\n[1] DI-575 — tappable cards…');
   void real;
 }
 
+// ═══ [1w] W-105 (DI-W105-5): a tap ON the finished-game card's team marks is the card's tap (one target, the real dispatcher) ═══════════════════════
+console.log('\n[1w] W-105 — the team marks are inside the card\'s ONE tap target…');
+{
+  const LOGO = (team) => `https://a.espncdn.com/i/teamlogos/ncaa/500/${encodeURIComponent(String(team).toLowerCase())}.png`;
+  const e = mk(home, { deps: { logoUrlFor: (game, side) => (game && !game.isManual ? LOGO(side === 'home' ? game.homeTeam : game.awayTeam) : null) } });
+  e.home.renderHome();
+  const gfCards = e.container.querySelectorAll('[data-card-type="game.final"]');
+  const g0 = gfCards[0];
+  const mark = g0 && g0.querySelector('.feed-card-marks .tl-abbr');
+  const img = g0 && g0.querySelector('.feed-card-marks img.matrix-hdr-logo');
+  assert(gfCards.length >= 2 && !!mark && !!img && g0.getAttribute('data-home-action') === 'open-card', `1w-a: with Team logos on, the finished-game cards (${gfCards.length}) carry their marks row INSIDE the tappable <article>`);
+  e.calls.actions.length = 0; e.calls.haptics.length = 0;
+  click(mark); click(img);
+  assert(e.calls.actions.length === 2 && e.calls.actions.every(a => a[0] === 'open-card' && a[1].cardId === g0.getAttribute('data-card-id')) && e.calls.haptics.join() === 'light,light',
+    '1w-b: a tap on a team mark (its abbreviation or its logo) goes through the REAL delegated dispatcher and opens THAT card\'s detail with the light haptic — no second target, no new control');
+}
+
 // ═══ [2] ═════════════════════════════════════════════════════════════════════════════════════════════════════
 console.log('\n[2] DI-586 — windowed pagination…');
 {
