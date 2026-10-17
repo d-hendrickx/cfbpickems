@@ -1941,6 +1941,10 @@ Manifest note moved here (2026-10-16, fix/d1-rls-triage; the manifest keeps a sh
 
 > Raised 2846 -> 2852 (2026-10-16, bugfix FAST_PATH DEV rls.test run 2 triage, thread 100726-D1): CREATION BREAKER PRE-FLIGHT (+6: breaker = every create_league c_max_breaker, the plan names exactly the create_league callers, DEV-only read-only pre-flight, before fixtures(), LIVE-guarded orphans-only fix, 10-weakening proof).
 
+Manifest note moved here (2026-10-16, fix/d1-0057-fill; the manifest keeps a short form under the 4 KB rule):
+
+> (D1 combine, 2026-10-08: RAISED from 2627 to 2629 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - (D1 DI-531, 2026-10-08: RAISED from 2497 to 2499 — W-37's DDL_EXEMPT emptied (competitions.extra retired) with a non-vacuity check, and the importer's competitions / competition_members planning pinned) — (the N8 1797 -> 1805 note, quoted once above)
+
 ## statstest
 
 label: `120` · script: `statstest.mjs` · floor at extraction: 169

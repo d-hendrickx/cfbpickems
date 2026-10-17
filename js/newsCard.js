@@ -18,7 +18,8 @@
  *      free text can reach it.
  *   5. The output is balanced markup, or '' on bad input (a non-object, a missing id / headline / source, an unknown sport, an unparseable time).
  *
- * Import allow-list (DI-382, asserted by newstest): ./haptics.js, ./platform.js and ./newsRules.js (the shared URL / picture validators). Nothing else.
+ * Import allow-list (DI-382, asserted by newstest): ./haptics.js, ./platform.js, ./newsRules.js (the shared URL / picture validators) and, since W-92 (2026-10-17),
+ * ./feed-time.js (the shared, pure time vocabulary). Nothing else.
  *
  * ── D1 (DI-671…673, C10, C18; 2026-10-08) ─────────────────────────────────────────────────────────────────────────────
  *   · An item from the SERVER carries its source's own `linkHosts` / `imageHosts` (news_sources_for): the article URL is re-validated against THOSE at render-adjacent
@@ -35,6 +36,7 @@
 import { haptic } from './haptics.js';
 import { openExternalUrl } from './platform.js';
 import { parseArticleUrl as parseArticleUrlFor, isAllowedImageUrl } from './newsRules.js';
+import { relativeTime } from './feed-time.js';   // W-92 (DI-W92-7/9): the ONE shared vocabulary; re-exported under its old name below (newstest imports it from here)
 
 // ─── escaping: ONE local, quote-complete escaper (S-C3) ───────────────────────────────────────────────────────────────
 
@@ -109,17 +111,11 @@ export function isAllowedNewsImageUrl(raw, hosts = null) {
 
 // ─── relative time ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** "Just now" / "12m ago" / "2h ago" / "Yesterday" / "3d ago". No shared helper in the app has these buckets (app.js and chat-ui.js keep private ones), so this is local. */
-export function relativeTime(iso, now = Date.now()) {
-  const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return '';
-  const diff = now - ms;
-  if (diff < 60e3) return 'Just now';
-  if (diff < 3600e3) return `${Math.floor(diff / 60e3)}m ago`;
-  if (diff < 86400e3) return `${Math.floor(diff / 3600e3)}h ago`;
-  if (diff < 2 * 86400e3) return 'Yesterday';
-  return `${Math.floor(diff / 86400e3)}d ago`;
-}
+/**
+ * "Just now" / "12m ago" / "2h ago" / "Yesterday" / "3d ago" / "Oct 9". W-92 (2026-10-17): this was a private helper; it is now js/feed-time.js's,
+ * shared with every Home card, and re-exported here under the same name. Past a week it says the date instead of "8d ago".
+ */
+export { relativeTime };
 
 // ─── the card ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -173,7 +169,7 @@ function newsCardHTML(item, { tag = '' } = {}) {
   const upd = updated ? `<span aria-hidden="true">·</span><span class="news-card__updated">Updated ${esc(updated)}</span>` : '';
   const also = alsoFromLabel(Array.isArray(item.alsoFrom) ? item.alsoFrom.map((a) => a && a.publisher) : []);
   const label = `${tagText ? `Storyline, ${tagText}: ` : ''}${headline}, ${byline}`;
-  const main = `${image}<div class="news-card__body">${eyebrow}${pill}<p class="news-card__headline">${esc(headline)}</p><div class="news-card__meta"><span class="news-card__pub">${esc(byline)}</span><span aria-hidden="true">·</span><span>${esc(when)}</span>${upd}<span class="national-tv-badge news-card__sport">${esc(sportLabel)}</span></div></div>`;
+  const main = `${image}<div class="news-card__body">${eyebrow}${pill}<p class="news-card__headline">${esc(headline)}</p><div class="news-card__meta"><span class="news-card__pub">${esc(byline)}</span><span aria-hidden="true">·</span><span class="news-card__time" data-feed-time="${esc(new Date(pubMs).toISOString())}">${esc(when)}</span>${upd}<span class="national-tv-badge news-card__sport">${esc(sportLabel)}</span></div></div>`;
   const kindClass = tagText ? ' news-card--storyline' : '';
   if (!also) return `<div class="card news-card${kindClass}" data-news-id="${esc(id)}" role="link" tabindex="0" aria-label="${esc(label)}">${main}</div>`;
   // DI-672: the grouped card. The link role moves to the main block, so the "Also from" button is a SIBLING (never a control nested inside a link).

@@ -234,7 +234,9 @@ const CARD_DETAIL = (() => {
   const ctx = { formatTime: (v) => String(v), formatCountdown: (ms) => `${Math.round(ms / 3600e3)}h`, capabilities: { thread: true, chat: true }, threadCount: () => 4 };
   const htmlOf = (card, over = {}) => { const model = card && CDMOD.buildCardDetail(card, snap, { ...ctx, ...over }); return model ? CDMOD.cardDetailHTML(model, { escHtml: esc, iconHtml: `<span class="cd-eyebrow-icon" aria-hidden="true">${ICONS_MOD.icon('calendarWeek')}</span>` }) : ''; };
   return {
-    list: htmlOf(cards.find((c) => c.type === 'player.week' && c.memberId === 'p1')),     // the numbers card + a 14-row list (2 past the preview) + the meaning card + one action
+    // W-92 (2026-10-17): the player.week card is retired from Home; the slate card's detail has the same shape — the numbers card + a 14-row list (the 14 games, 2 past the
+    // preview) + the meaning card + one action — so it carries the layout proof now.
+    list: htmlOf(cards.find((c) => c.type === 'slate.published')),
     actions: htmlOf(cards.find((c) => c.type === 'game.final'), { capabilities: { thread: true, chat: true, gameday: true } }),   // two actions side by side: Open game / Open thread · 4 (the Game view's flag on, only for the markup)
   };
 })();
@@ -260,10 +262,10 @@ assert(Object.values(NOTIF).every(h => /id="notif-priming-card"/.test(h) && /id=
   `[1j] the Notifications body renders the priming card, its button and the prefs card in all ${Object.keys(NOTIF).length} button-bearing states (${Object.keys(NOTIF).join(', ')})`);
 assert(/class="ob-actions ob-actions-tap"/.test(BOARD.admin) && !/ob-actions-tap/.test(COMM) && /class="ob-filter-tabs/.test(BOARD.creditor),
   '[1k] the Standings 2K25 card carries the .ob-actions-tap modifier and the owes-filter tabs; the Comm lists do not carry the modifier');
-assert(/class="cd" data-cd-type="player\.week"/.test(CARD_DETAIL.list) && /class="cd-eyebrow-icon"/.test(CARD_DETAIL.list) && /<svg/.test(CARD_DETAIL.list) && (CARD_DETAIL.list.match(/<li class="cd-item/g) || []).length === 14
+assert(/class="cd" data-cd-type="slate\.published"/.test(CARD_DETAIL.list) && /class="cd-eyebrow-icon"/.test(CARD_DETAIL.list) && /<svg/.test(CARD_DETAIL.list) && (CARD_DETAIL.list.match(/<li class="cd-item/g) || []).length === 14
   && (CARD_DETAIL.list.match(/cd-item--extra/g) || []).length === 2 && /class="card cd-card cd-numbers"/.test(CARD_DETAIL.list) && /data-cd-action="show-all"/.test(CARD_DETAIL.list)
   && /class="cd" data-cd-type="game\.final"/.test(CARD_DETAIL.actions) && (CARD_DETAIL.actions.match(/class="btn cd-action/g) || []).length === 2,
-  '[1l] the REAL card details: player.week has its eyebrow icon, the numbers card and 14 list rows (2 past the 12-row preview, "Show all 14"); game.final (with the Game-view flag on) has its two action buttons');
+  '[1l] the REAL card details: slate.published (W-92: was player.week, retired) has its eyebrow icon, the numbers card and 14 list rows (2 past the 12-row preview, "Show all 14"); game.final (with the Game-view flag on) has its two action buttons');
 
 // ── Page builders ────────────────────────────────────────────────────────────
 const tmp = mkdtempSync(join(tmpdir(), 'cfbp-spacing-'));
@@ -772,7 +774,8 @@ try {
       const lis = [...e.querySelectorAll('li')], last = lis[lis.length - 1], next = entries[i + 1];
       out.push({ v: e.dataset.release, toDivider: +(next.getBoundingClientRect().top - last.getBoundingClientRect().bottom).toFixed(2) });
     });
-    const first = entries[0], lis0 = [...first.querySelectorAll('li')];
+    // W-92 (v0.30.1, 2026-10-17): the newest release holds ONE bullet, so the gap is read in the first OPEN release that has two or more (the one opened mid-list above).
+    const first = entries.find((e) => e.open && e.querySelectorAll('li').length >= 2) || entries[0], lis0 = [...first.querySelectorAll('li')];
     const liGap = Math.min(...lis0.slice(1).map((li, i) => li.getBoundingClientRect().top - lis0[i].getBoundingClientRect().bottom));
     const lastE = entries[entries.length - 1], foot = document.querySelector('.release-notes-foot');
     return { out, liGap: +liGap.toFixed(2), footGap: +(foot.getBoundingClientRect().top - lastE.getBoundingClientRect().bottom).toFixed(2), n: entries.length };

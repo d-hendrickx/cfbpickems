@@ -20,6 +20,7 @@
  */
 
 import { icon } from './icons.js';
+import { timeLabels, tapLabel, makeDateFormatter } from './feed-time.js';   // W-92 (DI-W92-9): the one "when did this happen" vocabulary (a pure leaf)
 
 const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const esc = (s) => String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, (c) => ESC_MAP[c]);
@@ -101,7 +102,11 @@ export function renderContentCard(item, { now = Date.now(), timeZone = null, for
     const head = str(item.card && item.card.headline, 120);
     if (!meta || !id || !/^content_[0-9a-f-]{36}$/.test(id) || !head) return '';
     const reason = CONTENT_REASONS.indexOf(item.reason) >= 0 ? `<span class="feed-card-reason">${esc(item.reason)}</span>` : '';
-    const eyebrow = `<div class="feed-card-eyebrow"><span class="feed-card-icon" aria-hidden="true">${icon(meta.icon)}</span><span class="content-card-kind">${esc(meta.label)}</span>${reason}<span class="feed-card-chev" aria-hidden="true">${icon('chevronRight')}</span></div>`;
+    // W-92 (DI-W92-9): the card's time, from the `publishedAt` the feed sorts it by, in the player's zone — the feed card's own <time> and trailing group.
+    // Unknown beats wrong: no known instant, no time. The "as of" caption below stays: it says when the FACTS were true, a different thing.
+    const when = timeLabels(item.publishedAt, now, { formatDate: makeDateFormatter(timeZone || null) });
+    const timeHtml = when ? `<time class="feed-card-time" datetime="${esc(when.iso)}" data-feed-time="${esc(when.iso)}" aria-label="${esc(when.spoken)}">${esc(when.written)}</time>` : '';
+    const eyebrow = `<div class="feed-card-eyebrow"><span class="feed-card-icon" aria-hidden="true">${icon(meta.icon)}</span><span class="content-card-kind">${esc(meta.label)}</span>${reason}<span class="feed-card-trail">${timeHtml}<span class="feed-card-chev" aria-hidden="true">${icon('chevronRight')}</span></span></div>`;
     const sub = subLine(item, { timeZone, formatTime });
     const parts = [eyebrow, `<h3 class="feed-card-title">${esc(head)}</h3>`, sub ? `<p class="content-card-sub">${esc(sub)}</p>` : ''];
     const ok = item.synthesisStatus === 'ok' && str(item.summary);
@@ -129,7 +134,8 @@ export function renderContentCard(item, { now = Date.now(), timeZone = null, for
     const cap = contentCaption(item, now, { timeZone });
     parts.push(`<p class="feed-card-caption content-card-caption${cap.stale ? ' content-card-caption--stale' : ''}">${esc(cap.text)}</p>`);
     const kindClass = item.cardKind === 'matchup.preview' ? 'matchup' : item.cardKind === 'player.preview' ? 'player' : 'spotlight';
-    return `<article class="card feed-card feed-card--tap content-card content-card--${kindClass}" role="button" tabindex="0" data-content-id="${esc(id)}" aria-label="${esc(contentSpokenLabel(item, { timeZone }))}. Opens details.">${parts.join('')}</article>`;
+    const label = `${contentSpokenLabel(item, { timeZone })}.`;           // W-92 (DI-W92-8's form): "{label}. {spoken time}. Opens details."; data-feed-label lets Home refresh it in place
+    return `<article class="card feed-card feed-card--tap content-card content-card--${kindClass}" role="button" tabindex="0" data-content-id="${esc(id)}" data-feed-label="${esc(label)}" aria-label="${esc(tapLabel(label, when ? when.spoken : ''))}">${parts.join('')}</article>`;
   } catch { return ''; }
 }
 

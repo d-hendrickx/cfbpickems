@@ -48,7 +48,14 @@ const scrollListeners = [];
 globalThis.addEventListener = (t, fn) => { if (t === 'scroll') scrollListeners.push(fn); };
 globalThis.removeEventListener = (t, fn) => { const k = scrollListeners.indexOf(fn); if (t === 'scroll' && k >= 0) scrollListeners.splice(k, 1); };
 
-const league = (w2 = 'final') => fx.buildLeague({ w2, calculateWeeklyResults });
+// W-92 (2026-10-17): related cards now COMBINE (one standings / streak card per week, no per-member record or "called it" cards), so the hand-derived league
+// alone yields 19 feed entries — under one page. Windowing (DI-586), the pill (DI-574) and the dividers (DI-587) need pages to test, so the fixture carries
+// 32 extra FINAL week-1 games with NO picks (they move no record, rank or streak), each one more game-result card.
+const league = (w2 = 'final') => {
+  const L = fx.buildLeague({ w2, calculateWeeklyResults });
+  for (let i = 0; i < 32; i++) L.games.push(fx.mkGame({ id: `gx${i}`, weekId: 'w1', kick: new Date(Date.parse('2026-09-05T21:00:00.000Z') + i * 60e3).toISOString(), home: `Home ${i}`, away: `Away ${i}`, kind: 'cover', state: 'final' }));
+  return L;
+};
 /** The same league 40 days after its last week was finalized: the Now card is "Between seasons" (not Game Day), and the feed still has more than one page. */
 const betweenSeasons = () => { const L = league('final'); const last = L.weeks[L.weeks.length - 1]; return { ...L, weeks: L.weeks.map(w => (w.weekId === last.weekId ? { ...w, finalizedAt: iso(NOW - 40 * DAY) } : w)), games: L.games.map(g => (g.weekId === last.weekId ? { ...g, kickoff: iso(NOW - 41 * DAY) } : g)) }; };
 const post = (id, ts, ctx = { weekId: 'w2', weekN: 2 }) => ({ id, leagueId: 'L1', ts, author: 'scribe', authorName: 'SCRIBE', body: 'Settled: ' + id, reactionCount: 0, context: ctx, meta: { kind: 'lifecycle', test: false } });
@@ -229,14 +236,14 @@ console.log('\n[3] DI-574 — the new-posts pill…');
     globalThis.scrollY = 900; scrollListeners.length = 0;
     const live = () => a.container.querySelector('.home-pill-live');
     a.scribe.push(post('v-one', NOW + 3 * DAY)); a.home.renderHome();
-    assert(!!live() && live().getAttribute('role') === 'status' && live().getAttribute('aria-live') === 'polite' && live().getAttribute('aria-atomic') === 'true' && live().classList.contains('sr-only') && live().textContent === '' && a.pendingTimers() === 1 && home.PILL_ANNOUNCE_MS === 1000,
+    assert(!!live() && live().getAttribute('role') === 'status' && live().getAttribute('aria-live') === 'polite' && live().getAttribute('aria-atomic') === 'true' && live().classList.contains('sr-only') && live().textContent === '' && a.pendingTimers(home.PILL_ANNOUNCE_MS) === 1 && home.PILL_ANNOUNCE_MS === 1000,
       '3p: the pill carries an EMPTY polite live region (role=status, sr-only) beside the button; nothing is announced at once; one 1000 ms timer is pending');
     a.advance(999);
     assert(live().textContent === '', '3q: …still silent at 999 ms');
     a.advance(1);
-    assert(live().textContent === '1 new post' && a.pendingTimers() === 0, '3r: …"1 new post" is written to the live region at 1000 ms (so VoiceOver reads it once, politely)');
+    assert(live().textContent === '1 new post' && a.pendingTimers(home.PILL_ANNOUNCE_MS) === 0, '3r: …"1 new post" is written to the live region at 1000 ms (so VoiceOver reads it once, politely)');
     a.scribe.push(post('v-two', NOW + 3 * DAY + MIN)); a.home.renderHome();
-    assert(a.container.querySelector('.home-pill').getAttribute('aria-label') === '2 new posts' && live().textContent === '1 new post' && a.pendingTimers() === 0,
+    assert(a.container.querySelector('.home-pill').getAttribute('aria-label') === '2 new posts' && live().textContent === '1 new post' && a.pendingTimers(home.PILL_ANNOUNCE_MS) === 0,
       '3s: a LATER arrival updates the button\'s name but is NOT announced again (no chatter) — nothing new is scheduled');
     // arrivals inside the window fold into ONE announcement of the final count
     const b = mk(home); b.home.renderHome(); globalThis.scrollY = 900;
@@ -245,12 +252,12 @@ console.log('\n[3] DI-574 — the new-posts pill…');
     b.scribe.push(post('f-two', NOW + 3 * DAY + MIN)); b.home.renderHome();
     b.advance(600);
     const blive = () => b.container.querySelector('.home-pill-live');
-    assert(blive().textContent === '' && b.pendingTimers() === 1, '3t: a second arrival 600 ms in RESTARTS the quiet window — 1200 ms after the first, nothing has been said');
+    assert(blive().textContent === '' && b.pendingTimers(home.PILL_ANNOUNCE_MS) === 1, '3t: a second arrival 600 ms in RESTARTS the quiet window — 1200 ms after the first, nothing has been said');
     b.advance(400);
-    assert(blive().textContent === '2 new posts' && b.pendingTimers() === 0, '3u: …and one announcement follows, carrying the FINAL count ("2 new posts")');
+    assert(blive().textContent === '2 new posts' && b.pendingTimers(home.PILL_ANNOUNCE_MS) === 0, '3u: …and one announcement follows, carrying the FINAL count ("2 new posts")');
     // the reader reaching the top removes the pill and its announcement; a later batch is announced afresh
     globalThis.scrollY = 50; scrollListeners.slice().forEach(fn => fn());
-    assert(!b.container.querySelector('.home-pill-slot') && b.pendingTimers() === 0, '3v: arriving at the top removes the pill, live region included');
+    assert(!b.container.querySelector('.home-pill-slot') && b.pendingTimers(home.PILL_ANNOUNCE_MS) === 0, '3v: arriving at the top removes the pill, live region included');
     globalThis.scrollY = 900;
     b.scribe.push(post('f-three', NOW + 4 * DAY)); b.home.renderHome();
     b.advance(1000);
@@ -259,14 +266,14 @@ console.log('\n[3] DI-574 — the new-posts pill…');
     const c2 = mk(home); c2.home.renderHome(); globalThis.scrollY = 900; scrollListeners.length = 0;
     c2.scribe.push(post('c-one', NOW + 3 * DAY)); c2.home.renderHome();
     globalThis.scrollY = 50; scrollListeners.slice().forEach(fn => fn());
-    assert(c2.pendingTimers() === 0, '3x: the pill dismissed before 1 s cancels its pending announcement (a vanished pill is never announced)');
+    assert(c2.pendingTimers(home.PILL_ANNOUNCE_MS) === 0, '3x: the pill dismissed before 1 s cancels its pending announcement (a vanished pill is never announced)');
     // identity change before the timer fires
     globalThis.scrollY = 900;
     const d2 = mk(home); d2.home.renderHome();
     d2.scribe.push(post('i-one', NOW + 3 * DAY)); d2.home.renderHome();
     d2.state.identity = 'acct|L1|p9'; d2.home.renderHome();
     d2.advance(2000);
-    assert(d2.pendingTimers() === 0 && !/new post/.test(d2.container.textContent || ''), '3y: a different identity cancels the announcement — a departed reader\'s count is never spoken for the next one');
+    assert(d2.pendingTimers(home.PILL_ANNOUNCE_MS) === 0 && !/new post/.test(d2.container.textContent || ''), '3y: a different identity cancels the announcement — a departed reader\'s count is never spoken for the next one');
     // no timer injected: silent, never throws
     const n = mk(home, { deps: { setTimer: undefined, clearTimer: undefined } }); n.home.renderHome(); globalThis.scrollY = 900;
     let threw = false;
@@ -461,7 +468,7 @@ console.log('\n[7] MUTATION PROOFS — scratch copies loaded as data: URLs (neve
       o.announces = !!lv() && lv().textContent === '1 new post';
       o.polite = !!lv() && lv().getAttribute('aria-live') === 'polite';
       v.scribe.push(post('q-two', NOW + 3 * DAY + MIN)); v.home.renderHome();
-      o.once = v.pendingTimers() === 0 && lv().textContent === '1 new post';
+      o.once = v.pendingTimers(home.PILL_ANNOUNCE_MS) === 0 && lv().textContent === '1 new post';
       globalThis.scrollY = 50; scrollListeners.slice().forEach(fn => fn());          // the pill goes away (its announcement had fired)
       globalThis.scrollY = 900; v.scribe.push(post('q-three', NOW + 4 * DAY)); v.home.renderHome();
       v.advance(1000);
@@ -469,10 +476,10 @@ console.log('\n[7] MUTATION PROOFS — scratch copies loaded as data: URLs (neve
       globalThis.scrollY = 50; scrollListeners.slice().forEach(fn => fn());
       globalThis.scrollY = 900; v.scribe.push(post('q-four', NOW + 5 * DAY)); v.home.renderHome();   // a pending announcement …
       globalThis.scrollY = 50; scrollListeners.slice().forEach(fn => fn());          // … and the pill is dismissed before it fires
-      o.cancelledOnRemove = v.pendingTimers() === 0;
+      o.cancelledOnRemove = v.pendingTimers(home.PILL_ANNOUNCE_MS) === 0;
       globalThis.scrollY = 900; v.scribe.push(post('q-five', NOW + 6 * DAY)); v.home.renderHome();   // a pending announcement …
       v.state.identity = 'acct|L1|p8'; v.home.renderHome();                          // … and a different reader signs in
-      o.cancelledOnIdentity = v.pendingTimers() === 0;
+      o.cancelledOnIdentity = v.pendingTimers(home.PILL_ANNOUNCE_MS) === 0;
       globalThis.scrollY = 0;
     }
     const g = mk(mod); g.home.renderHome();

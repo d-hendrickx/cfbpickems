@@ -65,9 +65,12 @@ function rekey(league, entrants, { prefix, compId, shiftMs = 0 }) {
   const weeklyResults = weeks.filter((w) => w.status === 'final').flatMap((w) => calculateWeeklyResults(w.weekId, players, picks.filter((p) => p.weekId === w.weekId), games.filter((g) => g.weekId === w.weekId)));
   return { players, weeks, games, picks, weeklyResults };
 }
-function world({ nflShiftDays = 0, third = false } = {}) {
+function world({ nflShiftDays = 0, third = false, extraCfbGames = 0 } = {}) {
   const base = (s) => fx.buildLeague({ w2: s, calculateWeeklyResults });
   const cfbRaw = base('live');
+  // W-92 (2026-10-17): related cards combine, so the CFB slice alone is under one page. `extraCfbGames` adds FINAL week-1 CFB games with no picks (they move no
+  // record or rank), one result card each, for the paging case (2s/2t) that needs a FULL first page of CFB cards ahead of the older NFL ones.
+  for (let i = 0; i < extraCfbGames; i++) cfbRaw.games.push(fx.mkGame({ id: `gx${i}`, weekId: 'w1', kick: new Date(Date.parse('2026-09-05T21:00:00.000Z') + i * 60e3).toISOString(), home: `Home ${i}`, away: `Away ${i}`, kind: 'cover', state: 'final' }));
   const cfb = { ...cfbRaw, weeks: cfbRaw.weeks.map((w) => ({ ...w, competitionId: CFB_ID })) };
   const nfl = rekey(base('final'), NFL_ENTRANTS, { prefix: 'n_', compId: NFL_ID, shiftMs: -nflShiftDays * 86400e3 });
   const nhl = third ? rekey(base('final'), NHL_ENTRANTS, { prefix: 'h_', compId: NHL_ID }) : null;
@@ -181,7 +184,7 @@ async function checks(M) {
     ck('2r ...and the member\'s own sport (CFB) never gets one', !t3k.includes('join:cfb'));
 
     // paging: the NFL cards are older than a full first page of CFB cards, so no NFL card is in the window until the next page
-    const old = world({ nflShiftDays: 90 });
+    const old = world({ nflShiftDays: 90, extraCfbGames: 24 });
     const pg = mountFeed(M, old, { offers: [OFFER_NFL(true)] });
     const first = itemsOf(pg.container).map((i) => i.key);
     ck('2s an offered sport with no card in the visible window gets no nudge (no tease, no cold ad)', !first.some((k) => k.startsWith('join:')) && !itemsOf(pg.container).some((i) => i.html.includes('data-sport="nfl"')));

@@ -126,7 +126,7 @@ console.log('[1] Static contract — allow-lists, the zero-import rank module, o
   const ALLOW = {
     // D1 Lane C (DI-673 / DI-479 / DI-487 13.1, 2026-10-08): the transport also mirrors the pilot rule (./pilot-only.js); the card takes its validators from the shared rules file.
     'js/newsTransport.js': ['./data-provider.js', './auth.js', './newsCard.js', './newsRules.js', './pilot-only.js'],
-    'js/newsCard.js': ['./haptics.js', './platform.js', './newsRules.js'],
+    'js/newsCard.js': ['./haptics.js', './platform.js', './newsRules.js', './feed-time.js'],   // ./feed-time.js joined 2026-10-17 (W-92, DI-W92-7/9): the shared, pure time vocabulary (it imports nothing)
     'js/newsSettings.js': ['./icons.js'],
     // D1 Lane C (DI-663 / DI-673): the adapter also builds the slate keys and the storyline tag — ./team-match.js (the one matcher) and ./data-model.js (TIME_ZONES, for the tag's weekday).
     // D1 Lane C (DI-660 / DI-668): the Home CONTENT leg rides the same adapter — ./feed-relevance.js (pure: the private relevance) and ./content-card.js (the cards' one sink).

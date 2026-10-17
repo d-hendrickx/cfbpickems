@@ -78,7 +78,7 @@ import { calculateAtsWinner, evaluatePick, computeFirstKickoff } from './scoring
 import { weeksInGroup } from './data-model.js';
 import { SEASON_2025 } from './history-2025.js';
 import { orderedGradedResults, streakChange, loneWolfWinner, STREAK_MIN, MILESTONE_MARKS } from './stats-core.js';
-import { memberSeasonStats, sortWeeks, isUpsetCalled, upsetLineLabel, outrightScoreLine, atsMarginOf, almaMaterResultForWeek } from './stats.js';
+import { memberSeasonStats, sortWeeks, isUpsetCalled, upsetLineLabel, atsMarginOf } from './stats.js';
 
 /** Freezes an object graph (security N1): an exported allow-list or map must not be editable at runtime. */
 export function deepFreeze(o) {
@@ -97,6 +97,22 @@ export const CARD_TYPES = Object.freeze([
   'week.result', 'player.week', 'rank.changed', 'streak.extended', 'streak.broken', 'milestone.reached',
   'year.ago', 'scribe.post', 'lockerroom.top',
 ]);
+
+/**
+ * W-92 (DI-W92-2 / DI-W92-3, Drew "approve M-61", 2026-10-16): the three types Home no longer shows. They stay in the catalog — the reveal
+ * map, the allow-lists, CARD_NAMES_PICK, the icons and the detail titles all keep them, so a card shared before v0.30.1 still has a home
+ * in every table — but `deriveCards` provably never emits one (feedcombinetest RT3, across every fixture). "Called it" and "stood alone"
+ * fold into the game's own result card (its `standout` fact); the six personal-record cards fold into the week-final card, whose detail
+ * already holds every record.
+ */
+export const RETIRED_CARD_TYPES = Object.freeze(['called.it', 'stood.alone', 'player.week']);
+
+/**
+ * W-92 (DI-W92-5): the only types whose SCRIBE caption adds a fact its headline does not already say (the week-final card's caption names
+ * the loser and both records). Every other caption reworded its own headline ("4 of 6 in for Week 7." under "4/6 in for Week 7.") — the
+ * filler Drew named — so Home does not show it. The caption pools themselves (js/feed-caption-lines.js) stay in code, unused here.
+ */
+export const CAPTION_TYPES_THAT_ADD_A_FACT = Object.freeze(['week.result']);
 
 /** Declared per TYPE, read from a frozen map, never computed ad hoc (DI-362). */
 export const CARD_REVEAL_CLASS = Object.freeze({
@@ -143,16 +159,18 @@ export const CARD_ALLOWED_FACTS = deepFreeze({
   'week.revealed':    ['weekN', 'submittedCount', 'totalPlayers'],
   // chips: [{playerId, initials, result}] — result is 'win'|'loss' ONLY, never a team name per player.
   // D1 Lane B / DI-610 (2026-10-08): `gameId`, `gameIds`, `teamIds`, `weekId` — INTERNAL ids (no pick data) — are how a card says which game it is about, so the Game view's Related section can find it (cardsForGame).
-  'game.final':       ['awayTeam', 'homeTeam', 'awayScore', 'homeScore', 'atsWinnerTeam', 'marginCovered', 'chips', 'gameId', 'gameIds', 'teamIds', 'weekId'],
+  // W-92 (DI-W92-2): `standout` — who called the upset or stood alone on this game, as display names and counts only (see NESTED_FACT_KEYS).
+  'game.final':       ['awayTeam', 'homeTeam', 'awayScore', 'homeScore', 'atsWinnerTeam', 'marginCovered', 'chips', 'gameId', 'gameIds', 'teamIds', 'weekId', 'standout'],
   'called.it':        ['playerId', 'playerName', 'team', 'matchup', 'spreadDisplay', 'scoreLine', 'gameId', 'gameIds', 'teamIds', 'weekId'],
   'stood.alone':      ['playerId', 'playerName', 'team', 'matchup', 'against', 'gameId', 'gameIds', 'teamIds', 'weekId'],
   'week.result':      ['weekN', 'weekWinnerName', 'weekWinnerRecord', 'weekLoserName', 'weekLoserRecord'],
   // almaMaterResult: { team, result } — result 'win'|'loss' ONLY (see NESTED_FACT_KEYS).
   'player.week':      ['playerId', 'playerName', 'weekN', 'wins', 'losses', 'streakRun', 'streakKind', 'almaMaterResult'],
-  'rank.changed':     ['playerId', 'playerName', 'fromRank', 'toRank', 'weekN', 'rankedCount'],
-  'streak.extended':  ['playerId', 'playerName', 'run', 'kind'],
-  'streak.broken':    ['playerId', 'playerName', 'run', 'kind'],
-  'milestone.reached': ['playerId', 'playerName', 'mark', 'total'],
+  // W-92 (DI-W92-1): ONE card per week and kind. Its people are `members`, each item rebuilt from its own allow-list (NESTED_FACT_KEYS).
+  'rank.changed':     ['weekN', 'members', 'rankedCount'],
+  'streak.extended':  ['weekN', 'members'],
+  'streak.broken':    ['weekN', 'members'],
+  'milestone.reached': ['weekN', 'members'],
   'year.ago':         ['note', 'name', 'record', 'weekN', 'superlative'],
   'scribe.post':      ['messageId', 'body', 'timestamp', 'gameId', 'gameIds', 'teamIds', 'weekId'],
   'lockerroom.top':   ['authorName', 'excerpt', 'reactionCount'],
@@ -165,10 +183,20 @@ export const CARD_ALLOWED_FACTS = deepFreeze({
  * future builder cannot smuggle a team name or a pick into a chip.
  */
 export const NESTED_FACT_KEYS = deepFreeze({
-  'game.final': { chips: ['playerId', 'initials', 'result'] },
+  'game.final': { chips: ['playerId', 'initials', 'result'], standout: ['kind', 'names', 'team', 'spreadDisplay', 'against'] },
   'player.week': { almaMaterResult: ['team', 'result'] },
+  // W-92 (DI-W92-1): each member of a combined card — ids, names and numbers only (a member with no id or no name is dropped).
+  'rank.changed': { members: ['playerId', 'playerName', 'fromRank', 'toRank'] },
+  'streak.extended': { members: ['playerId', 'playerName', 'run', 'kind'] },
+  'streak.broken': { members: ['playerId', 'playerName', 'run', 'kind'] },
+  'milestone.reached': { members: ['playerId', 'playerName', 'mark', 'total'] },
 });
+/** W-92 (DI-W92-2): a name inside the game card's `standout` is `{playerId, playerName}` and nothing else. */
+export const STANDOUT_NAME_KEYS = Object.freeze(['playerId', 'playerName']);
 const CLOSED_RESULTS = Object.freeze(['win', 'loss']);
+const STANDOUT_KINDS = Object.freeze(['called', 'alone', 'both']);
+const STREAK_KINDS = Object.freeze(['covers', 'misses']);
+const NUMERIC_MEMBER_KEYS = Object.freeze(['fromRank', 'toRank', 'run', 'mark', 'total', 'against']);
 
 // Module-load-time deny-by-default scan — the same "fails the day a violation is
 // written" shape as notify-copy.js's own. A forbidden key in any list is a bug at
@@ -297,6 +325,19 @@ function joinNames(names) {
   return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
 }
 
+/**
+ * W-92 (DI-W92-4): how a combined card lists people. 1 -> "Kevin"; 2 -> "Kevin and Jacob"; 3 -> "Kevin, Jacob and Koby"; more than `max`
+ * -> the first `max`, then " and N others" ("and 1 other"). No ampersand, no serial comma; 0 -> ''. Pure: it joins what it is given —
+ * escaping happens at the sink (cardCopy hands it names already through the injected escaper).
+ */
+export function nameList(names, max = 3) {
+  const n = asArray(names).filter(x => typeof x === 'string' && x !== '');
+  if (!n.length) return '';
+  const cap = Math.max(1, Math.trunc(Number(max)) || 3);
+  if (n.length > cap) { const rest = n.length - cap; return `${n.slice(0, cap).join(', ')} and ${rest} ${rest === 1 ? 'other' : 'others'}`; }
+  return n.length === 1 ? n[0] : `${n.slice(0, -1).join(', ')} and ${n[n.length - 1]}`;
+}
+
 // ═══ the reveal gate ═════════════════════════════════════════════════════════════
 
 /**
@@ -399,11 +440,14 @@ export function finalizeFacts(type, facts) {
   for (const k of allowed) {
     if (facts && Object.prototype.hasOwnProperty.call(facts, k) && facts[k] !== undefined && facts[k] !== null) out[k] = facts[k];
   }
-  // The two structured facts are rebuilt item by item from their per-item allow-list (security N2);
-  // an item that is not an object, or whose `result` is outside the closed set, is dropped.
+  // The structured facts are rebuilt item by item from their per-item allow-list (security N2). `chips` and `almaMaterResult`: an item
+  // that is not an object, or whose `result` is outside the closed set, is dropped. W-92: `members` and `standout` are rebuilt from
+  // theirs (ids, names, numbers and closed sets only); the win|loss `result` rule is theirs alone, never a member's.
   const nested = NESTED_FACT_KEYS[type] || {};
   for (const [k, itemKeys] of Object.entries(nested)) {
     if (!(k in out)) continue;
+    if (k === 'members') { out[k] = asArray(out[k]).map(m => cleanMember(m, itemKeys)).filter(Boolean); continue; }
+    if (k === 'standout') { const so = cleanStandout(out[k], itemKeys); if (so) out[k] = so; else delete out[k]; continue; }
     const clean = (item) => {
       if (!item || typeof item !== 'object' || !CLOSED_RESULTS.includes(item.result)) return null;
       const c = {};
@@ -414,6 +458,33 @@ export function finalizeFacts(type, facts) {
     else { const c = clean(out[k]); if (c) out[k] = c; else delete out[k]; }
   }
   return out;
+}
+
+/** W-92: one member of a combined card (or one name of a standout): strings for the id and name, finite numbers for the figures, the closed
+ *  covers|misses set for a streak's kind. No id or no name -> dropped. */
+function cleanMember(m, itemKeys) {
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return null;
+  const c = {};
+  for (const k of itemKeys) {
+    const v = m[k];
+    if (k === 'kind') { if (STREAK_KINDS.includes(v)) c[k] = v; continue; }
+    if (NUMERIC_MEMBER_KEYS.includes(k)) { if (typeof v === 'number' && Number.isFinite(v)) c[k] = v; continue; }
+    if (typeof v === 'string' && v !== '') c[k] = v;
+  }
+  return (typeof c.playerId === 'string' && typeof c.playerName === 'string') ? c : null;
+}
+/** W-92 (DI-W92-2): the game card's standout — kind in called|alone|both, names `{playerId, playerName}`, display strings, a count. No name -> none. */
+function cleanStandout(so, itemKeys) {
+  if (!so || typeof so !== 'object' || Array.isArray(so) || !STANDOUT_KINDS.includes(so.kind)) return null;
+  const c = {};
+  for (const k of itemKeys) {
+    const v = so[k];
+    if (k === 'kind') c.kind = v;
+    else if (k === 'names') { const ns = asArray(v).map(n => cleanMember(n, STANDOUT_NAME_KEYS)).filter(Boolean); if (ns.length) c.names = ns; }
+    else if (NUMERIC_MEMBER_KEYS.includes(k)) { if (typeof v === 'number' && Number.isFinite(v)) c[k] = v; }
+    else if (typeof v === 'string' && v !== '') c[k] = v;
+  }
+  return c.names ? c : null;
 }
 
 /** Test seam: `_internals.buildCardId` is what the builders call, so a spy proves a
@@ -605,6 +676,37 @@ export function deriveCards(snapshot, opts = {}) {
     if (selfExempt && viewerId && memberId === viewerId) return true;
     return s.picksReadConfirmed[week.weekId] === true;
   };
+  // W-92 (DI-W92-1): members of a combined card are listed in ROSTER order (the players list, as Standings has it); a combined card's
+  // reason is the "Your …" label when the viewer is one of its members, else "In your league".
+  const rosterAt = new Map(s.players.filter(Boolean).map((p, i) => [p.playerId, i]));
+  const byRoster = (a, b) => ((rosterAt.has(a.playerId) ? rosterAt.get(a.playerId) : 1e9) - (rosterAt.has(b.playerId) ? rosterAt.get(b.playerId) : 1e9)) || String(a.playerId).localeCompare(String(b.playerId));
+  const groupReason = (type, members) => reasonFor(type, !!viewerId && members.some(m => m.playerId === viewerId));
+  /**
+   * W-92 (DI-W92-2): who called this game's upset or stood alone on it — the SAME isUpsetCalled / upsetLineLabel / loneWolfWinner calls the
+   * retired `called.it` / `stood.alone` cards used. Called ONLY inside the game card's passed gate (S-C5: no pick is read before it).
+   * 'called' = at least one member took the underdog and it won outright; 'alone' = the lone ATS winner (no upset); 'both' = the lone
+   * winner is also the only upset caller. Display names and a count only — never a pick object, a spread number or a margin.
+   */
+  const standoutOf = (g, gp) => {
+    const seen = new Set();
+    const callers = [];
+    for (const p of gp) {
+      if (!p || seen.has(p.playerId)) continue;
+      const nm = nameOf(p.playerId);
+      if (!nm || !isUpsetCalled(p, g)) continue;
+      seen.add(p.playerId);
+      callers.push({ playerId: p.playerId, playerName: nm, team: p.selectedTeam });
+    }
+    callers.sort(byRoster);
+    const wolf = loneWolfWinner(g, gp, { calculateAtsWinner });
+    const wolfName = wolf ? nameOf(wolf.playerId) : null;
+    if (callers.length) {
+      const both = callers.length === 1 && !!wolf && !!wolfName && wolf.playerId === callers[0].playerId;
+      return { kind: both ? 'both' : 'called', names: callers.map(c => ({ playerId: c.playerId, playerName: c.playerName })), team: callers[0].team, spreadDisplay: upsetLineLabel(g), ...(both ? { against: wolf.against } : {}) };
+    }
+    if (wolf && wolfName) return { kind: 'alone', names: [{ playerId: wolf.playerId, playerName: wolfName }], team: wolf.team, against: wolf.against };
+    return null;
+  };
   const push = (type, week, { memberId = null, suffix = null, facts, sortKey, reason = null, gameId = undefined, serverMinted = false }) => {
     const finalFacts = _internals.finalizeFacts(type, facts);
     cards.push({
@@ -669,28 +771,31 @@ export function deriveCards(snapshot, opts = {}) {
     }
   }
 
-  // ═══ after-reveal, game-scoped: game.final / called.it / stood.alone ═══
-  // Per GAME, per TYPE: the gate runs first, and a game's picks are not even READ until a gate has passed
-  // (`picksOf()` is called only inside a passed gate) — S-C5. What is computed before a gate is the game's own
-  // public row data (score line, matchup text, timestamps), never a pick.
+  // ═══ after-reveal, game-scoped: game.final (W-92: it now names who called the upset or stood alone — `called.it` / `stood.alone` are retired) ═══
+  // Per GAME: the gate runs first, and a game's picks are not even READ until it has passed (`picksOf()` is called only inside the passed
+  // gate) — S-C5. What is computed before the gate is the game's own public row data (score line, timestamps), never a pick.
   for (const W of allWeeks) {
     for (const g of gamesOf(W.weekId)) {
       const base = toMs(g.lastUpdated) || toMs(g.updatedAt) || toMs(g.kickoff);
-      const matchup = `${g.awayTeam} at ${g.homeTeam}`;
       const picksOf = () => s.picks.filter(p => p && p.gameId === g.gameId);
 
       if (gate('game.final', W, g) && othersConfirmed(W)) {
         const ats = (g.atsWinner !== undefined && g.atsWinner !== null) ? g.atsWinner : calculateAtsWinner(g);
         const covered = ats && ats !== 'no_decision';
         const margin = covered ? atsMarginOf(g) : null;
+        const gp = picksOf();
         const chips = [];
-        for (const p of picksOf()) {
+        for (const p of gp) {
           const r = evaluatePick(p, g);
           if (r !== 'win' && r !== 'loss') continue;       // 'win'|'loss' ONLY — a push has no chip
           if (!nameOf(p.playerId)) continue;
           chips.push({ playerId: p.playerId, initials: initialsOf(p.playerId), result: r });
         }
         chips.sort((a, b) => String(a.playerId).localeCompare(String(b.playerId)));
+        // DI-W92-2: the standout rides on the game card, so it needs everything the game card needs (the week is public, this game is
+        // final, the other members' picks have landed). Stricter than the retired called.it for one edge only — a member's OWN "called it"
+        // no longer shows in the window before the others' picks land. Safe direction, recorded.
+        const standout = standoutOf(g, gp);
         push('game.final', W, {
           suffix: g.gameId,
           facts: {
@@ -698,34 +803,10 @@ export function deriveCards(snapshot, opts = {}) {
             atsWinnerTeam: covered ? ats : null,
             marginCovered: margin === null ? null : String(Number(margin.toFixed(1))),
             chips,
+            ...(standout ? { standout } : {}),
           },
           sortKey: isoAt(base),
         });
-      }
-
-      if (gate('called.it', W, g)) {
-        for (const p of picksOf()) {
-          if (!othersConfirmed(W, { memberId: p.playerId, selfExempt: true })) continue;
-          const nm = nameOf(p.playerId);
-          if (!nm || !isUpsetCalled(p, g)) continue;
-          push('called.it', W, {
-            memberId: p.playerId, suffix: g.gameId,
-            facts: { playerId: p.playerId, playerName: nm, team: p.selectedTeam, matchup, spreadDisplay: upsetLineLabel(g), scoreLine: outrightScoreLine(g) },
-            sortKey: isoAt(base, 2),
-          });
-        }
-      }
-
-      if (gate('stood.alone', W, g) && othersConfirmed(W)) {
-        const wolf = loneWolfWinner(g, picksOf(), { calculateAtsWinner });
-        const nm = wolf ? nameOf(wolf.playerId) : null;
-        if (wolf && nm) {
-          push('stood.alone', W, {
-            memberId: wolf.playerId, suffix: g.gameId,
-            facts: { playerId: wolf.playerId, playerName: nm, team: wolf.team, matchup, against: wolf.against },
-            sortKey: isoAt(base, 1),
-          });
-        }
       }
     }
   }
@@ -778,47 +859,31 @@ export function deriveCards(snapshot, opts = {}) {
       }
     }
 
-    // player.week — one per player who played the week.
-    if (gate('player.week', W)) {
-      for (const p of activePlayers) {
-        const row = rowsW.find(r => r.playerId === p.playerId);
-        const nm = nameOf(p.playerId);
-        if (!row || !nm || !othersConfirmed(W, { memberId: p.playerId, selfExempt: true })) continue;
-        const wins = nz(row.correctCount ?? row.correctPicks ?? 0), losses = nz(row.incorrectCount ?? row.incorrectPicks ?? 0);
-        if (wins + losses === 0) continue;
-        const st = statsAt(p.playerId, W).currentStreak;
-        // The member's school's STRAIGHT-UP result this week — from the REVEALED view's games only (after-final).
-        const alma = almaMaterResultForWeek(p.almaMater, W.weekId, wGames);
-        push('player.week', W, {
-          memberId: p.playerId,
-          facts: {
-            playerId: p.playerId, playerName: nm, weekN: W.weekNumber, wins, losses,
-            ...(st.state === 'active' ? { streakRun: st.run, streakKind: st.kind } : {}),
-            ...(alma ? { almaMaterResult: alma } : {}),
-          },
-          sortKey: isoAt(endMs, 2),
-        });
-      }
-    }
+    // player.week — RETIRED from Home (W-92, DI-W92-3): the week-final card above names winner and loser, and its detail holds every
+    // member's record (the week table) one tap away. Nothing is derived for it.
 
-    // rank.changed — before/after over the revealed view; needs a previous week to move FROM.
+    // rank.changed — before/after over the revealed view; needs a previous week to move FROM. W-92 (DI-W92-1): ONE card per week, its
+    // members everyone who moved, best new rank first.
     if (prevW && gate('rank.changed', W) && othersConfirmed(W)) {
+      const moved = [];
       for (const p of activePlayers) {
         const nm = nameOf(p.playerId);
         const from = statsAt(p.playerId, prevW).currentRank;
         const to = statsAt(p.playerId, W).currentRank;
         if (!nm || from === null || to === null || from === to) continue;
-        push('rank.changed', W, {
-          memberId: p.playerId,
-          facts: { playerId: p.playerId, playerName: nm, fromRank: from, toRank: to, weekN: W.weekNumber, rankedCount: activePlayers.length },
-          sortKey: isoAt(endMs, 5),
-        });
+        moved.push({ playerId: p.playerId, playerName: nm, fromRank: from, toRank: to });
+      }
+      moved.sort((a, b) => (a.toRank - b.toRank) || byRoster(a, b));
+      if (moved.length) {
+        push('rank.changed', W, { facts: { weekN: W.weekNumber, rankedCount: activePlayers.length, members: moved }, sortKey: isoAt(endMs, 5), reason: groupReason('rank.changed', moved) });
       }
     }
 
-    // streak.extended / streak.broken — the SCRIBE detector's own rule, via stats-core, through THIS week.
+    // streak.extended / streak.broken — the SCRIBE detector's own rule, via stats-core, through THIS week. W-92 (DI-W92-1): ONE card for the
+    // streaks extended and ONE for the streaks ended, per week; a member enters only by the test that admitted their own card before.
     if (gate('streak.extended', W)) {
       const tw = throughWeek(W);
+      const extended = [], broken = [];
       for (const p of activePlayers) {
         const nm = nameOf(p.playerId);
         if (!nm || !othersConfirmed(W, { memberId: p.playerId, selfExempt: true })) continue;
@@ -828,37 +893,26 @@ export function deriveCards(snapshot, opts = {}) {
         if (!ordered.results.some(r => r.weekId === W.weekId)) continue;
         const ch = streakChange(ordered, W.weekId);
         if (!ch) continue;
-        if (ch.state === 'active') {
-          push('streak.extended', W, {
-            memberId: p.playerId, facts: { playerId: p.playerId, playerName: nm, run: ch.run, kind: ch.kind },
-            sortKey: isoAt(endMs, 3),
-          });
-        } else if (ch.state === 'broken' && gate('streak.broken', W)) {
-          push('streak.broken', W, {
-            memberId: p.playerId, facts: { playerId: p.playerId, playerName: nm, run: ch.run, kind: ch.kind },
-            sortKey: isoAt(endMs, 3),
-          });
-        }
+        if (ch.state === 'active') extended.push({ playerId: p.playerId, playerName: nm, run: ch.run, kind: ch.kind });
+        else if (ch.state === 'broken') broken.push({ playerId: p.playerId, playerName: nm, run: ch.run, kind: ch.kind });
       }
+      if (extended.length) push('streak.extended', W, { facts: { weekN: W.weekNumber, members: extended }, sortKey: isoAt(endMs, 3), reason: groupReason('streak.extended', extended) });
+      if (broken.length && gate('streak.broken', W)) push('streak.broken', W, { facts: { weekN: W.weekNumber, members: broken }, sortKey: isoAt(endMs, 3), reason: groupReason('streak.broken', broken) });
     }
 
-    // milestone.reached — a MILESTONE_MARKS crossing this week, RAW correct counts.
+    // milestone.reached — a MILESTONE_MARKS crossing this week, RAW correct counts. W-92 (DI-W92-1): ONE card per week; a member who
+    // crossed two marks in one week appears once, with the higher mark.
     if (gate('milestone.reached', W)) {
+      const crossedMembers = [];
       for (const p of activePlayers) {
         const nm = nameOf(p.playerId);
         if (!nm || !othersConfirmed(W, { memberId: p.playerId, selfExempt: true })) continue;
         const after = statsAt(p.playerId, W).record.wins;
         const before = prevW ? statsAt(p.playerId, prevW).record.wins : 0;
-        for (const mark of MILESTONE_MARKS) {
-          if (before < mark && after >= mark) {
-            push('milestone.reached', W, {
-              memberId: p.playerId, suffix: String(mark),
-              facts: { playerId: p.playerId, playerName: nm, mark, total: after },
-              sortKey: isoAt(endMs, 4),
-            });
-          }
-        }
+        const crossed = MILESTONE_MARKS.filter(mark => before < mark && after >= mark);
+        if (crossed.length) crossedMembers.push({ playerId: p.playerId, playerName: nm, mark: Math.max(...crossed), total: after });
       }
+      if (crossedMembers.length) push('milestone.reached', W, { facts: { weekN: W.weekNumber, members: crossedMembers }, sortKey: isoAt(endMs, 4), reason: groupReason('milestone.reached', crossedMembers) });
     }
   }
 
@@ -974,6 +1028,12 @@ export function cardCopy(card, { escHtml, formatKickoff = (iso) => String(iso), 
   const sp = sportCode ? t(sportCode) : '';
   const wk = (n) => `${sp ? `${sp} ` : ''}Week ${numStr(n)}`;
   const inSp = sp ? ` in ${sp}` : '';
+  // W-92 (DI-W92-1 / DI-W92-4): a combined card's people. Each name crosses the injected escaper BEFORE it is joined, so the list is safe
+  // wherever the names are; `runs` is the supporting line's "{name} {figure}" for the first three, then " · +N more".
+  const members = asArray(f.members).filter(m => m && typeof m === 'object');
+  const names = (list) => nameList(list.map(m => t(m.playerName)));
+  const runs = (list, figure) => { const shown = list.slice(0, 3).map(m => `${t(m.playerName)} ${figure(m)}`).join(' · '); return list.length > 3 ? `${shown} · +${list.length - 3} more` : shown; };
+  const runOf = (m) => `${numStr(m.run)} ${m.kind === 'misses' ? 'misses' : 'covers'}`;
   let title = '', body = '', chips = [];
   // A week-scoped card with no usable weekN renders NOTHING — never "Week 's slate is up" (reviewer note 5).
   if (card && WEEK_N_TYPES.includes(card.type) && numStr(f.weekN) === '') return { title, body, chips };
@@ -993,6 +1053,15 @@ export function cardCopy(card, { escHtml, formatKickoff = (iso) => String(iso), 
       else if (f.atsWinnerTeam) title = `${score} — ${t(f.atsWinnerTeam)} covered.`;
       else title = `${score}.`;
       chips = asArray(f.chips).map(c => ({ initialsHtml: t(c && c.initials), result: c && c.result === 'win' ? 'win' : 'loss' }));
+      // W-92 (DI-W92-2): the ONE supporting line — who called it / stood alone. It never restates the headline (which has the score and the cover).
+      const so = (f.standout && typeof f.standout === 'object') ? f.standout : null;
+      if (so) {
+        const who = nameList(asArray(so.names).map(n => t(n && n.playerName)));
+        const line = so.spreadDisplay ? ` ${t(so.spreadDisplay)}` : '';
+        if (who && so.kind === 'called') body = `${who} called it: ${t(so.team)}${line} won outright.`;
+        else if (who && so.kind === 'both') body = `${who} called it and stood alone: ${t(so.team)}${line} won outright.`;
+        else if (who && so.kind === 'alone') body = `${who} stood alone on ${t(so.team)} against ${numStr(so.against)} ${nz(so.against) === 1 ? 'other' : 'others'}, and it covered.`;
+      }
       break;
     }
     case 'called.it':
@@ -1003,26 +1072,42 @@ export function cardCopy(card, { escHtml, formatKickoff = (iso) => String(iso), 
       break;
     case 'week.result':
       title = `${wk(f.weekN)} is final.`;
-      body = `${t(f.weekWinnerName)} took it, ${t(f.weekWinnerRecord)}.`;
+      // W-92 (DI-W92-3): the plain body (shown only when SCRIBE's caption is unavailable) names the loser too, never just the winner.
+      body = `${t(f.weekWinnerName)} took it, ${t(f.weekWinnerRecord)}; ${t(f.weekLoserName)} finished ${t(f.weekLoserRecord)}.`;
       break;
     case 'player.week':
       title = `${t(f.playerName)}'s ${wk(f.weekN)}: ${numStr(f.wins)}–${numStr(f.losses)}`;
       if (nz(f.streakRun) >= STREAK_MIN) body = `On a ${numStr(f.streakRun)}-game ${streakWord(f.streakKind)} streak.`;
       break;
+    // W-92 (DI-W92-1): ONE card per week and kind. One member reads exactly as the per-member card did; two or more name everyone.
     case 'rank.changed': {
-      const up = nz(f.toRank) < nz(f.fromRank);
-      title = up ? `${t(f.playerName)} moved into ${ordinal(f.toRank)}${inSp} this week.` : `${t(f.playerName)} slipped to ${ordinal(f.toRank)}${inSp} this week.`;
-      body = `${up ? 'Up' : 'Down'} from ${ordinal(f.fromRank)} after ${wk(f.weekN)}.`;
+      if (!members.length) break;
+      if (members.length === 1) {
+        const m = members[0];
+        const up = nz(m.toRank) < nz(m.fromRank);
+        title = up ? `${t(m.playerName)} moved into ${ordinal(m.toRank)}${inSp} this week.` : `${t(m.playerName)} slipped to ${ordinal(m.toRank)}${inSp} this week.`;
+        body = `${up ? 'Up' : 'Down'} from ${ordinal(m.fromRank)} after ${wk(f.weekN)}.`;
+        break;
+      }
+      const ups = members.filter(m => nz(m.toRank) < nz(m.fromRank)), downs = members.filter(m => nz(m.toRank) > nz(m.fromRank));
+      if (ups.length && downs.length) title = `${names(ups)} moved up; ${names(downs)} slipped.`;
+      else if (ups.length) title = `${names(ups)} moved up.`;
+      else if (downs.length) title = `${names(downs)} slipped.`;
+      const first = members.find(m => nz(m.toRank) === 1);
+      body = first ? `${t(first.playerName)} takes first after ${wk(f.weekN)}.` : `After ${wk(f.weekN)}.`;
       break;
     }
     case 'streak.extended':
-      title = `${t(f.playerName)} is riding a ${numStr(f.run)}-game ${streakWord(f.kind)} streak${inSp}.`;
+      if (members.length === 1) title = `${t(members[0].playerName)} is riding a ${numStr(members[0].run)}-game ${streakWord(members[0].kind)} streak${inSp}.`;
+      else if (members.length > 1) { title = `${names(members)} are riding streaks${inSp}.`; body = runs(members, runOf); }
       break;
     case 'streak.broken':
-      title = `${t(f.playerName)}'s ${numStr(f.run)}-game streak${inSp} snapped this week.`;
+      if (members.length === 1) title = `${t(members[0].playerName)}'s ${numStr(members[0].run)}-game streak${inSp} snapped this week.`;
+      else if (members.length > 1) { title = `${names(members)} lost their streaks${inSp} this week.`; body = runs(members, runOf); }
       break;
     case 'milestone.reached':
-      title = `${t(f.playerName)} hit ${numStr(f.mark)} correct picks${inSp} this season.`;
+      if (members.length === 1) title = `${t(members[0].playerName)} hit ${numStr(members[0].mark)} correct picks${inSp} this season.`;
+      else if (members.length > 1) { title = `${names(members)} hit correct-pick milestones${inSp} this season.`; body = runs(members, (m) => numStr(m.mark)); }
       break;
     case 'year.ago':
       title = t(f.note);

@@ -80,6 +80,9 @@ const session = (pid, verified = true) => storage.setSession(pid, false, verifie
 function seed(opts = {}) {
   store.clear();
   const L = fx.buildLeague({ w2: opts.w2 || 'final', calculateWeeklyResults });
+  // W-92 (2026-10-17): `milestoneP2` puts Brayden (p2) at 49 correct after week 1, so week 2 carries a ONE-member milestone card about another member — the
+  // only kind of Home card that still offers "Compare with {name}" (a combined card has several members; Drew accepted that side effect).
+  if (opts.milestoneP2) L.weeklyResults = L.weeklyResults.map((r) => (r.playerId === 'p2' && r.weekId === 'w1' ? { ...r, correctCount: 49, correctPicks: 49 } : r));
   L.players.forEach((p) => storage.savePlayer({ ...p }));
   L.weeks.forEach((w) => storage.saveWeek(w));
   L.games.forEach((g) => storage.saveGame(g));
@@ -446,59 +449,69 @@ _log('\n[4] The week detail…');
 // ═══ [5] ═════════════════════════════════════════════════════════════════════════════════════════════════════
 _log('\n[5] The card detail\'s "Compare with" and "Week results"…');
 {
-  seed();
+  // W-92 (DI-W92-6): "Compare with {name}" is offered only on a ONE-member card about another member (a combined card names several); "Week results" on the
+  // week-final card and the combined cards. Before W-92 one player.week card carried both; the two are now exercised on the cards that carry each.
+  seed({ milestoneP2: true });
   reset(); quiet(); window.navigateTo('home'); loud();
   await wait(40);
   const ids = document.querySelectorAll('#home-root [data-home-action="open-card"]').map((n) => n.getAttribute('data-card-id'));
-  const pw = ids.filter((i) => i.startsWith('player.week:'));
-  assert(pw.length >= 1, `5a: (fixture) Home derives player.week cards (${pw.length})`);
-  const aboutOther = pw.find((i) => i.startsWith('player.week:-:w2:') && !i.endsWith(':p1'));
+  const aboutOther = ids.find((i) => i === 'milestone.reached:-:w2:-');
+  const weekCard = ids.find((i) => i === 'week.result:-:w2:-');
+  assert(!!aboutOther && !!weekCard && !ids.some((i) => /^(player\.week|called\.it|stood\.alone):/.test(i)), `5a: (fixture) Home derives a one-member card about another member (Brayden's milestone) and the week-final card, and no retired card (${ids.length} cards)`);
   quiet(); app._onHomeActionForTest('open-card', { cardId: aboutOther }); loud();
   let lv = topLevel();
   const acts = lv.querySelectorAll('[data-cd-action]').map((a) => a.getAttribute('data-cd-action'));
-  assert(acts.includes('week-detail') && acts.includes('compare'), `5b: a player.week card about another member offers "Week results" and "Compare with {name}" (${acts.join(', ')})`);
-  const cmp = lv.querySelector('[data-cd-action="compare"]'), wk = lv.querySelector('[data-cd-action="week-detail"]');
-  assert(/^Compare with \S/.test(texts(cmp)) && cmp.getAttribute('data-cd-member') && cmp.getAttribute('data-cd-week') && texts(wk) === 'Week results' && wk.getAttribute('data-cd-week'), '5c: the buttons carry the member and the week they name');
+  assert(acts.includes('compare') && acts.includes('go-standings'), `5b: a one-member card about another member offers "Compare with {name}" (beside See standings) (${acts.join(', ')})`);
+  const cmp = lv.querySelector('[data-cd-action="compare"]');
+  assert(texts(cmp) === 'Compare with Brayden' && cmp.getAttribute('data-cd-member') === 'p2' && cmp.getAttribute('data-cd-week') === 'w2', '5c: the Compare button carries the member and the week it names');
   const cardTitle = texts(lv.querySelector('.ps-title'));
   quiet(); click(cmp); loud();
   assert(ps.screenDepth() === 2 && ps.topScreenId().startsWith('compare:p1:') && texts(topLevel().querySelector('[data-ps-back]')) === cardTitle, `5d: Compare pushes the comparison ABOVE the card (depth 2) and its Back reads the card's title ("${cardTitle}")`);
   quiet(); click(topLevel().querySelector('[data-ps-back]')); loud();
   await wait(ps.EXIT_FALLBACK_MS + 120);
-  assert(ps.screenDepth() === 1 && ps.topScreenId().startsWith('player.week') === false && ps.topScreenId().startsWith('card:'), '5e: Back returns to the card');
-  quiet(); click(lv.querySelector('[data-cd-action="week-detail"]')); loud();
-  assert(ps.screenDepth() === 2 && ps.topScreenId().startsWith('week:') && texts(topLevel().querySelector('[data-ps-back]')) === cardTitle, '5f: Week results pushes the week detail above the card, Back reads the card');
-  quiet(); click(topLevel().querySelector('[data-ps-back]')); loud();
-  await wait(ps.EXIT_FALLBACK_MS + 120);
-  // forged member / week
+  assert(ps.screenDepth() === 1 && ps.topScreenId().startsWith('card:'), '5e: Back returns to the card');
+  // forged member / week on the Compare button
   const f1 = lv.querySelector('[data-cd-action="compare"]'); const real = f1.getAttribute('data-cd-member'); f1.setAttribute('data-cd-member', 'p6' === real ? 'p5' : 'p6');
   quiet(); click(f1); loud();
   assert(ps.screenDepth() === 1, '5g: a Compare button whose member is not the one the model offers does nothing');
   f1.setAttribute('data-cd-member', real); f1.setAttribute('data-cd-week', 'w1');
   quiet(); click(f1); loud();
   assert(ps.screenDepth() === 1, '5h: …nor one with a swapped week');
+  ps.closeAllScreens('test');
+  // Week results, from the week-final card
+  quiet(); app._onHomeActionForTest('open-card', { cardId: weekCard }); loud();
+  lv = topLevel();
+  const wk = lv.querySelector('[data-cd-action="week-detail"]');
+  const weekTitle = texts(lv.querySelector('.ps-title'));
+  assert(!!wk && texts(wk) === 'Week results' && wk.getAttribute('data-cd-week') === 'w2' && !lv.querySelector('[data-cd-action="compare"]'), '5f-0: the week-final card offers "Week results" for its own week (and no Compare)');
+  quiet(); click(wk); loud();
+  assert(ps.screenDepth() === 2 && ps.topScreenId().startsWith('week:') && texts(topLevel().querySelector('[data-ps-back]')) === weekTitle, '5f: Week results pushes the week detail above the card, Back reads the card');
+  quiet(); click(topLevel().querySelector('[data-ps-back]')); loud();
+  await wait(ps.EXIT_FALLBACK_MS + 120);
   const f2 = lv.querySelector('[data-cd-action="week-detail"]'); f2.setAttribute('data-cd-week', 'w1');
   quiet(); click(f2); loud();
   assert(ps.screenDepth() === 1, '5i: nor a Week results button with another week');
   ps.closeAllScreens('test');
-  // about yourself: no Compare
-  const mine = pw.find((i) => i.endsWith(':p1'));
+  // a combined card YOU are on: Week results, never Compare
+  const mine = ids.find((i) => i === 'streak.broken:-:w2:-');
   if (mine) {
     quiet(); app._onHomeActionForTest('open-card', { cardId: mine }); loud();
-    assert(!topLevel().querySelector('[data-cd-action="compare"]') && !!topLevel().querySelector('[data-cd-action="week-detail"]'), '5j: a card about YOU offers Week results but never Compare with yourself');
+    assert(!topLevel().querySelector('[data-cd-action="compare"]') && !!topLevel().querySelector('[data-cd-action="week-detail"]'), '5j: a combined card you are on (Drew and Kihoon lost their streaks) offers Week results but never Compare');
     ps.closeAllScreens('test');
-  } else assert(true, '5j: (no card about the viewer in this fixture - covered by the unit test of compareAction)');
+  } else assert(false, '5j: (fixture) the week-2 streak.broken card is on Home');
   // signed out
   storage.setSession(null, false, false);
   reset(); quiet(); window.navigateTo('home'); loud();
   await wait(40);
   const idsOut = document.querySelectorAll('#home-root [data-home-action="open-card"]').map((n) => n.getAttribute('data-card-id'));
-  const pwOut = idsOut.find((i) => i.startsWith('player.week:'));
-  if (pwOut) {
-    quiet(); app._onHomeActionForTest('open-card', { cardId: pwOut }); loud();
+  const msOut = idsOut.find((i) => i.startsWith('milestone.reached:'));
+  if (msOut) {
+    quiet(); app._onHomeActionForTest('open-card', { cardId: msOut }); loud();
     assert(!topLevel().querySelector('[data-cd-action="compare"]'), '5k: signed out (S4) - Compare is hidden');
     ps.closeAllScreens('test');
-  } else assert(true, '5k: (a signed-out visitor derives no player.week card here)');
+  } else assert(true, '5k: (a signed-out visitor derives no milestone card here)');
   session('p1');
+  seed();
 }
 
 // ═══ [6] ═════════════════════════════════════════════════════════════════════════════════════════════════════

@@ -4,9 +4,9 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.30.0';
-// 2026-10-16 is the web deploy day (D-87, moved by Drew 2026-10-16, M-59: "Change to oct 16"); if the deploy lands on a different day, set this and WHATS_NEW_RELEASES[0].date to that day together (whatsnewtest pins them equal).
-export const APP_VERSION_DATE = '2026-10-16';
+export const APP_VERSION = 'v0.30.1';
+// v0.30.1 (W-92, the Home feed fix) ships 2026-10-17 (Drew: "Tonight (~3:30–4 AM)"); if the deploy lands on a different day, set this and WHATS_NEW_RELEASES[0].date to that day together (whatsnewtest pins them equal).
+export const APP_VERSION_DATE = '2026-10-17';
 
 /**
  * UN-124 + FEAT-3 / DI-200.0 (UN-200/UN-201, 2026-09-12) — release notes,
@@ -137,7 +137,17 @@ export const APP_VERSION_DATE = '2026-10-16';
 // creation (closed; Drew flips it), and the push-address migration (waits for TestFlight build 4).
 // Commissioner-only SCRIBE surfaces (profile, lore, routing, budgets, learning approvals) are held
 // out of the player list on purpose, as in v0.25.0.
+// Release v0.30.1 (2026-10-17) — W-92, the Home feed fix (Drew "approve M-61"). ONE line, the coordinator's, which Drew sees before the deploy. It is the
+// FIRST `added` item, so it is also SCRIBE's chat-post headline (whatsNewHeadline()'s 90-character cut: it is 72). Nothing else ships in this release.
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.30.1',
+    date: '2026-10-17',
+    added: [
+      'Home combines cards from the same moment and shows when each one happened.',
+    ],
+    fixed: [],
+  },
   {
     version: 'v0.30.0',
     date: '2026-10-16',

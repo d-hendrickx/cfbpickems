@@ -144,6 +144,10 @@ const cardsLive = derive(fc, snapshotWith(fc, LIVE_SET));
 const cardsOpen = derive(fc, snapshotWith(fc, OPEN_SET));
 const cardsLocked = derive(fc, snapshotWith(fc, LOCKED_SET));
 const byMember = (cards, type, weekId) => Object.fromEntries(ofType(cards, type, weekId).map(c => [c.memberId, c.facts]));
+// W-92 (DI-W92-1): a combined card's people, keyed by player — the per-member view the pre-W-92 checks read off one card per member.
+const membersOf = (cards, type, weekId) => Object.fromEntries(ofType(cards, type, weekId).flatMap(c => (Array.isArray(c.facts.members) ? c.facts.members : [])).map(m => [m.playerId, m]));
+// W-92 (DI-W92-2): a game card's `standout` (who called the upset / stood alone), or undefined.
+const standoutOf = (cards, gameId) => (cards.find(c => c.type === 'game.final' && c.gameId === gameId) || { facts: {} }).facts.standout;
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log('[1] The catalog — shape, the frozen reveal map, allow-lists, reason labels…');
@@ -167,7 +171,8 @@ console.log('[1] The catalog — shape, the frozen reveal map, allow-lists, reas
 
   const SHAPE = ['id', 'type', 'sport', 'leagueId', 'weekId', 'memberId', 'gameId', 'requiresReveal', 'facts', 'reason', 'sortKey'];
   const all = [...cardsFinal, ...cardsLive, ...cardsOpen, ...cardsLocked];
-  assert(all.length > 100 && all.every(c => JSON.stringify(Object.keys(c)) === JSON.stringify(SHAPE)), `1-8: every card (${all.length}) has exactly DI-362's shape: ${SHAPE.join(', ')}`);
+  // W-92 (DI-W92-1/2/3, 2026-10-17): related cards combine, so the four states now derive 51 cards (FINAL 18, LIVE 12, OPEN 11, LOCKED 10) where they derived 100+; pinned exactly.
+  assert(all.length === 51 + [cardsFinal, cardsLive, cardsOpen, cardsLocked].reduce((n, cs) => n + cs.filter(c => c.type === 'scribe.post' || c.type === 'lockerroom.top').length, 0) && all.every(c => JSON.stringify(Object.keys(c)) === JSON.stringify(SHAPE)), `1-8: every card (${all.length}) has exactly DI-362's shape: ${SHAPE.join(', ')}`);
   assert(all.every(c => c.requiresReveal === fc.CARD_REVEAL_CLASS[c.type]), '1-9: every card\'s requiresReveal equals its TYPE\'s class from the frozen map');
   assert(all.every(c => Object.keys(c.facts).every(k => fc.CARD_ALLOWED_FACTS[c.type].includes(k))), '1-10: every card\'s facts contain ONLY keys on its type\'s allow-list (deny-by-default at the object)');
   assert(all.every(c => fc.CARD_REASON_LABELS.includes(c.reason) && c.reason !== ''), '1-11: every card carries one of the fixed reason labels (UN-329)');
@@ -218,23 +223,26 @@ console.log('\n[2] isRevealed() — the ONE gate, deny-by-default…');
 // ═══════════════════════════════════════════════════════════════════════════
 console.log('\n[3] The matrix — every card type x OPEN / LOCKED / LIVE / FINAL (week 2; week 1 is final in every state)…');
 // ═══════════════════════════════════════════════════════════════════════════
+// W-92 (DI-W92-1/2/3, Drew "approve M-61", 2026-10-17): called.it / stood.alone / player.week are RETIRED (0 in every state — the game card names its
+// callers, the week-final card holds the records), and rank.changed / streak.* / milestone.reached are ONE card per week and kind (5 -> 1, 2 -> 1, 2 -> 1).
+// Who is IN each card is pinned member by member in 3-f12 … 3-f16 and 3-m*; feedcombinetest holds the W-92 acceptance.
 const W2_EXPECT = {
   //                     OPEN LOCKED LIVE FINAL
   'slate.published':    [1, 1, 1, 1],
   'picks.submitted':    [1, 0, 0, 0],
   'week.revealed':      [0, 0, 1, 0],
   'game.final':         [0, 0, 1, 4],
-  'called.it':          [0, 0, 4, 4],
-  'stood.alone':        [0, 0, 0, 1],
+  'called.it':          [0, 0, 0, 0],
+  'stood.alone':        [0, 0, 0, 0],
   'week.result':        [0, 0, 0, 1],
-  'player.week':        [0, 0, 0, 6],
-  'rank.changed':       [0, 0, 0, 5],
-  'streak.extended':    [0, 0, 0, 2],
-  'streak.broken':      [0, 0, 0, 2],
+  'player.week':        [0, 0, 0, 0],
+  'rank.changed':       [0, 0, 0, 1],
+  'streak.extended':    [0, 0, 0, 1],
+  'streak.broken':      [0, 0, 0, 1],
   'milestone.reached':  [0, 0, 0, 0],
   'year.ago':           [1, 1, 1, 1],
 };
-const W1_EXPECT = { 'slate.published': 1, 'game.final': 5, 'called.it': 3, 'stood.alone': 1, 'week.result': 1, 'player.week': 6, 'rank.changed': 0, 'streak.extended': 2, 'streak.broken': 0, 'milestone.reached': 0 };
+const W1_EXPECT = { 'slate.published': 1, 'game.final': 5, 'called.it': 0, 'stood.alone': 0, 'week.result': 1, 'player.week': 0, 'rank.changed': 0, 'streak.extended': 1, 'streak.broken': 0, 'milestone.reached': 0 };
 {
   const states = [['OPEN', cardsOpen], ['LOCKED', cardsLocked], ['LIVE', cardsLive], ['FINAL', cardsFinal]];
   for (const [type, counts] of Object.entries(W2_EXPECT)) {
@@ -267,30 +275,40 @@ const W1_EXPECT = { 'slate.published': 1, 'game.final': 5, 'called.it': 3, 'stoo
     '3-f4: g21 chips are [{playerId, initials, result}] with result win|loss ONLY — no team name per player');
   const g11 = ofType(F, 'game.final', 'w1').find(c => c.gameId === 'g11').facts;
   assert(g11.atsWinnerTeam === 'Clemson' && g11.marginCovered === '11', '3-f5: g11 — Clemson (-3) won 24-10, covered by 11');
-  const ci = byMember(F, 'called.it', 'w2');
-  assert(JSON.stringify(Object.keys(ci).sort()) === '["p2","p4","p5","p6"]' && ci.p2.team === 'Washington' && ci.p2.matchup === 'Washington at Oregon' && ci.p2.spreadDisplay === '+7' && ci.p2.scoreLine === '20–17',
-    `3-f6: g21 called.it — p2/p4/p5/p6 took the +7 underdog that won outright; display "+7", "20–17" (got ${JSON.stringify(Object.keys(ci))} ${JSON.stringify(ci.p2)})`);
-  const w1ci = byMember(F, 'called.it', 'w1');
-  assert(JSON.stringify(Object.keys(w1ci).sort()) === '["p1","p4","p5"]', '3-f7: week 1 g13 called.it — p1, p4, p5 (the picks on Oklahoma +7)');
-  const sa = ofType(F, 'stood.alone', 'w2')[0];
-  assert(sa.memberId === 'p5' && sa.facts.team === 'Miami' && sa.facts.against === 5 && sa.facts.matchup === 'Florida State at Miami', `3-f8: g22 stood.alone — p5 on Miami against 5 (got ${JSON.stringify(sa.facts)})`);
-  const pw = byMember(F, 'player.week', 'w2');
-  assert(pw.p5.wins === 4 && pw.p5.losses === 0 && pw.p5.streakRun === 5 && pw.p5.streakKind === 'covers', `3-f9: player.week p5 — 4–0 on a 5-game covers streak (got ${JSON.stringify(pw.p5)})`);
-  assert(pw.p3.wins === 0 && pw.p3.losses === 4 && pw.p3.streakRun === 4 && pw.p3.streakKind === 'misses', '3-f10: player.week p3 — 0–4 on a 4-game MISS streak');
-  assert(pw.p1.wins === 1 && pw.p1.losses === 3 && !('streakRun' in pw.p1) && !('streakKind' in pw.p1), '3-f11: player.week p1 — 1–3, streak keys ABSENT below STREAK_MIN (absent, not zero)');
-  const rk = byMember(F, 'rank.changed', 'w2');
-  assert(JSON.stringify(Object.keys(rk).sort()) === '["p1","p3","p4","p5","p6"]' && rk.p5.fromRank === 2 && rk.p5.toRank === 1 && rk.p3.fromRank === 4 && rk.p3.toRank === 6 && rk.p1.fromRank === 1 && rk.p1.toRank === 2 && rk.p4.fromRank === 5 && rk.p4.toRank === 4 && rk.p6.fromRank === 6 && rk.p6.toRank === 5 && rk.p5.rankedCount === 6,
-    `3-f12: rank.changed — p5 2→1, p1 1→2, p4 5→4, p6 6→5, p3 4→6; p2 (3→3) has none (got ${JSON.stringify(Object.keys(rk))})`);
-  const se = byMember(F, 'streak.extended', 'w2'), sb = byMember(F, 'streak.broken', 'w2');
-  assert(JSON.stringify(Object.keys(se).sort()) === '["p3","p5"]' && se.p3.run === 4 && se.p3.kind === 'misses' && se.p5.run === 5 && se.p5.kind === 'covers', `3-f13: streak.extended — p3 4 misses, p5 5 covers (got ${JSON.stringify(se)})`);
-  assert(JSON.stringify(Object.keys(sb).sort()) === '["p1","p6"]' && sb.p1.run === 4 && sb.p1.kind === 'covers' && sb.p6.run === 3 && sb.p6.kind === 'misses', `3-f14: streak.broken — p1's 4-cover run, p6's 3-miss run (got ${JSON.stringify(sb)})`);
-  const se1 = byMember(F, 'streak.extended', 'w1');
-  assert(JSON.stringify(Object.keys(se1).sort()) === '["p1","p6"]' && se1.p1.run === 4 && se1.p6.kind === 'misses', '3-f15: week 1 streak.extended — p1 4 covers, p6 3 misses (the same players\' week-2 cards are DIFFERENT facts: through-week slicing)');
+  // W-92 (DI-W92-2): the upset callers and the lone winner ride on their GAME's card (`standout`), never on a card of their own.
+  const so = (gid) => (ofType(F, 'game.final').find(c => c.gameId === gid) || { facts: {} }).facts.standout;
+  const nm = (x) => (x && x.names ? x.names.map(n => n.playerId).join(',') : '');
+  assert(so('g21') && so('g21').kind === 'called' && nm(so('g21')) === 'p2,p4,p5,p6' && so('g21').team === 'Washington' && so('g21').spreadDisplay === '+7' && ofType(F, 'called.it').length === 0,
+    `3-f6: g21's card names who called it — p2/p4/p5/p6 took the +7 underdog that won outright (display "+7"); no called.it card exists (got ${JSON.stringify(so('g21'))})`);
+  assert(so('g13') && so('g13').kind === 'called' && nm(so('g13')) === 'p1,p4,p5' && so('g13').team === 'Oklahoma', '3-f7: week 1 g13\'s card names p1, p4, p5 (the picks on Oklahoma +7)');
+  assert(so('g22') && so('g22').kind === 'alone' && nm(so('g22')) === 'p5' && so('g22').team === 'Miami' && so('g22').against === 5 && ofType(F, 'stood.alone').length === 0, `3-f8: g22's card — p5 stood alone on Miami against 5; no stood.alone card exists (got ${JSON.stringify(so('g22'))})`);
+  // W-92 (DI-W92-3): no personal-record card; the streak facts those cards carried live on the ONE streak card, member by member.
+  assert(ofType(F, 'player.week').length === 0, '3-f9: no player.week card for any week (the week-final card and its detail hold the records)');
+  const memOf = (type, wk) => { const c = ofType(F, type, wk)[0]; return c ? Object.fromEntries(c.facts.members.map(m => [m.playerId, m])) : {}; };
+  const se = memOf('streak.extended', 'w2'), sb = memOf('streak.broken', 'w2');
+  assert(se.p5 && se.p5.run === 5 && se.p5.kind === 'covers' && se.p3 && se.p3.run === 4 && se.p3.kind === 'misses', '3-f10: …p5\'s 5-cover run and p3\'s 4-miss run are members of week 2\'s ONE streak.extended card');
+  assert(!se.p1 && sb.p1 && sb.p1.run === 4, '3-f11: …and p1 (1–3) carries no extended streak: his 4-cover run ENDED (a member of streak.broken)');
+  const rkCard = ofType(F, 'rank.changed', 'w2');
+  const rk = memOf('rank.changed', 'w2');
+  assert(rkCard.length === 1 && rkCard[0].facts.members.map(m => m.playerId).join() === 'p5,p1,p4,p6,p3' && rk.p5.fromRank === 2 && rk.p5.toRank === 1 && rk.p3.fromRank === 4 && rk.p3.toRank === 6 && rk.p1.fromRank === 1 && rk.p1.toRank === 2 && rk.p4.fromRank === 5 && rk.p4.toRank === 4 && rk.p6.fromRank === 6 && rk.p6.toRank === 5 && rkCard[0].facts.rankedCount === 6 && !rk.p2,
+    `3-f12: ONE rank.changed card — p5 2→1, p1 1→2, p4 5→4, p6 6→5, p3 4→6 (best new rank first); p2 (3→3) is not a member (got ${JSON.stringify(rkCard.map(c => c.facts.members))})`);
+  assert(JSON.stringify(Object.keys(se)) === '["p3","p5"]' && JSON.stringify(Object.keys(sb)) === '["p1","p6"]' && sb.p6.run === 3 && sb.p6.kind === 'misses' && sb.p1.kind === 'covers' && ofType(F, 'streak.extended', 'w2').length === 1 && ofType(F, 'streak.broken', 'w2').length === 1,
+    `3-f13: ONE streak.extended card (p3 4 misses, p5 5 covers) and ONE streak.broken card (p1's 4-cover run, p6's 3-miss run), roster order (got ${JSON.stringify(se)} / ${JSON.stringify(sb)})`);
+  assert(ofType(F, 'streak.extended', 'w2')[0].id === 'streak.extended:L1:w2:-' && ofType(F, 'streak.broken', 'w2')[0].id === 'streak.broken:L1:w2:-', '3-f14: the combined ids carry no member: streak.extended:L1:w2:- and streak.broken:L1:w2:-');
+  const se1 = memOf('streak.extended', 'w1');
+  assert(JSON.stringify(Object.keys(se1)) === '["p1","p6"]' && se1.p1.run === 4 && se1.p6.kind === 'misses', '3-f15: week 1 streak.extended — p1 4 covers, p6 3 misses (the same players\' week-2 card is a DIFFERENT card with different facts: through-week slicing)');
   assert(ofType(F, 'streak.broken', 'w1').length === 0, '3-f16: a streak cannot break in week 1 — there was nothing before it (SCRIBE\'s "prior" rule)');
-  // reasons: self vs others
-  assert(ofType(F, 'player.week', 'w2').find(c => c.memberId === 'p1').reason === 'Your week' && ofType(F, 'player.week', 'w2').find(c => c.memberId === 'p2').reason === 'In your league', '3-f17: reason — the viewer\'s own player.week is "Your week", everyone else\'s "In your league"');
-  assert(ofType(F, 'called.it', 'w1').find(c => c.memberId === 'p1').reason === 'Your pick' && ofType(F, 'streak.broken', 'w2').find(c => c.memberId === 'p1').reason === 'Your streak' && ofType(F, 'week.result', 'w2')[0].reason === 'In your league' && ofType(F, 'game.final', 'w2')[0].reason === "In this week's slate",
-    '3-f18: reasons — Your pick / Your streak / In your league / In this week\'s slate');
+  // reasons: self vs others — a combined card is "Your …" when the viewer is one of its members
+  assert(ofType(F, 'streak.broken', 'w2')[0].reason === 'Your streak' && ofType(F, 'streak.extended', 'w2')[0].reason === 'In your league', '3-f17: reason — the card the viewer (p1) is a member of is "Your streak", the one he is not in "In your league"');
+  assert(ofType(F, 'week.result', 'w2')[0].reason === 'In your league' && ofType(F, 'game.final', 'w2')[0].reason === "In this week's slate" && ofType(F, 'rank.changed', 'w2')[0].reason === 'In your league' && ofType(F, 'streak.extended', 'w1')[0].reason === 'Your streak',
+    '3-f18: reasons — Your streak / In your league / In this week\'s slate (rank.changed keeps its fixed "In your league")');
+  // W-92 (DI-W92-2 / DI-W92-11): the retired types never come back, a game with nobody to name says nothing extra, and a standout carries display data only.
+  assert([cardsFinal, cardsLive, cardsOpen, cardsLocked].every(cs => !cs.some(c => fc.RETIRED_CARD_TYPES.includes(c.type))) && fc.RETIRED_CARD_TYPES.length === 3,
+    '3-f21: no card in any of the four states is a retired type (called.it, stood.alone, player.week)');
+  assert(['g12', 'g14', 'g15', 'g23', 'g24'].every(gid => { const c = ofType(F, 'game.final').find(x => x.gameId === gid); return !!c && !('standout' in c.facts); }),
+    '3-f22: the five games nobody called and nobody stood alone on (g12, g14, g15, g23, g24) carry NO standout — the supporting line appears only when it says something');
+  assert(ofType(F, 'game.final').filter(c => c.facts.standout).length === 4 && ofType(F, 'game.final').map(c => c.facts.standout).filter(Boolean).every(x => Object.keys(x).every(k => ['kind', 'names', 'team', 'spreadDisplay', 'against'].includes(k)) && x.names.every(n => JSON.stringify(Object.keys(n)) === '["playerId","playerName"]')),
+    '3-f23: the four standouts (g11, g13, g21, g22) carry display data only — kind / names / team / spreadDisplay / against, each name exactly {playerId, playerName}');
   const anon = derive(fc, snapshotWith(fc, FINAL_SET), { viewerId: null });
   assert(anon.length === cardsFinal.length && !anon.some(c => c.reason.startsWith('Your')), '3-f19: with NO viewer every card is third-person — never a "Your …" label');
   assert(JSON.stringify(cardsFinal.map(c => c.id)) === JSON.stringify(anon.map(c => c.id)), '3-f20: the viewer changes reasons only — never which cards exist, never an id');
@@ -301,20 +319,22 @@ const W1_EXPECT = { 'slate.published': 1, 'game.final': 5, 'called.it': 3, 'stoo
   const rows = L.weeklyResults.map(r => (r.playerId === 'p1' && r.weekId === 'w1') ? { ...r, correctCount: 24, correctPicks: 24, incorrectCount: 0, incorrectPicks: 0 }
     : (r.playerId === 'p2' && r.weekId === 'w1') ? { ...r, correctCount: 49, correctPicks: 49 } : r);
   const cards = derive(fc, snapshotWith(fc, { ...L, weeklyResults: rows }));
-  const ms = ofType(cards, 'milestone.reached', 'w2');
-  const by = Object.fromEntries(ms.map(c => [c.memberId, c.facts]));
-  assert(ms.length === 2 && by.p1.mark === 25 && by.p1.total === 25 && by.p2.mark === 50 && by.p2.total === 52, `3-m1: milestone.reached — p1 24→25 crosses 25 (total 25); p2 49→52 crosses 50 (total 52); p3 2→2 nothing (got ${JSON.stringify(by)})`);
-  assert(ms.find(c => c.memberId === 'p1').id === 'milestone.reached:L1:w2:p1:25' && ms.find(c => c.memberId === 'p1').reason === 'Your milestone', '3-m2: the id carries the mark (two marks in one week stay two cards) and the reason is "Your milestone" for the viewer');
-  const m1 = ofType(cards, 'milestone.reached', 'w1');
-  assert(m1.length === 1 && m1[0].memberId === 'p2' && m1[0].facts.mark === 25 && m1[0].facts.total === 49,
-    `3-m3: a crossing happens ONCE — week 1 (everyone starts at 0): p2 0→49 crosses 25 (total 49) and p1 0→24 crosses nothing; week 2 does NOT re-announce p2's 25 (49→52 crosses only 50) (got ${JSON.stringify(m1.map(c => [c.memberId, c.facts.mark, c.facts.total]))})`);
+  // W-92 (DI-W92-1): ONE milestone card per week; its members are everyone who crossed a mark (the higher mark when two were crossed).
+  const msOf = (cs, wk) => { const c = ofType(cs, 'milestone.reached', wk); return c.length === 1 ? Object.fromEntries(c[0].facts.members.map(m => [m.playerId, m])) : (c.length ? { _multiple: c.length } : {}); };
+  const by = msOf(cards, 'w2');
+  assert(ofType(cards, 'milestone.reached', 'w2').length === 1 && by.p1 && by.p1.mark === 25 && by.p1.total === 25 && by.p2 && by.p2.mark === 50 && by.p2.total === 52 && !by.p3, `3-m1: ONE milestone.reached card — p1 24→25 crosses 25 (total 25); p2 49→52 crosses 50 (total 52); p3 2→2 nothing (got ${JSON.stringify(by)})`);
+  assert(ofType(cards, 'milestone.reached', 'w2')[0].id === 'milestone.reached:L1:w2:-' && ofType(cards, 'milestone.reached', 'w2')[0].reason === 'Your milestone', '3-m2: the id carries no member and no mark (one card per week) and the reason is "Your milestone" — the viewer is one of its members');
+  const m1 = msOf(cards, 'w1');
+  assert(JSON.stringify(Object.keys(m1)) === '["p2"]' && m1.p2.mark === 25 && m1.p2.total === 49,
+    `3-m3: a crossing happens ONCE — week 1 (everyone starts at 0): p2 0→49 crosses 25 (total 49) and p1 0→24 crosses nothing; week 2 does NOT re-announce p2's 25 (49→52 crosses only 50) (got ${JSON.stringify(m1)})`);
   const near = rows.map(r => (r.playerId === 'p5' && r.weekId === 'w1') ? { ...r, correctCount: 20, correctPicks: 20 } : r);
-  assert(derive(fc, snapshotWith(fc, { ...L, weeklyResults: near })).filter(c => c.type === 'milestone.reached' && c.memberId === 'p5').length === 0,
-    '3-m4: p5 at 20 after week 1 plus 4 in week 2 is 24 — one short of 25, so NO milestone card (a near miss is not announced)');
+  assert(!msOf(derive(fc, snapshotWith(fc, { ...L, weeklyResults: near })), 'w2').p5,
+    '3-m4: p5 at 20 after week 1 plus 4 in week 2 is 24 — one short of 25, so p5 is NOT a member (a near miss is not announced)');
   const over = rows.map(r => (r.playerId === 'p5' && r.weekId === 'w1') ? { ...r, correctCount: 22, correctPicks: 22 } : r);
-  const crossed = derive(fc, snapshotWith(fc, { ...L, weeklyResults: over })).filter(c => c.type === 'milestone.reached' && c.memberId === 'p5');
-  assert(crossed.length === 1 && crossed[0].facts.mark === 25 && crossed[0].facts.total === 26 && crossed[0].reason === 'In your league',
-    `3-m5: p5 at 22 plus 4 is 26 — crosses 25 once, total 26, third-person for a viewer who is not p5 (got ${JSON.stringify(crossed.map(c => [c.facts, c.reason]))})`);
+  const crossedCards = ofType(derive(fc, snapshotWith(fc, { ...L, weeklyResults: over }), { viewerId: 'p3' }), 'milestone.reached', 'w2');
+  const crossed = crossedCards.length === 1 ? crossedCards[0].facts.members.filter(m => m.playerId === 'p5') : [];
+  assert(crossed.length === 1 && crossed[0].mark === 25 && crossed[0].total === 26 && crossedCards[0].reason === 'In your league',
+    `3-m5: p5 at 22 plus 4 is 26 — a member once, mark 25, total 26; third-person for a viewer who is not a member (got ${JSON.stringify(crossedCards.map(c => [c.facts.members, c.reason]))})`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -345,14 +365,14 @@ function blindChecks(F) {
     const lc = cardsFor('locked', {}, { w2Finals: ['g21', 'g22'] });
     out['B1b …nor in a LOCKED week with two final games'] = !lc.some(x => GAME_TYPES.includes(x.type) && x.weekId === 'w2');
     const pos = cardsFor('live', {}, { w2Finals: ['g21'] });
-    out['B1+ positive control: the SAME final game once the week is LIVE (revealed) DOES produce game.final + 4 called.it'] = ofType(pos, 'game.final', 'w2').length === 1 && ofType(pos, 'called.it', 'w2').length === 4;
+    out['B1+ positive control: the SAME final game once the week is LIVE (revealed) DOES produce game.final, and it names its 4 upset callers (W-92: the called.it cards folded into it)'] = ofType(pos, 'game.final', 'w2').length === 1 && !!standoutOf(pos, 'g21') && standoutOf(pos, 'g21').names.length === 4;
   }
   // The symmetric case: a still-LIVE game inside a REVEALED week.
   {
     const c = cardsFor('live');
     out['B2 a still-LIVE game (g22, whose lone-wolf picks exist) in a revealed week produces no game card'] = !c.some(x => x.gameId === 'g22' || x.gameId === 'g23' || x.gameId === 'g24');
     const pos = cardsFor('live', {}, { w2Finals: ['g22'] });
-    out['B2+ positive control: finish g22 and its game.final + stood.alone appear'] = ofType(pos, 'game.final', 'w2').some(x => x.gameId === 'g22') && ofType(pos, 'stood.alone', 'w2').length === 1;
+    out['B2+ positive control: finish g22 and its game.final appears, naming the member who stood alone (W-92)'] = ofType(pos, 'game.final', 'w2').some(x => x.gameId === 'g22') && !!standoutOf(pos, 'g22') && standoutOf(pos, 'g22').kind === 'alone';
   }
   // RG-253: the mirror says FINAL, the SERVER says LIVE. The per-candidate gate must hold even when the assembled view was wrong.
   {
@@ -363,7 +383,7 @@ function blindChecks(F) {
     out['B3 RG-253: confirmed status LIVE while the mirror says FINAL → NO after-final card for week 2, even though the assembled view wrongly included it'] = !c.some(x => x.weekId === 'w2' && AGG_TYPES.includes(x.type));
     out['B3b …and the after-reveal game cards (the week IS public) still appear — the two classes are independent'] = ofType(c, 'game.final', 'w2').length === 4;
     const pos = derive(F, snapshotWith(F, L));
-    out['B3+ positive control: confirmed FINAL → the after-final cards appear'] = ofType(pos, 'week.result', 'w2').length === 1 && ofType(pos, 'rank.changed', 'w2').length === 5;
+    out['B3+ positive control: confirmed FINAL → the after-final cards appear (W-92: ONE rank.changed card, five members)'] = ofType(pos, 'week.result', 'w2').length === 1 && ofType(pos, 'rank.changed', 'w2').length === 1 && Object.keys(membersOf(pos, 'rank.changed', 'w2')).length === 5;
   }
   // FIXTURE C — DI-373's LITERAL named fixture (reviewer condition 2): "a final week W followed by an open week W+1 that also contains a final game:
   // W+1's final game must not produce game.final/called.it/stood.alone (W+1 itself is not revealed), AND W+1's picks/results must not leak into
@@ -382,29 +402,28 @@ function blindChecks(F) {
     out['FC3 W\'s rank.changed / streak.* / milestone.reached / player.week FACTS equal, card for card, the facts of a league where W+1 does not exist at all'] =
       ['rank.changed', 'streak.extended', 'streak.broken', 'milestone.reached', 'player.week', 'week.result'].every(t => JSON.stringify(factsOf(withW1, t, 'w1')) === JSON.stringify(factsOf(alone, t, 'w1')));
     const wCards = (cs) => cs.filter(c => c.weekId === 'w1' && c.type !== 'year.ago');   // year.ago follows the CURRENT week, which is the one thing that differs between the two snapshots
-    out['FC4 …and the whole W card set (ids, facts, reasons, sort keys) is byte-identical with and without W+1'] = JSON.stringify(wCards(withW1)) === JSON.stringify(wCards(alone)) && wCards(withW1).length === 19;
+    out['FC4 …and the whole W card set (ids, facts, reasons, sort keys) is byte-identical with and without W+1'] = JSON.stringify(wCards(withW1)) === JSON.stringify(wCards(alone)) && wCards(withW1).length === 8;   // W-92: 8 (was 19 before the cards combined)
     out['FC5 …with the explicit values: no rank.changed in W (nothing before it), streak.extended p1 4 covers + p6 3 misses, no streak.broken, no milestone'] =
       ofType(withW1, 'rank.changed', 'w1').length === 0 && ofType(withW1, 'streak.broken', 'w1').length === 0 && ofType(withW1, 'milestone.reached', 'w1').length === 0
-      && JSON.stringify(Object.keys(byMember(withW1, 'streak.extended', 'w1')).sort()) === '["p1","p6"]' && byMember(withW1, 'streak.extended', 'w1').p1.run === 4 && byMember(withW1, 'streak.extended', 'w1').p6.run === 3;
+      && ofType(withW1, 'streak.extended', 'w1').length === 1 && JSON.stringify(Object.keys(membersOf(withW1, 'streak.extended', 'w1'))) === '["p1","p6"]' && membersOf(withW1, 'streak.extended', 'w1').p1.run === 4 && membersOf(withW1, 'streak.extended', 'w1').p6.run === 3;
     const w2Teams = ['Oregon', 'Washington'];   // g21's two teams
     out['FC6 no W+1 team name, score or player outcome appears in any W card (W+1\'s picks and rows are in the store, in NO card of W)'] =
       withW1.filter(c => c.weekId === 'w1').every(c => w2Teams.every(t => !JSON.stringify(c).includes(t)));
-    out['FC+ positive control: the SAME final game (g21) once its week is LIVE DOES produce game.final + 4 called.it, so the zeros above are the gate\'s'] =
-      (() => { const live = derive(F, snapshotWith(F, league('live', { staleW2Rows: true }))); return ofType(live, 'game.final', 'w2').some(c => c.gameId === 'g21') && ofType(live, 'called.it', 'w2').length === 4; })();
+    out['FC+ positive control: the SAME final game (g21) once its week is LIVE DOES produce game.final naming its 4 callers, so the zeros above are the gate\'s'] =
+      (() => { const live = derive(F, snapshotWith(F, league('live', { staleW2Rows: true }))); return ofType(live, 'game.final', 'w2').some(c => c.gameId === 'g21') && !!standoutOf(live, 'g21') && standoutOf(live, 'g21').names.length === 4; })();
   }
   // Fixture D — a HIDDEN week (week 2, LIVE, stale final-shaped rows still in storage) sits BETWEEN two final weeks. The only guard for week 3's
   // aggregates is the S-C2 revealed view: through-week slicing includes week 2 (it is earlier), and the per-candidate gate on week 3 is open.
   {
     const L = league('live', { staleW2Rows: true, w3: true });
     const c = derive(F, snapshotWith(F, L));
-    const ext = byMember(c, 'streak.extended', 'w3');
+    const ext = membersOf(c, 'streak.extended', 'w3');
     const want = { p1: [6, 'covers'], p2: [4, 'covers'], p4: [3, 'misses'], p5: [3, 'covers'], p6: [5, 'misses'] };
     const gotExt = Object.fromEntries(Object.entries(ext).map(([k, v]) => [k, [v.run, v.kind]]));
     out['D1 S-C2: week 3 streaks are computed WITHOUT the hidden week 2 — p1 6 covers, p2 4, p5 3, p4 3 misses, p6 5 misses (p3 none)'] = JSON.stringify(gotExt) === JSON.stringify(want);
     out['D2 …and week 3 shows NO rank movement (week-1 ranks == week-1+3 ranks once week 2 is excluded)'] = ofType(c, 'rank.changed', 'w3').length === 0;
     out['D3 …and no week-2 after-final card exists at all (week 2 is not final)'] = !c.some(x => x.weekId === 'w2' && AGG_TYPES.includes(x.type));
-    const pw3 = byMember(c, 'player.week', 'w3');
-    out['D4 …and week 3 player.week streak notes carry the clean numbers (p1 6, p6 5 misses)'] = pw3.p1 && pw3.p1.streakRun === 6 && pw3.p6 && pw3.p6.streakRun === 5 && pw3.p6.streakKind === 'misses';
+    out['D4 …and week 3\'s ONE streak card carries the clean numbers (p1 6, p6 5 misses) — W-92: the player.week streak notes it used to repeat are retired'] = ofType(c, 'streak.extended', 'w3').length === 1 && ext.p1 && ext.p1.run === 6 && ext.p6 && ext.p6.run === 5 && ext.p6.kind === 'misses' && ofType(c, 'player.week').length === 0;
     const wr = ofType(c, 'week.result', 'w3')[0];
     out['D5 …week 3 result is Drew 2–0 over Kihoon 0–2 (rows for week 3 only)'] = !!wr && wr.facts.weekWinnerName === 'Drew' && wr.facts.weekLoserName === 'Kihoon';
     out['D6 …and no week-3 team name leaks into a card it should not be in (week 3 is FINAL; names belong to its game cards only)'] = W3_TEAMS.every(t => !JSON.stringify(c.filter(x => x.weekId !== 'w3')).includes(t));
@@ -413,24 +432,25 @@ function blindChecks(F) {
   {
     const small = derive(F, snapshotWith(F, league('final'))).filter(x => x.weekId === 'w1').map(x => x.id + '|' + JSON.stringify(x.facts)).sort();
     const big = derive(F, snapshotWith(F, league('final', { w3: true }))).filter(x => x.weekId === 'w1').map(x => x.id + '|' + JSON.stringify(x.facts)).sort();
-    out['E1 slicing: week 1\'s cards are IDENTICAL whether or not weeks 2 and 3 exist — a later week never moves an earlier week\'s streak, rank or milestone'] = small.length === 19 && JSON.stringify(small) === JSON.stringify(big);
-    const p5w1 = ofType(derive(F, snapshotWith(F, league('final', { w3: true }))), 'player.week', 'w1').find(x => x.memberId === 'p5');
-    out['E2 …specifically p5\'s week-1 player.week carries NO streak note (its 5-cover run is a week-2 fact)'] = !!p5w1 && !('streakRun' in p5w1.facts);
+    out['E1 slicing: week 1\'s cards are IDENTICAL whether or not weeks 2 and 3 exist — a later week never moves an earlier week\'s streak, rank or milestone'] = small.length === 8 && JSON.stringify(small) === JSON.stringify(big);   // W-92: 8 (was 19)
+    const w1ext = membersOf(derive(F, snapshotWith(F, league('final', { w3: true }))), 'streak.extended', 'w1');
+    out['E2 …specifically p5 is NOT a member of week 1\'s streak card (its 5-cover run is a week-2 fact), while p1 and p6 are'] = !w1ext.p5 && !!w1ext.p1 && !!w1ext.p6;
   }
   // S-C10 — picksReadConfirmed, independently of arePicksPublic().
   {
     const L = league('final');
     const none = derive(F, snapshotWith(F, L, { picksConfirmed: false }), { viewerId: 'p5' });
     out['PC1 S-C10: flag FALSE (the week IS public) → no game.final, no stood.alone, no rank.changed for anyone'] = ['game.final', 'stood.alone', 'rank.changed'].every(t => ofType(none, t).length === 0);
-    out['PC2 …called.it only for the VIEWER\'s own pick (p5), nobody else\'s'] = ofType(none, 'called.it').length === 2 && ofType(none, 'called.it').every(x => x.memberId === 'p5');
-    out['PC3 …player.week / streak.* only the viewer\'s own'] = ['player.week', 'streak.extended', 'streak.broken', 'milestone.reached'].every(t => ofType(none, t).every(x => x.memberId === 'p5')) && ofType(none, 'player.week').length === 2 && ofType(none, 'streak.extended', 'w2').length === 1;
+    out['PC2 …and so NO upset caller is named at all, not even the VIEWER\'s own (p5 called g21 and g13): W-92 moved "called it" onto the game card, whose gate needs the others\' picks (DI-W92-2, the recorded safe-direction edge)'] = !none.some(x => x.facts && x.facts.standout) && ofType(none, 'called.it').length === 0;
+    out['PC3 …a combined streak / milestone card admits only the viewer\'s own entry (each member passes its own gate)'] = ['streak.extended', 'streak.broken', 'milestone.reached'].every(t => ofType(none, t).every(x => x.facts.members.every(m => m.playerId === 'p5'))) && JSON.stringify(Object.keys(membersOf(none, 'streak.extended', 'w2'))) === '["p5"]' && ofType(none, 'player.week').length === 0;
     out['PC4 …week.result (derived from the stored result rows, not another member\'s pick) and the never-class cards still render'] = ofType(none, 'week.result').length === 2 && ofType(none, 'slate.published').length === 2;
     const per = derive(F, snapshotWith(F, L, { picksConfirmed: { w1: true, w2: false } }), { viewerId: 'p5' });
-    out['PC5 the flag is PER WEEK: week 1 confirmed shows everything, week 2 unconfirmed shows only the viewer\'s own'] = ofType(per, 'game.final', 'w1').length === 5 && ofType(per, 'game.final', 'w2').length === 0 && ofType(per, 'player.week', 'w1').length === 6 && ofType(per, 'player.week', 'w2').length === 1;
+    out['PC5 the flag is PER WEEK: week 1 confirmed shows everything, week 2 unconfirmed shows only the viewer\'s own'] = ofType(per, 'game.final', 'w1').length === 5 && ofType(per, 'game.final', 'w2').length === 0 && !!standoutOf(per, 'g13') && JSON.stringify(Object.keys(membersOf(per, 'streak.extended', 'w2'))) === '["p5"]' && !standoutOf(per, 'g21');
     const absent = derive(F, snapshotWith(F, L, { snap: { picksReadConfirmed: undefined } }), { viewerId: 'p5' });
     out['PC6 a snapshot with NO picksReadConfirmed fails CLOSED (treated as unconfirmed for every week)'] = ofType(absent, 'game.final').length === 0 && ofType(absent, 'rank.changed').length === 0;
     const pos = derive(F, snapshotWith(F, L), { viewerId: 'p5' });
-    out['PC+ positive control: flag TRUE → game.final 9, stood.alone 2, rank.changed 5, called.it 7'] = ofType(pos, 'game.final').length === 9 && ofType(pos, 'stood.alone').length === 2 && ofType(pos, 'rank.changed').length === 5 && ofType(pos, 'called.it').length === 7;
+    const sos = ofType(pos, 'game.final').map(c => c.facts.standout).filter(Boolean);
+    out['PC+ positive control: flag TRUE → game.final 9 (two name a lone winner, two name 7 upset callers between them), ONE rank.changed card with 5 members'] = ofType(pos, 'game.final').length === 9 && sos.filter(x => x.kind === 'alone').length === 2 && sos.filter(x => x.kind === 'called').reduce((n, x) => n + x.names.length, 0) === 7 && ofType(pos, 'rank.changed').length === 1 && Object.keys(membersOf(pos, 'rank.changed')).length === 5;
   }
   // Demo weeks (UN-71)
   {
@@ -463,14 +483,15 @@ function blindChecks(F) {
 function viewLayerChecks(F) {
   const out = {};
   const w3Cards = (cs) => JSON.stringify(cs.filter(c => c.weekId === 'w3'));
-  const brief = (cs) => Object.fromEntries(['streak.extended', 'streak.broken', 'player.week', 'milestone.reached', 'rank.changed'].map(t => [t,
-    ofType(cs, t, 'w3').map(c => `${c.memberId}:${c.facts.run ?? c.facts.streakRun ?? c.facts.toRank ?? ''}`).sort().join(' ')]));
+  // W-92: the people on each week-3 aggregate (one combined card per kind; player.week is retired).
+  const brief = (cs) => Object.fromEntries(['streak.extended', 'streak.broken', 'milestone.reached', 'rank.changed'].map(t => [t,
+    Object.values(membersOf(cs, t, 'w3')).map(m => `${m.playerId}:${m.run ?? m.toRank ?? m.mark ?? ''}`).sort().join(' ')]));
   const both = (L) => ({ good: derive(F, snapshotWith(F, L)), bad: derive(F, snapshotWith(F, L, { bypassView: true })) });
   // The probe's fixture: an OPEN week holding TWO FINAL games, followed by a FINAL week; the UNFILTERED view is passed in.
   { const L = league('open', { w2Finals: ['g21', 'g22'], w3: true }); const { good, bad } = both(L);
-    out['V1 C1: OPEN week 2 with TWO final games, then FINAL week 3, UNFILTERED view passed in → every week-3 card equals the correct-view output'] = w3Cards(bad) === w3Cards(good) && ofType(good, 'streak.extended', 'w3').length === 5;
+    out['V1 C1: OPEN week 2 with TWO final games, then FINAL week 3, UNFILTERED view passed in → every week-3 card equals the correct-view output'] = w3Cards(bad) === w3Cards(good) && ofType(good, 'streak.extended', 'w3').length === 1 && Object.keys(membersOf(good, 'streak.extended', 'w3')).length === 5;
     out['V2 …specifically p3\'s week-3 streak (the probe\'s leak: his week-2 sides) is the clean one — no streak.extended for p3, and the clean numbers p1 6 / p2 4 / p4 3 misses / p5 3 / p6 5 misses'] =
-      ofType(bad, 'streak.extended', 'w3').every(c => c.memberId !== 'p3') && brief(bad)['streak.extended'] === 'p1:6 p2:4 p4:3 p5:3 p6:5';
+      !membersOf(bad, 'streak.extended', 'w3').p3 && brief(bad)['streak.extended'] === 'p1:6 p2:4 p4:3 p5:3 p6:5';
     out['V3 …and the unfiltered view produces no week-2 game or aggregate card either (week 2 is OPEN, so it is not public)'] = !bad.some(c => c.weekId === 'w2' && (GAME_TYPES.includes(c.type) || AGG_TYPES.includes(c.type)));
   }
   // Fixture D: a LIVE (public, but not server-confirmed final) week 2 with stale final-shaped rows between two final weeks.
@@ -479,7 +500,7 @@ function viewLayerChecks(F) {
   }
   // The re-application is NARROW-ONLY: an honest view passes through byte-identical; with no confirmedStatusFor nothing is "revealed".
   { const L = league('final', { w3: true }); const { good, bad } = both(L);
-    out['V5 an honest, fully-final league: the bypassed and the built view give BYTE-IDENTICAL cards (the re-application only removes, never changes)'] = JSON.stringify(good) === JSON.stringify(bad) && good.length > 60;
+    out['V5 an honest, fully-final league: the bypassed and the built view give BYTE-IDENTICAL cards (the re-application only removes, never changes)'] = JSON.stringify(good) === JSON.stringify(bad) && good.length === 26;
     const noConf = derive(F, { ...snapshotWith(F, L, { bypassView: true }), confirmedStatusFor: undefined });
     out['V6 …and an unfiltered view with NO confirmedStatusFor yields NO aggregate card (nothing is confirmed final → fail closed)'] = !noConf.some(c => AGG_TYPES.includes(c.type)) && ofType(noConf, 'game.final').length === 11;
     const hidden = { ...L, weeks: L.weeks.map(w => (w.weekId === 'w2' ? { ...w, showInHistory: false } : w)) };
@@ -496,27 +517,21 @@ const almaLeague = (w2, o = {}) => {
   return L;
 };
 function almaChecks(F) {
+  // W-92 (DI-W92-3, Drew "Accept all three (Recommended)", 2026-10-16): the personal-record card is RETIRED from Home, and with it the straight-up
+  // alma-mater line it carried — the side effect Drew accepted. The Dashboard's Alma Mater Watch is untouched (a locked decision). What stays provable
+  // here: no state produces the card or the fact on Home, the per-item allow-list for the (catalogued) fact still holds, and the fact never migrates
+  // onto another card. The straight-up computation itself stays mutation-proven in statstest [7] 7-16…7-18.
   const out = {};
-  const fin = derive(F, snapshotWith(F, almaLeague('final')));
-  const am = (cs, wk, m) => (ofType(cs, 'player.week', wk).find(c => c.memberId === m) || { facts: {} }).facts.almaMaterResult;
-  const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  out['AL1 week 1: p2\'s school (Oklahoma) beat Texas → { team:"Oklahoma", result:"win" }'] = eq(am(fin, 'w1', 'p2'), { team: 'Oklahoma', result: 'win' });
-  out['AL2 week 1: p3\'s school (Notre Dame) lost at Clemson → { team:"Notre Dame", result:"loss" } (the team is the GAME ROW\'s spelling)'] = eq(am(fin, 'w1', 'p3'), { team: 'Notre Dame', result: 'loss' });
-  out['AL3 week 2: p4\'s school (USC) beat UCLA → win'] = eq(am(fin, 'w2', 'p4'), { team: 'USC', result: 'win' });
-  out['AL4 a member whose school is not on the slate (p1, p5, p6) carries NO almaMaterResult key (absent, never null)'] = ['p1', 'p5', 'p6'].every(m => ofType(fin, 'player.week').filter(c => c.memberId === m).every(c => !('almaMaterResult' in c.facts)));
-  out['AL5 the fact is exactly { team, result } and result is "win"|"loss" only'] = ofType(fin, 'player.week').filter(c => 'almaMaterResult' in c.facts).every(c => JSON.stringify(Object.keys(c.facts.almaMaterResult)) === '["team","result"]' && ['win', 'loss'].includes(c.facts.almaMaterResult.result)) && ofType(fin, 'player.week').filter(c => 'almaMaterResult' in c.facts).length === 3;
-  // absent before final — a final alma game inside a week that is not final yields NO player.week card, so no fact either
-  for (const [name, L] of [['LIVE', almaLeague('live', { w2Finals: ['g24'] })], ['OPEN (RG-45: a final game in an open week)', almaLeague('open', { w2Finals: ['g24'] })], ['LOCKED', almaLeague('locked', { w2Finals: ['g24'] })]]) {
-    const cs = derive(F, snapshotWith(F, L));
-    out[`AL6 week 2 ${name} with USC's game FINAL: NO player.week card for week 2 and no almaMaterResult anywhere in its cards`] = ofType(cs, 'player.week', 'w2').length === 0 && !JSON.stringify(cs.filter(c => c.weekId === 'w2')).includes('almaMaterResult');
+  const states = [['FINAL', almaLeague('final')], ['LIVE with USC\'s game final', almaLeague('live', { w2Finals: ['g24'] })], ['OPEN (RG-45: a final game in an open week)', almaLeague('open', { w2Finals: ['g24'] })], ['LOCKED', almaLeague('locked', { w2Finals: ['g24'] })], ['FINAL, picks not confirmed', null]];
+  for (const [name, L0] of states) {
+    const cs = L0 ? derive(F, snapshotWith(F, L0)) : derive(F, snapshotWith(F, almaLeague('final'), { picksConfirmed: false }), { viewerId: 'p2' });
+    out[`AL1 ${name}: NO player.week card and no almaMaterResult fact anywhere on Home (W-92: retired with the personal-record cards)`] = ofType(cs, 'player.week').length === 0 && !JSON.stringify(cs).includes('almaMaterResult');
   }
-  out['AL7 positive control: once week 2 is FINAL the fact is there (AL3) — the absence above is the gate\'s'] = eq(am(fin, 'w2', 'p4'), { team: 'USC', result: 'win' });
-  // S-C10: another member's player.week (and the fact on it) needs picksReadConfirmed; the viewer's own does not
-  const unconf = derive(F, snapshotWith(F, almaLeague('final'), { picksConfirmed: false }), { viewerId: 'p2' });
-  out['AL8 S-C10: with picksReadConfirmed false, p2 (the viewer) still carries his own alma fact, and no other member\'s player.week (so no one else\'s alma fact) renders'] =
-    eq(am(unconf, 'w1', 'p2'), { team: 'Oklahoma', result: 'win' }) && ofType(unconf, 'player.week').every(c => c.memberId === 'p2');
-  out['AL9 straight-up, never ATS: the fact never names a spread, a pick or a margin (keys team/result only; no pick content in the player.week card beyond the record)'] =
-    ofType(fin, 'player.week').every(c => Object.keys(c.facts).every(k => fc_ALLOWED(F, k)));
+  const fin = derive(F, snapshotWith(F, almaLeague('final')));
+  out['AL2 positive control: the same FINAL league does produce its week-final and combined cards (the absence above is the retirement, not an empty fixture)'] = ofType(fin, 'week.result').length === 2 && ofType(fin, 'rank.changed', 'w2').length === 1;
+  out['AL3 the fact never migrates: no combined card\'s member and no game card\'s standout carries a school or a straight-up result'] = fin.every(c => !/almaMater|"result":"(win|loss)"/.test(JSON.stringify(c.facts.members || c.facts.standout || '')));
+  const kept = F.finalizeFacts('player.week', { playerId: 'p', almaMaterResult: { team: 'USC', result: 'win', note: 'x' } });
+  out['AL4 the catalogued player.week allow-list still rebuilds almaMaterResult as {team, result} only (the type stays in the catalog)'] = JSON.stringify(kept.almaMaterResult) === '{"team":"USC","result":"win"}';
   return out;
 }
 const fc_ALLOWED = (F, k) => F.CARD_ALLOWED_FACTS['player.week'].includes(k);
@@ -559,7 +574,7 @@ function weekAndActiveChecks(F) {
     const noW2 = { ...L, weeks: L.weeks.filter(w => w.weekId !== 'w2'), games: L.games.filter(g => g.weekId !== 'w2'), picks: L.picks.filter(p => p.weekId !== 'w2'), weeklyResults: L.weeklyResults.filter(r => r.weekId !== 'w2') };
     const keep = (cs) => JSON.stringify(cs.filter(c => (c.weekId === 'w1' || c.weekId === 'w3') && c.type !== 'year.ago'));
     out['WN2 …and the malformed week cannot sit in the revealed view either (it would sort as week 0 and move week 3\'s ranks and streaks): weeks 1 and 3 equal those of a league without it'] =
-      keep(derive(F, snapshotWith(F, L, { snap: { currentWeekId: 'w3' } }))) === keep(derive(F, snapshotWith(F, noW2, { snap: { currentWeekId: 'w3' } }))) && ofType(derive(F, snapshotWith(F, L)), 'streak.extended', 'w3').length === 5; }
+      keep(derive(F, snapshotWith(F, L, { snap: { currentWeekId: 'w3' } }))) === keep(derive(F, snapshotWith(F, noW2, { snap: { currentWeekId: 'w3' } }))) && Object.keys(membersOf(derive(F, snapshotWith(F, L)), 'streak.extended', 'w3')).length === 5; }
   const E = { escHtml: esc };
   out['WN3 cardCopy: a week-scoped card whose weekN is missing renders NOTHING — no "Week \'s slate is up", no "Week  is final."'] =
     ['slate.published', 'picks.submitted', 'week.revealed', 'week.result', 'player.week', 'rank.changed'].every(t => { const c = F.cardCopy({ type: t, facts: { gameCount: 4, submittedCount: 1, totalPlayers: 6, playerName: 'A', wins: 1, losses: 1, fromRank: 1, toRank: 2 } }, E); return c.title === '' && c.body === ''; })
@@ -569,8 +584,9 @@ function weekAndActiveChecks(F) {
     const L = league('final'); L.players = L.players.map(p => (p.playerId === 'p6' ? { ...p, active: val } : p));
     const cs = derive(F, snapshotWith(F, L));
     const active = L.players.filter(p => p.active);
-    out[`AC1 a player with active:${label} has NO player.week / rank.changed / streak / milestone card (Standings\' truthy-active rule)`] = !cs.some(c => c.memberId === 'p6' && AGG_TYPES.includes(c.type)) && ofType(cs, 'player.week', 'w2').length === 5;
-    out[`AC2 …and the ranks are computed among the ${active.length} active players only (rankedCount ${active.length})`] = ofType(cs, 'rank.changed', 'w2').every(c => c.facts.rankedCount === 5);
+    const inAny = (cards, id) => cards.some(c => AGG_TYPES.includes(c.type) && Array.isArray(c.facts.members) && c.facts.members.some(m => m.playerId === id));
+    out[`AC1 a player with active:${label} is a member of NO rank.changed / streak / milestone card (Standings\' truthy-active rule; W-92: one combined card per kind)`] = !inAny(cs, 'p6') && inAny(derive(F, snapshotWith(F, league('final'))), 'p6');
+    out[`AC2 …and the ranks are computed among the ${active.length} active players only (rankedCount ${active.length})`] = ofType(cs, 'rank.changed', 'w2').length === 1 && ofType(cs, 'rank.changed', 'w2').every(c => c.facts.rankedCount === 5);
   }
   return out;
 }
@@ -612,7 +628,7 @@ function streakParityChecks(F) {
       const feed = cards.filter(c => c.weekId === w.weekId && (c.type === 'streak.extended' || c.type === 'streak.broken'));
       const norm = (xs) => xs.sort().join('|');
       const a = norm(sigPlayed.map(s => `${s.subject}:${s.evidence.state}:${s.evidence.run}:${s.evidence.kind}`));
-      const b = norm(feed.map(c => `${c.memberId}:${c.type === 'streak.extended' ? 'active' : 'broken'}:${c.facts.run}:${c.facts.kind}`));
+      const b = norm(feed.flatMap(c => c.facts.members.map(m => `${m.playerId}:${c.type === 'streak.extended' ? 'active' : 'broken'}:${m.run}:${m.kind}`)));   // W-92: one card per kind, its members
       weeksCompared++; if (sigPlayed.length) withSignals++;
       if (a !== b) mismatches.push(`league ${n} ${w.weekId}: scribe=${a} feed=${b}`);
     });
@@ -630,16 +646,16 @@ function streakParityChecks(F) {
   const DIRECTIVES = [
     { n: 1, layer: 'card', say: '"Your friend just locked in an underdog" → counts only ("6/6 in"): no member, no team, in an OPEN or LOCKED week',
       check: () => preReveal.every(cs => w2Only(cs).every(c => c.memberId === null && !('playerId' in c.facts) && !('team' in c.facts))) && ofType(cardsOpen, 'picks.submitted', 'w2').every(c => Object.keys(c.facts).sort().join() === 'submittedCount,totalPlayers,weekN') },
-    { n: 2, layer: 'card', say: '"A player in your league just made a huge pick" → after reveal only: no called.it / stood.alone before LIVE, present after',
-      check: () => preReveal.every(cs => !w2Only(cs).some(c => c.type === 'called.it' || c.type === 'stood.alone')) && ofType(cardsLive, 'called.it', 'w2').length === 4 },
+    { n: 2, layer: 'card', say: '"A player in your league just made a huge pick" → after reveal only: no card names an upset caller or a lone winner before LIVE; after, the game card does (W-92)',
+      check: () => preReveal.every(cs => !w2Only(cs).some(c => c.type === 'called.it' || c.type === 'stood.alone' || (c.facts && c.facts.standout))) && !!standoutOf(cardsLive, 'g21') && standoutOf(cardsLive, 'g21').names.length === 4 },
     { n: 3, layer: 'card', say: '"Brayden just took Texas +6.5" → before reveal no team / spread / matchup anywhere; after reveal it appears on the game-scoped card',
-      check: () => preReveal.every(cs => !JSON.stringify(w2Only(cs).map(c => c.facts)).match(/team|spreadDisplay|matchup|Washington|Oregon/)) && ofType(cardsLive, 'called.it', 'w2').every(c => c.facts.spreadDisplay === '+7') },
+      check: () => preReveal.every(cs => !JSON.stringify(w2Only(cs).map(c => c.facts)).match(/team|spreadDisplay|matchup|Washington|Oregon/)) && !!standoutOf(cardsLive, 'g21') && standoutOf(cardsLive, 'g21').spreadDisplay === '+7' },
     { n: 4, layer: 'card', say: '"Jacob is the only person taking Michigan" → "stands alone" only once the game is FINAL ("…and it covered") — stricter than the table\'s at-reveal wording',
-      check: () => ofType(cardsLive, 'stood.alone', 'w2').length === 0 && preReveal.every(cs => ofType(cs, 'stood.alone', 'w2').length === 0) && ofType(cardsFinal, 'stood.alone', 'w2').length === 1 },
+      check: () => !standoutOf(cardsLive, 'g22') && preReveal.every(cs => !standoutOf(cs, 'g22')) && !!standoutOf(cardsFinal, 'g22') && standoutOf(cardsFinal, 'g22').kind === 'alone' },
     { n: 5, layer: 'SCRIBE / server', say: 'SCRIBE "Three people picked the favorite…" — SCRIBE\'s own revealedView() filter (supabase/functions/_shared/scribe-evidence.mjs), not a feed card; no card type carries a split-of-picks fact',
       check: () => !fc.CARD_TYPES.some(t => /split|favorite/i.test(t)) && !Object.values(fc.CARD_ALLOWED_FACTS).some(ks => ks.some(k => /split|favorite/i.test(k))) },
     { n: 6, layer: 'card', say: '"Only 1 player… picked Stanford" → after reveal only (the stood.alone gate)',
-      check: () => preReveal.every(cs => !cs.some(c => c.type === 'stood.alone' && c.weekId === 'w2')) && ofType(cardsFinal, 'stood.alone', 'w2')[0].facts.against === 5 },
+      check: () => preReveal.every(cs => !cs.some(c => c.weekId === 'w2' && (c.type === 'stood.alone' || (c.facts && c.facts.standout)))) && !!standoutOf(cardsFinal, 'g22') && standoutOf(cardsFinal, 'g22').against === 5 },
     { n: 7, layer: 'SCRIBE / server', say: 'SCRIBE "Kevin has taken the favorite in every game" — after reveal only, enforced server-side; no per-member "every game" aggregate exists in the v1 catalog',
       check: () => !fc.CARD_TYPES.some(t => /taken|every/i.test(t)) },
     { n: 8, layer: 'SCRIBE / server', say: 'SCRIBE "Everyone suddenly loves the underdog…" — after reveal only; the "line moves" framing is dropped (spreads are locked); the feed never shows a line move',
@@ -690,7 +706,7 @@ function idOrderChecks(F) {
   const b = run(league('locked'));
   out['S5-3 LOCKED week: zero id builds for gated week-2 types'] = !b.calls.some(c => c.weekId === 'w2' && GATED.includes(c.type));
   const d = run(league('final'));
-  out['S5-4 positive control: FINAL week → id builds for gated week-2 types DO happen'] = d.calls.filter(c => c.weekId === 'w2' && GATED.includes(c.type)).length === 4 + 4 + 1 + 1 + 6 + 5 + 2 + 2;
+  out['S5-4 positive control: FINAL week → id builds for gated week-2 types DO happen (W-92: 4 game cards + week.result + ONE rank / extended / broken card)'] = d.calls.filter(c => c.weekId === 'w2' && GATED.includes(c.type)).length === 4 + 1 + 1 + 1 + 1;
   out['S5-5 one id build per card, no more (nothing is built and then thrown away)'] = d.calls.length === d.cards.length && a.calls.length === a.cards.length;
   const e = run(league('final'), { confirmed: (w) => (w.weekId === 'w2' ? 'live' : w.status), viewConfirmed: (w) => w.status });
   out['S5-6 RG-253 shape: confirmed LIVE → zero id builds for after-final week-2 types (the gate runs BEFORE the build)'] = !e.calls.some(c => c.weekId === 'w2' && AGG_TYPES.includes(c.type));
@@ -706,12 +722,14 @@ function idOrderChecks(F) {
 console.log('\n[6] Stable ids, determinism, re-derivation, fail-closed inputs, isContentWithheld…');
 // ═══════════════════════════════════════════════════════════════════════════
 {
-  const suffixOf = (c) => (GAME_TYPES.includes(c.type) ? c.gameId : c.type === 'milestone.reached' ? String(c.facts.mark) : c.type === 'scribe.post' ? c.facts.messageId : c.type === 'lockerroom.top' ? '2026-09-12' : c.type === 'year.ago' ? '2025' : null);
+  // W-92 (DI-W92-1): a combined card has no member slot and no suffix (the per-mark milestone suffix is gone).
+  const suffixOf = (c) => (GAME_TYPES.includes(c.type) ? c.gameId : c.type === 'scribe.post' ? c.facts.messageId : c.type === 'lockerroom.top' ? '2026-09-12' : c.type === 'year.ago' ? '2025' : null);
   const expectedId = (c) => `${c.type}:L1:${c.weekId ?? '-'}:${c.memberId ?? '-'}${suffixOf(c) ? ':' + suffixOf(c) : ''}`;
   const all = [...cardsFinal, ...cardsLive, ...cardsOpen, ...cardsLocked];
   assert(all.every(c => c.id === expectedId(c)), '6-1: every id equals `${type}:${leagueId}:${weekId ?? "-"}:${memberId ?? "-"}[:${suffix}]` — the UN-330 / DI-362 format — for all ' + all.length + ' cards of every type');
   for (const [name, cards] of [['FINAL', cardsFinal], ['LIVE', cardsLive], ['OPEN', cardsOpen]]) assert(new Set(cards.map(c => c.id)).size === cards.length, `6-2: ${name}: ids are UNIQUE within one derive (${cards.length} cards)`);
-  assert(cardsFinal.some(c => c.id === 'called.it:L1:w2:p2:g21') && cardsFinal.some(c => c.id === 'game.final:L1:w2:-:g21') && cardsFinal.some(c => c.id === 'week.result:L1:w2:-') && cardsFinal.some(c => c.id === 'streak.broken:L1:w2:p6'), '6-3: spot-check the literal ids: called.it:L1:w2:p2:g21, game.final:L1:w2:-:g21, week.result:L1:w2:-, streak.broken:L1:w2:p6');
+  assert(cardsFinal.some(c => c.id === 'rank.changed:L1:w2:-') && cardsFinal.some(c => c.id === 'game.final:L1:w2:-:g21') && cardsFinal.some(c => c.id === 'week.result:L1:w2:-') && cardsFinal.some(c => c.id === 'streak.broken:L1:w2:-') && !cardsFinal.some(c => c.id === 'called.it:L1:w2:p2:g21' || c.id === 'streak.broken:L1:w2:p6'),
+    '6-3: spot-check the literal ids: rank.changed:L1:w2:-, game.final:L1:w2:-:g21, week.result:L1:w2:-, streak.broken:L1:w2:- — and the pre-W-92 per-member ids (called.it:L1:w2:p2:g21, streak.broken:L1:w2:p6) are gone');
   const again = derive(fc, snapshotWith(fc, FINAL_SET));
   assert(JSON.stringify(again) === JSON.stringify(cardsFinal), '6-4: the same snapshot yields the same array, byte for byte (deterministic order and content)');
   assert(cardsFinal.every((c, i) => i === 0 || cardsFinal[i - 1].sortKey > c.sortKey || (cardsFinal[i - 1].sortKey === c.sortKey && cardsFinal[i - 1].id < c.id)), '6-5: output is newest-first by sortKey with id as the tiebreak');
@@ -720,8 +738,9 @@ console.log('\n[6] Stable ids, determinism, re-derivation, fail-closed inputs, i
   const first = derive(fc, snapshotWith(fc, L));
   const bumped = { ...L, weeklyResults: L.weeklyResults.map(r => (r.weekId === 'w2' && r.playerId === 'p3') ? { ...r, correctPicks: 4, correctCount: 4, incorrectPicks: 0, incorrectCount: 0 } : r) };
   const second = derive(fc, snapshotWith(fc, bumped));
-  const r1 = ofType(first, 'rank.changed', 'w2').find(c => c.memberId === 'p3'), r2 = ofType(second, 'rank.changed', 'w2').find(c => c.memberId === 'p3');
-  assert(r1.facts.toRank === 6 && (!r2 || r2.facts.toRank !== 6) && r1.id === 'rank.changed:L1:w2:p3', `6-6: re-derivation — p3's rank.changed shows toRank 6 on the first snapshot and ONLY the new standings on the second (${r2 ? 'toRank ' + r2.facts.toRank : 'no card'}); the id is stable, the stale card is never stored`);
+  const r1 = membersOf(first, 'rank.changed', 'w2').p3, r2 = membersOf(second, 'rank.changed', 'w2').p3;
+  const id1 = (ofType(first, 'rank.changed', 'w2')[0] || {}).id, id2 = (ofType(second, 'rank.changed', 'w2')[0] || {}).id;
+  assert(!!r1 && r1.toRank === 6 && (!r2 || r2.toRank !== 6) && id1 === 'rank.changed:L1:w2:-' && (id2 === undefined || id2 === id1), `6-6: re-derivation — p3's entry on the rank.changed card shows toRank 6 on the first snapshot and ONLY the new standings on the second (${r2 ? 'toRank ' + r2.toRank : 'not a member'}); the id is stable, the stale card is never stored`);
   // purity
   const freeze = (o) => { if (o && typeof o === 'object' && !Object.isFrozen(o)) { Object.freeze(o); Object.values(o).forEach(freeze); } return o; };
   const snap = freeze(JSON.parse(JSON.stringify({ ...snapshotWith(fc, FINAL_SET), confirmedStatusFor: undefined })));
@@ -944,10 +963,10 @@ function copyChecks(F) {
     const texts = [copy.title, copy.body, ...copy.chips.map(ch => ch.initialsHtml), cap.captionFor(c, { escHtml: esc })];
     for (const s of texts) { strings++; if (/[<>"]/.test(s)) rawLeak++; if (/&lt;|&gt;|&quot;/.test(s)) escSeen++; }
   }
-  out[`CP4 hostile team / player / initials / chat text: across ${cards.length} cards (title + body + chips + caption) no string contains a raw < > or "`] = rawLeak === 0 && strings > 150;
+  out[`CP4 hostile team / player / initials / chat text: across ${cards.length} cards (title + body + chips + caption) no string contains a raw < > or "`] = rawLeak === 0 && cards.length === 20 && strings > 100;   // W-92: 20 cards (they combine), 114 strings
   out['CP5 …and the escaped forms ARE present (positive control — the hostile data really flowed through)'] = escSeen > 10;
   const idEsc = (s) => String(s);
-  const sampleHost = cards.find(c => c.type === 'called.it');
+  const sampleHost = cards.find(c => c.type === 'game.final' && c.gameId === 'g21');   // W-92: called.it is retired; g21's title carries the hostile team
   out['CP6 negative control: with a NON-escaping escaper the same card DOES carry a raw < — so CP4 can fail'] = /[<>]/.test(F.cardCopy(sampleHost, { escHtml: idEsc }).title);
   out['CP7 numbers cross the boundary through a numeric helper: a non-finite score renders as nothing, never "NaN" or an injected string'] = !/NaN|undefined|null/.test(F.cardCopy({ type: 'game.final', facts: { awayTeam: 'A', homeTeam: 'H', awayScore: '<x>', homeScore: NaN, atsWinnerTeam: 'A', marginCovered: '3', chips: [] } }, { escHtml: esc }).title) && !/</.test(F.cardCopy({ type: 'game.final', facts: { awayTeam: 'A', homeTeam: 'H', awayScore: '<x>', homeScore: NaN, chips: [] } }, { escHtml: esc }).title);
   return out;
@@ -965,17 +984,24 @@ function copyChecks(F) {
   assert(ofType(cardsFinal, 'game.final', 'w2').map(c => fc.cardCopy(c, E).title).includes('Washington 20, Oregon 17 (Final) — Washington covered by 10.'), '8-4: game.final — "Washington 20, Oregon 17 (Final) — Washington covered by 10."');
   const gc = ofType(cardsFinal, 'game.final', 'w2').find(c => c.gameId === 'g21');
   assert(JSON.stringify(fc.cardCopy(gc, E).chips) === JSON.stringify([{ initialsHtml: 'DH', result: 'loss' }, { initialsHtml: 'BR', result: 'win' }, { initialsHtml: 'KC', result: 'loss' }, { initialsHtml: 'KR', result: 'win' }, { initialsHtml: 'JP', result: 'win' }, { initialsHtml: 'KB', result: 'win' }]), '8-5: game.final chips come back as {initialsHtml, result: win|loss} for the .badge-win / .badge-loss row');
-  assert(copy(cardsFinal, 'called.it', 'w2', 'p2').title === 'Brayden called it — Washington +7 upset outright, 20–17.', '8-6: called.it — "Brayden called it — Washington +7 upset outright, 20–17."');
-  assert(copy(cardsFinal, 'stood.alone', 'w2').title === 'Jacob stood alone on Miami — and it covered.', '8-7: stood.alone — "Jacob stood alone on Miami — and it covered."');
+  // W-92 (DI-W92-2): "called it" / "stood alone" are the game card's ONE supporting line (the retired cards' own copy stays in cardCopy for the catalog).
+  const g21c = fc.cardCopy(ofType(cardsFinal, 'game.final', 'w2').find(c => c.gameId === 'g21'), E), g22c = fc.cardCopy(ofType(cardsFinal, 'game.final', 'w2').find(c => c.gameId === 'g22'), E);
+  assert(g21c.body === 'Brayden, Koby, Jacob and 1 other called it: Washington +7 won outright.' && fc.cardCopy({ type: 'called.it', facts: { playerName: 'Brayden', team: 'Washington', spreadDisplay: '+7', scoreLine: '20–17' } }, E).title === 'Brayden called it — Washington +7 upset outright, 20–17.',
+    '8-6: g21\'s card — "Brayden, Koby, Jacob and 1 other called it: Washington +7 won outright." (the catalogued called.it copy is unchanged for a synthetic card)');
+  assert(g22c.body === 'Jacob stood alone on Miami against 5 others, and it covered.' && fc.cardCopy({ type: 'stood.alone', facts: { playerName: 'Jacob', team: 'Miami' } }, E).title === 'Jacob stood alone on Miami — and it covered.',
+    '8-7: g22\'s card — "Jacob stood alone on Miami against 5 others, and it covered." (catalogued stood.alone copy unchanged)');
   const wr = copy(cardsFinal, 'week.result', 'w2');
-  assert(wr.title === 'Week 2 is final.' && wr.body === 'Jacob took it, 4–0.', '8-8: week.result — "Week 2 is final." / "Jacob took it, 4–0."');
-  const pw5 = copy(cardsFinal, 'player.week', 'w2', 'p5'), pw1 = copy(cardsFinal, 'player.week', 'w2', 'p1');
-  assert(pw5.title === "Jacob's Week 2: 4–0" && pw5.body === 'On a 5-game cover streak.' && pw1.title === "Drew's Week 2: 1–3" && pw1.body === '', '8-9: player.week — "Jacob\'s Week 2: 4–0" + "On a 5-game cover streak." only at STREAK_MIN+; "Drew\'s Week 2: 1–3" with no body');
-  const up = copy(cardsFinal, 'rank.changed', 'w2', 'p5'), dn = copy(cardsFinal, 'rank.changed', 'w2', 'p3');
-  assert(up.title === 'Jacob moved into 1st this week.' && up.body === 'Up from 2nd after Week 2.' && dn.title === 'Kevin slipped to 6th this week.' && dn.body === 'Down from 4th after Week 2.',
-    '8-10: rank.changed — "moved into 1st / Up from 2nd" for a rise; a FALL says "slipped to 6th / Down from 4th" (the DI\'s "moved into … Up from" would be false for a drop)');
-  assert(copy(cardsFinal, 'streak.extended', 'w2', 'p5').title === 'Jacob is riding a 5-game cover streak.' && copy(cardsFinal, 'streak.extended', 'w2', 'p3').title === 'Kevin is riding a 4-game miss streak.', '8-11: streak.extended — "Jacob is riding a 5-game cover streak." (a miss run says "miss streak")');
-  assert(copy(cardsFinal, 'streak.broken', 'w2', 'p1').title === "Drew's 4-game streak snapped this week.", '8-12: streak.broken — "Drew\'s 4-game streak snapped this week."');
+  assert(wr.title === 'Week 2 is final.' && wr.body === 'Jacob took it, 4–0; Kevin finished 0–4.', '8-8: week.result — "Week 2 is final." / "Jacob took it, 4–0; Kevin finished 0–4." (W-92 DI-W92-3: the plain body names the loser too)');
+  const pw5 = fc.cardCopy({ type: 'player.week', facts: { playerName: 'Jacob', weekN: 2, wins: 4, losses: 0, streakRun: 5, streakKind: 'covers' } }, E), pw1 = fc.cardCopy({ type: 'player.week', facts: { playerName: 'Drew', weekN: 2, wins: 1, losses: 3 } }, E);
+  assert(pw5.title === "Jacob's Week 2: 4–0" && pw5.body === 'On a 5-game cover streak.' && pw1.title === "Drew's Week 2: 1–3" && pw1.body === '' && ofType(cardsFinal, 'player.week').length === 0, '8-9: player.week (retired from Home, still catalogued) — its copy is unchanged for a synthetic card: "Jacob\'s Week 2: 4–0" + "On a 5-game cover streak." only at STREAK_MIN+; "Drew\'s Week 2: 1–3" with no body');
+  const oneRank = (m) => fc.cardCopy({ type: 'rank.changed', facts: { weekN: 2, rankedCount: 6, members: [m] } }, E);
+  const up = oneRank({ playerId: 'p5', playerName: 'Jacob', fromRank: 2, toRank: 1 }), dn = oneRank({ playerId: 'p3', playerName: 'Kevin', fromRank: 4, toRank: 6 });
+  assert(up.title === 'Jacob moved into 1st this week.' && up.body === 'Up from 2nd after Week 2.' && dn.title === 'Kevin slipped to 6th this week.' && dn.body === 'Down from 4th after Week 2.' && copy(cardsFinal, 'rank.changed', 'w2').title === 'Jacob, Koby and Kihoon moved up; Drew and Kevin slipped.',
+    '8-10: rank.changed — one member: "moved into 1st / Up from 2nd" for a rise, "slipped to 6th / Down from 4th" for a fall (unchanged); the week-2 card names all five: "Jacob, Koby and Kihoon moved up; Drew and Kevin slipped."');
+  const oneStreak = (type, m) => fc.cardCopy({ type, facts: { weekN: 2, members: [m] } }, E);
+  assert(oneStreak('streak.extended', { playerId: 'p5', playerName: 'Jacob', run: 5, kind: 'covers' }).title === 'Jacob is riding a 5-game cover streak.' && oneStreak('streak.extended', { playerId: 'p3', playerName: 'Kevin', run: 4, kind: 'misses' }).title === 'Kevin is riding a 4-game miss streak.' && copy(cardsFinal, 'streak.extended', 'w2').title === 'Kevin and Jacob are riding streaks.',
+    '8-11: streak.extended — one member: "Jacob is riding a 5-game cover streak." (a miss run says "miss streak"); the week-2 card: "Kevin and Jacob are riding streaks."');
+  assert(oneStreak('streak.broken', { playerId: 'p1', playerName: 'Drew', run: 4, kind: 'covers' }).title === "Drew's 4-game streak snapped this week." && copy(cardsFinal, 'streak.broken', 'w2').title === 'Drew and Kihoon lost their streaks this week.', '8-12: streak.broken — one member: "Drew\'s 4-game streak snapped this week."; the week-2 card: "Drew and Kihoon lost their streaks this week."');
   const L = league('final');
   const rows = L.weeklyResults.map(r => (r.playerId === 'p1' && r.weekId === 'w1') ? { ...r, correctCount: 24, correctPicks: 24 } : r);
   assert(fc.cardCopy(ofType(derive(fc, snapshotWith(fc, { ...L, weeklyResults: rows })), 'milestone.reached', 'w2')[0], E).title === 'Drew hit 25 correct picks this season.', '8-13: milestone.reached — "Drew hit 25 correct picks this season."');
@@ -1013,11 +1039,12 @@ function captionChecks(C, F) {
     const m = C.CAPTION_FACT_MAP[p];
     const known = new Set([...Object.keys(m.fields), ...Object.keys(m.derived)]);
     for (const t of lines(p)) for (const tok of [...t.matchAll(/\{(\w+)\}/g)].map(x => x[1])) if (!known.has(tok)) unmapped.push(`${p}:{${tok}}`);
-    const allowed = F.CARD_ALLOWED_FACTS[m.cardType];
+    // W-92: a combined card's ceiling is its top-level list PLUS its per-member allow-list (the caption module's own load-time guard, mirrored)
+    const allowed = [...F.CARD_ALLOWED_FACTS[m.cardType], ...((F.NESTED_FACT_KEYS[m.cardType] && F.NESTED_FACT_KEYS[m.cardType].members) || [])];
     for (const k of [...Object.values(m.fields), ...Object.values(m.derived).flatMap(d => d.from)]) if (!allowed.includes(k)) outside.push(`${p}→${k}`);
   }
   out['K3 S-C12: every {placeholder} in every line is a MAPPED placeholder of its pool (mechanical regex-extract-and-diff over all 88 lines)'] = unmapped.length === 0;
-  out['K4 S-C12: every fact a pool reads is on its card type\'s CARD_ALLOWED_FACTS list'] = outside.length === 0;
+  out['K4 S-C12: every fact a pool reads is on its card type\'s CARD_ALLOWED_FACTS list (or, for a combined card, its per-member allow-list)'] = outside.length === 0;
   const valueKeys = Object.values(C.CAPTION_FACT_MAP).flatMap(m => [...Object.values(m.fields), ...Object.values(m.derived).flatMap(d => d.from)]);
   out['K5 `margin` is NEVER a fact key: the document\'s {margin} placeholder maps to scoreLine'] = !valueKeys.includes('margin') && C.CAPTION_FACT_MAP['called.it'].fields.margin === 'scoreLine';
   out['K6 no mapped fact is a FORBIDDEN_META_KEYS entry'] = valueKeys.every(k => !notifyCopy.FORBIDDEN_META_KEYS.includes(k));
@@ -1066,7 +1093,7 @@ function captionChecks(C, F) {
   // every produced card captions cleanly
   let bad = 0, n = 0;
   for (const c of [...cardsFinal, ...cardsLive, ...cardsOpen]) { const t = C.captionTextUnsafeForTests(c); n++; if (/[{}]/.test(t) || /undefined|NaN|null/.test(t)) bad++; }
-  out[`K20 across all ${n} derived cards no caption has an unfilled {slot}, "undefined", "NaN" or "null"`] = bad === 0 && n > 100;
+  out[`K20 across all ${n} derived cards no caption has an unfilled {slot}, "undefined", "NaN" or "null"`] = bad === 0 && n === 50;   // W-92: 50 cards (they combine)
   const sampleCaps = [...cardsFinal, ...cardsOpen].filter(c => c.type === 'picks.submitted').map(c => C.captionTextUnsafeForTests(c)).join(' ');
   out['K21 BLIND: the picks.submitted caption for an OPEN week names no player and no team'] = sampleCaps.length > 0 && !/Drew|Brayden|Kevin|Koby|Jacob|Kihoon/.test(sampleCaps) && W2_TEAMS.every(t => !sampleCaps.includes(t));
   let t1 = null; try { C.captionFor(cardsFinal[0]); } catch (e) { t1 = e; }
@@ -1188,8 +1215,9 @@ async function mutantOf(label, edits, runner, mustFail, rewrites) {
   const m8 = await mutantOf('11-8: M8 through-week slicing removed — later weeks move earlier weeks\' streaks and ranks',
     [['memberSeasonStats(memberId, { ...view, season: W.season, asOfWeekId: W.weekId })', 'memberSeasonStats(memberId, { ...view, season: W.season })'], ['const weeks = i < 0 ? [] : same.slice(0, i + 1);', 'const weeks = same;']], blindChecks, ['E1 slicing', 'E2']);
   // M9 id built BEFORE the gate (S-C5)
-  await mutantOf('11-9: M9 S-C5 — an id is built for a called.it candidate BEFORE its gate runs',
-    [["if (gate('called.it', W, g)) {", "if ((_internals.buildCardId({ type: 'called.it', leagueId: s.leagueId, weekId: W.weekId }), gate('called.it', W, g))) {"]], idOrderChecks, ['S5-1', 'S5-3']);
+  // W-92: called.it is retired; the game-scoped candidate whose id is built early is now game.final's (it carries the upset callers).
+  await mutantOf('11-9: M9 S-C5 — an id is built for a game card candidate BEFORE its gate runs',
+    [["if (gate('game.final', W, g) && othersConfirmed(W)) {", "if ((_internals.buildCardId({ type: 'game.final', leagueId: s.leagueId, weekId: W.weekId }), gate('game.final', W, g)) && othersConfirmed(W)) {"]], idOrderChecks, ['S5-1', 'S5-3']);
   // M10 chat exclusions, one at a time
   await mutantOf('11-10a: M10a private rows are no longer excluded', [['if (c.private === true || c.visibleTo || c.visible_to) return null;', '']], chatChecks, ['T2']);
   await mutantOf('11-10b: M10b wager receipts are no longer excluded (SD-6)', [['if (isWagerReceipt(c)) return null;', '']], chatChecks, ['T3']);
@@ -1268,10 +1296,12 @@ async function mutantOf(label, edits, runner, mustFail, rewrites) {
   //   security probe reported.
   {
     const noL2 = (await loadMutant('./js/feed-cards.js', [[L2_LINE, L2_OFF]])).mod;           // layer 2: deriveCards stops re-applying the view
+    // W-92 (2026-10-17): read off the ONE combined card per kind (its members); the player.week streak notes this used to print are retired, so the
+    // third row is now the week's ended streaks. The pasted CLEAN/MUTANT outputs above predate W-92; the live label below prints today's truth.
     const brief = (cs) => ({
-      'week-3 streak.extended': Object.fromEntries(ofType(cs, 'streak.extended', 'w3').map(c => [c.memberId, `${c.facts.run} ${c.facts.kind}`])),
-      'week-3 rank.changed': Object.fromEntries(ofType(cs, 'rank.changed', 'w3').map(c => [c.memberId, `${c.facts.fromRank}->${c.facts.toRank}`])),
-      'week-3 player.week streaks': Object.fromEntries(ofType(cs, 'player.week', 'w3').filter(c => c.facts.streakRun).map(c => [c.memberId, `${c.facts.streakRun} ${c.facts.streakKind}`])),
+      'week-3 streak.extended': Object.fromEntries(Object.values(membersOf(cs, 'streak.extended', 'w3')).map(m => [m.playerId, `${m.run} ${m.kind}`])),
+      'week-3 rank.changed': Object.fromEntries(Object.values(membersOf(cs, 'rank.changed', 'w3')).map(m => [m.playerId, `${m.fromRank}->${m.toRank}`])),
+      'week-3 streak.broken': Object.fromEntries(Object.values(membersOf(cs, 'streak.broken', 'w3')).map(m => [m.playerId, `${m.run} ${m.kind}`])),
     });
     const same = (a, b) => JSON.stringify(brief(a)) === JSON.stringify(brief(b));
     const viewOnly = (m) => viewLayerChecks(m);
@@ -1309,10 +1339,13 @@ async function mutantOf(label, edits, runner, mustFail, rewrites) {
   await mutantOf('11-26: M26 the active filter reverts to `active !== false` (an undefined-active player is ranked)', [['const activePlayers = s.players.filter(p => p && p.active);', 'const activePlayers = s.players.filter(p => p && p.active !== false);']], weekAndActiveChecks, ['AC1 a player with active:undefined']);
   // reviewer note 4 — the feed's own streak rule drifting from SCRIBE's
   await mutantOf('11-27: M27 the feed asks about players with no graded result this week too', [['if (!ordered.results.some(r => r.weekId === W.weekId)) continue;', '']], streakParityChecks, ['SP1']);
-  // reviewer note 3 — the alma fact. (Its blind-rule guard is the card's own after-final gate: the fact rides ONLY on a player.week card, which exists only
-  // for a revealed-view week; the alma-result logic itself is mutation-proven in statstest [7] 7-16…7-18.) A mutant that DROPS the fact from the card:
-  await mutantOf('11-28: M28 the almaMaterResult fact is no longer attached to the player.week card', [['            ...(alma ? { almaMaterResult: alma } : {}),\n', '']], almaChecks, ['AL1', 'AL2', 'AL3']);
-  assert(Object.keys(almaChecks(fc)).length >= 9, '11-29: the alma checks ran (≥ 9 named checks)');
+  // reviewer note 3 — the alma fact. W-92 (DI-W92-3) retired the player.week card from Home, and the alma line with it (Drew accepted the side effect);
+  // the alma-result logic itself stays mutation-proven in statstest [7] 7-16…7-18. The mutant is now the retirement undone: a player.week card (with
+  // its alma fact) pushed beside the week-final card again.
+  await mutantOf('11-28: M28 a player.week card carrying an almaMaterResult is emitted again (the retirement undone)',
+    [['          sortKey: isoAt(endMs, 6),\n        });', "          sortKey: isoAt(endMs, 6),\n        });\n        push('player.week', W, { memberId: 'p3', facts: { playerId: 'p3', playerName: 'Kevin', weekN: W.weekNumber, wins: 0, losses: 4, almaMaterResult: { team: 'Notre Dame', result: 'loss' } }, sortKey: isoAt(endMs, 2) });"]],
+    almaChecks, ['AL1 FINAL']);
+  assert(Object.keys(almaChecks(fc)).length >= 8, '11-29: the alma checks ran (≥ 8 named checks: five states, the positive control, no migration, the catalogued allow-list)');
   // SB-22 (2026-10-01) — year.ago's denominator. The control first: the unmutated module passes both check sets.
   const YA_RECORD = 'const record = Number.isInteger(size) && size > 0 && size >= max ? `${max}/${size}` : `${max} correct`;';
   const YA_FIX = { 'history-2025.js': YA_FIXTURE_URL };

@@ -1,0 +1,29 @@
+{
+  "id": "feedcombinetest",
+  "script": "feedcombinetest.mjs",
+  "summary": "strict",
+  "floor": 97,
+  "forbid": [
+    {
+      "regex": "ERR_MODULE_NOT_FOUND",
+      "flags": "",
+      "label": "feedcombinetest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)"
+    }
+  ],
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "deps": [
+    "js/feed-cards.js",
+    "js/card-detail.js",
+    "js/home.js",
+    "js/feed-time.js",
+    "js/feed-caption-lines.js",
+    "d1homeenv.mjs",
+    "statsfixtures.mjs",
+    "minidom.mjs"
+  ],
+  "expectedMs": 1500,
+  "note": "W-92 (release v0.30.1, 2026-10-17; Drew 'approve M-61', DI-W92-1…6 + the combine half of DI-W92-11): one standings / streak / milestone card per week and kind with per-member admission, the game card naming who called it / stood alone, the retired called.it / stood.alone / player.week never emitted, the pinned one-supporting-line table, the combined detail (a section per member, Compare only for one), old shared ids closed. [M] is the S-3 mutation kit (node feedcombinetest.mjs --kit). tz: it renders cards through home.js cardHTML, which formats dates in a zone."
+}

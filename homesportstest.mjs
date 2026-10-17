@@ -179,7 +179,8 @@ async function checks(M, H = home) {
     const cfbRanks = cards.filter((c) => c.sport === 'cfb' && c.type === 'rank.changed');
     if (process.env.HS_DEBUG) console.log('RANK', j(cards.filter((c) => c.type === 'rank.changed').map((c) => [c.sport, c.weekId, c.memberId, c.facts.fromRank, c.facts.toRank, c.facts.rankedCount])));
     ck('3a NFL rank cards rank among the THREE entrants, CFB among all six', nflRanks.length > 0 && nflRanks.every((c) => c.facts.rankedCount === 3) && cfbRanks.length > 0 && cfbRanks.every((c) => c.facts.rankedCount === 6));
-    ck('3b no NFL card names a member who is not in the NFL', cards.filter((c) => c.sport === 'nfl').every((c) => c.memberId === null || NFL_ENTRANTS.includes(c.memberId)));
+    // W-92: a combined card names its people in `members`, and a game card names its upset callers / lone winner in `standout` — both are checked, not just memberId
+    ck('3b no NFL card names a member who is not in the NFL (memberId, a combined card\'s members, a game card\'s standout names)', cards.filter((c) => c.sport === 'nfl').every((c) => (c.memberId === null || NFL_ENTRANTS.includes(c.memberId)) && (Array.isArray(c.facts.members) ? c.facts.members : []).every((m) => NFL_ENTRANTS.includes(m.playerId)) && (!c.facts.standout || c.facts.standout.names.every((n) => NFL_ENTRANTS.includes(n.playerId)))) && cards.some((c) => c.sport === 'nfl' && Array.isArray(c.facts.members) && c.facts.members.length > 0));
     ck('3c ...in chips either', cards.filter((c) => c.sport === 'nfl' && c.type === 'game.final').every((c) => c.facts.chips.every((ch) => NFL_ENTRANTS.includes(ch.playerId))));
     // adversarial: a stray pick ROW by the viewer (a non-entrant) in an NFL game
     const strayLeague = nflOf(fx.buildLeague({ w2: 'final', calculateWeeklyResults }), NFL_ENTRANTS, { stray: true });
@@ -187,13 +188,15 @@ async function checks(M, H = home) {
     const sc = feed(M, stray);
     ck('3d a stray pick row by a non-entrant names nobody and moves nothing: the NFL cards are identical to the run without it', j(sc.filter((c) => c.sport === 'nfl')) === j(cards.filter((c) => c.sport === 'nfl')));
     // the other half of A3: a non-entrant's pick ROW is not "somebody else also picked that side" either. A stray pick agreeing with the NFL's lone wolf must not un-alone him.
-    const wolves = cards.filter((c) => c.sport === 'nfl' && c.type === 'stood.alone');
-    ck('3j fixture: the NFL feed has a stood-alone card to attack', wolves.length > 0);
+    // W-92 (DI-W92-2): the lone wolf is named on his GAME's card (`standout`, kind alone / both) — the stood.alone card is retired.
+    const isWolf = (c) => c.sport === 'nfl' && c.type === 'game.final' && c.facts.standout && (c.facts.standout.kind === 'alone' || c.facts.standout.kind === 'both');
+    const wolves = cards.filter(isWolf);
+    ck('3j fixture: the NFL feed has a game card naming a lone wolf to attack', wolves.length > 0);
     if (wolves.length) {
       const w0 = wolves[0];
-      const strayWolf = [{ pickId: 'stray_wolf', weekId: w0.weekId, gameId: w0.gameId, playerId: 'p1', selectedTeam: w0.facts.team, submittedAt: 'x' }];
-      const wolvesAfter = feed(M, assemble({ cfb: cfbFinal, nfl: nflFinal, contexts: [ctxCfb(cfbFinal), ctxNfl(nflFinal)], picksExtra: strayWolf })).filter((c) => c.sport === 'nfl' && c.type === 'stood.alone' && c.gameId === w0.gameId);
-      ck('3k a stray pick (by a non-entrant) on the lone wolf\'s side leaves him alone: the card stands, unchanged', wolvesAfter.length === 1 && wolvesAfter[0].memberId === w0.memberId && j(wolvesAfter[0].facts) === j(w0.facts));
+      const strayWolf = [{ pickId: 'stray_wolf', weekId: w0.weekId, gameId: w0.gameId, playerId: 'p1', selectedTeam: w0.facts.standout.team, submittedAt: 'x' }];
+      const wolvesAfter = feed(M, assemble({ cfb: cfbFinal, nfl: nflFinal, contexts: [ctxCfb(cfbFinal), ctxNfl(nflFinal)], picksExtra: strayWolf })).filter((c) => isWolf(c) && c.gameId === w0.gameId);
+      ck('3k a stray pick (by a non-entrant) on the lone wolf\'s side leaves him alone: the card still names him, unchanged', wolvesAfter.length === 1 && j(wolvesAfter[0].facts.standout) === j(w0.facts.standout) && j(wolvesAfter[0].facts) === j(w0.facts));
     }
     // "N of M in": the snapshot's counts
     const open = assemble({ cfb: cfbOpen, nfl: nflOpen, contexts: [ctxCfb(cfbOpen), ctxNfl(nflOpen)] });
@@ -294,11 +297,12 @@ async function checks(M, H = home) {
   {
     const escHtml = esc;
     const card = { id: 'c1', type: 'week.result', facts: { weekN: 2, weekWinnerName: 'Kevin', weekWinnerRecord: '3-1', weekLoserName: 'Drew', weekLoserRecord: '1-3' }, reason: 'Week result', sortKey: '2026-09-14T00:00:00.000Z' };
-    const plain = H.cardHTML(card, { escHtml });
+    const TNOW = Date.parse('2026-09-14T02:00:00.000Z');   // W-92: a card now carries its time ("2h ago"); a fixed clock keeps the golden deterministic
+    const plain = H.cardHTML(card, { escHtml, now: TNOW });
     ck('6a a card with no sport has NO chip and NO sport attribute (a one-sport league\'s markup)', !/sport-chip|data-sport|data-competition-id/.test(plain) && /<article class="card feed-card feed-card--tap" role="button" tabindex="0" data-card-type="week\.result" data-home-action="open-card"/.test(plain));   // re-derived 2026-10-08 (merge): every card type is a tap target now (DI-575), so the sportless card has the tap shell and still no chip / sport attribute
-    const tagged = H.cardHTML({ ...card, sport: 'nfl', sportCode: 'NFL', competitionId: NFL_ID }, { escHtml });
+    const tagged = H.cardHTML({ ...card, sport: 'nfl', sportCode: 'NFL', competitionId: NFL_ID }, { escHtml, now: TNOW });
     ck('6b a card in a several-sport league carries the chip and the sport on the article', /<span class="sport-chip">NFL<\/span>/.test(tagged) && new RegExp(`<article class="card feed-card feed-card--tap" role="button" tabindex="0" data-card-type="week\\.result" data-sport="nfl" data-competition-id="${NFL_ID}" data-home-action="open-card"`).test(tagged));   // re-derived 2026-10-08 (merge): the sport rides on the tap shell, before the action attributes
-    ck('6c the chip sits in the card\'s eyebrow', /<div class="feed-card-eyebrow">[\s\S]*<span class="sport-chip">NFL<\/span><span class="feed-card-chev"[\s\S]*?<\/span><\/div>/.test(tagged));   // re-derived 2026-10-08 (merge): the chip sits in the eyebrow and the chevron FOLLOWS it (both at the trailing edge; styles.css .sport-chip + .feed-card-chev)
+    ck('6c the chip sits in the card\'s eyebrow', /<div class="feed-card-eyebrow">[\s\S]*<span class="feed-card-trail"><span class="sport-chip">NFL<\/span><time class="feed-card-time"[^>]*>2h ago<\/time><span class="feed-card-chev"[\s\S]*?<\/span><\/span><\/div>/.test(tagged));   // W-92 (DI-W92-8, 2026-10-17): the trailing group is [chip][time][chevron], one span pushed to the trailing edge   // re-derived 2026-10-08 (merge): the chip sits in the eyebrow and the chevron FOLLOWS it (both at the trailing edge; styles.css .sport-chip + .feed-card-chev)
     const hostile = H.cardHTML({ ...card, sport: '"><img src=x onerror=alert(1)>', sportCode: '<img src=x onerror=alert(1)>', competitionId: '" onmouseover="x' }, { escHtml });
     ck('6d hostile sport text (code, dbCode, competition id) is inert: no live element, no attribute break', !/<img/i.test(hostile) && !/"\s*onmouseover=/.test(hostile) && !/onerror=alert\(1\)>/.test(hostile.replace(/&gt;/g, '')) && /&lt;img/.test(hostile));
     ck('6e a sport code without a dbCode renders neither the chip nor the attributes (both or neither)', !/sport-chip|data-sport/.test(H.cardHTML({ ...card, sportCode: 'NFL' }, { escHtml })) && !/sport-chip|data-sport/.test(H.cardHTML({ ...card, sport: 'nfl' }, { escHtml })));
@@ -316,16 +320,18 @@ async function checks(M, H = home) {
       ['week.revealed', W, 'Week 3 is revealed. Every pick is visible now.', 'NFL Week 3 is revealed. Every pick is visible now.'],
       ['week.result', { ...W, weekWinnerName: 'Kevin', weekWinnerRecord: '3-1' }, 'Week 3 is final.', 'NFL Week 3 is final.'],
       ['player.week', { ...W, playerName: 'Kevin', wins: 3, losses: 1 }, "Kevin's Week 3: 3–1", "Kevin's NFL Week 3: 3–1"],
-      ['rank.changed', { ...W, playerName: 'Kevin', fromRank: 2, toRank: 1 }, 'Kevin moved into 1st this week.', 'Kevin moved into 1st in NFL this week.'],
-      ['streak.extended', { playerName: 'Kevin', run: 4, kind: 'covers' }, 'Kevin is riding a 4-game cover streak.', 'Kevin is riding a 4-game cover streak in NFL.'],
-      ['streak.broken', { playerName: 'Kevin', run: 4, kind: 'covers' }, "Kevin's 4-game streak snapped this week.", "Kevin's 4-game streak in NFL snapped this week."],
-      ['milestone.reached', { playerName: 'Kevin', mark: 10 }, 'Kevin hit 10 correct picks this season.', 'Kevin hit 10 correct picks in NFL this season.'],
+      // W-92 (DI-W92-1): these four carry their people as `members`; a one-member card reads exactly as the per-member card did
+      ['rank.changed', { ...W, members: [{ playerId: 'p3', playerName: 'Kevin', fromRank: 2, toRank: 1 }] }, 'Kevin moved into 1st this week.', 'Kevin moved into 1st in NFL this week.'],
+      ['streak.extended', { ...W, members: [{ playerId: 'p3', playerName: 'Kevin', run: 4, kind: 'covers' }] }, 'Kevin is riding a 4-game cover streak.', 'Kevin is riding a 4-game cover streak in NFL.'],
+      ['streak.broken', { ...W, members: [{ playerId: 'p3', playerName: 'Kevin', run: 4, kind: 'covers' }] }, "Kevin's 4-game streak snapped this week.", "Kevin's 4-game streak in NFL snapped this week."],
+      ['milestone.reached', { ...W, members: [{ playerId: 'p3', playerName: 'Kevin', mark: 10, total: 10 }] }, 'Kevin hit 10 correct picks this season.', 'Kevin hit 10 correct picks in NFL this season.'],
     ];
     for (const [type, facts, plainTitle, sportTitle] of cases) {
       const a = cc(type, facts, '').title, b = cc(type, facts, 'NFL').title;
       ck(`7 ${type}: no sport code => v0.29.0's words; with one => it names the sport`, a === plainTitle && b === sportTitle);
     }
-    ck('7 rank.changed body names the sport\'s week too', cc('rank.changed', { ...W, playerName: 'Kevin', fromRank: 2, toRank: 1 }, 'NFL').body === 'Up from 2nd after NFL Week 3.' && cc('rank.changed', { ...W, playerName: 'Kevin', fromRank: 2, toRank: 1 }, '').body === 'Up from 2nd after Week 3.');
+    const RK1 = { ...W, members: [{ playerId: 'p3', playerName: 'Kevin', fromRank: 2, toRank: 1 }] };
+    ck('7 rank.changed body names the sport\'s week too', cc('rank.changed', RK1, 'NFL').body === 'Up from 2nd after NFL Week 3.' && cc('rank.changed', RK1, '').body === 'Up from 2nd after Week 3.');
     ck('7 types that name no week or rank are unchanged by a sport code (game.final, called.it, stood.alone, year.ago, scribe.post, lockerroom.top)', ['game.final', 'called.it', 'stood.alone', 'year.ago', 'scribe.post', 'lockerroom.top'].every((t) => j(cc(t, { awayTeam: 'A', homeTeam: 'B', awayScore: 1, homeScore: 2, team: 'B', note: 'n', body: 'b', excerpt: 'e', reactionCount: 2, playerName: 'P', matchup: 'A at B', chips: [] }, 'NFL')) === j(cc(t, { awayTeam: 'A', homeTeam: 'B', awayScore: 1, homeScore: 2, team: 'B', note: 'n', body: 'b', excerpt: 'e', reactionCount: 2, playerName: 'P', matchup: 'A at B', chips: [] }, ''))));
     ck('7 a hostile sport code is escaped through the injected escaper', !/<img/i.test(cc('week.result', W, '<img src=x onerror=1>').title) && /&lt;img/.test(cc('week.result', W, '<img src=x onerror=1>').title));
   }
@@ -335,7 +341,9 @@ async function checks(M, H = home) {
 // Captured from the UNCHANGED v0.29.0 home.js (a scratch copy of the tree before this work) for this exact card: a one-sport league's card markup must never move.
 // RE-CAPTURED 2026-10-08 (merge): from the SERVER tree's home.js (17a9fa29), where week.result - like every card type - has a detail provider (DI-575) and so renders as ONE tap target. The merged tree is byte-identical
 // to it for a card with no sport (run on both trees). The v0.29.0 non-tappable shell it replaces is the same card without the role/tabindex/data-home-action attributes and the chevron.
-const GOLDEN_CARD_HTML = "<article class=\"card feed-card feed-card--tap\" role=\"button\" tabindex=\"0\" data-card-type=\"week.result\" data-home-action=\"open-card\" data-card-id=\"c1\" data-haptic=\"light\" aria-label=\"Week 2 is final.. Opens details.\"><div class=\"feed-card-eyebrow\"><span class=\"feed-card-icon\" aria-hidden=\"true\"><svg aria-hidden=\"true\" focusable=\"false\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 4h8v5a4 4 0 0 1-8 0z\"/><path d=\"M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4\"/><line x1=\"12\" y1=\"13\" x2=\"12\" y2=\"17\"/><line x1=\"8\" y1=\"20\" x2=\"16\" y2=\"20\"/></svg></span><span class=\"feed-card-reason\">Week result</span><span class=\"feed-card-chev\" aria-hidden=\"true\"><svg aria-hidden=\"true\" focusable=\"false\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"9 6 15 12 9 18\"/></svg></span></div><h3 class=\"feed-card-title\">Week 2 is final.</h3><p class=\"feed-card-caption\">Kevin closes Week 2 3-1. Drew finishes 1-3, which is its own kind of achievement.</p></article>";
+// RE-CAPTURED 2026-10-17 (W-92, DI-W92-5 / DI-W92-8): the same one-sport card now carries its time ("2h ago" at the fixed TNOW) in the eyebrow's trailing group, a data-feed-label, and a VoiceOver label that
+// includes its supporting line and its time (the old "final.. Opens details." double stop is gone). Still: no chip, no sport attribute.
+const GOLDEN_CARD_HTML = "<article class=\"card feed-card feed-card--tap\" role=\"button\" tabindex=\"0\" data-card-type=\"week.result\" data-home-action=\"open-card\" data-card-id=\"c1\" data-haptic=\"light\" data-feed-label=\"Week 2 is final. Kevin closes Week 2 3-1. Drew finishes 1-3, which is its own kind of achievement.\" aria-label=\"Week 2 is final. Kevin closes Week 2 3-1. Drew finishes 1-3, which is its own kind of achievement. 2 hours ago. Opens details.\"><div class=\"feed-card-eyebrow\"><span class=\"feed-card-icon\" aria-hidden=\"true\"><svg aria-hidden=\"true\" focusable=\"false\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 4h8v5a4 4 0 0 1-8 0z\"/><path d=\"M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4\"/><line x1=\"12\" y1=\"13\" x2=\"12\" y2=\"17\"/><line x1=\"8\" y1=\"20\" x2=\"16\" y2=\"20\"/></svg></span><span class=\"feed-card-reason\">Week result</span><span class=\"feed-card-trail\"><time class=\"feed-card-time\" datetime=\"2026-09-14T00:00:00.000Z\" data-feed-time=\"2026-09-14T00:00:00.000Z\" aria-label=\"2 hours ago\">2h ago</time><span class=\"feed-card-chev\" aria-hidden=\"true\"><svg aria-hidden=\"true\" focusable=\"false\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"9 6 15 12 9 18\"/></svg></span></span></div><h3 class=\"feed-card-title\">Week 2 is final.</h3><p class=\"feed-card-caption\">Kevin closes Week 2 3-1. Drew finishes 1-3, which is its own kind of achievement.</p></article>";
 
 console.log('\n[1-7] DI-528 - the single-sport rule, nothing merges, entrants, the blind rule per sport, chat and year-ago, markup, copy…');
 const ctl = await checks(hs);

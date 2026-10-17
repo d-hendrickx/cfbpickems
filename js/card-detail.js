@@ -31,12 +31,12 @@
 import { arePicksPublic } from './storage.js';
 import { FORBIDDEN_META_KEYS, assertMetaIsBlindSafe } from './notify-copy.js';
 import {
-  isRevealed, CARD_REVEAL_CLASS, cardCopy, ordinal, streakWord, deepFreeze, requireEscHtml, buildRevealedView,
+  isRevealed, CARD_REVEAL_CLASS, cardCopy, ordinal, streakWord, deepFreeze, requireEscHtml, buildRevealedView, RETIRED_CARD_TYPES,
 } from './feed-cards.js';
 import { evaluatePick, calculateAtsWinner, calculateSeasonStandings, computeEffectiveLockAt } from './scoring.js';
 import { formatSpread } from './data-model.js';
 import { SEASON_2025 } from './history-2025.js';
-import { memberSeasonStats, sortWeeks, atsMarginOf, almaMaterResultForWeek, viewerWeekLine } from './stats.js';
+import { memberSeasonStats, sortWeeks, atsMarginOf, viewerWeekLine } from './stats.js';
 import { orderedGradedResults, runLength } from './stats-core.js';
 import { gameStateOf, isLivePhase, freshnessLine, coverWord } from './game-state.js';
 // D1 / DI-540 (consumertest): "is this week editable right now?" is week-lock.js's ONE answer (a stored `open` whose lock instant has passed is LOCKED), never a read of the stored status.
@@ -85,15 +85,17 @@ export const DETAIL_ALLOWED_FACTS = deepFreeze({
   'slate.published': ['weekN', 'gameCount', 'firstKickoffText', 'lockText', 'lockCountdown', 'yourCountText', 'weekStatus', 'games'],
   'picks.submitted': ['weekN', 'inText', 'lockText', 'yourStatus', 'weekStatus', 'yourCountText'],
   'week.revealed': ['weekN', 'inText', 'weekStatus', 'games'],
-  'game.final': ['weekN', 'matchup', 'lineText', 'resultText', 'coverText', 'coveredNames', 'missedNames', 'yourPickText', 'yourResult', 'yourWeekText', 'weekFinal', 'threadGameId'],
+  // W-92 (DI-W92-6): the game card's "Called it" / "Stood alone" list — the retired cards' rows, one per named member.
+  'game.final': ['weekN', 'matchup', 'lineText', 'resultText', 'coverText', 'coveredNames', 'missedNames', 'yourPickText', 'yourResult', 'yourWeekText', 'weekFinal', 'threadGameId', 'standoutTitle', 'standoutItems'],
   'called.it': ['matchup', 'playerName', 'playerId', 'pickText', 'finalText', 'outrightByText', 'alsoText', 'upsetsText', 'threadGameId', 'spreadDisplay', 'team'],
   'stood.alone': ['matchup', 'playerName', 'playerId', 'team', 'againstText', 'resultText', 'threadGameId'],
   'week.result': ['weekN', 'winnerText', 'loserText', 'recordText', 'winnerName', 'weekId'],
   'player.week': ['weekN', 'playerName', 'playerId', 'recordText', 'streakText', 'almaText', 'games', 'wins', 'losses', 'streakSentence'],
-  'rank.changed': ['weekN', 'playerName', 'playerId', 'fromText', 'toText', 'winPctText', 'weeksText', 'gapText'],
-  'streak.extended': ['playerName', 'playerId', 'runText', 'startedText', 'longestText', 'games', 'sentence'],
-  'streak.broken': ['playerName', 'playerId', 'runText', 'startedText', 'longestText', 'games', 'sentence'],
-  'milestone.reached': ['playerName', 'playerId', 'markText', 'totalText', 'games'],
+  // W-92 (DI-W92-6): a combined card (two or more members) is one screen with a section per member: `sections` (each rebuilt below) and one `sentence`.
+  'rank.changed': ['weekN', 'playerName', 'playerId', 'fromText', 'toText', 'winPctText', 'weeksText', 'gapText', 'sections', 'sentence'],
+  'streak.extended': ['playerName', 'playerId', 'runText', 'startedText', 'longestText', 'games', 'sentence', 'weekN', 'sections'],
+  'streak.broken': ['playerName', 'playerId', 'runText', 'startedText', 'longestText', 'games', 'sentence', 'weekN', 'sections'],
+  'milestone.reached': ['playerName', 'playerId', 'markText', 'totalText', 'games', 'weekN', 'sections', 'sentence'],
   'year.ago': ['weekN', 'winnerText', 'recordText', 'superlative', 'members', 'thisYearText', 'leaderName', 'sentence'],
   'scribe.post': ['body', 'postedText', 'reactionText', 'weekText', 'matchup', 'messageId', 'threadGameId'],
   'lockerroom.top': ['body', 'authorName', 'postedText', 'reactionText', 'messageId'],
@@ -101,6 +103,9 @@ export const DETAIL_ALLOWED_FACTS = deepFreeze({
 export const DETAIL_ITEM_KEYS = deepFreeze({
   games: ['key', 'primary', 'secondary', 'mark', 'markWord', 'tone'],
   members: ['key', 'primary', 'secondary'],
+  standoutItems: ['key', 'primary', 'secondary'],
+  // W-92: a section is { key, title, items }, its items rebuilt with the `members` item keys (finalizeDetailFacts).
+  sections: ['key', 'title', 'items'],
 });
 for (const [type, keys] of Object.entries(DETAIL_ALLOWED_FACTS)) {
   for (const k of keys) if (FORBIDDEN_META_KEYS.includes(k)) throw new Error(`[card-detail] ${type} allow-lists forbidden key ${k}`);
@@ -122,6 +127,17 @@ export function finalizeDetailFacts(type, facts) {
   const out = {};
   for (const k of allowed) {
     if (!facts || !Object.prototype.hasOwnProperty.call(facts, k) || facts[k] === undefined || facts[k] === null) continue;
+    if (k === 'sections') {                                                   // W-92: one level deeper — each section's items rebuilt from the member item keys
+      out[k] = (Array.isArray(facts[k]) ? facts[k] : []).filter(x => x && typeof x === 'object').map(x => ({
+        key: String(x.key ?? ''), title: String(x.title ?? ''),
+        items: (Array.isArray(x.items) ? x.items : []).filter(i => i && typeof i === 'object').map(i => {
+          const c = {};
+          for (const ik of DETAIL_ITEM_KEYS.members) if (i[ik] !== undefined && i[ik] !== null) c[ik] = typeof i[ik] === 'number' ? i[ik] : String(i[ik]);
+          return c;
+        }),
+      })).filter(x => x.title && x.items.length);
+      continue;
+    }
     const itemKeys = DETAIL_ITEM_KEYS[k];
     if (itemKeys) {
       out[k] = (Array.isArray(facts[k]) ? facts[k] : []).filter(i => i && typeof i === 'object').map(i => {
@@ -202,6 +218,8 @@ export function buildCardDetail(card, snapshot, ctx) {
 
 function buildCardDetailCore(card, snapshot, ctx) {
   if (!card || typeof card !== 'object' || !hasDetail(card.type)) return null;
+  // W-92 (DI-W92-2 / DI-W92-3 / DI-W92-6): a retired type (an id shared to chat before v0.30.1) has no screen any more: the calm unavailable state.
+  if (RETIRED_CARD_TYPES.includes(card.type)) return null;
   const s = normalize(snapshot);
   const c = normalizeCtx(ctx);
   const week = card.weekId ? (s.weeks.find(w => w && w.weekId === card.weekId) || null) : null;
@@ -219,6 +237,7 @@ function buildCardDetailCore(card, snapshot, ctx) {
   const env = { card, s, c, week, game, confirmed, othersOk: !!week && s.picksReadConfirmed[week.weekId] === true };
   env.share = shareOf(env);
   const builder = BUILDERS[card.type];
+  if (typeof builder !== 'function') return null;                               // a catalog type with no builder (the retired three) has no screen
   let parts = null;
   try { parts = builder(env); } catch (e) { try { console.error('[card-detail] builder failed', card.type, e); } catch {} return null; }
   if (!parts) return null;
@@ -335,8 +354,8 @@ function threadActions(env, gameId, { primary = false } = {}) {
 }
 
 /** DI-576 / DI-596: "Week results" - the week's detail screen, offered only where the app has that screen (a capability) and the card names a week. */
-function weekResultsAction(env, week) {
-  return env.c.capabilities.weekDetail && week && isId(week.weekId) ? [act('week-detail', 'Week results', 'secondary', { weekId: week.weekId })] : [];
+function weekResultsAction(env, week, tone = 'secondary') {
+  return env.c.capabilities.weekDetail && week && isId(week.weekId) ? [act('week-detail', 'Week results', tone, { weekId: week.weekId })] : [];
 }
 /** DI-576 / DI-595: "Compare with {name}" - offered only where the app has the screen, the viewer is signed in, the card is about ANOTHER member, and the app says both were entered in the card's competition
  *  (canCompare: S4 hides it, and so does a member the viewer's sport does not share). The name is the card's own allow-listed fact. */
@@ -487,10 +506,12 @@ const BUILDERS = {
     const missed = asArray(f.chips).filter(x => x.result === 'loss').map(nameOfChip).filter(Boolean);
     const mark = s.viewerId ? ownPickMark(s, c, game) : null;
     const wk = viewerWeekSentence(env, week);
+    const so = standoutRows(env);
     const facts = finalizeDetailFacts('game.final', {
       weekN: week.weekNumber, matchup: matchupOf(game), lineText: lineOf(game), resultText, coverText,
       coveredNames: joinNames(covered), missedNames: joinNames(missed),
       yourPickText: mark ? `${mark.text} ${mark.mark}${mark.word}`.trim() : '', yourResult: mark ? mark.result : '', yourWeekText: wk.text, weekFinal: wk.final, threadGameId: game.gameId,
+      ...(so ? { standoutTitle: so.title, standoutItems: so.items } : {}),
     });
     const meaning = [];
     if (facts.yourResult === 'covered') meaning.push('You covered this one.');
@@ -500,49 +521,9 @@ const BUILDERS = {
     return {
       facts, freshness: gameFreshness(env),
       rows: compactRows(row('Line', facts.lineText), row('Result', facts.resultText), row('Covered by', facts.coverText), row('Covered', facts.coveredNames), row('Missed', facts.missedNames), row('Your pick', facts.yourPickText)),
+      lists: facts.standoutTitle && asArray(facts.standoutItems).length ? [{ id: 'standout', title: facts.standoutTitle, items: facts.standoutItems }] : [],
       meaning,
       actions: [...(c.capabilities.gameday ? [act('open-game', 'Open game', 'primary', { gameId: game.gameId })] : []), ...threadActions(env, game.gameId, { primary: !c.capabilities.gameday })],
-    };
-  },
-
-  'called.it'(env) {
-    const { card, s, c, week, game } = env;
-    const f = card.facts;
-    const by = Math.abs(nz(game.homeScore) - nz(game.awayScore));
-    const also = env.othersOk ? pickersOf(s, game.gameId).filter(p => p.selectedTeam === f.team && p.playerId !== f.playerId).map(p => nameIn(s, p.playerId)).filter(Boolean) : null;
-    const rv = viewThrough(s, null, week);
-    const seasonUpsets = rv.revealedWeeks.length ? memberSeasonStats(f.playerId, { ...rv, season: week.season }).upsetsCalled : null;
-    const facts = finalizeDetailFacts('called.it', {
-      matchup: f.matchup, playerName: f.playerName, playerId: f.playerId, team: f.team, spreadDisplay: f.spreadDisplay || '',
-      pickText: `${f.team}${f.spreadDisplay ? ` ${f.spreadDisplay}` : ''}`,
-      finalText: `${game.awayTeam} ${nz(game.awayScore)}, ${game.homeTeam} ${nz(game.homeScore)}`, outrightByText: `${by}`,
-      alsoText: also === null ? '' : (also.length ? joinNames(also) : 'No one else'),
-      upsetsText: seasonUpsets === null ? '' : `${seasonUpsets} in finished weeks`, threadGameId: game.gameId,
-    });
-    return {
-      facts, freshness: gameFreshness(env),
-      rows: compactRows(row('Pick', facts.pickText), row('Final', facts.finalText), row('Won outright by', facts.outrightByText), row(`Also on ${f.team}`, facts.alsoText), row('Upsets called', facts.upsetsText)),
-      meaning: [`${facts.playerName} took ${facts.pickText} and it won outright.`],
-      actions: [...(c.capabilities.gameday ? [act('open-game', 'Open game', 'primary', { gameId: game.gameId })] : []), ...threadActions(env, game.gameId, { primary: !c.capabilities.gameday }), ...compareAction(env, facts.playerId, facts.playerName)],
-    };
-  },
-
-  'stood.alone'(env) {
-    const { card, s, c, game } = env;
-    const f = card.facts;
-    const otherTeam = f.team === game.homeTeam ? game.awayTeam : game.homeTeam;
-    const others = env.othersOk ? pickersOf(s, game.gameId).filter(p => p.playerId !== f.playerId).map(p => nameIn(s, p.playerId)).filter(Boolean) : [];
-    const m = atsMarginOf(game);
-    const facts = finalizeDetailFacts('stood.alone', {
-      matchup: f.matchup, playerName: f.playerName, playerId: f.playerId, team: f.team,
-      againstText: others.length ? `${otherTeam} · ${joinNames(others)}` : `${otherTeam} · ${nz(f.against)} ${nz(f.against) === 1 ? 'member' : 'members'}`,
-      resultText: m === null ? '' : `${f.team} covered by ${Number(m.toFixed(1))}`, threadGameId: game.gameId,
-    });
-    return {
-      facts, freshness: gameFreshness(env),
-      rows: compactRows(row('Pick', facts.team), row('Against', facts.againstText), row('Result', facts.resultText)),
-      meaning: [`Everyone else went the other way on ${facts.team}.`],
-      actions: [...(c.capabilities.gameday ? [act('open-game', 'Open game', 'primary', { gameId: game.gameId })] : []), ...threadActions(env, game.gameId, { primary: !c.capabilities.gameday }), ...compareAction(env, facts.playerId, facts.playerName)],
     };
   },
 
@@ -563,83 +544,20 @@ const BUILDERS = {
     };
   },
 
-  'player.week'(env) {
-    const { card, s, c, week } = env;
-    const f = card.facts;
-    const gs = new Map(s.revealedGames.filter(g => g && g.weekId === week.weekId).map(g => [g.gameId, g]));
-    const mine = s.revealedPicks.filter(p => p && p.weekId === week.weekId && p.playerId === f.playerId);
-    const games = mine.map(p => ({ p, g: gs.get(p.gameId) })).filter(x => x.g).sort((a, b) => (toMs(a.g.kickoff) ?? 0) - (toMs(b.g.kickoff) ?? 0) || String(a.g.gameId).localeCompare(String(b.g.gameId))).map(({ p, g }) => {
-      const r = evaluatePick(p, g);
-      const m = r === 'win' ? ['✓', ' covered', 'win'] : r === 'loss' ? ['✗', ' missed', 'loss'] : ['—', ' pushed', 'push'];
-      return { key: g.gameId, primary: matchupOf(g), secondary: p.selectedTeam, mark: m[0], markWord: m[1], tone: m[2] };
-    });
-    const streak = nz(f.streakRun) >= 3 ? `${f.streakRun}-game ${streakWord(f.streakKind)} streak` : '';
-    const alma = f.almaMaterResult ? `${f.almaMaterResult.team}: ${f.almaMaterResult.result === 'win' ? 'won' : 'lost'}` : '';
-    const facts = finalizeDetailFacts('player.week', {
-      weekN: week.weekNumber, playerName: f.playerName, playerId: f.playerId, wins: nz(f.wins), losses: nz(f.losses), recordText: dash(f.wins, f.losses),
-      streakText: streak, almaText: alma, games, streakSentence: streak ? `On a ${streak}.` : '',
-    });
-    return {
-      facts, freshness: eventFreshness(env),
-      rows: compactRows(row('Record', facts.recordText), row('Streak', facts.streakText), row('Alma mater (straight up)', facts.almaText)),
-      lists: [{ id: 'games', title: 'Their picks', items: facts.games || [] }],
-      meaning: [`${facts.playerName} went ${facts.recordText} in Week ${facts.weekN}.`, facts.streakSentence],
-      actions: [act('go-standings', 'See standings', 'primary'), ...weekResultsAction(env, week), ...compareAction(env, facts.playerId, facts.playerName)],
-    };
-  },
-
+  // W-92 (DI-W92-6): ONE screen for everyone on a combined card. One member opens exactly the detail it opened before (rankMember /
+  // streakMember / milestoneMember); two or more get a section per member (groupParts).
   'rank.changed'(env) {
-    const { card, s, week } = env;
-    const f = card.facts;
-    const view = viewThrough(s, week);
-    const stats = memberSeasonStats(f.playerId, view);
-    // The weighted gap to the rank above, from the SAME standings function over the SAME slice (Standings parity).
-    let gapText = '';
-    try {
-      const { ids } = throughIds(view, week);
-      const standings = calculateSeasonStandings(view.players, view.revealedWeeklyResults.filter(r => r && ids.has(r.weekId)), view.allWeeks, view.tieContexts);
-      const mine = standings.find(x => x.playerId === f.playerId);
-      const above = mine ? standings.find(x => x.currentRank === mine.currentRank - 1) : null;
-      if (mine && above) { const gap = nz(above.totalCorrect) - nz(mine.totalCorrect); gapText = gap > 0 ? `${Number(gap.toFixed(1))} ${gap === 1 ? 'pick' : 'picks'} (weighted)` : 'Level on picks (a tiebreaker applies)'; }
-    } catch { gapText = ''; }
-    const facts = finalizeDetailFacts('rank.changed', {
-      weekN: week.weekNumber, playerName: f.playerName, playerId: f.playerId, fromText: ordinal(f.fromRank), toText: `${ordinal(f.toRank)} of ${nz(f.rankedCount)}`,
-      winPctText: stats.winPct === null || stats.winPct === undefined ? '' : `${stats.winPct}%`,
-      weeksText: stats.weeklyWins === null || stats.weeklyWins === undefined ? '' : dash(stats.weeklyWins, stats.weeklyLosses), gapText,
+    return groupParts(env, rankMember, {
+      sentence: (n, week) => `Standings changed for ${n} members after Week ${week.weekNumber}.`,
+      actions: (e) => [act('go-standings', 'See standings', 'primary'), ...weekResultsAction(e, e.week)],
     });
-    return {
-      facts, freshness: eventFreshness(env),
-      rows: compactRows(row('From', facts.fromText), row('To', facts.toText), row('Season win %', facts.winPctText), row('Weeks won–lost', facts.weeksText), row('Gap to the rank above', facts.gapText)),
-      meaning: [`${facts.playerName} moved from ${facts.fromText} to ${ordinal(f.toRank)} after Week ${facts.weekN}.`, 'Rank counts each game by its multiplier. Win % counts every pick once.'],
-      actions: [act('go-standings', 'See standings', 'primary'), ...compareAction(env, f.playerId, facts.playerName)],
-    };
   },
 
-  'streak.extended'(env) { return streakParts(env); },
-  'streak.broken'(env) { return streakParts(env); },
+  'streak.extended'(env) { return groupParts(env, streakMember, { sentence: (n) => `${n} members are on streaks.`, actions: (e) => weekResultsAction(e, e.week, 'primary') }); },
+  'streak.broken'(env) { return groupParts(env, streakMember, { sentence: (n) => `${n} members lost their streaks this week.`, actions: (e) => weekResultsAction(e, e.week, 'primary') }); },
 
   'milestone.reached'(env) {
-    const { card, s, week } = env;
-    const f = card.facts;
-    const view = viewThrough(s, week);
-    const { ids, weeks: wkThrough } = throughIds(view, week);
-    const ordered = orderedGradedResults(f.playerId, s.revealedGames.filter(g => g && ids.has(g.weekId)), s.revealedPicks.filter(p => p && ids.has(p.weekId)), wkThrough);
-    const wins = ordered.complete ? ordered.results.filter(r => r.result === 'win') : [];
-    const crossing = wins[nz(f.mark) - 1] || null;
-    const gameById = new Map(s.revealedGames.map(g => [g.gameId, g]));
-    const pick = crossing ? s.revealedPicks.find(p => p && p.playerId === f.playerId && p.gameId === crossing.gameId) : null;
-    const g = crossing ? gameById.get(crossing.gameId) : null;
-    const games = g && pick ? [{ key: g.gameId, primary: matchupOf(g), secondary: pick.selectedTeam, mark: '✓', markWord: ' covered', tone: 'win' }] : [];
-    const facts = finalizeDetailFacts('milestone.reached', {
-      playerName: f.playerName, playerId: f.playerId, markText: `${nz(f.mark)} correct picks`, totalText: `${nz(f.total)}`, games,
-    });
-    return {
-      facts, freshness: eventFreshness(env),
-      rows: compactRows(row('Mark', facts.markText), row('Season total', facts.totalText)),
-      lists: [{ id: 'crossing', title: 'The pick that crossed it', items: facts.games || [] }],
-      meaning: [`${facts.playerName} hit ${nz(f.mark)} correct picks this season.`],
-      actions: [act('go-standings', 'See standings', 'primary'), ...compareAction(env, f.playerId, facts.playerName)],
-    };
+    return groupParts(env, milestoneMember, { sentence: (n) => `${n} members passed milestones.`, actions: (e) => weekResultsAction(e, e.week, 'primary') });
   },
 
   'year.ago'(env) {
@@ -716,6 +634,117 @@ const BUILDERS = {
   },
 };
 
+/** W-92: the people on a combined card (feed-cards' `members`, already allow-listed by finalizeFacts). */
+function membersOf(card) {
+  return asArray(card && card.facts && card.facts.members).filter(m => m && isId(m.playerId) && isId(m.playerName));
+}
+
+/**
+ * W-92 (DI-W92-6): the combined card's screen. ONE member: exactly the detail that member's own card opened before (its rows, lists,
+ * sentences, See standings and "Compare with {name}"). TWO OR MORE: no rows; one section per member holding the rows that member's own
+ * detail shows (label / value, at most four), one sentence, the group's actions — and no Compare (it compares with ONE member). Every
+ * member's rows are built here, after the gate in buildCardDetailCore has passed (it runs at open and on every repaint); a member whose
+ * rows cannot be built is omitted; none left = null (the calm unavailable state).
+ */
+function groupParts(env, perMember, { sentence, actions }) {
+  const members = membersOf(env.card);
+  if (!members.length) return null;
+  const single = members.length === 1 ? members[0] : null;
+  const tail = [...(single ? compareAction(env, single.playerId, single.playerName) : [])];
+  if (single) {
+    const p = perMember(env, single);
+    if (!p) return null;
+    return { facts: p.facts, freshness: eventFreshness(env), rows: p.rows, lists: p.lists || [], meaning: p.meaning, actions: [...p.actions, ...tail] };
+  }
+  const sections = [];
+  for (const m of members) {
+    let p = null;
+    try { p = perMember(env, m); } catch { p = null; }
+    if (!p) continue;
+    sections.push({ key: m.playerId, title: m.playerName, items: asArray(p.rows).slice(0, 4).map(r => ({ key: `${m.playerId}:${r.label}`, primary: r.label, secondary: r.value })) });
+  }
+  if (!sections.length) return null;
+  const facts = finalizeDetailFacts(env.card.type, { weekN: env.week.weekNumber, sections, sentence: sentence(sections.length, env.week) });
+  if (!asArray(facts.sections).length) return null;
+  return {
+    facts, freshness: eventFreshness(env), rows: [],
+    lists: facts.sections.map(sec => ({ id: `member-${sec.key}`, title: sec.title, items: sec.items })),
+    meaning: [facts.sentence], actions: [...actions(env), ...tail],
+  };
+}
+
+/** One member's standings detail (DI-576 row 9) — the figures from the SAME standings function over the SAME slice (Standings parity). */
+function rankMember(env, m) {
+  const { card, s, week } = env;
+  const view = viewThrough(s, week);
+  const stats = memberSeasonStats(m.playerId, view);
+  let gapText = '';
+  try {
+    const { ids } = throughIds(view, week);
+    const standings = calculateSeasonStandings(view.players, view.revealedWeeklyResults.filter(r => r && ids.has(r.weekId)), view.allWeeks, view.tieContexts);
+    const mine = standings.find(x => x.playerId === m.playerId);
+    const above = mine ? standings.find(x => x.currentRank === mine.currentRank - 1) : null;
+    if (mine && above) { const gap = nz(above.totalCorrect) - nz(mine.totalCorrect); gapText = gap > 0 ? `${Number(gap.toFixed(1))} ${gap === 1 ? 'pick' : 'picks'} (weighted)` : 'Level on picks (a tiebreaker applies)'; }
+  } catch { gapText = ''; }
+  const facts = finalizeDetailFacts('rank.changed', {
+    weekN: week.weekNumber, playerName: m.playerName, playerId: m.playerId, fromText: ordinal(m.fromRank), toText: `${ordinal(m.toRank)} of ${nz(card.facts.rankedCount)}`,
+    winPctText: stats.winPct === null || stats.winPct === undefined ? '' : `${stats.winPct}%`,
+    weeksText: stats.weeklyWins === null || stats.weeklyWins === undefined ? '' : dash(stats.weeklyWins, stats.weeklyLosses), gapText,
+  });
+  return {
+    facts,
+    rows: compactRows(row('From', facts.fromText), row('To', facts.toText), row('Season win %', facts.winPctText), row('Weeks won–lost', facts.weeksText), row('Gap to the rank above', facts.gapText)),
+    meaning: [`${facts.playerName} moved from ${facts.fromText} to ${ordinal(m.toRank)} after Week ${facts.weekN}.`, 'Rank counts each game by its multiplier. Win % counts every pick once.'],
+    actions: [act('go-standings', 'See standings', 'primary')],
+  };
+}
+
+/** One member's milestone detail (DI-576 row 11): the mark, the season total and the pick that crossed it. */
+function milestoneMember(env, m) {
+  const { s, week } = env;
+  const view = viewThrough(s, week);
+  const { ids, weeks: wkThrough } = throughIds(view, week);
+  const ordered = orderedGradedResults(m.playerId, s.revealedGames.filter(g => g && ids.has(g.weekId)), s.revealedPicks.filter(p => p && ids.has(p.weekId)), wkThrough);
+  const wins = ordered.complete ? ordered.results.filter(r => r.result === 'win') : [];
+  const crossing = wins[nz(m.mark) - 1] || null;
+  const gameById = new Map(s.revealedGames.map(g => [g.gameId, g]));
+  const pick = crossing ? s.revealedPicks.find(p => p && p.playerId === m.playerId && p.gameId === crossing.gameId) : null;
+  const g = crossing ? gameById.get(crossing.gameId) : null;
+  const games = g && pick ? [{ key: g.gameId, primary: matchupOf(g), secondary: pick.selectedTeam, mark: '✓', markWord: ' covered', tone: 'win' }] : [];
+  const facts = finalizeDetailFacts('milestone.reached', {
+    playerName: m.playerName, playerId: m.playerId, markText: `${nz(m.mark)} correct picks`, totalText: `${nz(m.total)}`, games,
+  });
+  return {
+    facts,
+    rows: compactRows(row('Mark', facts.markText), row('Season total', facts.totalText)),
+    lists: [{ id: 'crossing', title: 'The pick that crossed it', items: facts.games || [] }],
+    meaning: [`${facts.playerName} hit ${nz(m.mark)} correct picks this season.`],
+    actions: [act('go-standings', 'See standings', 'primary')],
+  };
+}
+
+/**
+ * W-92 (DI-W92-6): the game result's "Called it" / "Stood alone" list — the retired called.it / stood.alone cards' rows, one per member the
+ * card's own (already gated, allow-listed) `standout` names: the pick and its line, how it won, "against N". Other members' figures need the
+ * S-C10 flag; without it there is no list.
+ */
+function standoutRows(env) {
+  const { card, game } = env;
+  const so = card.facts && card.facts.standout && typeof card.facts.standout === 'object' ? card.facts.standout : null;
+  if (!so || !env.othersOk) return null;
+  const by = Math.abs(nz(game.homeScore) - nz(game.awayScore));
+  const line = so.spreadDisplay ? ` ${plain(so.spreadDisplay)}` : '';
+  const m = atsMarginOf(game);
+  const items = asArray(so.names).filter(n => n && isId(n.playerId) && isId(n.playerName)).map(n => {
+    const bits = so.kind === 'alone'
+      ? [plain(so.team), `against ${nz(so.against)}`, m === null ? '' : `covered by ${Number(m.toFixed(1))}`]
+      : [`${plain(so.team)}${line}`, `won outright by ${by}`, so.kind === 'both' ? `against ${nz(so.against)}` : ''];
+    return { key: n.playerId, primary: n.playerName, secondary: bits.filter(Boolean).join(' · ') };
+  });
+  if (!items.length) return null;
+  return { title: so.kind === 'called' ? 'Called it' : so.kind === 'alone' ? 'Stood alone' : 'Called it and stood alone', items };
+}
+
 /** The Locker Room's top message of the day — feed-cards' own selection (reactions desc, oldest first, id), so the card and its detail can never name different messages. */
 function pickTopLockerRoomCandidate(list, leagueId) {
   const pool = asArray(list).filter(r => r && typeof r === 'object' && !r.deleted && (r.leagueId === undefined || r.leagueId === null || r.leagueId === leagueId)
@@ -724,9 +753,9 @@ function pickTopLockerRoomCandidate(list, leagueId) {
   return pool[0] || null;
 }
 
-function streakParts(env) {
+/** One member's streak detail (DI-576 row 10) — streak.extended and streak.broken share this layout. */
+function streakMember(env, f) {
   const { card, s, week } = env;
-  const f = card.facts;
   const view = viewThrough(s, week);
   const { ids, weeks: wkThrough } = throughIds(view, week);
   const games = s.revealedGames.filter(g => g && ids.has(g.weekId));
@@ -763,11 +792,11 @@ function streakParts(env) {
     sentence: broken ? (snappedOn ? `${f.playerName}'s ${nz(f.run)}-game streak snapped on ${snappedOn}.` : `${f.playerName}'s ${nz(f.run)}-game streak snapped this week.`) : `${f.playerName} is on a ${nz(f.run)}-game ${kindWord} streak.`,
   });
   return {
-    facts, freshness: eventFreshness(env),
+    facts,
     rows: compactRows(row('Run', facts.runText), row('Started', facts.startedText), row('Longest this season', facts.longestText)),
     lists: [{ id: 'run', title: broken ? 'The streak, newest first' : 'The run, newest first', items: facts.games || [] }],
     meaning: [facts.sentence],
-    actions: [act('go-standings', 'See standings', 'primary'), ...compareAction(env, f.playerId, facts.playerName)],
+    actions: [act('go-standings', 'See standings', 'primary')],
   };
 }
 

@@ -339,7 +339,10 @@ _log('\n[8] Every Game view button is tapped through the real dispatcher (review
       gid: 'g24', expect: ['open-gameday'],
       setup: () => { seed(); const w = storage.getWeeks().find((x) => x.weekId === 'w2'); storage.saveWeek({ ...w, status: 'live' }); const g = storage.getGames('w2').find((x) => x.gameId === 'g22'); storage.saveGame({ ...g, status: 'live', homeScore: 10, awayScore: 7 }); },
     },
-    manyRelated: { gid: 'g21', setup: () => seed(), expect: ['open-thread', 'locker-room', 'open-card', 'see-all-home'] },
+    // W-92 (DI-W92-2, 2026-10-17): g21's three "called it" cards folded into its result card, so its Related list is that ONE card and "See all on Home" is not drawn
+    // (8f below). No game can now hold more than three Related cards (its result card plus at most one server-minted SCRIBE post per game, the DI-578 rule), so the
+    // See-all button is unreachable with real data; its rendering stays covered by relatedtest [2] on an injected feed.
+    related: { gid: 'g21', setup: () => seed(), expect: ['open-thread', 'locker-room', 'open-card'] },
     notSubmittedOpen: {
       gid: 'g24', expect: ['make-picks'],
       setup: () => { seed(); const w = storage.getWeeks().find((x) => x.weekId === 'w2'); storage.saveWeek({ ...w, status: 'open', picksLockAt: new Date(Date.now() + 86400e3).toISOString() }); storage.saveGame({ ...storage.getGames('w2')[0], gameId: 'g_extra', status: 'scheduled', homeScore: null, awayScore: null, kickoff: new Date(Date.now() + 2 * 86400e3).toISOString() }); },
@@ -391,10 +394,17 @@ _log('\n[8] Every Game view button is tapped through the real dispatcher (review
   assert(missingFromState.length === 0, `8a: (fixture) each state draws the buttons it exists to test${missingFromState.length ? ' — ' + missingFromState.join(' | ') : ` (${Object.keys(STATES).join(', ')})`}`);
   assert(unknown.length === 0 && present >= 12, `8b: the sweep found ${present} buttons in ${Object.keys(STATES).length} states and every action has an expectation${unknown.length ? ' (UNKNOWN: ' + unknown.join(' | ') + ')' : ''}`);
   assert(failures.length === 0 && tappedOk === present - unknown.length, `8c: B2 — every Game view button was TAPPED through onGameViewClick and did what it says (${tappedOk}/${present} ok)${failures.length ? ' — DEAD: ' + failures.join(' | ') : ''}`);
-  const all = ['open-thread', 'locker-room', 'see-all-home', 'make-picks', 'back-home', 'open-card', 'prev', 'next', 'week-results', 'next-picks', 'open-gameday', 'share'];
+  const all = ['open-thread', 'locker-room', 'make-picks', 'back-home', 'open-card', 'prev', 'next', 'week-results', 'next-picks', 'open-gameday', 'share'];   // W-92: 'see-all-home' left this list (unreachable with real data — 8f)
   const reached = new Set();
   for (const st of Object.values(STATES)) st.expect.forEach((a) => reached.add(a));
-  assert(all.every((a) => reached.has(a)), '8d: …and all twelve kinds (Share to chat joined with DI-597) the Game view can draw (Open thread, Locker Room, See all on Home, Make your picks, Back to Home, a Related card, Previous, Next, and What\'s next\'s See week results, Make your picks / Edit My Picks, Open Game Day) are in the sweep');
+  assert(all.every((a) => reached.has(a)), '8d: …and all eleven kinds (Share to chat joined with DI-597; W-92 took See all on Home out — unreachable, 8f) the Game view can draw (Open thread, Locker Room, Make your picks, Back to Home, a Related card, Previous, Next, and What\'s next\'s See week results, Make your picks / Edit My Picks, Open Game Day) are in the sweep');
+  {
+    STATES.related.setup(); boot('g21');
+    const rel = root() ? root().querySelectorAll('.ps-level:last-child .gv-rel') : [];
+    assert(rel.length === 1 && /^game\.final:[^:]+:w2:-:g21$/.test(rel[0].getAttribute('data-card-key') || '') && !holders().some((n) => nameOf(n) === 'see-all-home') && /called it: Washington \+7 won outright/.test(rel[0].textContent || ''),
+      `8f: W-92 — g21's Related list is its ONE result card, which names who called it (the three called.it cards folded into it), and "See all on Home" is not drawn (${rel.length} card(s))`);
+    try { ps.closeAllScreens('test'); } catch {}
+  }
   // the Home side of the same coverage: the Final card's Results button reaches the app and lands on Standings through navigateTo (B2: the dispatcher's allow-list dropped it)
   reset(); quiet(); window.navigateTo('home'); app._onHomeActionForTest('go-tab', { tab: 'leaderboard' }); loud();
   assert(app.state.currentTab === 'leaderboard', '8e: go-tab {tab: "leaderboard"} (the Final card\'s Results) lands on Standings through the real navigateTo');

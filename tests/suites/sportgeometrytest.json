@@ -2,7 +2,7 @@
   "id": "sportgeometrytest",
   "script": "sportgeometrytest.mjs",
   "summary": "strict",
-  "floor": 95,
+  "floor": 101,
   "tags": [
     "browser",
     "slow"
@@ -13,5 +13,5 @@
     "index.html"
   ],
   "expectedMs": 36000,
-  "note": "D1 third pass item 2 (P-8, D-66; registered 2026-10-08): the multisport surfaces in a real Chromium running the real app (switcher + due dot, All sports with its gate and tags, Home sport chip + chevron, the header pill and its dot, the league overview, the Comm lens and its separate-lens caption, the Comm All sports card, Add a sport) at 375/390 pt and 1x/1.35x text: 44 pt targets, Breathing Room, centring, no overflow, the switcher never wraps and the pill rows do, every painted colour follows the tokens; real taps through the app's dispatcher; [9] is the encoded anti-vacuity kit (11 override-sheet mutants, each must go RED)."
+  "note": "RAISED from 95 by W-92 (2026-10-17): the Home card time in the real browser (P-8) — [3-2b] the chip keeps 8 pt from the time beside it, [3-5a..c] caption level / --text-secondary / tabular / nowrap, unclipped, trailing group at the edge, the VoiceOver label ends with the spoken time; kit [9-11] re-targeted to the trailing group's gap and [9-12] (--text-muted) / [9-13] (wrap + group at the leading edge) added. | D1 third pass item 2 (P-8, D-66; registered 2026-10-08): the multisport surfaces in a real Chromium running the real app (switcher + due dot, All sports with its gate and tags, Home sport chip + chevron, the header pill and its dot, the league overview, the Comm lens and its separate-lens caption, the Comm All sports card, Add a sport) at 375/390 pt and 1x/1.35x text: 44 pt targets, Breathing Room, centring, no overflow, the switcher never wraps and the pill rows do, every painted colour follows the tokens; real taps through the app's dispatcher; [9] is the encoded anti-vacuity kit (11 override-sheet mutants, each must go RED)."
 }

@@ -390,7 +390,12 @@ try {
 
   // ── [1] THE GAME VIEW ──
   console.log('\n[1] The Game view at 375 pt, default and 1.35x text…');
-  const GV = { final: CAP.gvFinal, live: CAP.gvLive, due: CAP.gvDue };
+  // W-92 (2026-10-17): g21's three "called it" cards folded into its result card, so a real game's Related list now holds ONE card (two at most: the result and one
+  // server-minted SCRIBE post). 'related3' is that same captured screen with its one Related card repeated three times (distinct keys) so the SPACING between
+  // Related cards is still proven in a real browser (P-8); 'final' is the real capture, one card.
+  const relBlock = (CAP.gvFinal.match(/<div class="gv-rel" data-card-key="[^"]*">[\s\S]*?<\/article><\/div>/) || [''])[0];
+  const related3 = relBlock ? CAP.gvFinal.replace(relBlock, [0, 1, 2].map((i) => relBlock.replace(/data-card-key="([^"]*)"/, `data-card-key="$1-${i}"`)).join('')) : CAP.gvFinal;
+  const GV = { final: CAP.gvFinal, live: CAP.gvLive, due: CAP.gvDue, related3 };
   const gvRows = [];
   for (const [name, pushed] of Object.entries(GV)) for (const tx of TEXTS) gvRows.push({ name, tx: tx.name, ...(await measure(shell({ pushed }), gvMeasure, { scale: tx.scale })) });
   const liveRows = gvRows.filter((r) => r.name === 'live');
@@ -403,7 +408,8 @@ try {
   assert(gvRows.every((r) => r.cards >= 3 && r.cardGaps.every((g) => Math.abs(g - 16) <= 0.5)), `1e: the cards are 16 pt apart (${gvRows.map((r) => `${r.name}/${r.tx}: ${r.cardGaps.join(',')}`).join('; ')})`);
   assert(gvRows.every((r) => r.overflow <= 1), `1f: NO horizontal overflow — not the document, not the body, not a card — at 375 pt and 1.35x text${gvRows.some((r) => r.overflow > 1) ? ' — WIDE: ' + gvRows.filter((r) => r.overflow > 1).map((r) => `${r.name}/${r.tx} +${r.overflow} ${r.wide.join(',')}`).join('; ') : ''}`);
   const fin = gvRows.filter((r) => r.name === 'final');
-  assert(fin.every((r) => r.rels === 3 && r.relInside && r.relWidths.every((w) => w >= r.bodyW - 32 - 1) && r.relHeights.every((h) => h >= 44) && r.relGaps.every((g) => Math.abs(g - 8) <= 0.5)), `1g: the Related cards are LAID OUT: three full-width cards inside the body, each >= 44 pt tall, 8 pt apart (${fin.map((r) => `${r.tx}: ${r.rels} cards, widths ${r.relWidths.join('/')} of ${r.bodyW}, gaps ${r.relGaps.join(',')}`).join('; ')})`);
+  const rel3 = gvRows.filter((r) => r.name === 'related3');
+  assert(!!relBlock && fin.every((r) => r.rels === 1 && r.relInside && r.relWidths.every((w) => w >= r.bodyW - 32 - 1) && r.relHeights.every((h) => h >= 44)) && rel3.length === 2 && rel3.every((r) => r.rels === 3 && r.relInside && r.relWidths.every((w) => w >= r.bodyW - 32 - 1) && r.relHeights.every((h) => h >= 44) && r.relGaps.length === 2 && r.relGaps.every((g) => Math.abs(g - 8) <= 0.5)), `1g: the Related cards are LAID OUT: the real final game's ONE card (W-92) full-width inside the body, >= 44 pt tall; three of them 8 pt apart (${rel3.map((r) => `related3/${r.tx}: ${r.rels} cards, gaps ${r.relGaps.join(',')}`).join('; ')}; ${fin.map((r) => `${r.tx}: ${r.rels} cards, widths ${r.relWidths.join('/')} of ${r.bodyW}, gaps ${r.relGaps.join(',')}`).join('; ')})`);
   assert(gvRows.every((r) => r.lockups.length === 2 && r.lockups.every(([w, h]) => Math.abs(w - 48) <= 0.5 && Math.abs(h - 48) <= 0.5)), '1h: the score card\'s team lockups are 48 x 48 pt (DI-572: the box never changes size)');
 
   // [1k] What's next: the block on a FINAL game, with two buttons (Make your picks, See week results) and with one (See week results)

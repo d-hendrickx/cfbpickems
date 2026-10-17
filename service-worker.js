@@ -66,7 +66,7 @@ try {
   console.warn('[service-worker] OneSignal SDK import failed — push unavailable, cache-shell unaffected:', err);
 }
 
-const CACHE_NAME = 'cfb-pickems-v30-0';
+const CACHE_NAME = 'cfb-pickems-v30-1';
 
 const STATIC_ASSETS = [
   './',
@@ -229,6 +229,7 @@ const STATIC_ASSETS = [
   './js/stats.js',
   './js/feed-cards.js',
   './js/feed-caption-lines.js',
+  './js/feed-time.js',   // W-92 (2026-10-17): the shared time vocabulary — home.js, newsCard.js and content-card.js import it statically (a shell one module short is RG-236)
   './js/reminder-rules.js',
   './js/home.js',
   // Social Platform News (option A, 2026-10-01) -- the six news modules. js/newsSettings.js is imported STATICALLY by js/control-center.js and js/newsFeed.js by js/app.js (the News

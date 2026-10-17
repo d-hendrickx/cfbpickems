@@ -1,0 +1,33 @@
+{
+  "id": "feedtimetest",
+  "script": "feedtimetest.mjs",
+  "summary": "strict",
+  "floor": 73,
+  "forbid": [
+    {
+      "regex": "ERR_MODULE_NOT_FOUND",
+      "flags": "",
+      "label": "feedtimetest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)"
+    }
+  ],
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "deps": [
+    "js/feed-time.js",
+    "js/home.js",
+    "js/content-card.js",
+    "js/newsCard.js",
+    "js/feed-cards.js",
+    "js/**",
+    "css/styles.css",
+    "service-worker.js",
+    "loadtest.mjs",
+    "d1homeenv.mjs",
+    "statsfixtures.mjs",
+    "minidom.mjs"
+  ],
+  "expectedMs": 2000,
+  "note": "W-92 (release v0.30.1, 2026-10-17; Drew 'approve M-61', DI-W92-7…10 + the time half of DI-W92-11): the shared written / spoken time vocabulary at every boundary and in the viewer's zone, one <time> on every event card from its event time, the VoiceOver label with the supporting line and the time, the style, news / storyline / content cards, the 60 s in-place refresh (armed by a real paint, nothing while hidden, cleared on tab leave and session reset, absorbed repaints), and the P-11 allow-list of time emitters plus the exempt renderers. [M] is the S-3 mutation kit (node feedtimetest.mjs --kit). tz: dates are formatted in a zone."
+}

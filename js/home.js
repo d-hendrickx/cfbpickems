@@ -82,7 +82,8 @@ import {
 import { getActiveLeagueId } from './auth.js';
 import { homeFeedContexts, playersForWeek } from './competition.js';   // D1 DI-528: who plays each sport (C4) and which sports the feed spans
 import { deriveFeedCards, cleanJoinOffers, placeJoinNudges } from './home-sports.js';
-import { buildRevealedView, deriveCards, cardCopy, requireEscHtml, isWagerReceipt, ordinal, cardsForGame } from './feed-cards.js';
+import { buildRevealedView, deriveCards, cardCopy, requireEscHtml, isWagerReceipt, ordinal, cardsForGame, CAPTION_TYPES_THAT_ADD_A_FACT } from './feed-cards.js';
+import { timeLabels, tapLabel, makeDateFormatter } from './feed-time.js';   // W-92 (DI-W92-7/8/10): the one "when did this happen" vocabulary (a pure leaf)
 import { captionFor } from './feed-caption-lines.js';
 import { computeCommissionerOpsPlan, LOCKING_SOON_MS } from './reminder-rules.js';
 import { buildCopy } from './notify-copy.js';
@@ -138,6 +139,10 @@ export const SEEN_STATE_ONLY_TYPES = Object.freeze(['picks.submitted', 'week.rev
 /** SCRIBE's chat history is long; the feed carries the newest few, never all of it. */
 export const SCRIBE_POST_LIMIT = 10;
 export const SKELETON_CARD_COUNT = 4;
+/** W-92 (DI-W92-10): while Home is the visible tab, the card times are rewritten in place this often (no repaint). */
+export const TIME_TICK_MS = 60 * 1000;
+/** W-92 (DI-W92-8): a tappable card's VoiceOver label ("{headline}. {supporting line}.") is trimmed to this BEFORE its time is added, so the time is never cut. */
+export const CARD_LABEL_MAX = 160;
 export const NEWS_SKELETON_COUNT = 2;
 /** UX-2's density rule (News needs doc, Open Decision #8): at most ONE news card per four non-news cards… */
 export const NEWS_PER_NON_NEWS = 4;
@@ -1475,8 +1480,24 @@ export function joinNudgeHTML(offer, { escHtml } = {}) {
   return joinHtml(['<article class="card feed-card feed-join" data-card-type="join-nudge">', text, action, '</article>']);
 }
 
-/** One stats / SCRIBE / Locker Room card. Returns '' for a card with nothing to say (never an empty shell). */
-export function cardHTML(card, { escHtml, formatKickoff } = {}) {
+/** W-92: the viewer's date formatter for a time-zone key (data-model TIME_ZONES), built once per key. */
+const DATE_FORMATTERS = new Map();
+export function dateFormatterFor(tzKey) {
+  const z = TIME_ZONES.find(x => x.key === tzKey) || null;
+  const key = z ? z.iana : '';
+  if (!DATE_FORMATTERS.has(key)) DATE_FORMATTERS.set(key, makeDateFormatter(z ? z.iana : null));
+  return DATE_FORMATTERS.get(key);
+}
+/** A label sentence: whitespace folded, a full stop added when it does not already end in one ("final.." was the old label). */
+const asSentence = (x) => { const v = String(x ?? '').replace(/\s+/g, ' ').trim(); return !v ? '' : /[.!?…"”’)]$/.test(v) ? v : `${v}.`; };
+
+/**
+ * One stats / SCRIBE / Locker Room card. Returns '' for a card with nothing to say (never an empty shell).
+ * W-92: `now` and `formatDate` (the viewer's zone) date the card — DI-W92-8: ONE <time> on the eyebrow's trailing edge from the card's own
+ * event time (`sortKey`, the time the feed sorts by), and the tappable card's VoiceOver label "{headline}. {supporting line}. {spoken time}.
+ * Opens details."; DI-W92-5: at most ONE supporting line, and a SCRIBE caption only where it adds a fact (CAPTION_TYPES_THAT_ADD_A_FACT).
+ */
+export function cardHTML(card, { escHtml, formatKickoff, now = Date.now(), formatDate } = {}) {
   requireEscHtml(escHtml, 'cardHTML');
   let copy;
   try { copy = cardCopy(card, { escHtml: plainText, formatKickoff, sportCode: typeof card.sportCode === 'string' ? card.sportCode : '' }); } catch (e) { console.error('[home] cardCopy failed', e); return ''; }
@@ -1484,25 +1505,41 @@ export function cardHTML(card, { escHtml, formatKickoff } = {}) {
   let captionHtml = '';
   try { captionHtml = captionFor(card, { escHtml }); } catch { captionHtml = ''; }      // a caption failure never costs the card
   // D1 DI-528 — in a several-sport league each card NAMES its sport: a small chip ('CFB' / 'NFL') in the eyebrow, and the sport on the article for the tap handler. A card with no sport (a chat
-  // card, or any card in a one-sport league) has neither, so a one-sport league's markup is v0.29.0's byte for byte.
+  // card, or any card in a one-sport league) has neither.
   const hasSport = typeof card.sportCode === 'string' && card.sportCode !== '' && typeof card.sport === 'string' && card.sport !== '';
   const sportAttrs = hasSport ? ` data-sport="${escHtml(card.sport)}" data-competition-id="${escHtml(card.competitionId || '')}"` : '';
   // DI-575 — a card that has a detail provider is ONE tap target (a pushed screen with the evidence behind it); one that has none renders exactly as before and is not tappable (never a dead end).
   // The action is allow-listed (`open-card`); the id in the markup is only a request — the dispatcher resolves it against the cards derived for the current paint (Std-9).
   const tap = hasDetail(card.type);
-  const spoken = truncateLabel(copy.title || copy.body);
+  // W-92 (DI-W92-5): a card shows ONE supporting line at most. A SCRIBE caption is shown only for the types whose caption ADDS a fact (the week-final
+  // card: the loser and both records), and there it takes the plain body's place; every other caption reworded its own headline (the filler Drew named).
+  // The two types whose body IS the content (a SCRIBE post, the Locker Room's quoted message) always keep it.
+  const keepsBody = BODY_IS_CONTENT.includes(card.type);
+  const showCaption = !!captionHtml && CAPTION_TYPES_THAT_ADD_A_FACT.includes(card.type) && !keepsBody;
+  const showBody = !!copy.body && (keepsBody || !showCaption);
+  // W-92 (DI-W92-8): when it happened — the EVENT (sortKey), never the app open. Unknown beats wrong: no known instant, no time (the card stays).
+  // The picks tally is a living count dated to when the week opened, so it is the one prefixed card ("Opened 3d ago").
+  const opened = card.type === 'picks.submitted';
+  const timeParts = timeLabels(card.sortKey, now, { formatDate, opened });
+  const timeHtml = timeParts ? `<time class="feed-card-time" datetime="${escHtml(timeParts.iso)}" data-feed-time="${escHtml(timeParts.iso)}"${opened ? ' data-feed-time-prefix="opened"' : ''} aria-label="${escHtml(timeParts.spoken)}">${escHtml(timeParts.written)}</time>` : '';
+  // VoiceOver (DI-W92-8): role="button" hides the card's children, so the label carries the headline, the supporting line (no longer dropped) and the
+  // time. The headline-and-line part is trimmed to CARD_LABEL_MAX first, so the time is never cut; `data-feed-label` keeps that part so the in-place
+  // time refresh (DI-W92-10) can rebuild the label without a repaint.
+  const head = copy.title || copy.body;
+  const support = !copy.title ? '' : showCaption ? captionFor(card, { escHtml: plainText }) : showBody ? copy.body : '';
+  const prefix = truncateLabel([asSentence(head), asSentence(support)].filter(Boolean).join(' '), CARD_LABEL_MAX);
   const open = tap
-    ? `<article class="card feed-card feed-card--tap" role="button" tabindex="0" data-card-type="${escHtml(card.type)}"${sportAttrs} data-home-action="open-card" data-card-id="${escHtml(card.id)}" data-haptic="light" aria-label="${escHtml(spoken)}. Opens details.">`
+    ? `<article class="card feed-card feed-card--tap" role="button" tabindex="0" data-card-type="${escHtml(card.type)}"${sportAttrs} data-home-action="open-card" data-card-id="${escHtml(card.id)}" data-haptic="light" data-feed-label="${escHtml(prefix)}" aria-label="${escHtml(tapLabel(prefix, timeParts ? timeParts.spoken : ''))}">`
     : `<article class="card feed-card" data-card-type="${escHtml(card.type)}"${sportAttrs}>`;
   const reason = card.reason ? `<span class="feed-card-reason">${escHtml(card.reason)}</span>` : '';
   const sportChip = hasSport ? `<span class="sport-chip">${escHtml(card.sportCode)}</span>` : '';
-  const eyebrow = joinHtml(['<div class="feed-card-eyebrow">', glyphSpan('feed-card-icon', CARD_ICON[card.type] || 'calendarWeek'), reason, sportChip, tap ? glyphSpan('feed-card-chev', 'chevronRight') : '', '</div>']);
+  // The eyebrow: [icon][reason][sport chip][time][chevron]. The trailing three are ONE group pushed to the trailing edge, so at the largest text size
+  // they drop to their own line together, right-aligned, and the chip and the time never split the row's free space between them.
+  const trailParts = [sportChip, timeHtml, tap ? glyphSpan('feed-card-chev', 'chevronRight') : ''].filter(Boolean);
+  const trail = trailParts.length ? joinHtml(['<span class="feed-card-trail">', ...trailParts, '</span>']) : '';
+  const eyebrow = joinHtml(['<div class="feed-card-eyebrow">', glyphSpan('feed-card-icon', CARD_ICON[card.type] || 'calendarWeek'), reason, trail, '</div>']);
   const title = copy.title ? `<h3 class="feed-card-title">${escHtml(copy.title)}</h3>` : '';
-  // The caption and the body are two presentations of ONE fact (the caption document's own §0: "one fact, two presentation slots"), so a card shows ONE of them:
-  // the SCRIBE-voiced caption when it has one, else the plain body. The two types whose body IS the content (a SCRIBE post, the Locker Room's quoted message) always keep it.
-  const keepsBody = BODY_IS_CONTENT.includes(card.type);
-  const showCaption = !!captionHtml && !keepsBody;
-  const body = copy.body && (keepsBody || !showCaption) ? `<p class="feed-card-body${card.type === 'scribe.post' ? ' feed-card-body--scribe' : ''}">${escHtml(copy.body)}</p>` : '';
+  const body = showBody ? `<p class="feed-card-body${card.type === 'scribe.post' ? ' feed-card-body--scribe' : ''}">${escHtml(copy.body)}</p>` : '';
   const chips = asArray(copy.chips).length ? joinHtml(['<div class="feed-card-chips">', joinHtml(asArray(copy.chips).map(c => chipHTML(c, { escHtml }))), '</div>']) : '';
   const caption = showCaption ? `<p class="feed-card-caption">${captionHtml}</p>` : '';
   return joinHtml([open, eyebrow, title, body, chips, caption, '</article>']);
@@ -1546,6 +1583,45 @@ function dividerHTML(variant, { escHtml }) {
   return variant === 'new'
     ? `<div class="feed-divider feed-divider--new" role="separator" aria-label="${escHtml('New since your last visit')}"><span>NEW</span></div>`
     : `<div class="feed-divider feed-divider--earlier" role="separator" aria-label="${escHtml('Earlier')}"><span>EARLIER</span></div>`;
+}
+
+/**
+ * W-92 (DI-W92-10): a card's markup with its TIME taken out — the written label, the spoken label and the card's own label (which carries the
+ * spoken time). Two markups equal under this differ only in how long ago something happened, which never needs a repaint: the labels are
+ * rewritten in place instead (refreshTimes). The ISO instant stays in, so a card whose EVENT time changed is still a real change.
+ */
+export function timeInvariant(html) {
+  return String(html ?? '')
+    .replace(/<(time|span)\b([^>]*\bdata-feed-time="[^"]*"[^>]*)>[^<]*<\/\1>/g, (_m, tag, attrs) => `<${tag}${attrs.replace(/\saria-label="[^"]*"/, '')}></${tag}>`)
+    .replace(/(\sdata-feed-label="[^"]*")\saria-label="[^"]*"/g, '$1');
+}
+
+/**
+ * W-92 (DI-W92-10): rewrite every time label under `root` for `now`, IN PLACE — only the text and aria-label of a `[data-feed-time]` element
+ * (the cards' <time>, the news card's time) and the label of a tappable card that carries `data-feed-label`. No node is created or removed,
+ * nothing reflows but the label, nothing is announced (no live region). Returns how many nodes changed.
+ */
+export function refreshTimes(root, now, { formatDate } = {}) {
+  if (!root || typeof root.querySelectorAll !== 'function') return 0;
+  let n = 0;
+  const labelsOf = (el) => timeLabels(el.getAttribute('data-feed-time'), now, { formatDate, opened: el.getAttribute('data-feed-time-prefix') === 'opened' });
+  let times = [];
+  try { times = Array.from(root.querySelectorAll('[data-feed-time]') || []); } catch { times = []; }
+  for (const el of times) {
+    const t = labelsOf(el);
+    if (!t) continue;
+    if (el.textContent !== t.written) { el.textContent = t.written; n++; }
+    if (el.hasAttribute('aria-label') && el.getAttribute('aria-label') !== t.spoken) { el.setAttribute('aria-label', t.spoken); n++; }
+  }
+  let cards = [];
+  try { cards = Array.from(root.querySelectorAll('[data-feed-label]') || []); } catch { cards = []; }
+  for (const card of cards) {
+    const el = typeof card.querySelector === 'function' ? card.querySelector('[data-feed-time]') : null;
+    const t = el ? labelsOf(el) : null;
+    const want = tapLabel(card.getAttribute('data-feed-label'), t ? t.spoken : '');
+    if (card.getAttribute('aria-label') !== want) { card.setAttribute('aria-label', want); n++; }
+  }
+  return n;
 }
 
 /** DI-586 — the windowing sentinel: an invisible 1 pt row an IntersectionObserver watches; reaching it (600 pt early) appends the next page. */
@@ -1705,6 +1781,8 @@ export function createHome(deps) {
   let parkedNow = false;
   let flushTimer = null;
   let gdWatch = null;                                                        // DI-604: what the card said about each game at the last paint (the viewer's own coverage only), for the announcer
+  let tickTimer = null;                                                      // W-92 (DI-W92-10): the ONE pending 60 s time refresh (null = not armed)
+  let tickFormat = null;                                                     // …and the viewer's date formatter the last paint used
 
   const safeIdentity = () => { try { return d.currentIdentityKey(); } catch { return ''; } };
   const safeTab = () => { try { return d.getCurrentTab(); } catch { return ''; } };
@@ -1730,6 +1808,7 @@ export function createHome(deps) {
   }
 
   function resetSession() {
+    stopTimeTick();                                                          // W-92: the time refresh goes with the rest of the reader's session
     pages = 1; renderedOrdinary = new Set(); userRefreshing = false; currentCardIds = new Set(); seen = { marker: null, baseline: null, visibleSince: null };
     heldCount = 0; cancelAnnounce(); pillAnnounced = false;
     gd = { expanded: false, focusedGameId: null }; gdCurrent = { expandable: false, ids: new Set(), pillIds: new Set(), kind: '', scopes: new Set(), footerScope: null }; parkedNow = false; railTouch = { down: false, downAt: 0, lastScrollAt: 0 };
@@ -1750,7 +1829,7 @@ export function createHome(deps) {
       case 'now': return ctx.nowEntry || '';
       case 'nudge': return nudgeHTML(e.nudge, { escHtml });
       case 'join': return joinNudgeHTML(e.offer, { escHtml });          // DESIGN_D1_E: one per sport the viewer has not joined, placed by placeJoinNudges
-      case 'card': return cardHTML(e.card, { escHtml, formatKickoff: ctx.formatKickoff });
+      case 'card': return cardHTML(e.card, { escHtml, formatKickoff: ctx.formatKickoff, now: ctx.now, formatDate: ctx.formatDate });
       case 'news': {
         let html = '';
         if (d.renderNewsCard) { try { const out = d.renderNewsCard(e.item); html = typeof out === 'string' ? out : ''; } catch { html = ''; } }
@@ -1797,6 +1876,8 @@ export function createHome(deps) {
     const descriptors = mergeFeed({ now, cards, nudge, news, feedError, emptyLeague: nowState === 'no-weeks' });
     const tzKey = snapshot.timezone;
     const formatKickoff = (iso) => formatGameTime(iso, tzKey);
+    const formatDate = dateFormatterFor(tzKey);                              // W-92: a card's date is the VIEWER's day
+    tickFormat = formatDate;
 
     const isOrdinary = (e) => e.kind === 'card' || e.kind === 'news' || e.kind === 'error';
     const isPinned = (e) => e.kind === 'now' || e.kind === 'nudge';
@@ -1827,10 +1908,10 @@ export function createHome(deps) {
 
     const items = [];
     for (const e of entries) {
-      const html = orderedEntryHtml(e, { nowEntry, formatKickoff });
+      const html = orderedEntryHtml(e, { nowEntry, formatKickoff, now, formatDate });
       if (html) items.push({ key: e.key, html });
     }
-    return { items, state: nowState, ordinaryKeys: visible.map(e => e.key), heldCount: held.size, hasMore };
+    return { items, state: nowState, ordinaryKeys: visible.map(e => e.key), heldCount: held.size, hasMore, now };
   }
 
   function isPainted(el) { return !!(el && (el.firstElementChild || el.firstChild)); }
@@ -1885,7 +1966,7 @@ export function createHome(deps) {
   function bindVisibilityOnce() {
     if (visibilityBound || typeof document === 'undefined' || !document || typeof document.addEventListener !== 'function') return;
     visibilityBound = true;
-    document.addEventListener('visibilitychange', () => { if (document.hidden !== true) releaseRail(); });
+    document.addEventListener('visibilitychange', () => { if (document.hidden !== true) { releaseRail(); onForeground(); } else stopTimeTick(); });
   }
   /**
    * D1 Lane B Game Day (DI-604 / DI-605), fix round 1 (reviewer B3): the card's NODE is kept across every paint that still has a Game Day on both sides, WHATEVER ELSE in the feed changed in the same paint.
@@ -2045,10 +2126,57 @@ export function createHome(deps) {
     }
   }
 
+  // ── W-92 (DI-W92-10): the time stays honest while Home is open. ONE 60 s timer, armed by a content paint while Home is the visible tab, rewrites
+  // the labels in place (refreshTimes — no repaint, no reflow of other cards, no scroll change, no announcement); it re-arms itself, stops when the
+  // page is hidden, the tab is left, the content is withheld or the session resets, and runs once when the app comes back to the foreground. ──
+  function stopTimeTick() {
+    if (tickTimer !== null) { try { if (d.clearTimer) d.clearTimer(tickTimer); } catch { /* a dead timer */ } tickTimer = null; }
+  }
+  function armTimeTick() {
+    stopTimeTick();
+    if (!d.setTimer || withheld() || safeTab() !== HOME_TAB) return;
+    if (typeof document !== 'undefined' && document && document.hidden === true) return;
+    tickTimer = d.setTimer(() => { tickTimer = null; timeTick(); }, TIME_TICK_MS);
+  }
+  function timeTick() {
+    if (withheld() || safeTab() !== HOME_TAB) { stopTimeTick(); return; }
+    if (typeof document !== 'undefined' && document && document.hidden === true) { stopTimeTick(); return; }
+    const el = d.getContainer();
+    if (!el) return;
+    refreshTimes(el, d.now(), { formatDate: tickFormat || undefined });
+    armTimeTick();
+  }
+  /** Back in the foreground (iOS fires visibilitychange on resume): the labels catch up at once, then the timer resumes. */
+  function onForeground() {
+    if (withheld() || safeTab() !== HOME_TAB) return;
+    let el = null;
+    try { el = d.getContainer(); } catch { el = null; }
+    if (el && paintState.get(el) && paintState.get(el).mode === 'content') { refreshTimes(el, d.now(), { formatDate: tickFormat || undefined }); armTimeTick(); }
+  }
+  /**
+   * A repaint whose ONLY change to an item is its time label is not a change: the labels already on screen are brought up to date in place and the
+   * stored markup is advanced to match, so the paint below finds nothing to write (or writes only what really changed). Keeps the reader's nodes,
+   * focus and VoiceOver position — "no repaint to change a time".
+   */
+  function absorbTimeOnly(el, items, prev, mode, now) {
+    if (mode !== 'content' || !prev || prev.mode !== 'content' || !(prev.htmls instanceof Map) || !Array.isArray(prev.order)) return prev;
+    const htmls = new Map(prev.htmls);
+    let changed = false;
+    for (const it of items) {
+      const old = htmls.get(it.key);
+      if (typeof old === 'string' && old !== it.html && timeInvariant(old) === timeInvariant(it.html)) { htmls.set(it.key, it.html); changed = true; }
+    }
+    if (!changed) return prev;
+    refreshTimes(el, now, { formatDate: tickFormat || undefined });
+    const stored = prev.order.filter(k => typeof htmls.get(k) === 'string').map(k => ({ key: k, html: htmls.get(k) }));
+    return { ...prev, htmls, plain: wrapItems(stored, { enter: null, busy: false, escHtml }) };
+  }
+
   /** Replaces the markup only when it CHANGED; cards that were not on screen fade in (150 ms); the first content paint after a skeleton fades in whole. */
   function paint(el, items, mode, model = null) {
     const painted = isPainted(el);
-    const prev = painted ? (paintState.get(el) || { mode: 'none', keys: new Set(), plain: '', htmls: new Map() }) : { mode: 'none', keys: new Set(), plain: '', htmls: new Map() };
+    const prev0 = painted ? (paintState.get(el) || { mode: 'none', keys: new Set(), plain: '', htmls: new Map() }) : { mode: 'none', keys: new Set(), plain: '', htmls: new Map() };
+    const prev = absorbTimeOnly(el, items, prev0, mode, model && Number.isFinite(model.now) ? model.now : d.now());
     const busy = mode === 'skeleton';
     const plain = wrapItems(items, { enter: null, busy, escHtml });
     if (painted && prev.mode === mode && prev.plain === plain) { if (model) afterPaint(el, model); return false; }     // identical: no DOM write, no flash, scroll untouched
@@ -2081,6 +2209,7 @@ export function createHome(deps) {
 
   /** What follows every content paint, written or not: which ordinary entries are on screen, the new-posts pill, the scroll watch that lets it dismiss itself, and the next-page sentinel. */
   function afterPaint(el, model) {
+    armTimeTick();                                                           // W-92 (DI-W92-10): every content paint (re)arms the ONE time refresh — a real paint is what arms it
     renderedOrdinary = new Set(model.ordinaryKeys);
     heldCount = model.heldCount;
     syncPill(el, heldCount);
@@ -2264,6 +2393,7 @@ export function createHome(deps) {
   }
   /** DI-587 — the reader left Home (another tab, the app backgrounded). A visit of at least SEEN_MIN_VISIT_MS advances the marker to now; a pull-to-refresh or opening a detail never calls this. */
   function noteLeft() {
+    stopTimeTick();
     if (seen.visibleSince === null) return false;
     const advanced = d.now() - seen.visibleSince >= SEEN_MIN_VISIT_MS;
     seen = { marker: advanced ? d.now() : seen.marker, baseline: seen.baseline, visibleSince: null };
@@ -2533,7 +2663,7 @@ export function createHome(deps) {
     const picksState = picksHtml ? (/data-picks-view="blind"/.test(picksHtml) ? 'hidden' : 'public') : 'none';
     const related = cardsForGame(cards, game, { entered: viewer ? viewerIn && entered : true });
     const shown = related.slice(0, RELATED_CAP);
-    const relatedHtml = shown.map(c => `<div class="gv-rel" data-card-key="${escHtml(c.id)}">${cardHTML(c, { escHtml, formatKickoff: (iso) => formatGameTime(iso, snapshot.timezone) })}</div>`).join('');
+    const relatedHtml = shown.map(c => `<div class="gv-rel" data-card-key="${escHtml(c.id)}">${cardHTML(c, { escHtml, formatKickoff: (iso) => formatGameTime(iso, snapshot.timezone), now, formatDate: dateFormatterFor(snapshot.timezone) })}</div>`).join('');   // W-92: Related cards carry their times too
     // the live games the stepper walks (two or more): the Now card's scope, kickoff order
     const kept = sortWeeks(asArray(snapshot.weeks)).filter(w => hasWeekN(w) && (isCommissioner === true || w.dataSourceMode !== 'demo'));
     const curWeek = kept.find(w => w.weekId === snapshot.currentWeekId) || kept[kept.length - 1] || null;
@@ -2625,7 +2755,7 @@ export function createHome(deps) {
   }
 
   /** Test/diagnostic seam: what the reader's session holds right now (never rendered, never persisted). */
-  const sessionForTest = () => ({ pages, heldCount, rendered: [...renderedOrdinary], marker: seen.marker, baseline: seen.baseline, visibleSince: seen.visibleSince, cardIds: [...currentCardIds] });
+  const sessionForTest = () => ({ pages, heldCount, rendered: [...renderedOrdinary], marker: seen.marker, baseline: seen.baseline, visibleSince: seen.visibleSince, cardIds: [...currentCardIds], timeTick: tickTimer !== null });
 
   return {
     renderHome, refresh, bindActions, resetNews, resolveCardDetail, unavailableDetail, noteLeft, loadMore, _sessionForTest: sessionForTest,

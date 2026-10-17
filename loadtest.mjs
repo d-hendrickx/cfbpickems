@@ -150,7 +150,8 @@ for (const m of ['data-model', 'storage', 'scoring', 'data-provider', 'notificat
   // so a broken import in it takes SCRIBE down with it (RG-03); stats / feed-cards / feed-caption-lines have no boot-path importer yet (js/home.js lands in the
   // serialized wiring window), so without these lines a broken import in them would be invisible to every suite that starts from app.js.
   // js/home.js (2026-10-01, the Home renderer) joins the list now: still not imported by app.js until the wiring window, so only this line (and hometest [128]) would see a broken import in it.
-  'stats-core', 'stats', 'feed-cards', 'feed-caption-lines', 'home',
+  // W-92 (2026-10-17): js/feed-time.js — the shared, pure time vocabulary home.js / newsCard.js / content-card.js import (feedtimetest owns its behaviour).
+  'stats-core', 'stats', 'feed-cards', 'feed-caption-lines', 'feed-time', 'home',
   // Social Platform News, option A (2026-10-01) -- the six news modules. js/newsSettings.js (imported by control-center.js) and js/newsFeed.js (imported by app.js) are on the
   // boot graph, so a broken import in any of the six takes the whole app down with it (RG-03). newstest.mjs ([133]) owns their behavior; each sits ABOVE 'section-drag' / 'league-settings-view' on purpose (leaguesettingsuitest [6zc] pins 'league-settings-view' as the entry directly above account-exit's comment).
   'newsRules', 'newsCard', 'newsRank', 'newsTransport', 'newsFeed', 'newsSettings',

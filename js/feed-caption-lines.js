@@ -41,7 +41,7 @@
  * Every line is Dry and carries zero emoji, by the document's own (accepted) judgment call.
  */
 
-import { CARD_ALLOWED_FACTS, requireEscHtml, ordinal, streakWord, deepFreeze } from './feed-cards.js';
+import { CARD_ALLOWED_FACTS, NESTED_FACT_KEYS, requireEscHtml, ordinal, streakWord, deepFreeze } from './feed-cards.js';
 
 // ── the pools (placeholders use the caption document's own lowerCamelCase names) ──
 // A line is a string, or `{ t, when }` where `when` names a closed predicate below.
@@ -223,9 +223,13 @@ export const CAPTION_FACT_MAP = deepFreeze({
   } },
 });
 
-// A card type's allow-list is the ceiling for everything the map may read.
+// A card type's allow-list is the ceiling for everything the map may read. W-92 (DI-W92-1, 2026-10-17): a combined card (rank.changed,
+// streak.*, milestone.reached) carries its people as `members`, so the ceiling for those types is the top-level list PLUS the per-member
+// allow-list (NESTED_FACT_KEYS[type].members) — a pool still cannot read anything its type cannot carry. Home shows none of these
+// captions any more (CAPTION_TYPES_THAT_ADD_A_FACT); the pools stay in code, dormant, for SCRIBE-voiced combined lines later (ledger §6).
 for (const [pool, m] of Object.entries(CAPTION_FACT_MAP)) {
-  const allowed = CARD_ALLOWED_FACTS[m.cardType] || [];
+  const nested = NESTED_FACT_KEYS[m.cardType] && NESTED_FACT_KEYS[m.cardType].members ? NESTED_FACT_KEYS[m.cardType].members : [];
+  const allowed = [...(CARD_ALLOWED_FACTS[m.cardType] || []), ...nested];
   const reads = [...Object.values(m.fields), ...Object.values(m.derived).flatMap(d => d.from)];
   for (const k of reads) {
     if (!allowed.includes(k)) throw new Error(`[feed-caption-lines] pool ${pool} reads fact ${k}, which ${m.cardType} does not allow-list`);

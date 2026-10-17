@@ -96,8 +96,8 @@ const spot = (o = {}) => base({ id: 'content_00000000-0000-4000-8000-00000000000
 console.log('\n[1] the cards');
 {
   const s = CC.renderContentCard(base(), { now: NOW });
-  assert(/^<article class="card feed-card feed-card--tap content-card content-card--matchup" role="button" tabindex="0" data-content-id="content_00000000-0000-4000-8000-000000000001" aria-label="Matchup: Texas A&amp;M at Missouri, as of October 8\. Opens details\.">/.test(s),
-    '1-1: the feed card\'s own shell, one tap target, the spoken name "Matchup: …, as of October 8. Opens details."');
+  assert(/^<article class="card feed-card feed-card--tap content-card content-card--matchup" role="button" tabindex="0" data-content-id="content_00000000-0000-4000-8000-000000000001" data-feed-label="Matchup: Texas A&amp;M at Missouri, as of October 8\." aria-label="Matchup: Texas A&amp;M at Missouri, as of October 8\. 1 hour ago\. Opens details\.">/.test(s),
+    '1-1: the feed card\'s own shell, one tap target, the spoken name "Matchup: …, as of October 8. 1 hour ago. Opens details." (W-92 DI-W92-8/9: its time is read too; data-feed-label lets Home refresh it in place)');
   assert(/<span class="feed-card-icon" aria-hidden="true"><svg/.test(s) && /<span class="content-card-kind">Matchup<\/span>/.test(s) && /feed-card-chev/.test(s), '1-2: one icon from the family, the kind label, the chevron');
   assert(/<h3 class="feed-card-title">Texas A&amp;M at Missouri<\/h3>/.test(s), '1-3: the deterministic headline');
   assert(/<li>Missouri is 4-1, 1-1 in conference/.test(s) && !/feed-card-body">/.test(s), '1-4: STRUCTURED: the card-level facts, and no model summary');
@@ -224,7 +224,7 @@ console.log('\n[6] static');
 {
   const code = SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
   const imps = [...code.matchAll(/^\s*import\s+[\s\S]*?\s+from\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]);
-  assert(JSON.stringify(imps) === JSON.stringify(['./icons.js']), '6-1: content-card.js imports only icons.js');
+  assert(JSON.stringify(imps) === JSON.stringify(['./icons.js', './feed-time.js']), '6-1: content-card.js imports only icons.js and (W-92, DI-W92-9) the pure time vocabulary feed-time.js');
   assert(!/fetch\(|localStorage|\.rpc\(|navigator\.share|innerHTML\s*=/.test(code), '6-2: no I/O, no storage, no navigator.share, no DOM write (it returns strings)');
   const nc = await readFile(HERE + 'js/newsCard.js', 'utf8');
   const reasons = JSON.parse((/export const NEWS_CARD_REASONS = Object\.freeze\((\[[^\]]*\])\)/.exec(nc) || [])[1].replace(/'/g, '"').replace(/"In this week"s slate"/, '"In this week\'s slate"') || '[]');

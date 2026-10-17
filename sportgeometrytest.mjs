@@ -325,10 +325,23 @@ try {
         const chev = g.q('.feed-card-chev', eb), card = eb.closest('.feed-card'), cr = g.R(chip), er = g.content(eb);
         const vr = chev ? g.R(chev) : null; const sameLine = vr && Math.abs((vr.t + vr.b) / 2 - (cr.t + cr.b) / 2) < 4;
         const reason = g.q('.feed-card-reason', eb), rr = reason ? g.R(reason) : null; const reasonSame = rr && Math.abs((rr.t + rr.b) / 2 - (cr.t + cr.b) / 2) < 4;
-        out.push({ chev: !!chev, chevTrail: vr ? +(er.r - vr.r).toFixed(1) : null, chipToChev: sameLine ? +(vr.l - cr.r).toFixed(1) : null, reasonToChip: reasonSame ? +(cr.l - rr.r).toFixed(1) : null,
+        // W-92 (DI-W92-8): the chip, the card's time and the chevron are ONE trailing group; the chip's NEXT neighbour (the time, or the chevron) is what it must keep 8 pt from.
+        const nx = chip.nextElementSibling, nr = nx ? g.R(nx) : null; const nextSame = nr && Math.abs((nr.t + nr.b) / 2 - (cr.t + cr.b) / 2) < 4;
+        out.push({ chev: !!chev, chevTrail: vr ? +(er.r - vr.r).toFixed(1) : null, chipToChev: sameLine ? +(vr.l - cr.r).toFixed(1) : null, chipToNext: nextSame ? +(nr.l - cr.r).toFixed(1) : null, reasonToChip: reasonSame ? +(cr.l - rr.r).toFixed(1) : null,
           clipped: g.clipped(chip), inCard: cr.r <= g.content(card).r + 0.5, cardH: +g.R(card).h.toFixed(1), tappable: card.getAttribute('role') === 'button' });
       }
-      return { chips: out, overflow: g.overflowX(g.q('#page-home')) };
+      // W-92 (DI-W92-8, P-8): every event card's time, measured in the real browser — its computed style against the tokens, and where it sits.
+      const probe = document.createElement('span'); probe.style.color = 'var(--text-secondary)'; document.body.appendChild(probe); const secondary = getComputedStyle(probe).color; probe.style.color = 'var(--text-muted)'; const muted = getComputedStyle(probe).color; probe.remove();
+      const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize);
+      const times = [];
+      for (const t of g.qa('#page-home .feed-card-eyebrow time.feed-card-time')) {
+        const cs = getComputedStyle(t), tr = g.R(t), eb = t.closest('.feed-card-eyebrow'), card = t.closest('.feed-card'), er = g.content(eb);
+        const nx = t.nextElementSibling, nr = nx ? g.R(nx) : null; const nextSame = nr && Math.abs((nr.t + nr.b) / 2 - (tr.t + tr.b) / 2) < 4;
+        const trail = t.closest('.feed-card-trail'), trr = trail ? g.R(trail) : null;
+        times.push({ text: t.textContent, fontPx: +parseFloat(cs.fontSize).toFixed(2), wantPx: +(rootPx * 0.75).toFixed(2), color: cs.color, secondary, muted, tabular: /tabular-nums/.test(cs.fontVariantNumeric), nowrap: cs.whiteSpace === 'nowrap',
+          weight: cs.fontWeight, clipped: g.clipped(t), inCard: tr.r <= g.content(card).r + 0.5 && tr.l >= g.content(card).l - 0.5, toNext: nextSame ? +(nr.l - tr.r).toFixed(1) : null, trailEnd: trr ? +(er.r - trr.r).toFixed(1) : null, label: (card.getAttribute('aria-label') || '') });
+      }
+      return { chips: out, times, overflow: g.overflowX(g.q('#page-home')) };
     },
     // the header pill's due dot (DI-556)
     pill: (g) => {
@@ -456,6 +469,11 @@ try {
   assert(chips.every((c) => c.chevTrail !== null && Math.abs(c.chevTrail) <= 1), `[3-1] the chevron sits at the eyebrow's trailing edge, every size (worst ${Math.max(...chips.map((c) => Math.abs(c.chevTrail ?? 99)))} pt)`);
   assert(chips.every((c) => (c.chipToChev === null || c.chipToChev >= 7.5) && (c.reasonToChip === null || c.reasonToChip >= 7.5) && !c.clipped && c.inCard), `[3-2] chip and chevron are 8 pt apart (and the chip 8 pt from the reason pill) when they share a line, the chip is unclipped and inside its card (${fmt(chips.filter((c) => !((c.chipToChev === null || c.chipToChev >= 7.5) && (c.reasonToChip === null || c.reasonToChip >= 7.5) && !c.clipped && c.inCard)).slice(0, 2))})`);
   assert(chips.every((c) => c.cardH >= 44), '[3-3] the card (the whole card is the tap target) is >= 44 pt');
+  assert(chips.every((c) => c.chipToNext === null || c.chipToNext >= 7.5) && chips.some((c) => c.chipToNext !== null), `[3-2b] W-92: the chip keeps 8 pt from whatever follows it in the trailing group (the card's time) on the same line (${fmt(chips.filter((c) => c.chipToNext !== null && c.chipToNext < 7.5).slice(0, 2))})`);
+  const times = hcAll.flatMap(([k, m]) => m.times.map((t) => ({ k, ...t })));
+  assert(times.length >= 8 && times.every((t) => Math.abs(t.fontPx - t.wantPx) <= 0.1 && t.color === t.secondary && t.color !== t.muted && t.tabular && t.nowrap), `[3-5a] W-92 (P-8): every card time is caption level in the REAL browser — .75rem (${times[0] && times[0].fontPx} px at 1x), var(--text-secondary) (never --text-muted), tabular figures, no wrap (${times.length} times; off: ${fmt(times.filter((t) => !(Math.abs(t.fontPx - t.wantPx) <= 0.1 && t.color === t.secondary && t.tabular && t.nowrap)).slice(0, 2))})`);
+  assert(times.every((t) => !t.clipped && t.inCard && t.trailEnd !== null && Math.abs(t.trailEnd) <= 1 && (t.toNext === null || t.toNext >= 7.5)), `[3-5b] …unclipped and inside its card at every size, in a trailing group that ends at the eyebrow's trailing edge, 8 pt from the chevron when they share a line (${fmt(times.filter((t) => !(!t.clipped && t.inCard && Math.abs(t.trailEnd ?? 99) <= 1)).slice(0, 2))})`);
+  assert(times.every((t) => / Opens details\.$/.test(t.label) && (/(ago|yesterday|just now|[A-Z][a-z]+ \d{1,2}(, \d{4})?)\. Opens details\.$/.test(t.label))), '[3-5c] …and the tappable card\'s VoiceOver label ends with that time, spoken, then "Opens details."');
   assert(hcAll.every(([, m]) => noOverflow(m.overflow)), `[3-4] no horizontal overflow on Home${hcAll.filter(([, m]) => !noOverflow(m.overflow)).slice(0, 1).map(([k, m]) => ` — ${k}: ${fmt(m.overflow)}`).join('')}`);
   await viewport(375, 812); await go('home');
   const tCard = await tap('#page-home .feed-card--tap .sport-chip');
@@ -697,7 +715,10 @@ try {
   // a literal colour on a D1 surface
   await red('[9-10]', 'a literal colour on the due dot', '.sport-seg-dot{background:#c9a227!important}', async () => tokenRun(['#page-picks .sport-seg-host'], () => go('picks')), (r) => r.literal.length > 0);
   // the Home chip pressed against the chevron
-  await red('[9-11]', 'the chip pressed against the chevron (eyebrow gap 0)', '.feed-card-eyebrow{gap:0!important}', async () => { await go('home'); await sleep(150); return measure('homeChips'); }, (m) => m.chips.some((c) => c.chipToChev !== null && c.chipToChev < 7.5));
+  // W-92: the chip now sits in the trailing group [chip][time][chevron]; the gap that keeps it off its neighbour is that group's own.
+  await red('[9-11]', 'the chip pressed against the time beside it (trailing group gap 0)', '.feed-card-trail{gap:0!important}', async () => { await go('home'); await sleep(150); return measure('homeChips'); }, (m) => m.chips.some((c) => c.chipToNext !== null && c.chipToNext < 7.5));
+  await red('[9-12]', 'the card time drawn in --text-muted (fails AA on a card)', '.feed-card-time{color:var(--text-muted)!important}', async () => { await go('home'); await sleep(150); return measure('homeChips'); }, (m) => m.times.some((t) => t.color !== t.secondary));
+  await red('[9-13]', 'the card time allowed to wrap and the trailing group pushed to the leading edge', '.feed-card-time{white-space:normal!important}.feed-card-trail{margin-left:0!important}', async () => { await go('home'); await sleep(150); return measure('homeChips'); }, (m) => m.times.some((t) => !t.nowrap || Math.abs(t.trailEnd ?? 99) > 1));
 } catch (e) {
   fail++;
   console.error('  ❌ the engine run threw:', e && e.stack ? e.stack : e);

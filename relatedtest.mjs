@@ -131,7 +131,8 @@ console.log('\n[3] The blind rule…');
   const rosterWithout = (L, id) => L.players.filter((p) => p.playerId !== id).map((p) => ({ ...p, active: true }));
   const vIn = mk(FINAL).e.home.resolveGameView('g21');
   const vNon = mk(FINAL, { deps: { entrantsFor: () => rosterWithout(FINAL, 'p1') } }).e.home.resolveGameView('g21');
-  assert(!!vIn && cardsOf(vIn.html).filter((t) => PICK.has(t)).length >= 2, `3e-0: (positive control) an ENTRANT opening the final game g21 sees pick-naming Related cards (${cardsOf(vIn ? vIn.html : '').join(', ')})`);
+  // W-92 (DI-W92-2): the three "called it" cards about g21 are folded into g21's own result card, which now NAMES the callers — so the pick-naming Related card is exactly that one.
+  assert(!!vIn && cardsOf(vIn.html).filter((t) => PICK.has(t)).join() === 'game.final' && /called it: Washington \+7 won outright/.test(vIn.html), `3e-0: (positive control) an ENTRANT opening the final game g21 sees its pick-naming Related card — the result card naming who called it (${cardsOf(vIn ? vIn.html : '').join(', ')})`);
   assert(!!vNon && cardsOf(vNon.html).every((t) => !PICK.has(t)) && vNon.relatedIds.length < vIn.relatedIds.length && !/pg-cluster|pg-pp/.test(vNon.html), `3e: a viewer who is not on the roster gets NO pick-naming Related card for the same final game (${vNon && vNon.relatedIds.length} cards instead of ${vIn && vIn.relatedIds.length}; what stays is the SCRIBE post, which names no pick) and no pick line in the panel`);
   const sNonLive = E.scenario('live3', { entrants: () => fx.PLAYERS.filter((p) => p.playerId !== 'p1').map((p) => ({ ...p, active: true })) });
   const vNonLive = E.mount({ home, storage }, doc, sNonLive).home.resolveGameView('c1');
@@ -145,7 +146,7 @@ console.log('\n[3] The blind rule…');
     assert(!!vYes && vYes.relatedIds.length >= 1, `3h-0: (positive control) with the rows LANDED the final game g21 has Related cards (${vYes && vYes.relatedIds.length})`);
     const typeOfId = (env, id) => { const c = env.cards.find((x) => x.id === id); return c ? c.type : null; };
     const pickNaming = (env, v) => v.relatedIds.filter((id) => PICK.has(typeOfId(env, id)));
-    assert(!!vNo && pickNaming(notLanded, vNo).length === 0 && cardsOf(vNo.html).every((t) => !PICK.has(t)) && pickNaming(landed, vYes).length >= 2, `3h: S-C10 — a final game in a week whose rows have NOT landed shows NO pick-naming Related card (${pickNaming(notLanded, vNo).length}, against ${pickNaming(landed, vYes).length} once they have); the feed itself holds ${notLanded.cards.length} cards, ${landed.cards.length} once they have`);
+    assert(!!vNo && pickNaming(notLanded, vNo).length === 0 && cardsOf(vNo.html).every((t) => !PICK.has(t)) && pickNaming(landed, vYes).length === 1, `3h: S-C10 — a final game in a week whose rows have NOT landed shows NO pick-naming Related card (${pickNaming(notLanded, vNo).length}, against ${pickNaming(landed, vYes).length} once they have); the feed itself holds ${notLanded.cards.length} cards, ${landed.cards.length} once they have`);
     for (const [label, env] of [['rows landed', landed], ['rows not landed', notLanded], ['server status live', mk(FINAL, { confirmed: () => 'live' })], ['local', mk(FINAL)]]) {
       const feedIds = new Set(env.cards.map((c) => c.id));
       const all = FINAL.games.map((g) => env.e.home.resolveGameView(g.gameId)).filter(Boolean);

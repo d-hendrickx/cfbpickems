@@ -50,6 +50,10 @@ function mk(L, o = {}) {
   return { e, snap, cards, viewerId };
 }
 const find = (cards, type, pred = () => true) => cards.find(c => c.type === type && pred(c));
+// W-92 (DI-W92-1 / DI-W92-6): a combined card narrowed to ONE member opens exactly the detail that member's own card opened before v0.30.1 —
+// the per-member layouts below are pinned through it. `combined(type, week)` is the real (several-member) card.
+const oneOf = (card, pid) => (card ? { ...card, facts: { ...card.facts, members: card.facts.members.filter(m => m.playerId === pid) } } : null);
+const retiredCard = (type) => ({ id: `${type}:L1:w2:p2${type === 'player.week' ? '' : ':g21'}`, type, weekId: 'w2', gameId: type === 'player.week' ? null : 'g21', memberId: 'p2', requiresReveal: fc.CARD_REVEAL_CLASS[type], facts: { playerId: 'p2', playerName: 'Brayden', team: 'Washington', matchup: 'Washington at Oregon', spreadDisplay: '+7', scoreLine: '20–17', against: 2, weekN: 2, wins: 3, losses: 1 }, reason: 'In your league', sport: 'cfb', sortKey: iso(NOW) });
 const detail = (mod, card, snap, ctx = CTX) => mod.buildCardDetail(card, snap, ctx);
 const rowOf = (m, label) => (m && m.rows.find(r => r.label === label)) || null;
 const texts = (m) => JSON.stringify([m.headline, m.freshness, m.rows, m.lists, m.meaning, m.actions, m.note]);
@@ -62,11 +66,14 @@ console.log('\n[1] The catalog…');
 {
   assert(JSON.stringify([...CD.DETAIL_TYPES].sort()) === JSON.stringify([...fc.CARD_TYPES].sort()), '1a: ALL fifteen card types have a detail provider (DI-575/576: every generated insight card opens a substantive screen)');
   assert(CD.hasDetail('game.final') && !CD.hasDetail('news') && !CD.hasDetail('future.type') && !CD.hasDetail(undefined) && !CD.hasDetail('__proto__') && !CD.hasDetail('constructor'), '1b: a type with no provider (a Lane C type that has not registered one, a forged name) has none — it renders non-tappable and never dead-ends');
-  const ext = detail(CD, find(FINAL.cards, 'streak.extended'), FINAL.snap), brk = detail(CD, find(FINAL.cards, 'streak.broken'), FINAL.snap);
+  const ext = detail(CD, oneOf(find(FINAL.cards, 'streak.extended', c => c.weekId === 'w2'), 'p3'), FINAL.snap), brk = detail(CD, oneOf(find(FINAL.cards, 'streak.broken', c => c.weekId === 'w2'), 'p1'), FINAL.snap);
   assert(ext && brk && JSON.stringify(ext.rows.map(r => r.label)) === JSON.stringify(brk.rows.map(r => r.label)) && ext.lists[0].id === brk.lists[0].id && ext.title === 'Streak' && brk.title === 'Streak', '1c: streak.extended and streak.broken share ONE layout (the same rows and list, the same title) with their own sentences');
   assert(ext.meaning[0] === 'Kevin is on a 4-game miss streak.' && brk.meaning[0] === "Drew's 4-game streak snapped on Washington at Oregon.", '1d: …"{name} is on a {n}-game {kind} streak." / "{name}\'s {n}-game streak snapped on {matchup}."');
   const titles = Object.fromEntries(FINAL.cards.map(c => [c.type, CD.detailTitle(c)]));
-  titles['player.week'] = CD.detailTitle(find(FINAL.cards, 'player.week', c => c.memberId === 'p1'));
+  // W-92: the three retired types keep their catalogued titles (an old shared card still has a name), though none is derived any more.
+  titles['player.week'] = CD.detailTitle({ type: 'player.week', facts: { playerName: 'Drew' } });
+  titles['called.it'] = CD.detailTitle({ type: 'called.it', facts: {} });
+  titles['stood.alone'] = CD.detailTitle({ type: 'stood.alone', facts: {} });
   titles['week.result'] = CD.detailTitle(find(FINAL.cards, 'week.result', c => c.weekId === 'w2'));
   assert(titles['week.result'] === 'Week 2' && titles['player.week'] === "Drew's week" && titles['game.final'] === 'Final' && titles['rank.changed'] === 'Rank change' && titles['year.ago'] === 'A year ago' && titles['lockerroom.top'] === 'Top message' && titles['scribe.post'] === 'SCRIBE' && titles['slate.published'] === 'Slate' && titles['called.it'] === 'Called it' && titles['stood.alone'] === 'Stood alone', '1e: the navigation-bar titles are DI-576\'s ("Week {N}", "{name}\'s week", "Final", "Rank change", …)');
 }
@@ -92,23 +99,33 @@ console.log('\n[2] Every type\'s content — and its figures equal the ones the 
   const tableCtx = { ...CTX, scoreSummaryRowsHTML: (week) => `<tr data-fixture="${week.weekId}"><td>1</td></tr>` };
   const wrT = detail(CD, find(cards, 'week.result', c => c.weekId === 'w2'), snap, tableCtx);
   assert(wrT.tableHtml === '<tr data-fixture="w2"><td>1</td></tr>' && /<tbody><tr data-fixture="w2">/.test(CD.cardDetailHTML(wrT, { escHtml: esc })), '2i: …and the week\'s standings table is the INJECTED Dashboard row renderer\'s own markup (one render path), spliced');
-  const pw = detail(CD, find(cards, 'player.week', c => c.memberId === 'p1'), snap);
-  const p1row = w2rows.find(r => r.playerId === 'p1');
-  assert(rowOf(pw, 'Record').value === `${p1row.correctCount}–${p1row.incorrectCount}` && pw.lists[0].items.length === 4 && pw.lists[0].items.every(i => ['✓', '✗'].includes(i.mark) && i.markWord), '2j: player.week — the RAW record equals the stored row (the weekly update\'s), with one ✓/✗ row per game and a word for each mark');
-  const rk = detail(CD, find(cards, 'rank.changed', c => c.memberId === 'p1'), snap);
+  // W-92 (DI-W92-3): the personal-record card is retired; every member's record is one tap away in the week-final card's table (2i). An old shared
+  // player.week card opens nothing (the calm unavailable state).
+  assert(!find(cards, 'player.week') && detail(CD, retiredCard('player.week'), snap) === null && wrT.tableHtml.length > 0, '2j: player.week is retired — no such card is derived, an old one opens nothing, and the week-final detail carries the full week table instead');
+  const rkCard = find(cards, 'rank.changed', c => c.weekId === 'w2');
+  const rk = detail(CD, oneOf(rkCard, 'p1'), snap);
   const standings = calculateSeasonStandings(fx.PLAYERS.map(p => ({ ...p })), FINAL.snap.revealedWeeklyResults, FINAL.snap.weeks, null);
   const p1s = standings.find(s => s.playerId === 'p1'), above = standings.find(s => s.currentRank === p1s.currentRank - 1);
   assert(rowOf(rk, 'To').value === `${fc.ordinal(p1s.currentRank)} of 6` && rowOf(rk, 'Season win %').value === `${p1s.winPct}%` && rowOf(rk, 'Gap to the rank above').value === `${above.totalCorrect - p1s.totalCorrect} picks (weighted)`, '2k: rank.changed — rank, Win % and the WEIGHTED gap equal calculateSeasonStandings\' own row (Standings parity)');
   assert(rk.meaning[1] === 'Rank counts each game by its multiplier. Win % counts every pick once.', '2l: …with Standings\' own sentence about raw versus weighted');
-  const ca = detail(CD, find(cards, 'called.it'), snap);
-  assert(rowOf(ca, 'Pick').value === 'Washington +7' && rowOf(ca, 'Final').value === 'Washington 20, Oregon 17' && rowOf(ca, 'Won outright by').value === '3' && rowOf(ca, 'Also on Washington').value === 'Koby, Jacob & Kihoon', '2m: called.it — the pick as displayed (+7 is the underdog\'s own line), the final score line, the outright margin, and the others on that side (g21 hand-derived: p2 p4 p5 p6 called it)');
-  assert(rowOf(ca, 'Upsets called').value === '1 in finished weeks', '2n: …"Upsets called" is labelled as finished weeks only (it is computed from the revealed view)');
-  const so = detail(CD, find(cards, 'stood.alone'), snap);
-  assert(rowOf(so, 'Pick').value === 'Miami' && /^Florida State · Drew, Brayden, Kevin, Koby & Kihoon$/.test(rowOf(so, 'Against').value) && rowOf(so, 'Result').value === 'Miami covered by 11', '2o: stood.alone — the pick, who went the other way (names, after reveal), and the result');
-  const brk = detail(CD, find(cards, 'streak.broken'), snap);
+  const rkAll = detail(CD, rkCard, snap);
+  const p1sec = rkAll && rkAll.lists.find(l => l.title === 'Drew');
+  assert(!!p1sec && JSON.stringify(p1sec.items.map(i => [i.primary, i.secondary])) === JSON.stringify(rk.rows.slice(0, 4).map(r => [r.label, r.value])) && rkAll.rows.length === 0, '2l-b: W-92 parity — on the five-member card, Drew\'s section holds exactly the first four rows his own one-member detail shows (the same builder, no second computation)');
+  // W-92 (DI-W92-2 / DI-W92-6): "called it" and "stood alone" live on the GAME's detail, as one list — the retired cards' rows, one per named member.
+  const g21m = detail(CD, find(cards, 'game.final', c => c.gameId === 'g21'), snap);
+  const ca = g21m && g21m.lists.find(l => l.id === 'standout');
+  assert(!!ca && ca.title === 'Called it' && JSON.stringify(ca.items.map(i => [i.primary, i.secondary])) === JSON.stringify(['Brayden', 'Koby', 'Jacob', 'Kihoon'].map(n => [n, 'Washington +7 · won outright by 3'])), '2m: g21\'s detail lists "Called it": the four who took Washington +7 (the underdog\'s own line), each "won outright by 3" (g21 hand-derived: p2 p4 p5 p6)');
+  assert(detail(CD, retiredCard('called.it'), snap) === null && rowOf(g21m, 'Result').value === 'Washington by 3', '2n: …the retired called.it card opens nothing, and the final margin stays on the game\'s own Result row');
+  const g22m = detail(CD, find(cards, 'game.final', c => c.gameId === 'g22'), snap);
+  const so = g22m && g22m.lists.find(l => l.id === 'standout');
+  assert(!!so && so.title === 'Stood alone' && so.items.length === 1 && so.items[0].primary === 'Jacob' && so.items[0].secondary === 'Miami · against 5 · covered by 11' && detail(CD, retiredCard('stood.alone'), snap) === null, '2o: g22\'s detail lists "Stood alone": Jacob, "Miami · against 5 · covered by 11"; the retired stood.alone card opens nothing');
+  const brk = detail(CD, oneOf(find(cards, 'streak.broken', c => c.weekId === 'w2'), 'p1'), snap);
   assert(rowOf(brk, 'Run').value === '4 covers' && rowOf(brk, 'Started').value === 'Week 1' && rowOf(brk, 'Longest this season').value === '4 covers' && brk.lists[0].items.length === 4 && brk.lists[0].items[0].key === 'g15' && brk.lists[0].items.every(i => i.mark === '✓'), '2p: streak.broken — the run (4 covers from Week 1), newest first (g15 is the last cover before the miss), all ✓');
-  const ext = detail(CD, find(cards, 'streak.extended'), snap);
+  const ext = detail(CD, oneOf(find(cards, 'streak.extended', c => c.weekId === 'w2'), 'p3'), snap);
   assert(rowOf(ext, 'Run').value === '4 misses' && rowOf(ext, 'Started').value === 'Week 2' && rowOf(ext, 'Longest this season').value === '1 cover', '2q: streak.extended — a miss run is "4 misses", started Week 2; the longest COVER streak is singular when it is 1');
+  const extAll = detail(CD, find(cards, 'streak.extended', c => c.weekId === 'w2'), snap);
+  const kev = extAll && extAll.lists.find(l => l.title === 'Kevin');
+  assert(!!kev && extAll.lists.map(l => l.title).join() === 'Kevin,Jacob' && JSON.stringify(kev.items.map(i => [i.primary, i.secondary])) === JSON.stringify(ext.rows.slice(0, 4).map(r => [r.label, r.value])) && extAll.meaning[0] === '2 members are on streaks.', '2q-b: W-92 parity — the two-member streak card is one screen with Kevin\'s and Jacob\'s sections, Kevin\'s rows exactly his own one-member detail\'s');
   const ya = detail(CD, find(cards, 'year.ago'), snap);
   assert(ya.lists[0].items.length === 6 && ya.lists[0].items[0].secondary === '7 correct' && ya.lists[0].items.every((it, i, a) => i === 0 || parseInt(a[i - 1].secondary, 10) >= parseInt(it.secondary, 10)) && rowOf(ya, 'This year so far').value === 'Jacob leads after Week 2' && ya.actions[0].id === 'see-2025', '2r: year.ago — the six members of the closed 2025 week, best first, this year\'s leader from Standings\' own function, and the path to the 2025 record');
   const sl = detail(CD, find(cards, 'slate.published'), snap);
@@ -168,15 +185,23 @@ console.log('\n[3] THE BLIND RULE — the gate is asked of the current snapshot�
   const fgFacts = { awayTeam: g24.awayTeam, homeTeam: g24.homeTeam, awayScore: 10, homeScore: 24, atsWinnerTeam: 'USC', marginCovered: '11', chips: [{ playerId: 'p2', initials: 'BR', result: 'win' }] };
   // after-reveal, game-scoped: game.final / called.it / stood.alone
   for (const type of ['game.final', 'called.it', 'stood.alone']) {
-    const facts = type === 'game.final' ? fgFacts : { playerId: 'p2', playerName: 'Brayden', team: 'UCLA', matchup: 'UCLA at USC', spreadDisplay: '+3', scoreLine: '24–10', against: 3 };
+    const facts = type === 'game.final' ? { ...fgFacts, standout: { kind: 'called', names: [{ playerId: 'p2', playerName: 'Brayden' }], team: 'UCLA', spreadDisplay: '+3' } } : { playerId: 'p2', playerName: 'Brayden', team: 'UCLA', matchup: 'UCLA at USC', spreadDisplay: '+3', scoreLine: '24–10', against: 3 };
     const card = mkCard(type, 'w2', 'g24', { facts });
     const liveG = { ...LIVE.snap, games: LIVE.snap.games.map(g => (g.gameId === 'g24' ? { ...g, status: 'final', homeScore: 24, awayScore: 10 } : g)) };
-    assert(detail(CD, card, liveG) !== null, `3a CONTROL ${type}: a final game in a LIVE (public) week opens`);
-    assert(detail(CD, card, OPEN.snap) === null && detail(CD, card, LOCKED.snap) === null, `3a ${type}: the same card in an OPEN or a LOCKED week is null (after-reveal: arePicksPublic and nothing else)`);
     const notFinal = { ...liveG, games: liveG.games.map(g => (g.gameId === 'g24' ? { ...g, status: 'live' } : g)) };
-    assert(detail(CD, card, notFinal) === null, `3b ${type}: a game still LIVE inside a revealed week does not open (the game must itself be final)`);
+    if (type === 'game.final') {
+      assert(detail(CD, card, liveG) !== null, `3a CONTROL ${type}: a final game in a LIVE (public) week opens (and carries its standout)`);
+      assert(detail(CD, card, OPEN.snap) === null && detail(CD, card, LOCKED.snap) === null, `3a ${type}: the same card in an OPEN or a LOCKED week is null (after-reveal: arePicksPublic and nothing else)`);
+      assert(detail(CD, card, notFinal) === null, `3b ${type}: a game still LIVE inside a revealed week does not open (the game must itself be final)`);
+    } else {
+      // W-92: retired. Even where its gate WOULD pass (a final game in a public week) it opens nothing — and nowhere else either.
+      assert(detail(CD, card, liveG) === null, `3a RETIRED ${type}: even a final game in a LIVE (public) week opens nothing (W-92: the calm unavailable state)`);
+      assert(detail(CD, card, OPEN.snap) === null && detail(CD, card, LOCKED.snap) === null, `3a ${type}: the same card in an OPEN or a LOCKED week is null`);
+      assert(detail(CD, card, notFinal) === null, `3b ${type}: …and while the game is still LIVE`);
+    }
   }
   // after-final: week.result / player.week / rank.changed / streak / milestone
+  assert(!FINAL.cards.some(c => c.type === 'player.week'), '3c-0: W-92 — no player.week card is derived in a FINAL week (retired; its 3c rows below are the combined cards\')');
   for (const type of ['week.result', 'player.week', 'rank.changed', 'streak.extended', 'streak.broken', 'milestone.reached']) {
     const real = FINAL.cards.find(c => c.type === type && c.weekId === 'w2') || null;
     if (!real) continue;
@@ -199,10 +224,11 @@ console.log('\n[3] THE BLIND RULE — the gate is asked of the current snapshot�
   assert(others.every(n => !rowsText.includes(n)), '3h: the split is COUNTS only — no other member\'s name, initials or selection appears in a week.revealed row');
   // S-C10 on named facts
   const noC = mk(league('final'), { supabase: true, picksRead: () => false });
-  const caNC = detail(CD, find(noC.cards.length ? noC.cards : FINAL.cards, 'called.it') || find(FINAL.cards, 'called.it'), noC.snap);
-  assert(!caNC || !rowOf(caNC, 'Also on Washington'), '3i: S-C10 — without the confirmed rows, called.it names no one else on that side');
-  const soNC = detail(CD, find(FINAL.cards, 'stood.alone'), noC.snap);
-  assert(!soNC || !/Drew|Brayden|Kevin|Koby|Kihoon/.test(rowOf(soNC, 'Against') ? rowOf(soNC, 'Against').value : ''), '3j: S-C10 — stood.alone falls back to a COUNT of the other side, never the names');
+  // W-92: the game card is not even DERIVED without the confirmed rows; a game card held open while the rows go unconfirmed loses its "Called it" list.
+  const g21NC = detail(CD, find(FINAL.cards, 'game.final', c => c.gameId === 'g21'), noC.snap);
+  assert(!noC.cards.some(c => c.type === 'game.final') && !!g21NC && !g21NC.lists.some(l => l.id === 'standout'), '3i: S-C10 — without the confirmed rows no game card is derived, and one held open names no caller (its "Called it" list needs the flag)');
+  const g22NC = detail(CD, find(FINAL.cards, 'game.final', c => c.gameId === 'g22'), noC.snap);
+  assert(!!g22NC && !g22NC.lists.some(l => l.id === 'standout') && !/Jacob/.test(JSON.stringify(g22NC.lists)), '3j: S-C10 — …nor who stood alone');
   // signed out
   const anon = mk(league('final'), { viewer: null });
   const gfA = detail(CD, find(anon.cards, 'game.final'), anon.snap);
@@ -279,7 +305,7 @@ console.log('\n[6] Live language…');
   const stale = detail(CD, find(LIVE.cards, 'week.revealed'), LIVE.snap, { ...CTX, liveEntryFor: () => null });
   const srow = stale.lists[0].items.find(i => i.key === 'g22');
   assert(/Score may be behind/.test(srow.secondary), '6c: a live game with no fresh capture says "Score may be behind" in its row (DI-570), not a stale quarter and clock');
-  const finalRows = detail(CD, find(FINAL.cards, 'player.week'), FINAL.snap);
+  const finalRows = detail(CD, oneOf(find(FINAL.cards, 'streak.broken', c => c.weekId === 'w2'), 'p1'), FINAL.snap);   // W-92: player.week is retired; a FINAL streak run says covered / missed
   assert(finalRows.lists[0].items.every(i => ['covered', 'missed', 'pushed'].some(w => i.markWord.includes(w))), '6d: a FINAL game may say covered / missed (the only phase that may)');
   const allLive = LIVE.cards.map(c => detail(CD, c, LIVE.snap)).filter(Boolean);
   const liveOnly = allLive.filter(m => ['week.revealed', 'slate.published'].includes(m.type));
@@ -333,10 +359,11 @@ console.log('\n[8] MUTATION PROOFS — scratch copies loaded as data: URLs (neve
     const nc = mk(league('live'), { supabase: true, picksRead: () => false });
     const rv2 = m.buildCardDetail(wrv, nc.snap, CTX);
     o.rowsNeedConfirmed = !!rv2 && rv2.lists.length === 0;
-    const ca = m.buildCardDetail(find(FINAL.cards, 'called.it'), { ...FINAL.snap, picksReadConfirmed: {} }, CTX);
-    o.namesNeedConfirmed = !!ca && !ca.rows.some(r => /^Also on/.test(r.label));
-    const so = m.buildCardDetail(find(FINAL.cards, 'stood.alone'), { ...FINAL.snap, picksReadConfirmed: {} }, CTX);
-    o.stoodNamesNeedConfirmed = !!so && !/Drew|Brayden|Kevin|Koby|Kihoon/.test(rowOf(so, 'Against') ? rowOf(so, 'Against').value : '');
+    // W-92: the game card's "Called it" / "Stood alone" list needs the S-C10 flag (with it the list is there — the positive half); a retired card opens nothing.
+    const g21c = find(FINAL.cards, 'game.final', c => c.gameId === 'g21');
+    const ca = m.buildCardDetail(g21c, { ...FINAL.snap, picksReadConfirmed: {} }, CTX), caOk = m.buildCardDetail(g21c, FINAL.snap, CTX);
+    o.namesNeedConfirmed = !!ca && !ca.lists.some(l => l.id === 'standout') && !!caOk && caOk.lists.some(l => l.id === 'standout');
+    o.stoodNamesNeedConfirmed = m.buildCardDetail(retiredCard('stood.alone'), FINAL.snap, CTX) === null && m.buildCardDetail(retiredCard('called.it'), FINAL.snap, CTX) === null;
     let leaked = 'ok'; try { m.finalizeDetailFacts('game.final', { selectedTeam: 'Texas' }); leaked = 'no throw'; } catch { leaked = 'ok'; }
     o.forbiddenThrows = leaked === 'ok';
     const kept = m.finalizeDetailFacts('game.final', { matchup: 'A', stray: 'x' });
@@ -362,8 +389,8 @@ console.log('\n[8] MUTATION PROOFS — scratch copies loaded as data: URLs (neve
     ['the week-final check uses the local mirror, not the confirmed status', R('confirmedWeekStatus: confirmed,', 'confirmedWeekStatus: week && week.status,'), 'serverConfirmed'],
     ['week.revealed shows its per-game rows without arePicksPublic', R('const rowsOk = arePicksPublic(week) && env.othersOk;', 'const rowsOk = env.othersOk;'), 'rowsNeedPublic'],
     ['week.revealed shows its per-game rows without the S-C10 flag', R('const rowsOk = arePicksPublic(week) && env.othersOk;', 'const rowsOk = arePicksPublic(week);'), 'rowsNeedConfirmed'],
-    ['called.it names the others without the S-C10 flag', R("const also = env.othersOk ? pickersOf(s, game.gameId)", "const also = true ? pickersOf(s, game.gameId)"), 'namesNeedConfirmed'],
-    ['stood.alone names the others without the S-C10 flag', R("const others = env.othersOk ? pickersOf(s, game.gameId)", "const others = true ? pickersOf(s, game.gameId)"), 'stoodNamesNeedConfirmed'],
+    ['W-92: the game card\'s "Called it" list names members without the S-C10 flag', R('if (!so || !env.othersOk) return null;', 'if (!so) return null;'), 'namesNeedConfirmed'],
+    ['W-92: a retired card (called.it / stood.alone) opens a screen again (the early return removed AND a builder found)', R("if (RETIRED_CARD_TYPES.includes(card.type)) return null;\n", '\n').replace("const builder = BUILDERS[card.type];", "const builder = BUILDERS[card.type] || BUILDERS['game.final'];"), 'stoodNamesNeedConfirmed'],
     ['a forbidden key no longer throws', R('assertDeepBlindSafe(facts);\n  const out = {};', 'const out = {};'), 'forbiddenThrows'],
     ['stray facts are carried through', R("for (const k of allowed) {\n    if (!facts", "for (const k of Object.keys(facts || {})) {\n    if (!facts"), 'dropsStray'],
     ['S-C3: the viewer\'s pick is "the first pick found" (another member\'s selection is shown as yours)', R("(s.viewerId ? (s.picks.find(p => p && p.gameId === gameId && p.playerId === s.viewerId) || null) : null)", "(s.picks.find(p => p && p.gameId === gameId) || null)"), 'ownPickOnly'],

@@ -76,7 +76,7 @@ export function mkHomeEnv(mods, doc, league, o = {}) {
     onAction: (a, p) => calls.actions.push([a, p]),
     haptic: (k) => calls.haptics.push(k),
     now: () => state.now,
-    setTimer: (fn, ms) => { const t = { fn, at: clock.now + ms, id: ++clock.seq, live: true }; clock.timers.push(t); return t.id; },
+    setTimer: (fn, ms) => { const t = { fn, at: clock.now + ms, ms, id: ++clock.seq, live: true }; clock.timers.push(t); return t.id; },
     clearTimer: (id) => { const t = clock.timers.find(x => x.id === id); if (t) t.live = false; },
     pilotHistoryAllowed: () => o.pilotHistory !== false,   // D1 security O1: the default env is the pilot league; pass pilotHistory:false for any other
     observeSentinel: (el, cb) => { const rec = { el, cb, off: false }; calls.observed.push(rec); return () => { rec.off = true; }; },
@@ -85,7 +85,8 @@ export function mkHomeEnv(mods, doc, league, o = {}) {
   };
   const home = mods.home.createHome(deps);
   const advance = (ms) => { clock.now += ms; for (const t of clock.timers.filter(x => x.live && x.at <= clock.now).sort((p, q) => p.at - q.at || p.id - q.id)) { t.live = false; t.fn(); } };
-  const pendingTimers = () => clock.timers.filter(t => t.live).length;
+  // `ms` (optional) counts only the timers armed with that delay — W-92 (2026-10-17): Home now owns a second timer, the 60 s time refresh, beside the pill's 1 s announcement.
+  const pendingTimers = (ms) => clock.timers.filter(t => t.live && (ms === undefined || t.ms === ms)).length;
   return { home, deps, calls, container, state, read: readers, league: w, advance, pendingTimers };
 }
 

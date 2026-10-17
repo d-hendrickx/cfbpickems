@@ -9203,6 +9203,13 @@ body.native-shell #swap-picker-sheet .chat-sheet-header{position:relative;paddin
 .feed-card-chev svg{width:16px;height:16px}
 /* D1 merge (2026-10-08): in a several-sport league a tappable card's eyebrow holds BOTH the sport chip (margin-left:auto, pushed to the trailing edge) and the chevron; the chip takes the free space and the chevron follows it at the 8 pt eyebrow gap, so the two never split the space and the chip never floats mid-row. */
 .sport-chip + .feed-card-chev{margin-left:0}
+/* W-92 (DI-W92-8, 2026-10-17): when each card happened — a quiet caption-level time on the eyebrow's trailing edge, [icon][reason][sport chip][time][chevron].
+   The trailing three are ONE group (.feed-card-trail) pushed to the trailing edge, so they never split the row's free space between two auto margins, and at the
+   largest text size the group drops to its own line together, right-aligned (it wraps inside itself only if it must, keeping its 8 pt gap). The time is
+   --text-secondary (never --text-muted, which fails AA on a card), tabular figures so "12m" and "13m" do not shift, one weight, no motion on a change. */
+.feed-card-trail{display:inline-flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-left:auto;min-width:0}
+.feed-card-trail > *{margin-left:0}
+.feed-card-time{flex:0 0 auto;font-size:.75rem;line-height:1.35;font-variant-numeric:tabular-nums;color:var(--text-secondary);white-space:nowrap}
 
 .feed-divider{display:flex;align-items:center;gap:8px;font-size:.72rem;font-weight:700;letter-spacing:.06em;color:var(--text-secondary)}
 .feed-divider::before,.feed-divider::after{content:'';flex:1 1 auto;height:1px;background:var(--border)}

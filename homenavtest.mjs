@@ -568,9 +568,12 @@ _log('\n[6] SP-54 / checklist item 21 — Home\'s season stats get the SAME grou
   {
     // 6-9b (review N1, 2026-10-02: this was `... || true`, an assertion that could never fail). The context DOES change which cards exist: with it the group's completion (p5 over p2, decided by the weekly
     // tie-break) is reported as a rank change AT the group's last week; without it the same two moves surface a week later, at week 3. So the feed itself is observably sensitive, and the mutant is checked on it.
-    const idsWith = feed.deriveCards(snap, opts).map((c) => c.id), idsWithout = JSON.parse(noCtxCards);
+    const cardsWith = feed.deriveCards(snap, opts), cardsWithout = feed.deriveCards({ ...snap, tieContexts: null }, opts);
+    const idsWith = cardsWith.map((c) => c.id), idsWithout = JSON.parse(noCtxCards);
     const rk = (ids) => ids.filter((x) => x.startsWith('rank.changed')).sort();
-    assert(JSON.stringify(rk(idsWith)) === '["rank.changed:-:grp_a2:p2","rank.changed:-:grp_a2:p5"]' && JSON.stringify(rk(idsWithout)) === '["rank.changed:-:w_3:p2","rank.changed:-:w_3:p5"]' && idsWith.length > 5,
+    // W-92 (DI-W92-1, 2026-10-17): the two moves are ONE rank.changed card per week now (id `rank.changed:-:{week}:-`), its members p2 and p5.
+    const movers = (cs) => cs.filter((c) => c.type === 'rank.changed').map((c) => `${c.weekId}:${c.facts.members.map((m) => m.playerId).sort().join('+')}`).sort().join();
+    assert(JSON.stringify(rk(idsWith)) === '["rank.changed:-:grp_a2:-"]' && JSON.stringify(rk(idsWithout)) === '["rank.changed:-:w_3:-"]' && movers(cardsWith) === 'grp_a2:p2+p5' && movers(cardsWithout) === 'w_3:p2+p5' && idsWith.length > 5,
       `6-9b: the feed is SENSITIVE to the context — with it the rank change is reported at the group's last week (grp_a2), without it a week later (w_3): ${JSON.stringify(rk(idsWith))} vs ${JSON.stringify(rk(idsWithout))}`);
     const idsMut = mutFeed.deriveCards({ ...snap, tieContexts: new Map(snap.tieContexts) }, opts).map((c) => c.id);
     assert(JSON.stringify(rk(idsMut)) === JSON.stringify(rk(idsWithout)),

@@ -60,14 +60,17 @@ console.log('\n[1] GOLDEN - a one-sport league renders exactly what v0.29.0 rend
 // The Picks page prints the What's New card, and the v0.30.0 entry went from 14 added lines to 16. The fixture was rendered by dump-sport-renders.mjs on the int tip (e6627bca) and on this tree and the pages
 // line-diffed (evidence/final-copy/renders-int vs renders-new): in each of the seven, the ONLY difference is the same two added <li> lines (the two new bullets), nothing else; the fourteen Dashboard and
 // Standings pages are byte-identical. No sport-context code moved.
+// RE-PINNED 2026-10-17 (v0.30.1 release stamps, W-92): the SAME seven one-sport PICKS hashes moved and ONLY those (Dashboard and Standings did not). The Picks page prints the What's New card, and it now holds
+// the v0.30.1 entry (one line) instead of v0.30.0's. The fixture was rendered through sportenv.mjs on main (4e866058) and on this tree with the card's exact rendered text cut out: all seven Picks pages are
+// byte-identical with the card cut, so the card is the only difference; the fourteen Dashboard and Standings pages are byte-identical. No sport-context code moved.
 const GOLDEN = {
-  'drafting/picks': 'ca3489788f737762:9459', 'drafting/dashboard': '4054c60c93fee924:2906', 'drafting/leaderboard': '07c25cadde5c0738:22610',
-  'submitted/picks': '47419caf242cdb78:9336', 'submitted/dashboard': '34ea2d19294bb755:13324', 'submitted/leaderboard': '07c25cadde5c0738:22610',
-  'one-row/picks': '91eba8fd1bc61da1:9356', 'one-row/dashboard': 'e4b6cafebce8eaa2:12278', 'one-row/leaderboard': '07c25cadde5c0738:22610',
-  'locked/picks': '675838324aaab59f:9141', 'locked/dashboard': '54d6960a63032f77:12384', 'locked/leaderboard': '07c25cadde5c0738:22610',
-  'live/picks': '31302bb700556b49:5567', 'live/dashboard': '70013fb6baaf8db9:9812', 'live/leaderboard': '1e9c27d512d26eb2:22969',
-  'signed-out/picks': '071fb47ed4f2fd2a:8802', 'signed-out/dashboard': '1f99658fac2fbab0:5636', 'signed-out/leaderboard': '145a625601f4d3f7:16871',
-  'commissioner/picks': '14b625fa6ab3dda7:11082', 'commissioner/dashboard': 'd02f8dac28d130c9:10343', 'commissioner/leaderboard': '4c11eb4cf7757b20:23911',
+  'drafting/picks': 'a007a606cd185c93:5696', 'drafting/dashboard': '4054c60c93fee924:2906', 'drafting/leaderboard': '07c25cadde5c0738:22610',
+  'submitted/picks': 'c0dcbe384ffb08eb:5573', 'submitted/dashboard': '34ea2d19294bb755:13324', 'submitted/leaderboard': '07c25cadde5c0738:22610',
+  'one-row/picks': '34b56d6cfd1994d7:5593', 'one-row/dashboard': 'e4b6cafebce8eaa2:12278', 'one-row/leaderboard': '07c25cadde5c0738:22610',
+  'locked/picks': '2229c1de28d9e82b:5378', 'locked/dashboard': '54d6960a63032f77:12384', 'locked/leaderboard': '07c25cadde5c0738:22610',
+  'live/picks': '2506d772dd46daf4:1804', 'live/dashboard': '70013fb6baaf8db9:9812', 'live/leaderboard': '1e9c27d512d26eb2:22969',
+  'signed-out/picks': 'd4d95d65dcf8443b:5039', 'signed-out/dashboard': '1f99658fac2fbab0:5636', 'signed-out/leaderboard': '145a625601f4d3f7:16871',
+  'commissioner/picks': '271ee2980e95da5b:7319', 'commissioner/dashboard': 'd02f8dac28d130c9:10343', 'commissioner/leaderboard': '4c11eb4cf7757b20:23911',
 };
 const SCENARIOS = {
   'drafting': { sports: ['cfb'] },
@@ -127,7 +130,9 @@ const JOINISH = /data-lo-action="join"|Join (CFB|NFL)|Join picks|lo-join/;
   const only = Object.fromEntries(TABS.map((t) => [t, env.render(t)]));
   assert(TABS.every((t) => !SW.test(only[t])), '[2f] plays only CFB: NO switcher on any tab (DI-555: a one-segment control is not drawn)');
   assert(TABS.every((t) => !/NFL/.test(withoutNotes(only[t]))), '[2g] ...and the word NFL appears nowhere on Picks, Dashboard or Standings (outside the platform What\'s New card, the one named exemption: release-note text, the same for every league)');
-  assert(only.picks.includes(platformNotesCard()) && /NFL/.test(platformNotesCard()) && withoutNotes(only.picks).length < only.picks.length && !only.dashboard.includes(platformNotesCard()) && !only.leaderboard.includes(platformNotesCard()), '[2g2] ...and the exemption is real and bounded: the card is on Picks only, it does say NFL, and cutting it shortens the page');
+  // W-92 (v0.30.1, 2026-10-17): the card now holds the v0.30.1 entry, which names no sport, so the exemption is INERT today — the page holds no NFL word even WITH the card. Kept (bounded, on Picks only)
+  // for the release that names a sport again.
+  assert(only.picks.includes(platformNotesCard()) && !/NFL/.test(platformNotesCard()) && !/NFL/.test(only.picks) && withoutNotes(only.picks).length < only.picks.length && !only.dashboard.includes(platformNotesCard()) && !only.leaderboard.includes(platformNotesCard()), '[2g2] ...and the exemption is real and bounded: the card is on Picks only and cutting it shortens the page; with v0.30.1 it names no sport, so the Picks page holds no NFL word even uncut');
   assert(/NFL/.test(withoutNotes(only.picks + '<button class="btn">NFL</button>')) && /NFL/.test(withoutNotes(only.dashboard.replace('</div>', '<span>NFL</span></div>'))) && /NFL/.test(withoutNotes(only.picks.split(platformNotesCard()).join(platformNotesCard() + '<p>NFL picks are open</p>'))), '[2g3] ...and an NFL word anywhere else (after the card, on Dashboard, beside the card) still fails the check');
   assert(TABS.every((t) => !JOINISH.test(only[t])), '[2h] ...nor anything that leads to a Join');
   assert(/CFB-open-home/.test(env.renderFull('picks')) && /Drew|Brayden/.test(only.leaderboard), '[2i] ...and the CFB pages are the full CFB pages');

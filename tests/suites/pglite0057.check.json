@@ -10,5 +10,5 @@
     "supabase/migrations/*.sql",
     "supabase/tests/pglite-common.mjs"
   ],
-  "note": "D1 Lane A (DI-546): the migration 0057 (the drift canary) run end to end in an in-process Postgres (PGlite) over stubs - S57 offline: gate prints live vs expected, canary names objects only; NOT FINAL until Drew fills the three policy-set hashes from DEV. Offline evidence only, never server evidence; SKIPS and passes with ONE assertion when PGlite is not installed (set PGLITE_DIR), so the floor is 1."
+  "note": "D1 Lane A (DI-546): the migration 0057 (the drift canary) run end to end in an in-process Postgres (PGlite) over stubs - S57 offline: gate prints live vs expected, canary names objects only; FINAL since 2026-10-16: the three policy-set hashes are Drew's DEV print, pinned, and the rehearsal's own print equals them. Offline evidence only, never server evidence; SKIPS and passes with ONE assertion when PGlite is not installed (set PGLITE_DIR), so the floor is 1."
 }

@@ -15,6 +15,11 @@
  * deploy) and is now REQUIRED: RD-01 v4.0.0 is published with this release (Drew, M-57/D-90: "Approve RD-01 v4.0.0-draft.1"; privacytest pins the page), so the entry must
  * carry the line exactly once, verbatim, and never as the headline. v0.29.0's News-from-ESPN privacy line stays pinned as intact history and must not be in this entry.
  *
+ * RE-PINNED 2026-10-17 from v0.30.0 to v0.30.1 (W-92, the Home feed fix; Drew "approve M-61"). v0.30.1 carries ONE line, the coordinator's, which Drew sees before
+ * the deploy: "Home combines cards from the same moment and shows when each one happened." It is pinned exactly (one `added`, no `fixed`, uncut as the SCRIBE
+ * headline, no privacy line — the policy did not change). Nothing about v0.30.0 was loosened: every one of its pins and every one of its mutants still runs, now
+ * against R[1] as intact HISTORY (problemsV030), the way v0.29.0 was carried when v0.30.0 shipped; v0.29.0 moves to R[2].
+ *
  * WHAT IS PINNED
  *   [1] The four version strings agree (APP_VERSION, index.html's three ?v=, service-worker CACHE_NAME, derived from one another) and the entry is the newest one.
  *   [2] The entry is exactly the approved copy: 16 added lines and 9 fixed lines, each verbatim and in order (a line dropped, reworded, added or reordered fails by name).
@@ -85,13 +90,15 @@ function assert(cond, label) {
   else { fail += 1; console.log('  ❌', label); }
 }
 
-console.log(`\n[TZ=${process.env.TZ || '(system default)'}] whatsnewtest.mjs — the v0.30.0 release notes\n`);
+console.log(`\n[TZ=${process.env.TZ || '(system default)'}] whatsnewtest.mjs — the v0.30.1 release notes (v0.30.0 pinned as history)\n`);
 
 const app = await import('./js/app.js');
 const live = app._whatsNewForTest();
 const R = live.releases;
-const NOW = R[0];
-const PREV = R[1];
+const NOW = R[0];        // v0.30.1 (W-92) — the release under test
+const V030 = R[1];       // v0.30.0 — intact history: every pin below that names v0.30.0 runs against it
+const PREV = R[2];       // v0.29.0
+const W92_LINE = 'Home combines cards from the same moment and shows when each one happened.';
 
 // v0.29.0's privacy line (RD-01 v3.0.0, R-C14) — now HISTORY: pinned below as still intact in the v0.29.0 entry, and ABSENT from v0.30.0's.
 const PRIVACY_LINE_V029 = "The privacy policy has been updated to cover News, which loads headlines straight from ESPN. You'll find it at the bottom of the menu.";
@@ -147,14 +154,14 @@ const UNSHIPPED = new RegExp([
   'haptic', 'TestFlight', 'iPhone',
 ].join('|'), 'i');
 
-/** Every property this suite pins about a release object, as named failures. [] means the entry is as shipped. */
-function problems(rel) {
+/** Every property this suite pins about the v0.30.0 entry (HISTORY since v0.30.1), as named failures. [] means the entry is as it shipped on 2026-10-16. */
+function problemsV030(rel) {
   const out = [];
   const added = Array.isArray(rel?.added) ? rel.added : [];
   const fixed = Array.isArray(rel?.fixed) ? rel.fixed : [];
   const all = [...added, ...fixed];
-  if (rel?.version !== app.APP_VERSION) out.push('version');
-  if (rel?.date !== app.APP_VERSION_DATE) out.push('date');
+  if (rel?.version !== 'v0.30.0') out.push('version');
+  if (rel?.date !== '2026-10-16') out.push('date');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(rel?.date))) out.push('date-format');
   for (const [name, text] of ADDED_PIN) if (!added.includes(text)) out.push(name);
   for (const [name, text] of FIXED_PIN) if (!fixed.includes(text)) out.push(name);
@@ -167,6 +174,27 @@ function problems(rel) {
   if (!(privacyLines.length === 1 && privacyLines[0] === PRIVACY_LINE_V030 && added.includes(PRIVACY_LINE_V030))) out.push('privacy-line');
   if (added.indexOf(PRIVACY_LINE_V030) === 0 || (added[0] && /privacy/i.test(added[0]))) out.push('privacy-not-headline');
   if (all.includes(PRIVACY_LINE_V029)) out.push('privacy-stale');
+  if (all.some(b => UNSHIPPED.test(b))) out.push('announces-unshipped');
+  if (all.some(b => /\b(UN|PF|DI|SB|SP|RG|AD|DO|VT|FB|TP|PM)-\d+\b|\bDI-W\d+|\b[WMDNT]-\d{2,3}\b/.test(b))) out.push('internal-id');
+  if (all.some(b => /RELEASE-EDIT|\bXX\b/.test(b)) || /XX/.test(String(rel?.date))) out.push('placeholder');
+  if (rel?.expanded === true) out.push('expanded-flag');
+  return out;
+}
+
+/** W-92: everything pinned about the v0.30.1 entry. ONE approved line, in `added` (so it is SCRIBE's chat-post headline, uncut), nothing in `fixed`, no privacy line. */
+function problems(rel) {
+  const out = [];
+  const added = Array.isArray(rel?.added) ? rel.added : [];
+  const fixed = Array.isArray(rel?.fixed) ? rel.fixed : [];
+  const all = [...added, ...fixed];
+  if (rel?.version !== app.APP_VERSION) out.push('version');
+  if (rel?.date !== app.APP_VERSION_DATE) out.push('date');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(rel?.date))) out.push('date-format');
+  if (!added.includes(W92_LINE)) out.push('w92-line');
+  if (JSON.stringify(added) !== JSON.stringify([W92_LINE])) out.push('added-list-exact');
+  if (JSON.stringify(fixed) !== '[]') out.push('fixed-list-exact');
+  if (!(added[0] && added[0].length <= 90 && added[0] === W92_LINE)) out.push('headline-uncut');
+  if (all.some(b => /privacy/i.test(b))) out.push('privacy-line');
   if (all.some(b => UNSHIPPED.test(b))) out.push('announces-unshipped');
   if (all.some(b => /\b(UN|PF|DI|SB|SP|RG|AD|DO|VT|FB|TP|PM)-\d+\b|\bDI-W\d+|\b[WMDNT]-\d{2,3}\b/.test(b))) out.push('internal-id');
   if (all.some(b => /RELEASE-EDIT|\bXX\b/.test(b)) || /XX/.test(String(rel?.date))) out.push('placeholder');
@@ -190,30 +218,33 @@ console.log('[1] Stamps — one release, one version, one date, newest first…'
   const html = readFileSync(join(HERE, 'index.html'), 'utf8');
   const sw = readFileSync(join(HERE, 'service-worker.js'), 'utf8');
   const tag = String(app.APP_VERSION).replace(/^v0\./, '').replace('.', '-');   // DERIVED from APP_VERSION, so the stamps cannot all be pinned to the same wrong literal
-  assert(app.APP_VERSION === 'v0.30.0' && app.APP_VERSION_DATE === '2026-10-16', `[1a] APP_VERSION is v0.30.0 and APP_VERSION_DATE is 2026-10-16, the deploy day (got ${app.APP_VERSION}, ${app.APP_VERSION_DATE})`);
-  assert(NOW?.version === 'v0.30.0' && NOW?.date === '2026-10-16' && NOW?.date === app.APP_VERSION_DATE, `[1b] WHATS_NEW_RELEASES[0] is the v0.30.0 entry dated 2026-10-16, equal to APP_VERSION_DATE (got ${NOW?.version}, ${NOW?.date})`);
-  assert(PREV?.version === 'v0.29.0' && R[2]?.version === 'v0.28.0', `[1c] the entries behind it are v0.29.0 then v0.28.0 — newest first, nothing dropped (got ${PREV?.version}, ${R[2]?.version})`);
-  assert(tag === '30-0' && stampProblems({ html, sw, version: app.APP_VERSION }).length === 0, `[1d] index.html carries ?v=30-0 in exactly three places (styles.css, app.js, service-worker registration) and service-worker.js CACHE_NAME is cfb-pickems-v30-0 — the tag APP_VERSION derives (${tag}); problems: ${stampProblems({ html, sw, version: app.APP_VERSION }).join(', ') || 'none'}`);
-  assert(!/\?v=29-0/.test(html) && !/cfb-pickems-v29-0/.test(sw) && /<link rel="stylesheet" href="css\/styles\.css\?v=30-0"/.test(html) && /<script type="module" src="js\/app\.js\?v=30-0"><\/script>/.test(html) && /setupServiceWorker\(\{ scriptUrl: 'service-worker\.js\?v=30-0' \}\)/.test(html), '[1e] no 29-0 is left anywhere, and the three references are the stylesheet link, the app.js module and the service-worker registration');
-  assert(live.shown.length >= 1 && live.shown[0] === NOW && live.shown.length === 1, `[1f] the Picks card shows v0.30.0 first and alone — no older release still carries the one-release 'expanded' flag (shown: ${live.shown.map(r => r.version).join(', ')})`);
+  assert(app.APP_VERSION === 'v0.30.1' && app.APP_VERSION_DATE === '2026-10-17', `[1a] APP_VERSION is v0.30.1 and APP_VERSION_DATE is 2026-10-17, the deploy day (got ${app.APP_VERSION}, ${app.APP_VERSION_DATE})`);
+  assert(NOW?.version === 'v0.30.1' && NOW?.date === '2026-10-17' && NOW?.date === app.APP_VERSION_DATE, `[1b] WHATS_NEW_RELEASES[0] is the v0.30.1 entry dated 2026-10-17, equal to APP_VERSION_DATE (got ${NOW?.version}, ${NOW?.date})`);
+  assert(V030?.version === 'v0.30.0' && PREV?.version === 'v0.29.0' && R[3]?.version === 'v0.28.0', `[1c] the entries behind it are v0.30.0, v0.29.0 then v0.28.0 — newest first, nothing dropped (got ${V030?.version}, ${PREV?.version}, ${R[3]?.version})`);
+  assert(tag === '30-1' && stampProblems({ html, sw, version: app.APP_VERSION }).length === 0, `[1d] index.html carries ?v=30-1 in exactly three places (styles.css, app.js, service-worker registration) and service-worker.js CACHE_NAME is cfb-pickems-v30-1 — the tag APP_VERSION derives (${tag}); problems: ${stampProblems({ html, sw, version: app.APP_VERSION }).join(', ') || 'none'}`);
+  assert(!/\?v=30-0/.test(html) && !/cfb-pickems-v30-0/.test(sw) && /<link rel="stylesheet" href="css\/styles\.css\?v=30-1"/.test(html) && /<script type="module" src="js\/app\.js\?v=30-1"><\/script>/.test(html) && /setupServiceWorker\(\{ scriptUrl: 'service-worker\.js\?v=30-1' \}\)/.test(html), '[1e] no 30-0 is left anywhere, and the three references are the stylesheet link, the app.js module and the service-worker registration');
+  assert(live.shown.length >= 1 && live.shown[0] === NOW && live.shown.length === 1, `[1f] the Picks card shows v0.30.1 first and alone — no older release still carries the one-release 'expanded' flag (shown: ${live.shown.map(r => r.version).join(', ')})`);
 }
 
 console.log('\n[2] The entry as shipped is exactly the copy Drew approved…');
 {
-  const p = problems(NOW);
-  assert(p.length === 0, `[2a] problems(v0.30.0) is empty (got: ${p.join(', ') || 'none'})`);
-  assert(NOW.added.length === 16 && NOW.fixed.length === 9, `[2b] sixteen added lines and nine fixed lines (got ${NOW.added.length} / ${NOW.fixed.length})`);
-  assert(JSON.stringify(NOW.added) === JSON.stringify(ADDED_PIN.map(([, t]) => t)) && JSON.stringify(NOW.fixed) === JSON.stringify(FIXED_PIN.map(([, t]) => t)), '[2c] every line is verbatim and in the approved order');
-  assert(new Set([...NOW.added, ...NOW.fixed]).size === 25 && !NOW.added.some(b => NOW.fixed.includes(b)), '[2d] 25 distinct lines, none duplicated across `added` and `fixed`');
+  const p0 = problems(NOW);
+  assert(p0.length === 0 && NOW.added.length === 1 && NOW.fixed.length === 0 && NOW.added[0] === W92_LINE, `[2-v0301] v0.30.1 is exactly the one approved line, in \`added\`, nothing in \`fixed\` (problems: ${p0.join(', ') || 'none'})`);
+  const p = problemsV030(V030);
+  assert(p.length === 0, `[2a] problemsV030(v0.30.0) is empty — the history entry is as it shipped (got: ${p.join(', ') || 'none'})`);
+  assert(V030.added.length === 16 && V030.fixed.length === 9, `[2b] v0.30.0 keeps sixteen added lines and nine fixed lines (got ${V030.added.length} / ${V030.fixed.length})`);
+  assert(JSON.stringify(V030.added) === JSON.stringify(ADDED_PIN.map(([, t]) => t)) && JSON.stringify(V030.fixed) === JSON.stringify(FIXED_PIN.map(([, t]) => t)), '[2c] every line is verbatim and in the approved order');
+  assert(new Set([...V030.added, ...V030.fixed]).size === 25 && !V030.added.some(b => V030.fixed.includes(b)) && !V030.added.includes(W92_LINE), '[2d] v0.30.0: 25 distinct lines, none duplicated across `added` and `fixed`, and the v0.30.1 line was not slipped into it');
 }
 
 console.log('\n[3] The headline is uncut; the privacy line is required, once, and not first…');
 {
-  assert(NOW.added[0].length <= 90, `[3a] the first item (SCRIBE's chat-post headline) is within the 90-character cut, so it posts uncut (${NOW.added[0].length} characters)`);
-  assert(/^Game Day is on Home/.test(NOW.added[0]) && NOW.added[0] === ADDED_PIN[0][1], '[3b] and it is the Game Day line, the release headline');
-  const privAt = NOW.added.indexOf(PRIVACY_LINE_V030);
-  assert([...NOW.added, ...NOW.fixed].filter(b => /privacy/i.test(b)).length === 1 && privAt > 0 && NOW.fixed.indexOf(PRIVACY_LINE_V030) === -1, `[3c] exactly one line says the privacy policy changed (RD-01 v4.0.0 ships with this deploy), it is the approved one, it sits in \`added\` at position ${privAt + 1} of ${NOW.added.length}, and it is not first`);
-  assert(!NOW.added.includes(PRIVACY_LINE_V029) && !NOW.fixed.includes(PRIVACY_LINE_V029) && /how SCRIBE looks up football questions/.test(PRIVACY_LINE_V030) && /where News headlines come from/.test(PRIVACY_LINE_V030) && /bottom of the menu/.test(PRIVACY_LINE_V030), '[3d] v0.29.0\'s older privacy line (News straight from ESPN) is not carried in, and this one names what v4.0.0 adds: SCRIBE\'s football lookups and where News headlines come from');
+  assert(NOW.added[0].length <= 90 && NOW.added[0] === W92_LINE, `[3a] v0.30.1's first item (SCRIBE's chat-post headline) is the approved line and within the 90-character cut, so it posts uncut (${NOW.added[0].length} characters)`);
+  assert(![...NOW.added, ...NOW.fixed].some(b => /privacy/i.test(b)), '[3a2] v0.30.1 says nothing about the privacy policy (it did not change; v0.30.0\'s line is history)');
+  assert(V030.added[0].length <= 90 && /^Game Day is on Home/.test(V030.added[0]) && V030.added[0] === ADDED_PIN[0][1], '[3b] v0.30.0 still leads with the Game Day line, uncut');
+  const privAt = V030.added.indexOf(PRIVACY_LINE_V030);
+  assert([...V030.added, ...V030.fixed].filter(b => /privacy/i.test(b)).length === 1 && privAt > 0 && V030.fixed.indexOf(PRIVACY_LINE_V030) === -1, `[3c] exactly one line says the privacy policy changed (RD-01 v4.0.0 ships with this deploy), it is the approved one, it sits in \`added\` at position ${privAt + 1} of ${V030.added.length}, and it is not first`);
+  assert(!V030.added.includes(PRIVACY_LINE_V029) && !V030.fixed.includes(PRIVACY_LINE_V029) && /how SCRIBE looks up football questions/.test(PRIVACY_LINE_V030) && /where News headlines come from/.test(PRIVACY_LINE_V030) && /bottom of the menu/.test(PRIVACY_LINE_V030), '[3d] v0.29.0\'s older privacy line (News straight from ESPN) is not carried in, and this one names what v4.0.0 adds: SCRIBE\'s football lookups and where News headlines come from');
 }
 
 console.log('\n[4] Coupled to what the app really says…');
@@ -256,14 +287,20 @@ console.log('\n[4] Coupled to what the app really says…');
   const priv = readFileSync(join(HERE, 'privacy.html'), 'utf8');
   const ccSrc = readFileSync(join(HERE, 'js', 'control-center.js'), 'utf8');
   assert(/When someone asks SCRIBE a current sports question/.test(priv) && /<strong>Sports publishers<\/strong>/.test(priv) && /last updated 2026-10-15/.test(priv), '[4p] the privacy line is true of the page that ships: privacy.html carries the SCRIBE web-lookup paragraph and the Sports publishers bullet, dated 2026-10-15 (privacytest pins every word)');
+  const fcm = await import('./js/feed-cards.js'), H = await import('./js/home.js');
+  const card = { id: 'rank.changed:L1:w2:-', type: 'rank.changed', weekId: 'w2', facts: { weekN: 2, rankedCount: 6, members: [{ playerId: 'p1', playerName: 'Drew', fromRank: 2, toRank: 1 }, { playerId: 'p2', playerName: 'Kevin', fromRank: 1, toRank: 2 }] }, reason: 'In your league', sortKey: '2026-10-17T06:00:00.000Z' };
+  const rendered = H.cardHTML(card, { escHtml: (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'), now: Date.parse('2026-10-17T08:00:00.000Z') });
+  assert(/combines cards from the same moment/.test(NOW.added[0]) && /Drew moved up; Kevin slipped\./.test(rendered) && JSON.stringify(fcm.RETIRED_CARD_TYPES) === '["called.it","stood.alone","player.week"]', '[4r] v0.30.1\'s "combines cards from the same moment" is true of the code: one standings card names everyone who moved, and the per-person cards are retired (js/feed-cards.js)');
+  assert(/shows when each one happened/.test(NOW.added[0]) && /<time class="feed-card-time"[^>]*>2h ago<\/time>/.test(rendered), '[4s] …and "shows when each one happened" is true: the card carries its own time ("2h ago", js/home.js cardHTML)');
   assert(ccSrc.includes('privacy.html') && /bottom of the menu/.test(line('privacy')), '[4q] "at the bottom of the menu" is real: the control centre\'s footer links privacy.html (js/control-center.js)');
 }
 
-console.log('\n[5] History — v0.29.0 intact right behind it; v0.28.0 still reads as iPhone-app items…');
+console.log('\n[5] History — v0.30.0 intact right behind it, then v0.29.0; v0.28.0 still reads as iPhone-app items…');
 {
+  assert(V030.version === 'v0.30.0' && V030.date === '2026-10-16' && problemsV030(V030).length === 0, `[5-030] v0.30.0 is R[1], dated 2026-10-16, every line as shipped (the history was not edited)`);
   const V28 = R.find(r => r.version === 'v0.28.0');
   const all28 = [...(V28?.added || []), ...(V28?.fixed || [])];
-  assert(PREV.version === 'v0.29.0' && PREV.date === '2026-10-02' && PREV.added.length === 9 && PREV.fixed.length === 7, `[5a] v0.29.0 is still R[1], dated 2026-10-02, nine added and seven fixed (got ${PREV.version}, ${PREV.date}, ${PREV.added.length}/${PREV.fixed.length})`);
+  assert(PREV.version === 'v0.29.0' && PREV.date === '2026-10-02' && PREV.added.length === 9 && PREV.fixed.length === 7, `[5a] v0.29.0 is R[2] (behind v0.30.0), dated 2026-10-02, nine added and seven fixed (got ${PREV.version}, ${PREV.date}, ${PREV.added.length}/${PREV.fixed.length})`);
   assert(PREV.added.filter(b => b === PRIVACY_LINE_V029).length === 1 && PREV.added[0] !== PRIVACY_LINE_V029 && /^Meet Home/.test(PREV.added[0]), '[5b] v0.29.0 still carries its privacy line exactly once, not first, and still leads with "Meet Home" (the history was not edited)');
   assert(readFileSync(join(HERE, 'js', 'app.js'), 'utf8').includes("The privacy policy has been updated to cover News, which loads headlines straight from ESPN. You\\'ll find it at the bottom of the menu."), '[5c] the same v0.29.0 text is in js/app.js source');
   const rules = app.renderWeeklyTiesRulesHTML();
@@ -280,20 +317,31 @@ console.log('\n[6] Both renderers show the entry, escaped…');
 {
   const card = app.renderWhatsNewCardHTML();
   const hist = app.renderReleaseNotesCardHTML();
-  assert(/What's new in v0\.30\.0/.test(card) && /Game Day is on Home/.test(card) && /Find spreads/.test(card), '[6a] the Picks card is titled "What\'s new in v0.30.0" and carries the bullets');
-  assert(/data-release="v0\.30\.0"[^>]*\bopen\b/.test(hist) && !/data-release="v0\.29\.0"[^>]*\bopen\b/.test(hist), '[6b] the Rules → Release notes history opens v0.30.0 (newest) first, and only it');
-  assert(/data-release="v0\.29\.0"/.test(hist) && /data-release="v0\.28\.0"/.test(hist), '[6c] v0.29.0 and v0.28.0 stay in the history, closed');
-  assert(/&quot;Cross-device sync is OFF&quot;|"Cross-device sync is OFF"/.test(card), '[6d] the quoted red-error line renders in the card');
+  assert(/What's new in v0\.30\.1/.test(card) && card.includes(W92_LINE) && !/Game Day is on Home/.test(card), '[6a] the Picks card is titled "What\'s new in v0.30.1" and carries its one line (v0.30.0\'s bullets are history now)');
+  assert(/data-release="v0\.30\.1"[^>]*\bopen\b/.test(hist) && !/data-release="v0\.30\.0"[^>]*\bopen\b/.test(hist) && !/data-release="v0\.29\.0"[^>]*\bopen\b/.test(hist), '[6b] the Rules → Release notes history opens v0.30.1 (newest) first, and only it');
+  assert(/data-release="v0\.30\.0"/.test(hist) && /data-release="v0\.29\.0"/.test(hist) && /data-release="v0\.28\.0"/.test(hist), '[6c] v0.30.0, v0.29.0 and v0.28.0 stay in the history, closed');
+  assert(/&quot;Cross-device sync is OFF&quot;|"Cross-device sync is OFF"/.test(hist) && /Game Day is on Home/.test(hist), '[6d] v0.30.0\'s lines (the quoted red-error line, the Game Day headline) still render in the history');
   const hostile = app.renderWhatsNewCardHTML([{ version: 'v9.9.9', date: '2026-10-14', added: ['<img src=x onerror=alert(1)>'], fixed: ['<b>bold</b>'] }]);
   assert(!/<img src=x/.test(hostile) && /&lt;img src=x/.test(hostile) && !/<b>bold<\/b>/.test(hostile), '[6e] every bullet goes through escHtml: markup in a bullet renders as text (CONVENTIONS #12)');
   assert(/Comm → Games is now one list/.test(hist), '[6f] the history carries the commissioner Comm → Games line');
-  assert(/The privacy policy has been updated to cover how SCRIBE looks up football questions and where News headlines come from\./.test(card) && /Home shows how the sports you(?:&#39;|')re not in are going, with a Join button/.test(card), '[6g] the Picks card shows both new lines (apostrophes may be entity-escaped)');
+  assert(/The privacy policy has been updated to cover how SCRIBE looks up football questions and where News headlines come from\./.test(hist) && /Home shows how the sports you(?:&#39;|')re not in are going, with a Join button/.test(hist), '[6g] the history shows v0.30.0\'s two late lines (apostrophes may be entity-escaped)');
 }
 
 console.log('\n[7] TEETH — the same checks FAIL on in-memory mutants…');
 {
-  const clone = () => ({ ...NOW, added: [...NOW.added], fixed: [...NOW.fixed] });
-  const caught = (mutate, name) => { const r = clone(); mutate(r); return problems(r).includes(name); };
+  // v0.30.0's teeth, kept whole: they run against the HISTORY entry (problemsV030), which must still catch every one of them.
+  const clone = () => ({ ...V030, added: [...V030.added], fixed: [...V030.fixed] });
+  const caught = (mutate, name) => { const r = clone(); mutate(r); return problemsV030(r).includes(name); };
+  // v0.30.1's own teeth (W-92)
+  const cloneNow = () => ({ ...NOW, added: [...NOW.added], fixed: [...NOW.fixed] });
+  const caughtNow = (mutate, name) => { const r = cloneNow(); mutate(r); return problems(r).includes(name); };
+  assert(caughtNow(r => { r.added = []; }, 'w92-line') && caughtNow(r => { r.added = []; }, 'headline-uncut'), '[7-301a] v0.30.1: the one line dropped -> caught by name');
+  assert(caughtNow(r => { r.added = ['Home combines cards and shows times.']; }, 'added-list-exact') && caughtNow(r => { r.added = ['Home combines cards and shows times.']; }, 'w92-line'), '[7-301b] the line reworded -> caught');
+  assert(caughtNow(r => { r.added = [...r.added, 'And much more.']; }, 'added-list-exact'), '[7-301c] an extra, unapproved line added -> caught');
+  assert(caughtNow(r => { r.fixed = [W92_LINE]; r.added = []; }, 'fixed-list-exact'), '[7-301d] the line moved from `added` to `fixed` (it would no longer be the SCRIBE headline) -> caught');
+  assert(caughtNow(r => { r.added = [...r.added, PRIVACY_LINE_V030]; }, 'privacy-line'), '[7-301e] v0.30.0\'s privacy line carried into v0.30.1 -> caught');
+  assert(caughtNow(r => { r.version = 'v0.30.0'; }, 'version') && caughtNow(r => { r.date = '2026-10-16'; }, 'date'), '[7-301f] the entry left on v0.30.0\'s version or date -> caught');
+  assert(caughtNow(r => { r.added = [W92_LINE + ' Fixes W-92 and DI-W92-1.']; }, 'internal-id'), '[7-301g] an internal ID in the line -> caught');
   const swapIn = (arr, from, to) => arr.map(b => (b === from ? to : b));
   const A = Object.fromEntries(ADDED_PIN), F = Object.fromEntries(FIXED_PIN);
   assert(caught(r => { r.added = r.added.filter(b => b !== A['whos-in']); }, 'whos-in'), '[7a] the Who\'s in line dropped -> caught by name');
@@ -328,12 +376,12 @@ console.log('\n[7] TEETH — the same checks FAIL on in-memory mutants…');
     const html = readFileSync(join(HERE, 'index.html'), 'utf8'), sw = readFileSync(join(HERE, 'service-worker.js'), 'utf8');
     const sp = (m) => stampProblems({ html: m.html ?? html, sw: m.sw ?? sw, version: m.version ?? app.APP_VERSION });
     assert(sp({}).length === 0, '[7x0] baseline: the real stamps pass the stamp check');
-    assert(sp({ html: html.replace('css/styles.css?v=30-0', 'css/styles.css?v=29-0') }).includes('html-ref-value'), '[7x] one index.html reference left on 29-0 -> caught');
-    assert(sp({ html: html.replace('js/app.js?v=30-0', 'js/app.js') }).includes('html-ref-count'), '[7y] a reference dropped (two left) -> caught');
-    assert(sp({ sw: sw.replace("cfb-pickems-v30-0", "cfb-pickems-v29-0") }).includes('cache-name'), '[7z] CACHE_NAME left on v29-0 -> caught');
-    assert(sp({ version: 'v0.30.1' }).length > 0 && sp({ version: 'v0.31.0' }).length > 0, '[7z1] APP_VERSION bumped without the cache stamps -> caught');
+    assert(sp({ html: html.replace('css/styles.css?v=30-1', 'css/styles.css?v=30-0') }).includes('html-ref-value'), '[7x] one index.html reference left on 30-0 -> caught');
+    assert(sp({ html: html.replace('js/app.js?v=30-1', 'js/app.js') }).includes('html-ref-count'), '[7y] a reference dropped (two left) -> caught');
+    assert(sp({ sw: sw.replace("cfb-pickems-v30-1", "cfb-pickems-v30-0") }).includes('cache-name'), '[7z] CACHE_NAME left on v30-0 -> caught');
+    assert(sp({ version: 'v0.30.2' }).length > 0 && sp({ version: 'v0.31.0' }).length > 0, '[7z1] APP_VERSION bumped without the cache stamps -> caught');
   }
-  assert(problems(NOW).length === 0, '[7w] and the real entry still passes after every mutation above (the mutants were clones, the real constant is untouched)');
+  assert(problems(NOW).length === 0 && problemsV030(V030).length === 0, '[7w] and the real entries still pass after every mutation above (the mutants were clones, the real constant is untouched)');
 }
 
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
