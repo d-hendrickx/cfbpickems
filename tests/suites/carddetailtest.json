@@ -1,0 +1,18 @@
+{
+  "id": "carddetailtest",
+  "script": "carddetailtest.mjs",
+  "summary": "strict",
+  "floor": 148,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/card-detail.js",
+    "js/home.js",
+    "js/feed-cards.js",
+    "d1homeenv.mjs",
+    "statsfixtures.mjs",
+    "minidom.mjs"
+  ],
+  "note": "RAISED from 147 by the D1 Game Day consolidated round (2026-10-08): 7a-2 js/chat-share.js imports nothing; 7a allows that pure leaf (DI-597) while still refusing the chat ENGINE. | MERGED int/v0.30.0 (d6e8ac5a) into feat/d1-gameday 2026-10-08: floor = the higher side's (147 / 147), to be re-measured on the merged tree. | RAISED to 147 by D1 Lane B (coordinator item, DI-540 consumertest, 2026-10-08): 2s-b..f — slate.published offers Edit My Picks by weekLockState, never the stored status (derived-locked closes it; a demo week is exempt). (D1 combine, 2026-10-08: RAISED from 142 to 147 - Game Day's derived-lock fix to the card detail's Edit My Picks gate ported: carddetailtest 2s-b..f) - D1 Lane B DI-575/576: every insight card opens a detail built from the same facts (allow-listed, gated, escaped, no forged action). Registered 2026-10-07."
+}

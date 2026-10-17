@@ -1,0 +1,16 @@
+{
+  "id": "spotlighttest",
+  "script": "spotlighttest.mjs",
+  "summary": "strict",
+  "floor": 163,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "supabase/functions/_shared/spotlight-standard.mjs",
+    "supabase/functions/_shared/sports-evidence.mjs",
+    "supabase/feed/fixtures/espn"
+  ],
+  "expectedMs": 600,
+  "note": "D1 Lane C (DI-664, D-48, W-58; 2026-10-14): the Munera Spotlight standard v2's special-teams rules on recorded ESPN box scores and in-shape planted ones: the kicker (4+ field goals made / 50+ yards, NFL 5+ / 55+, at the threshold and one below, per sport; a game-winning field goal with its 60-second window, overtime, 'ahead for good' and every way the scoring plays can fail to carry the time), the returner (a kick- or punt-return touchdown, any role) and the punter (4+ punts inside the 20); absent fields leave a rule inactive and unnamed; the shared cap (1 per game, 3 per slate day) and the sum ranking with the other positions; the card text (the DI's kicker sentence character for character) with no stat that is not in the evidence. Absent is not zero (review rulings OD-1..3, fixed in the standard): a field the source does not carry (absent, null, empty, blank) is never read as 0 and never printed (no 'long undefined' on a kicker's line, no go-ahead credited from a running score, a clock or a period the plays do not carry; a game without both scores features nobody). KIT_MUTANTS: 67 (tests/kits/lane-c-news-kit.mjs server)."
+}

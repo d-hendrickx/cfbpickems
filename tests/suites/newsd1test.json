@@ -1,0 +1,23 @@
+{
+  "id": "newsd1test",
+  "script": "newsd1test.mjs",
+  "summary": "strict",
+  "floor": 109,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/newsTransport.js",
+    "js/newsCard.js",
+    "js/newsRank.js",
+    "js/newsFeed.js",
+    "js/newsRules.js",
+    "js/team-match.js",
+    "js/home.js",
+    "js/app.js",
+    "js/pilot-only.js",
+    "js/auth.js"
+  ],
+  "expectedMs": 1500,
+  "note": "D1 Lane C client (DI-663, DI-672, DI-673, SC-N13/SC-N14, C10, C18; 2026-10-08): the server news path with a fake Supabase client (one RPC and its exact arguments, the two levers exact-false / exact-true, the registry's publisher, each source's own link and picture hosts, the pilot-only mirror with a passed league AND the installed resolver, blocked sources, cache / force / coalescing / identity / errors), S-C2-N (two viewers with different picks send byte-identical arguments), the grouped and storyline cards, the two dispatchers (card vs Also from, tap-time re-validation, the sheet's rows), read-time dedupe, grouping, diversity, storyline selection, Home's merge windows, and [9] Home's one binder routing content taps, Enter and Retry to the openers the app registered. KIT_MUTANTS: 38, all RED (tests/kits/lane-c-news-kit.mjs client)."
+}

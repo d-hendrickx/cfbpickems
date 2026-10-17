@@ -1,0 +1,26 @@
+{
+  "id": "sportstallbrowsertest",
+  "script": "sportstallbrowsertest.mjs",
+  "summary": "strict",
+  "floor": 66,
+  "tags": [
+    "browser",
+    "slow"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/sw-register.js",
+    "js/sport-stall.js",
+    "css/**",
+    "index.html",
+    "service-worker.js",
+    "manifest.json",
+    "config.json",
+    "icons/**",
+    "vendor/**",
+    "reveal/**",
+    "favicon.*"
+  ],
+  "expectedMs": 45000,
+  "note": "D1 (2026-10-14) DI-557 / P-8: the stall banner in a real engine - raised by the page's own compressed 60 s interval over a failing/answering fetch; computed style (a stock .warning-box, in the flow, flex, 8 px gaps, 24 px glyph, 16 px below, never red, red above it in z-order); the one fade on the ARRIVING node only (a rebuild is quiet, a changed set fades once, Reduce Motion none); the scroller offset by exactly its height on arrival and removal with no frame off and no row movement; red wins through the page's own listener and close button; scope through the real switcher; 375 pt, the largest text size and night mode."
+}

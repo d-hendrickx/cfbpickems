@@ -1499,8 +1499,10 @@ ${navHtml}</div></body></html>`);
         const dash = gl('dashboard'), chat = gl('chat');
         out.gapLeft = dash ? d.left - ring - dash.right : null; out.gapRight = chat ? chat.left - (d.right + ring) : null;
         out.minTab = Math.min(...[...document.querySelectorAll('.nav-item')].map(e => R(e).width));
-        const roof = document.querySelector('.nav-home-disc .home-roof'), cs = getComputedStyle(disc);
-        out.roofFill = getComputedStyle(roof).fill; out.discColor = cs.color; out.discBg = cs.backgroundColor;
+        const mark = document.querySelector('.nav-home-disc svg'), cs = getComputedStyle(disc);
+        const mk = R(mark);
+        out.markFill = getComputedStyle(mark).fill; out.markStroke = getComputedStyle(mark).stroke; out.discColor = cs.color; out.discBg = cs.backgroundColor;
+        out.mark = { w: mk.width, h: mk.height, dx: (mk.left + mk.right) / 2 - (d.left + d.right) / 2, dy: (mk.top + mk.bottom) / 2 - (d.top + d.bottom) / 2 };
         out.ringOpacity = getComputedStyle(disc, '::after').opacity;
         const collarTopAfter = (setup) => { setup(); nav.style.transition = 'none'; void nav.offsetHeight; const dd = R(disc); const t = dd.top - ring; return { collarTop: t, visible: Math.max(0, vh - t) }; };
         out.hiddenClass = collarTopAfter(() => nav.classList.add('nav-hidden')); nav.classList.remove('nav-hidden');
@@ -1540,8 +1542,10 @@ ${navHtml}</div></body></html>`);
         const m = await probeAt(fixtures[name]);
         assert(m.clearance === 48 + m.pillBottom && (inset >= 8 ? m.clearance === 48 + 8 + inset : m.clearance === 64),
           `[7m] inset ${inset}: --nav-bar-clearance is ${m.clearance}px = ${inset >= 8 ? 'the SHIPPED 48 + 8 + ' + inset + ' (the disc added NO room at the bottom: Drew, 2026-10-01)' : '48 + the floored pill offset 16 (the pill must not cover the composer where there is no inset)'}`);
-        assert(m.active && /^rgb\(\d+, \d+, \d+\)$/.test(m.discBg) && m.roofFill === m.discColor && Number(m.ringOpacity) === 1,
-          `[7m] inset ${inset}: Home selected: the roof is FILLED with the disc's reversed-out colour (${m.roofFill}) and the 2 px inner ring is fully visible (opacity ${m.ringOpacity}): shapes, not colour alone`);
+        assert(m.active && /^rgb\(\d+, \d+, \d+\)$/.test(m.discBg) && m.markFill === m.discColor && Number(m.ringOpacity) === 1,
+          `[7m] inset ${inset}: Home selected: the filled Munera mark is the disc's reversed-out colour (${m.markFill}) and the 2 px inner ring is fully visible (opacity ${m.ringOpacity}): a shape, not colour alone`);
+        assert(m.markStroke === 'none' && Math.abs(m.mark.w - 32) < 0.6 && Math.abs(m.mark.h - 32 * 495 / 614) < 0.8 && Math.abs(m.mark.dx) < 0.6 && Math.abs(m.mark.dy) < 0.6 && m.mark.w <= m.disc.w - 16,
+          `[7m] inset ${inset}: DI-584 — the mark is 32 pt wide (${m.mark.w.toFixed(1)}), auto height in the temple's own proportion (${m.mark.h.toFixed(1)}), unstroked, centred in the 56 pt disc (off by ${m.mark.dx.toFixed(2)} / ${m.mark.dy.toFixed(2)}) with at least 8 pt of disc around it`);
       }
       // ── the CHAT composer vs the collar (Drew M-11 Q2 "lift", 2026-10-02): with the keyboard DOWN the composer's bottom edge sits >= 8 pt clear of the disc's collar on every phone; with the keyboard UP
       //    the gap above the keyboard is unchanged (8 pt, the nav and its collar are hidden). A chat page fixture: the real #page-chat.active rules, a flex-filling thread and a composer at the bottom.

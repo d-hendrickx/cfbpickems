@@ -142,9 +142,10 @@ export const CARD_ALLOWED_FACTS = deepFreeze({
   'picks.submitted':  ['weekN', 'submittedCount', 'totalPlayers'],
   'week.revealed':    ['weekN', 'submittedCount', 'totalPlayers'],
   // chips: [{playerId, initials, result}] — result is 'win'|'loss' ONLY, never a team name per player.
-  'game.final':       ['awayTeam', 'homeTeam', 'awayScore', 'homeScore', 'atsWinnerTeam', 'marginCovered', 'chips'],
-  'called.it':        ['playerId', 'playerName', 'team', 'matchup', 'spreadDisplay', 'scoreLine'],
-  'stood.alone':      ['playerId', 'playerName', 'team', 'matchup', 'against'],
+  // D1 Lane B / DI-610 (2026-10-08): `gameId`, `gameIds`, `teamIds`, `weekId` — INTERNAL ids (no pick data) — are how a card says which game it is about, so the Game view's Related section can find it (cardsForGame).
+  'game.final':       ['awayTeam', 'homeTeam', 'awayScore', 'homeScore', 'atsWinnerTeam', 'marginCovered', 'chips', 'gameId', 'gameIds', 'teamIds', 'weekId'],
+  'called.it':        ['playerId', 'playerName', 'team', 'matchup', 'spreadDisplay', 'scoreLine', 'gameId', 'gameIds', 'teamIds', 'weekId'],
+  'stood.alone':      ['playerId', 'playerName', 'team', 'matchup', 'against', 'gameId', 'gameIds', 'teamIds', 'weekId'],
   'week.result':      ['weekN', 'weekWinnerName', 'weekWinnerRecord', 'weekLoserName', 'weekLoserRecord'],
   // almaMaterResult: { team, result } — result 'win'|'loss' ONLY (see NESTED_FACT_KEYS).
   'player.week':      ['playerId', 'playerName', 'weekN', 'wins', 'losses', 'streakRun', 'streakKind', 'almaMaterResult'],
@@ -153,7 +154,7 @@ export const CARD_ALLOWED_FACTS = deepFreeze({
   'streak.broken':    ['playerId', 'playerName', 'run', 'kind'],
   'milestone.reached': ['playerId', 'playerName', 'mark', 'total'],
   'year.ago':         ['note', 'name', 'record', 'weekN', 'superlative'],
-  'scribe.post':      ['messageId', 'body', 'timestamp'],
+  'scribe.post':      ['messageId', 'body', 'timestamp', 'gameId', 'gameIds', 'teamIds', 'weekId'],
   'lockerroom.top':   ['authorName', 'excerpt', 'reactionCount'],
 });
 
@@ -205,6 +206,30 @@ export const CARD_REASON_LABELS = Object.freeze([...new Set([
 function reasonFor(type, isSelf) {
   if (REASON_SELF_OTHERS[type]) return REASON_SELF_OTHERS[type][isSelf ? 0 : 1];
   return REASON_FIXED[type] || '';
+}
+
+/**
+ * DI-578 (D1 Lane B, PF-444) — a SCRIBE card's reason label NAMES why it is on Home: "SCRIBE · Week 9 · Oklahoma at Texas" when the post names a game, "SCRIBE · Week 9" when it names
+ * a week, "SCRIBE · League update" for a league-wide notice. A post with no context at all keeps the bare "SCRIBE" (the fixed label above; home.js no longer admits such a post to the feed).
+ * `context` is home.js's resolved, sanitised `{ gameId?, weekId?, weekN?, matchup?, leagueWide? }` — ids and public game/team text only, never a pick.
+ */
+export function scribeReasonLabel(context) {
+  const c = (context && typeof context === 'object') ? context : null;
+  if (!c) return 'SCRIBE';
+  const wk = numStr(c.weekN) !== '' ? `Week ${numStr(c.weekN)}` : '';
+  if (wk && typeof c.matchup === 'string' && c.matchup) return `SCRIBE · ${wk} · ${c.matchup}`;
+  if (wk) return `SCRIBE · ${wk}`;
+  if (c.leagueWide === true) return 'SCRIBE · League update';
+  return 'SCRIBE';
+}
+/** The closed shape a chat candidate's context may have (ids and public text only). */
+function sanitizeContext(c) {
+  if (!c || typeof c !== 'object') return null;
+  const out = {};
+  for (const k of ['weekId', 'gameId', 'matchup']) if (typeof c[k] === 'string' && c[k]) out[k] = c[k];
+  if (numStr(c.weekN) !== '') out.weekN = Number(c.weekN);
+  if (c.leagueWide === true) out.leagueWide = true;
+  return Object.keys(out).length ? out : null;
 }
 
 // ═══ small pure helpers ══════════════════════════════════════════════════════════
@@ -455,7 +480,7 @@ function cleanCandidate(c, leagueId) {
   const id = String(c.id ?? c.messageId ?? '');
   const body = typeof c.body === 'string' ? c.body : '';
   if (!id || !body.trim()) return null;
-  return { id, ts: toMs(c.ts), author: String(c.author ?? ''), authorName: c.authorName == null ? '' : String(c.authorName), body, reactionCount: countReactions(c) };
+  return { id, ts: toMs(c.ts), author: String(c.author ?? ''), authorName: c.authorName == null ? '' : String(c.authorName), body, reactionCount: countReactions(c), context: sanitizeContext(c.context), serverMinted: c.serverMinted === true };
 }
 
 // ═══ 2025 history (year.ago) ═════════════════════════════════════════════════════
@@ -580,7 +605,7 @@ export function deriveCards(snapshot, opts = {}) {
     if (selfExempt && viewerId && memberId === viewerId) return true;
     return s.picksReadConfirmed[week.weekId] === true;
   };
-  const push = (type, week, { memberId = null, suffix = null, facts, sortKey }) => {
+  const push = (type, week, { memberId = null, suffix = null, facts, sortKey, reason = null, gameId = undefined, serverMinted = false }) => {
     const finalFacts = _internals.finalizeFacts(type, facts);
     cards.push({
       id: _internals.buildCardId({ type, leagueId: s.leagueId, weekId: week ? week.weekId : null, memberId, suffix }),
@@ -589,44 +614,57 @@ export function deriveCards(snapshot, opts = {}) {
       leagueId: s.leagueId,
       weekId: week ? week.weekId : null,
       memberId,
-      gameId: type === 'game.final' || type === 'called.it' || type === 'stood.alone' ? suffix : null,
+      gameId: gameId !== undefined ? gameId : (type === 'game.final' || type === 'called.it' || type === 'stood.alone' ? suffix : null),
       requiresReveal: CARD_REVEAL_CLASS[type],
       facts: finalFacts,
-      reason: reasonFor(type, !!viewerId && memberId === viewerId),
+      reason: reason !== null ? reason : reasonFor(type, !!viewerId && memberId === viewerId),
       sortKey,
+      ...(serverMinted ? { serverMinted: true } : {}),   // DI-610: a SCRIBE post the SERVER minted (the row's `relayed === false`); only such a post may be about a game
     });
   };
 
   const allWeeks = sortWeeks(s.weeks).filter(keepWeek);
   const revealedSorted = sortWeeks(s.revealedWeeks).filter(keepWeek);
   const gamesOf = (weekId) => s.games.filter(g => g && g.weekId === weekId);
+  // FB-010 (D1 batch H, 2026-10-07) — EVERY sortKey is a genuine event time, never the render clock. `picks.submitted`, `week.revealed`
+  // and `year.ago` used to be stamped `now` (or now − 1 ms) on every render, so they sat on top of the feed forever and each newer card
+  // landed beneath them (Drew: "some old posts staying at the top"). A week opens once: its slate card, its submission tally and its
+  // year-ago callback all date from that moment.
+  const weekOpenMs = (W) => { const first = computeFirstKickoff(gamesOf(W.weekId)); return toMs(W.picksOpenAt) || toMs(W.createdAt) || (first ? first.getTime() : 0); };
 
   // ═══ never-class cards — counts and announcements, no selections ═══
   for (const W of allWeeks) {
     const st = confirmedFor(W) || W.status;
     const wGames = gamesOf(W.weekId);
     const first = computeFirstKickoff(wGames);
+    const openMs = weekOpenMs(W);
     const counts = s.submissionCounts[W.weekId];
     const countsKnown = !!counts && Number.isFinite(Number(counts.submittedCount)) && Number.isFinite(Number(counts.totalPlayers));
 
     if (gate('slate.published', W) && st !== 'draft' && wGames.length > 0) {
       push('slate.published', W, {
         facts: { weekN: W.weekNumber, gameCount: wGames.length, firstKickoff: first ? first.toISOString() : null },
-        sortKey: isoAt(toMs(W.picksOpenAt) || toMs(W.createdAt) || (first ? first.getTime() : 0)),
+        sortKey: isoAt(openMs),
       });
     }
+    // The running tally of the submission window that opened with the slate: it sorts directly above that week's slate card (+1 ms) and
+    // stays there as the count changes — the count is a living fact on an old card, not a new event (the Now card carries "N/6 in" live).
     if (gate('picks.submitted', W) && st === 'open' && countsKnown) {
       push('picks.submitted', W, {
         facts: { weekN: W.weekNumber, submittedCount: nz(counts.submittedCount), totalPlayers: nz(counts.totalPlayers) },
-        sortKey: isoAt(now),
+        sortKey: isoAt(openMs, 1),
       });
     }
     // week.revealed keys on arePicksPublic() directly (revealed_at is never client-projected,
-    // js/supabase-backend.js) and lives for the whole LIVE window, re-derived each render.
+    // js/supabase-backend.js) and lives for the whole LIVE window, re-derived each render. Its time is the REVEAL: the first kickoff
+    // (UN-116 — picks go public at kickoff). A week made live by hand before its first kickoff falls back to its lock time, then to its
+    // open time, so the card never sorts in the future and never at the clock.
     if (gate('week.revealed', W) && arePicksPublic(W) && st !== 'final') {
+      const firstMs = first ? first.getTime() : 0, lockedMs = toMs(W.lockedAt);
+      const revealMs = (firstMs && firstMs <= now) ? firstMs : (lockedMs && lockedMs <= now) ? lockedMs : openMs;
       push('week.revealed', W, {
         facts: { weekN: W.weekNumber, ...(countsKnown ? { submittedCount: nz(counts.submittedCount), totalPlayers: nz(counts.totalPlayers) } : {}) },
-        sortKey: isoAt(now),
+        sortKey: isoAt(revealMs),
       });
     }
   }
@@ -836,7 +874,7 @@ export function deriveCards(snapshot, opts = {}) {
         // SB-22 scribe copy pass (2026-10-01, coordinator-approved): "had", not "went" — the record is
         // "9/10" OR "7 correct" now, and "went 7 correct" doesn't read; matches the year.ago caption pools.
         facts: { note: `A year ago this week, ${ya.name} had ${ya.record}${tail}.`, name: ya.name, record: ya.record, weekN: ya.weekN, superlative: ya.superlative },
-        sortKey: isoAt(now, -1),
+        sortKey: isoAt(weekOpenMs(cur), -1),   // FB-010: the current week's callback dates from that week's open, directly beneath its slate card — never now − 1 ms
       });
     }
   }
@@ -846,7 +884,8 @@ export function deriveCards(snapshot, opts = {}) {
     for (const raw of s.chatScribe) {
       const c = cleanCandidate(raw, s.leagueId);
       if (!c || c.author !== 'scribe') continue;
-      push('scribe.post', null, { suffix: c.id, facts: { messageId: c.id, body: c.body, timestamp: isoAt(c.ts) }, sortKey: isoAt(c.ts) });
+      const about = c.serverMinted === true && c.context && typeof c.context.gameId === 'string' ? c.context.gameId : null;   // DI-610: a post can be ABOUT a game only when the server minted it (a post mirrored from chat is member-writable text)
+      push('scribe.post', null, { suffix: c.id, facts: { messageId: c.id, body: c.body, timestamp: isoAt(c.ts), ...(about ? { gameId: about, weekId: c.context.weekId } : {}) }, sortKey: isoAt(c.ts), reason: scribeReasonLabel(c.context), gameId: about, serverMinted: c.serverMinted === true });   // DI-578
     }
   }
   if (gate('lockerroom.top', null)) {
@@ -872,6 +911,46 @@ export function deriveCards(snapshot, opts = {}) {
   return cards;
 }
 
+// ═══ the Game view's "Related" (D1 Lane B, DI-610 · Drew D-63: "clicking into the game from gameday should [show] home feed cards relevant to that game") ═══════════════════
+
+/**
+ * Does a card's allow-listed content NAME a member's pick, side or per-member result? `game.final` (its covered / missed chips), `called.it` and `stood.alone` do; so does any card type that is not
+ * registered here (a Lane C type must declare `false` with its detail provider — an unregistered type is treated as `namesPick`, security S3). Only a card that names no pick is shown, in a game's
+ * Related section, to a viewer who has NOT joined that game's sport (C7: plain scores only).
+ */
+export const CARD_NAMES_PICK = deepFreeze({
+  'slate.published': false, 'picks.submitted': false, 'week.revealed': false, 'year.ago': false, 'scribe.post': false, 'lockerroom.top': false,
+  'game.final': true, 'called.it': true, 'stood.alone': true,
+  'week.result': true, 'player.week': true, 'rank.changed': true, 'streak.extended': true, 'streak.broken': true, 'milestone.reached': true,
+});
+export const namesPick = (type) => CARD_NAMES_PICK[type] !== false;
+
+/**
+ * The Home-feed cards ABOUT one game: a card matches when its allow-listed facts say `gameId === game.gameId`, or `game.gameId` is among its `gameIds`, or its `teamIds` contain either team of the game AND its
+ * `weekId` equals the game's week. A `scribe.post` counts only if the SERVER minted it (`serverMinted`, i.e. the row's `relayed === false`). It is a FILTER of the cards the feed already derived for this viewer
+ * at this instant (`cards` comes from deriveCards, after every reveal gate), so Related is always a SUBSET of what Home itself shows that viewer — there is no new gate and no way to widen one. A viewer who has
+ * not joined the game's sport (`entered === false`) never gets a card that names a pick. Order is the feed's own (newest first, stable); there is no news interleave; the caller caps the list.
+ * @param {object[]} cards  deriveCards()'s result (already ordered)
+ * @param {{gameId:string, weekId?:string, homeTeam?:string, awayTeam?:string}} game
+ * @param {{entered?:boolean}} opts
+ */
+export function cardsForGame(cards, game, opts) {
+  const entered = !(opts && typeof opts === 'object' && opts.entered === false);   // only an explicit `false` withholds the pick-naming cards; a missing or malformed options argument is "entered" (the feed's own gates already ran)
+  if (!game || typeof game.gameId !== 'string' || !game.gameId) return [];
+  const teams = [game.homeTeam, game.awayTeam].filter(t => typeof t === 'string' && t);
+  const list = (v) => (Array.isArray(v) ? v : []);
+  return list(cards).filter(c => {
+    if (!c || typeof c !== 'object' || typeof c.type !== 'string') return false;
+    if (c.type === 'scribe.post' && c.serverMinted !== true) return false;
+    const f = (c.facts && typeof c.facts === 'object') ? c.facts : {};
+    const byGame = c.gameId === game.gameId || f.gameId === game.gameId || list(f.gameIds).includes(game.gameId);
+    const byTeam = list(f.teamIds).some(t => teams.includes(t)) && typeof game.weekId === 'string' && (c.weekId === game.weekId || f.weekId === game.weekId);
+    if (!byGame && !byTeam) return false;
+    if (entered === false && namesPick(c.type)) return false;
+    return true;
+  });
+}
+
 // ═══ copy (title / body) — built ONLY from card.facts, escaped through the injected escaper ═══
 
 const WEEK_N_TYPES = Object.freeze(['slate.published', 'picks.submitted', 'week.revealed', 'week.result', 'player.week', 'rank.changed']);
@@ -886,22 +965,27 @@ const WEEK_N_TYPES = Object.freeze(['slate.published', 'picks.submitted', 'week.
  *          title/body are ESCAPED HTML strings; chips carry an escaped `initialsHtml`
  *          and a closed `result` ('win'|'loss' — the renderer maps it to .badge-win/.badge-loss).
  */
-export function cardCopy(card, { escHtml, formatKickoff = (iso) => String(iso) } = {}) {
+export function cardCopy(card, { escHtml, formatKickoff = (iso) => String(iso), sportCode = '' } = {}) {
   const esc = requireEscHtml(escHtml, 'cardCopy');
   const f = (card && card.facts) || {};
   const t = (v) => esc(String(v ?? ''));
+  // D1 DI-528 — in a several-sport league a card that quotes a week, a rank or a record NAMES its sport ("NFL Week 3", "moved into 1st in NFL"); with no `sportCode` (a one-sport league, a chat
+  // card) every string below is exactly v0.29.0's.
+  const sp = sportCode ? t(sportCode) : '';
+  const wk = (n) => `${sp ? `${sp} ` : ''}Week ${numStr(n)}`;
+  const inSp = sp ? ` in ${sp}` : '';
   let title = '', body = '', chips = [];
   // A week-scoped card with no usable weekN renders NOTHING — never "Week 's slate is up" (reviewer note 5).
   if (card && WEEK_N_TYPES.includes(card.type) && numStr(f.weekN) === '') return { title, body, chips };
   switch (card && card.type) {
     case 'slate.published':
-      title = `Week ${numStr(f.weekN)}'s slate is up — ${numStr(f.gameCount)} ${nz(f.gameCount) === 1 ? 'game' : 'games'}${f.firstKickoff ? `, first kickoff ${t(formatKickoff(f.firstKickoff))}` : ''}.`;
+      title = `${wk(f.weekN)}'s slate is up — ${numStr(f.gameCount)} ${nz(f.gameCount) === 1 ? 'game' : 'games'}${f.firstKickoff ? `, first kickoff ${t(formatKickoff(f.firstKickoff))}` : ''}.`;
       break;
     case 'picks.submitted':
-      title = `${numStr(f.submittedCount)}/${numStr(f.totalPlayers)} in for Week ${numStr(f.weekN)}.`;
+      title = `${numStr(f.submittedCount)}/${numStr(f.totalPlayers)} in for ${wk(f.weekN)}.`;
       break;
     case 'week.revealed':
-      title = `Week ${numStr(f.weekN)} is revealed. Every pick is visible now.`;
+      title = `${wk(f.weekN)} is revealed. Every pick is visible now.`;
       break;
     case 'game.final': {
       const score = `${t(f.awayTeam)} ${numStr(f.awayScore)}, ${t(f.homeTeam)} ${numStr(f.homeScore)} (Final)`;
@@ -918,27 +1002,27 @@ export function cardCopy(card, { escHtml, formatKickoff = (iso) => String(iso) }
       title = `${t(f.playerName)} stood alone on ${t(f.team)} — and it covered.`;
       break;
     case 'week.result':
-      title = `Week ${numStr(f.weekN)} is final.`;
+      title = `${wk(f.weekN)} is final.`;
       body = `${t(f.weekWinnerName)} took it, ${t(f.weekWinnerRecord)}.`;
       break;
     case 'player.week':
-      title = `${t(f.playerName)}'s Week ${numStr(f.weekN)}: ${numStr(f.wins)}–${numStr(f.losses)}`;
+      title = `${t(f.playerName)}'s ${wk(f.weekN)}: ${numStr(f.wins)}–${numStr(f.losses)}`;
       if (nz(f.streakRun) >= STREAK_MIN) body = `On a ${numStr(f.streakRun)}-game ${streakWord(f.streakKind)} streak.`;
       break;
     case 'rank.changed': {
       const up = nz(f.toRank) < nz(f.fromRank);
-      title = up ? `${t(f.playerName)} moved into ${ordinal(f.toRank)} this week.` : `${t(f.playerName)} slipped to ${ordinal(f.toRank)} this week.`;
-      body = `${up ? 'Up' : 'Down'} from ${ordinal(f.fromRank)} after Week ${numStr(f.weekN)}.`;
+      title = up ? `${t(f.playerName)} moved into ${ordinal(f.toRank)}${inSp} this week.` : `${t(f.playerName)} slipped to ${ordinal(f.toRank)}${inSp} this week.`;
+      body = `${up ? 'Up' : 'Down'} from ${ordinal(f.fromRank)} after ${wk(f.weekN)}.`;
       break;
     }
     case 'streak.extended':
-      title = `${t(f.playerName)} is riding a ${numStr(f.run)}-game ${streakWord(f.kind)} streak.`;
+      title = `${t(f.playerName)} is riding a ${numStr(f.run)}-game ${streakWord(f.kind)} streak${inSp}.`;
       break;
     case 'streak.broken':
-      title = `${t(f.playerName)}'s ${numStr(f.run)}-game streak snapped this week.`;
+      title = `${t(f.playerName)}'s ${numStr(f.run)}-game streak${inSp} snapped this week.`;
       break;
     case 'milestone.reached':
-      title = `${t(f.playerName)} hit ${numStr(f.mark)} correct picks this season.`;
+      title = `${t(f.playerName)} hit ${numStr(f.mark)} correct picks${inSp} this season.`;
       break;
     case 'year.ago':
       title = t(f.note);

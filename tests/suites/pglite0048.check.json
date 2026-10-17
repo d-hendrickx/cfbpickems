@@ -1,0 +1,14 @@
+{
+  "id": "pglite0048.check",
+  "script": "supabase/tests/pglite0048.check.mjs",
+  "summary": "loose",
+  "floor": 1,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "supabase/migrations/*.sql",
+    "supabase/tests/pglite-common.mjs"
+  ],
+  "note": "D1 Lane A (DI-546): the migration 0048 (re-entry bound + audit scrub) run end to end in an in-process Postgres (PGlite) over stubs - S48.* offline: ledger append-only, bound of 3 seats per account per league per 24h incl. claim-code links, scrub removes only email/phone/user_id and writes ONE trace row. Offline evidence only, never server evidence; SKIPS and passes with ONE assertion when PGlite is not installed (set PGLITE_DIR), so the floor is 1."
+}

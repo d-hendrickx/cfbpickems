@@ -135,6 +135,8 @@ export const COMM_CARD_TAB = Object.freeze({
   'scribe-heat': 'scribe',                    // app.js:15881
   'scribe-learning-rate': 'scribe',           // app.js:16054
   'chat-scribe': 'scribe',                    // app.js:17367 ("Chat & S.C.R.I.B.E.")
+  // D1 Lane C (FB-006 / DI-648, 2026-10-07) — the SCRIBE profile entry card, the FIRST card on this tab (js/app.js renderCommPage inserts it ahead of 'chat-scribe').
+  'scribe-profile': 'scribe',
   // ── SCRIBE (leaves) ──
   // AMENDMENT 2026-09-25: SCRIBE Model is placed on the Admin panel (Admin →
   // Settings beside SCRIBE Caps & Limits). The 'admin' below is a TAB value

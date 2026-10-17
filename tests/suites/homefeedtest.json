@@ -1,0 +1,19 @@
+{
+  "id": "homefeedtest",
+  "script": "homefeedtest.mjs",
+  "summary": "strict",
+  "floor": 111,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "deps": [
+    "js/home.js",
+    "js/feed-cards.js",
+    "js/card-detail.js",
+    "d1homeenv.mjs",
+    "statsfixtures.mjs",
+    "minidom.mjs"
+  ],
+  "note": "RAISED from 110 by D1 Game Day fix round 2 (reviewer round 2, 2026-10-08): [7] the ORIGINAL 'next page falls back to renderHome()' mutant is kept, proved on a between-seasons fixture (the Now card is not Game Day, so a repaint still writes the whole feed) through the new appendInPlaceNoGd probe. | D1 Lane B DI-574/575/586/587: tappable cards, windowed pagination, the new-posts pill, NEW/EARLIER dividers, the reader's session, resolveCardDetail, with mutation proofs. Registered 2026-10-07."
+}

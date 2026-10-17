@@ -87,6 +87,8 @@
 
 import {
   toRows, fromRows, KEY_TABLES, canonicalize, stripCredentials,
+  // FB-026 — a server row's `extra` without the typed-column copies finalize_week leaves in it.
+  unshadowedExtra,
   // UN-237/238 (DI-260) — `scribe_memory` is NOT a mirror key and never will be
   // (see §12b), but its row<->record shape is still the projection's to own.
   rowToMemory,
@@ -401,6 +403,7 @@ export function getStatus() {
     lastError: _lastError,
     pendingWrites: _dirty.size,
     refusedKeys: [..._refusedKeys.keys()],
+    refusedWeeks: _refusedWeeks(),   // D1 (N3)
     realtime: _rt ? _rt.phase : 'off',
     stale: _state === 'ACTIVE-STALE',
   };
@@ -434,6 +437,23 @@ export function getConfirmedWeekStatus(weekId) {
  */
 export function picksReadWhilePublic(weekId) {
   return !!_mirrorTag && _picksReadPublic.has(weekId);
+}
+
+/**
+ * SECURITY N-1 (0045 delta, 2026-10-08) — A MEMBER'S ROLE AS THE SERVER LAST SERVED IT: 'commissioner' or 'player' from the
+ * league_members base row (a hydrate, or a write's own returned row; `role` is in SELECT_COLS.league_members and in no client
+ * write), only for the league this mirror holds, and only for an ACTIVE member (public.is_commissioner()'s own `m.active` conjunct).
+ * `null` for anything else: no hydrated mirror, another league, an unknown or deactivated member, a row without the column. The
+ * chat relay (js/notifications.js, handed this function by app.js through setMemberRoleSource) asks it before it treats a
+ * COMMISSIONER_ANNOUNCEMENT as never silenceable, and every null fails CLOSED to the ordinary chat category. Synchronous,
+ * read-only, no network.
+ */
+export function getConfirmedMemberRole(leagueId, memberId) {
+  if (!_mirrorTag || typeof leagueId !== 'string' || !leagueId || _mirrorTag.leagueId !== leagueId) return null;
+  if (typeof memberId !== 'string' || !memberId) return null;
+  const row = (_baseRows.get('cfbp_players') || new Map()).get(memberId);
+  if (!row || row.active !== true) return null;
+  return row.role === 'commissioner' || row.role === 'player' ? row.role : null;
 }
 
 export function isReady() { return READY_STATES.includes(_state); }
@@ -471,6 +491,7 @@ const ID_FIELD = {
   cfbp_notifications: 'id',
   cfbp_game_requests: 'id',
   cfbp_competitions: 'id',
+  cfbp_competition_members: 'id',
 };
 
 /** Columns the PROJECTION stamps with "now" every time it runs
@@ -501,7 +522,15 @@ const ROUTES = {
   cfbp_games: { table: 'games', comm: 'rows', player: 'overlay' },
   cfbp_picks: { table: 'picks', comm: 'rows', player: 'rows', ownRowsOnly: true },
   cfbp_results: { table: 'results', comm: 'rpc-finalize', player: 'refuse' },
-  cfbp_obligations: { table: 'obligations', comm: 'rows', player: 'rows', ownRowsOnly: true, noDelete: true, memberIdCol: null },
+  // `immutableCols` (FB-026): obligations_guard (0002_rls.sql:498-514) refuses ANY change to these five, for
+  // every caller, so a PATCH never carries them — see `_diffRows`.
+  // `playerPatchCols` (R-19): the same guard (0002_rls.sql:526-535; 0046 adds denied_reason) lets a NON-commissioner
+  // change these three and nothing else, so a player's PATCH carries only them — see `_diffRows`.
+  // `playerStatusBoundCols` (0046, security F2): of those, these two move ONLY in a PATCH that also moves `status`
+  // (the guard refuses them alone, and dates a player's ->paid itself) — see `_diffRows`.
+  cfbp_obligations: { table: 'obligations', comm: 'rows', player: 'rows', ownRowsOnly: true, noDelete: true, memberIdCol: null,
+    immutableCols: ['payer_member_id', 'recipient_member_id', 'week_id', 'type', 'created_at'],
+    playerPatchCols: ['status', 'paid_at', 'denied_reason'], playerStatusBoundCols: ['paid_at', 'denied_reason'] },
   cfbp_nicknames: { table: 'league_kv', kvKey: 'nicknames', comm: 'kv', player: 'refuse' },
   cfbp_lock_overrides: { table: 'league_kv', kvKey: 'lock_overrides', comm: 'kv', player: 'refuse' },
   cfbp_tiebreaker_guesses: { table: 'tiebreaker_guesses', comm: 'rows', player: 'rows', ownRowsOnly: true },
@@ -519,8 +548,10 @@ const ROUTES = {
   cfbp_active_week: { table: 'league_kv', kvKey: 'active_week', comm: 'kv', kvMode: 'replace', player: 'refuse' },
   cfbp_fetch_proof: { table: 'league_kv', kvKey: 'fetch_proof', comm: 'kv', kvMode: 'replace', player: 'refuse' },
   cfbp_notifications: { table: 'notifications', comm: 'refuse', player: 'refuse' },
-  cfbp_scribe_learnings: { table: 'scribe_learnings', comm: 'rows', player: 'refuse', noDelete: true, patchCols: ['status'] },
-  cfbp_scribe_canon: { table: 'scribe_canon', comm: 'rows', player: 'refuse', noDelete: true, patchCols: ['approval_status'] },
+  // `serverRowIds` (FB-005): the projection re-derives these rows' ids from ARRAY POSITION, which is not the
+  // id the server's writers gave them — `_diffRows` keys every row by the server row it was read from.
+  cfbp_scribe_learnings: { table: 'scribe_learnings', comm: 'rows', player: 'refuse', noDelete: true, patchCols: ['status'], serverRowIds: true },
+  cfbp_scribe_canon: { table: 'scribe_canon', comm: 'rows', player: 'refuse', noDelete: true, patchCols: ['approval_status'], serverRowIds: true },
   cfbp_scribe_reports: { table: 'scribe_reports', comm: 'refuse', player: 'refuse' },
   cfbp_game_requests: { table: 'game_requests', comm: 'rows', player: 'rows', noDelete: true, insertOnly: true, memberIdCol: 'member_id' },
   // Multi-Sport DI-220 (AD-74, migration 0033). Commissioner-written league structure; a player device
@@ -528,6 +559,12 @@ const ROUTES = {
   // before the network does. `noDelete`: competitions are archived, never deleted — there is no DELETE
   // grant — so a row that vanishes from the array is never sent as a delete.
   cfbp_competitions: { table: 'competitions', comm: 'rows', player: 'refuse', noDelete: true },
+  // D1 (v0.30.0) DI-531, migration 0033 §5 — who plays each opt-in sport. INSERT and DELETE only (the table has no UPDATE grant, so a PATCH is never planned: a row never changes, it is
+  // added or removed). A member may write their OWN row (`cm_self_insert`; `cm_self_delete` before the sport's first lock, which this release does not build a button for), the
+  // commissioner any row (`cm_commissioner_all`) — `_mayOperateOnRow` reads `league_member_id` for the player case. `generatedCols`: `id` is GENERATED ALWAYS (competition_id:league_member_id),
+  // so an INSERT must not carry it (Postgres refuses a value for it), while the planner still keys the row by it. `serverOwnedCols`: `joined_at` is the SERVER's (C1) — never sent from a client,
+  // never compared; the column default (and from 0044 a BEFORE INSERT trigger) stamps it, so a client cannot back-date its own entry past a lock.
+  cfbp_competition_members: { table: 'competition_members', comm: 'rows', player: 'rows', ownRowsOnly: true, noPatch: true, memberIdCol: 'league_member_id', generatedCols: ['id'], serverOwnedCols: ['joined_at'] },
 };
 
 /**
@@ -575,6 +612,8 @@ const READ_TABLES = [
   // (or a project that has not applied it) is a hydrate failure by design (AD-06 loud-fail): apply 0033
   // BEFORE deploying a client that names this table.
   'competitions',
+  // D1 DI-531 (migration 0033 §5, also live) — who plays each opt-in sport. After `competitions` for the same reason: a project without 0033 is a loud hydrate failure, never a quiet empty roster.
+  'competition_members',
 ];
 
 /**
@@ -726,6 +765,7 @@ const HYDRATE_BANNER = 'Couldn’t load your league. Nothing has changed — ret
  */
 const NOT_NULL_COLS = Object.freeze({
   comments: Object.freeze(['league_id', 'id', 'author_id', 'author_kind', 'body', 'created_at', 'extra']),
+  competition_members: Object.freeze(['league_id', 'competition_id', 'league_member_id', 'enrolled_by', 'joined_at']),   // `id` is GENERATED ALWAYS and declares no NOT NULL (adaptertest [A-NN] derives this list from every migration)
   competitions: Object.freeze(['league_id', 'id', 'sport', 'kind', 'enrollment', 'is_default', 'settings', 'created_at', 'updated_at']),
   extra_point_guesses: Object.freeze(['league_id', 'id', 'week_id', 'member_id', 'guess', 'updated_at']),
   feedback: Object.freeze(['league_id', 'id', 'name', 'kind', 'body', 'submitted_at', 'app_version', 'site_url', 'status', 'excluded_from_export', 'extra']),
@@ -1356,6 +1396,103 @@ async function _refreshWeekProgress(client, leagueId, op) {
   _mirror.set(DERIVED_PROGRESS_KEY, { at: new Date().toISOString(), weeks: out });
 }
 
+/**
+ * ══ UN-412 / DI-502e — "WHO'S IN" FRESHNESS: THE PROGRESS ANSWER, RE-ASKED BETWEEN HYDRATES ═══════════════
+ *
+ * `_refreshWeekProgress` above runs only at the end of a hydrate, and other members' pick rows do not stream
+ * over Realtime on an open week (RLS), so nothing tells a device that Kevin has just submitted. This is the
+ * ONE other caller of `week_submission_status`: it re-asks for the non-public weeks (or the named ones) and
+ * MERGES the answer into the same derived, never-persisted key — never replacing it wholesale, so one week
+ * failing leaves the others (and its own previous answer) exactly where they were.
+ *
+ * What it keeps from the hydrate's version, and why:
+ *   - the same RPC, the same guards: it calls nothing else and reads no pick;
+ *   - `_opMoved` after the await — an answer for a league or identity this device has left is DISCARDED;
+ *   - a hydrate that LANDED while this was in flight wins (`_hydrateSeq` moved): its answer is newer than this
+ *     request's start, so this one is dropped rather than written over it;
+ *   - ACTIVE only: a device that has stopped asking does not get to state a count (DI-T4.11 — the offline
+ *     transition deletes the key, and this refuses to put it back);
+ *   - the key is never persisted and never dirty (`_persistSnapshot` skips it; `set()` refuses it).
+ *
+ * What is different, on purpose:
+ *   - a FAILED read keeps the week's previous answer (the strip says "Last checked …" once it is old), except
+ *     `not_member` / `not_authenticated`, which delete that week's entry: an account the server no longer
+ *     recognises must not keep reading a count off the device (it renders as UNKNOWN, never as zero);
+ *   - weeks that have since gone live or final are pruned from the map (their rows are public and the client
+ *     counts them itself);
+ *   - the `at` stamp advances only when EVERY requested week was read, so "as of" never claims more than it did;
+ *   - single flight: a second call while one is running shares its promise.
+ *
+ * @returns {Promise<{ok:boolean, reason?:string, refreshed:string[], failed:string[]}>}
+ */
+let _progressFlight = null;
+export function refreshWeekProgress({ weekIds = null } = {}) {
+  if (_state !== 'ACTIVE') return Promise.resolve({ ok: false, reason: 'not-active', refreshed: [], failed: [] });
+  if (_progressFlight) return _progressFlight;
+  const tag = _mirrorTag;
+  const client = _safe('getClient');
+  if (!client || !tag || !tag.leagueId) return Promise.resolve({ ok: false, reason: 'no-client', refreshed: [], failed: [] });
+  const op = { leagueId: tag.leagueId, epoch: tag.epoch, switchSeq: tag.switchSeq };
+  const seq = _hydrateSeq;
+  const asked = Array.isArray(weekIds) ? new Set(weekIds.map(String)) : null;
+  const flight = (async () => {
+    const weeks = _mirror.get('cfbp_weeks');
+    const nonPublic = (Array.isArray(weeks) ? weeks : [])
+      .filter((w) => w && w.weekId && w.status !== 'live' && w.status !== 'final')
+      .map((w) => w.weekId);
+    const wanted = asked ? nonPublic.filter((id) => asked.has(String(id))) : nonPublic;
+    const answers = new Map();      // weekId -> byMember | null (drop the entry)
+    const failed = [];
+    for (const weekId of wanted) {
+      try {
+        const res = await client.rpc('week_submission_status', { p_league: tag.leagueId, p_week: weekId });
+        if (_opMoved(op) || seq !== _hydrateSeq || _state !== 'ACTIVE') return { ok: false, reason: 'moved', refreshed: [], failed: [] };
+        if (res && res.error) {
+          const text = `${res.error.message || ''} ${res.error.code || ''}`;
+          if (/not_member|not_authenticated/.test(text)) answers.set(weekId, null);
+          else failed.push(weekId);
+          console.warn(`[sb] week_submission_status(${weekId}) refused`, res.error.code || res.error.message);
+          continue;
+        }
+        const byMember = {};
+        for (const r of (res && res.data) || []) {
+          if (!r || r.member_id == null) continue;
+          byMember[r.member_id] = {
+            pickCount: Number(r.pick_count) || 0,
+            hasTiebreaker: !!r.has_tiebreaker,
+            hasExtraPoint: !!r.has_extra_point,
+            lastUpdated: r.last_updated || null,
+          };
+        }
+        answers.set(weekId, byMember);
+      } catch (e) {
+        if (_opMoved(op) || seq !== _hydrateSeq || _state !== 'ACTIVE') return { ok: false, reason: 'moved', refreshed: [], failed: [] };
+        failed.push(weekId);
+        console.warn(`[sb] week_submission_status(${weekId}) threw`, e && e.message);
+      }
+    }
+    if (_opMoved(op) || seq !== _hydrateSeq || _state !== 'ACTIVE') return { ok: false, reason: 'moved', refreshed: [], failed: [] };
+    const prev = _mirror.get(DERIVED_PROGRESS_KEY);
+    const prevWeeks = (prev && typeof prev === 'object' && prev.weeks && typeof prev.weeks === 'object') ? prev.weeks : {};
+    const keep = {};
+    for (const id of Object.keys(prevWeeks)) if (nonPublic.includes(id)) keep[id] = prevWeeks[id];
+    let touched = false;
+    for (const [id, byMember] of answers) {
+      if (byMember === null) delete keep[id]; else keep[id] = byMember;
+      touched = true;
+    }
+    if (!touched && !prev) return { ok: false, reason: 'no-answer', refreshed: [], failed };
+    const complete = failed.length === 0;
+    const at = (complete || !prev || !prev.at) ? new Date().toISOString() : prev.at;
+    _mirror.set(DERIVED_PROGRESS_KEY, { at, weeks: keep });
+    return { ok: complete, refreshed: [...answers.keys()], failed };
+  })();
+  _progressFlight = flight;
+  const clear = () => { if (_progressFlight === flight) _progressFlight = null; };
+  flight.then(clear, clear);
+  return flight;
+}
+
 function _isPlainObject(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
 
 function _opMoved(op) {
@@ -1642,8 +1779,10 @@ function _fail(err, leagueId, reason) {
 function _diffRows(key, route, value, leagueId) {
   const table = route.table;
   const projected = toRows[key](stripCredentials(key, value), _ctx(leagueId));
-  const newRows = (projected && projected[table]) || [];
   const base = _baseRows.get(key) || new Map();
+  let newRows = (projected && projected[table]) || [];
+  // FB-005 — key each row by the SERVER row it was read from, before anything is compared (see the function).
+  if (route.serverRowIds) newRows = _serverRowIdsByPosition(key, newRows, base, leagueId);
   const volatile = new Set(VOLATILE_COLS[table] || []);
   const inserts = [];
   const patches = [];
@@ -1659,6 +1798,9 @@ function _diffRows(key, route, value, leagueId) {
       const ins = {};
       for (const col of Object.keys(row)) {
         if (row[col] == null && notNull.includes(col)) continue;
+        // D1 DI-531 (C1) — a SERVER-OWNED column (competition_members.joined_at) is never sent from a client: omitted, so the server stamps it. Dropped HERE, at the planner, so no downstream
+        // consumer of the planned row (the fingerprint, the base fold) ever sees a client-supplied value for it.
+        if (route.serverOwnedCols && route.serverOwnedCols.includes(col)) continue;
         ins[col] = row[col];
       }
       inserts.push(ins);
@@ -1667,19 +1809,69 @@ function _diffRows(key, route, value, leagueId) {
     const changed = {};
     for (const col of Object.keys(row)) {
       if (col === 'league_id' || col === 'id' || volatile.has(col)) continue;
+      if (route.serverOwnedCols && route.serverOwnedCols.includes(col)) continue;   // D1 DI-531: the server's column is never compared (a local stamp vs the server's is not a change)
       // PATCH: a null for a NOT NULL column is the projection's "absent", never an erase.
       if (row[col] == null && notNull.includes(col)) continue;
-      if (canonicalize(row[col]) !== canonicalize(old[col])) changed[col] = row[col];
+      // FB-026 — the server's `extra` is compared WITHOUT the typed-column copies finalize_week leaves in it
+      // (`unshadowedExtra`). The projection never writes them, so comparing them raw made every row
+      // finalize_week created look changed on every save — a patch of `extra` a player may never send.
+      const was = col === 'extra' ? unshadowedExtra(key, old[col]) : old[col];
+      if (canonicalize(row[col]) !== canonicalize(was)) changed[col] = row[col];
+    }
+    if (route.immutableCols) {
+      // FB-026 — obligations_guard (0002_rls.sql:498-514) refuses ANY change to payer/recipient/week/type/
+      // created_at, for every caller, so one of them in a PATCH can only ever be a refusal of the WHOLE row —
+      // the red banner Drew got on Finalize. Rows finalize_week inserted carry the server's created_at while the
+      // client holds its own, so the disagreement is real on live rows and cannot be settled by a write. Never
+      // sent; the server's value stands, and the next hydrate shows it. Said, not silent. Every other column the
+      // row changed is still sent.
+      const dropped = route.immutableCols.filter((c) => c in changed);
+      if (dropped.length) {
+        for (const c of dropped) delete changed[c];
+        console.warn(`[sb] ${key}: row ${row.id} differs from the server in ${dropped.join(', ')}, which the server never`
+          + ' lets change (obligations_guard) — NOT sent; the server\'s value stands and the next hydrate shows it.'
+          + ' Any other change to the row is still sent.');
+      }
+    }
+    if (route.playerPatchCols && !_isAdmin()) {
+      // R-19 — obligations_guard (0002_rls.sql:526-535) refuses a NON-commissioner's change to any column but
+      // status and paid_at, and refuses the WHOLE row when one is present. handleObligationAction() (app.js)
+      // writes `deniedReason` on every player action (null on Mark Paid / Confirm, the reason on Deny); it is not a
+      // column, so it rides in `extra`, and every player's Mark Paid, Confirm and Deny was refused with it — the
+      // status change included. Those columns are the commissioner's to change; a player's device never sends them.
+      // The server's value stands and the next hydrate shows it. Said, not silent. The status/paid_at change goes.
+      const dropped = Object.keys(changed).filter((c) => !route.playerPatchCols.includes(c));
+      if (dropped.length) {
+        for (const c of dropped) delete changed[c];
+        console.warn(`[sb] ${key}: row ${row.id} differs from the server in ${dropped.join(', ')}, which only the`
+          + ` commissioner may change (obligations_guard lets a player change only ${route.playerPatchCols.join(', ')}) —`
+          + ' NOT sent from this device; the server\'s value stands and the next hydrate shows it.'
+          + ` Any change to ${route.playerPatchCols.join(', ')} is still sent.`);
+      }
+      // 0046 (security F2) — paid_at and denied_reason move only WITH the status. The guard refuses either one alone,
+      // and it dates a player's move to paid with the SERVER's clock, so after a Confirm this device's paidAt (its own
+      // clock) differs from the base (the server's) until the next hydrate — `obligations` is not in the Realtime
+      // publication. Without this rule the NEXT obligations save from this device would send that paid_at alone and be
+      // refused WHOLE. Not sent; the server's value stands. Said, not silent.
+      if (route.playerStatusBoundCols && !('status' in changed)) {
+        const bound = route.playerStatusBoundCols.filter((c) => c in changed);
+        if (bound.length) {
+          for (const c of bound) delete changed[c];
+          console.warn(`[sb] ${key}: row ${row.id} differs from the server in ${bound.join(', ')} but not in its status —`
+            + ' NOT sent: obligations_guard moves those only together with a status change (and dates a player\'s'
+            + ' payment itself). The server\'s value stands and the next hydrate shows it.');
+        }
+      }
     }
     if (route.patchCols) {
       // scribe_learnings / scribe_canon: `scribe_guard` (0002:618-645) refuses a
       // change to id/ord/run_id/created_at and only the status column may move,
       // so the planner narrows the patch to it rather than letting the guard
       // raise 42501 on a column the client never meant to send. Q8: the patch is
-      // keyed by the SYNTHESIZED ROW ID, never by array index — the approve flip
-      // at `app.js:12023-12027` rewrites `all[idx]` in place, so `ord` (and
-      // therefore the id) is stable across it. A reorder of that array WOULD move
-      // the ids, which is why this is id-keyed and asserted (adaptertest A16).
+      // keyed by the row's SERVER id, never by array index — the approve flip
+      // at `app.js` (applyScribeLearningDecision) rewrites `all[idx]` in place,
+      // so the position maps to the same server row across it (FB-005,
+      // `_serverRowIdsByPosition`). Asserted: adaptertest A16 and [A-FB005].
       for (const col of Object.keys(changed)) if (!route.patchCols.includes(col)) delete changed[col];
     }
     if (Object.keys(changed).length) patches.push({ id: row.id, changed });
@@ -1696,6 +1888,70 @@ function _diffRows(key, route, value, leagueId) {
     deletes.push({ id, row: base.get(id) });
   }
   return { inserts, patches, deletes };
+}
+
+/**
+ * FB-005 — WHICH SERVER ROW IS THIS ITEM? For the two SCRIBE review tables: by position, and checked.
+ *
+ * `fromRows` (supabase-projection.js `scribeScalarKind`) hands back each row's payload in `ord` order and keeps
+ * no id; `toRows` then names an item `sl_<runId>_<position>` (scribe_learnings, unless it has a learningId) or
+ * its `canonId` (scribe_canon). The server's writers name a row `sl_<runId>_<max(ord)+1+i>` and
+ * `canonId || sc_<runId>_<ord>` (supabase/functions/trainer/index.js, scribe-learn/index.js). The two agree only
+ * while `ord` is exactly 0..n-1, and nothing makes it so: no unique constraint on `ord`, two writers that read
+ * the same max write the same ord, a stray row leaves a gap, and a canon row with no canonId is '' here. Keyed by
+ * the derived id, an approve either PATCHED A NEIGHBOUR (a different proposal silently approved) or INSERTED a
+ * row the table grants no insert for (refused; the next refresh showed it still pending) — Drew's "glitching out
+ * and not marking as approve".
+ *
+ * The base holds the server's rows WITH their ids, and the mirror was built from exactly those rows in exactly
+ * this order (`ord`, stable — `fromRows` sorts the same read). Every writer of these two keys replaces an element
+ * in place (approve/reject, the on/off toggle, the reset), so the item at position p is still the row at rank p.
+ * Each projected row takes that row's id — CHECKED, not assumed: they must be the same proposal (kind, runId, and
+ * learningId/canonId when either has one). A row that fails the check is matched by content instead (exactly one
+ * unclaimed server row whose payload equals it apart from its status). One that matches nothing, or more than
+ * one row, is REFUSED for the whole key — sending it under a guessed id is the defect itself.
+ */
+function _serverRowIdsByPosition(key, rows, base, leagueId) {
+  const ranked = [...base.values()].filter((r) => r && r.id != null)
+    .sort((a, b) => Number(a.ord) - Number(b.ord));
+  const claimed = new Set();
+  const unmatched = [];
+  const out = rows.map((row, position) => {
+    if (!row) return row;
+    let hit = ranked[position];
+    if (!hit || claimed.has(hit.id) || !_sameScribeProposal(row.payload, hit.payload)) {
+      const same = ranked.filter((r) => !claimed.has(r.id) && _sameScribeContent(row.payload, r.payload));
+      hit = same.length === 1 ? same[0] : null;
+    }
+    if (!hit) { unmatched.push(position); return row; }
+    claimed.add(hit.id);
+    return hit.id === row.id && hit.ord === row.ord ? row : { ...row, id: hit.id, ord: hit.ord };
+  });
+  if (unmatched.length) {
+    throw new AdapterWriteRefusedError(
+      `Refusing to save ${key}: ${unmatched.length} item(s) (position ${unmatched.join(', ')}) no longer line up with a row`
+      + ' the server holds, so there is no safe row to write them to. Nothing was saved — refresh, then try again.',
+      { code: 'row_identity_unresolved', key, leagueId,
+        serverMessage: 'an item no longer lines up with a row the server holds; refresh, then try again.' });
+  }
+  return out;
+}
+
+/** FB-005 — the same proposal: same kind and run, and the same learningId/canonId when either side has one. */
+function _sameScribeProposal(a, b) {
+  if (!_isPlainObject(a) || !_isPlainObject(b)) return false;
+  if ((a.kind ?? null) !== (b.kind ?? null) || (a.runId ?? null) !== (b.runId ?? null)) return false;
+  for (const f of ['learningId', 'canonId']) {
+    if ((a[f] || b[f]) && a[f] !== b[f]) return false;
+  }
+  return true;
+}
+
+/** FB-005 — the same payload apart from the status the commissioner flips (learnings `status`, canon `approvalStatus`). */
+function _sameScribeContent(a, b) {
+  if (!_isPlainObject(a) || !_isPlainObject(b)) return false;
+  const strip = (p) => { const c = { ...p }; delete c.status; delete c.approvalStatus; return c; };
+  return canonicalize(strip(a)) === canonicalize(strip(b));
 }
 
 /**
@@ -1731,6 +1987,9 @@ function _mayOperateOnRow(key, route, row) {
   // line blaming ownership. 0008's `comments_delete` is `own row OR commissioner`, and this is that
   // rule stated where the planner can act on it.
   if (key === 'cfbp_comments') return !!row && (row.author_member_id === me || _isAdmin());
+  // D1 DI-531 — `competition_members` is keyed on `league_member_id`, not `member_id`: the same false-negative as comments above (every row looked like somebody else's, the caller's own
+  // Join was DROPPED from the plan with a console line, and nothing was ever sent). A member may write only their own row; the commissioner passes by the admin branch at the top.
+  if (key === 'cfbp_competition_members') return !!row && row.league_member_id === me;
   return !!row && row.member_id === me;
 }
 
@@ -1928,6 +2187,27 @@ export function planFlush() {
  * stamps them with "now" on every run — counting them would make every plan look new and turn the
  * latch into a blind retry loop.
  */
+/**
+ * D1 (N3, 2026-10-08) - WHICH WEEKS ARE THE ROWS OF A PLANNED OPERATION IN? An insert carries its rows (each has `week_id`); a patch or a delete names a row the BASE holds (picks,
+ * tiebreaker_guesses and extra_point_guesses all carry `week_id`). The refusal record keeps these so the app can judge a lock refusal by the weeks of the rows that were REFUSED, not by whichever
+ * week happens to be current: in a league with several sports a refused CFB row can sit queued beside a later pick for an open NFL week, and the two must not be read as one. A key whose rows carry
+ * no `week_id` (anything that is not a pick or a guess) yields [].
+ */
+function _opWeekIds(op) {
+  const ids = new Set();
+  const base = (op && _baseRows.get(op.key)) || new Map();
+  const add = (w) => { if (typeof w === 'string' && w) ids.add(w); };
+  if (op && Array.isArray(op.rows)) for (const r of op.rows) add(r && r.week_id);
+  if (op && op.rowId != null) add((base.get(op.rowId) || {}).week_id);
+  return [...ids];
+}
+/** The refusal record's weeks for the app: `{ [cfbpKey]: [weekId] }` over every key still latched. Additive on every 'refused' emit; absent keys read as "unknown" and keep the old rule. */
+function _refusedWeeks() {
+  const out = {};
+  for (const [k, r] of _refusedKeys) out[k] = Array.isArray(r && r.weekIds) ? [...r.weekIds] : [];
+  return out;
+}
+
 function _planFingerprint(plan, refusals, key) {
   const ops = plan.filter((op) => op && op.key === key).map((op) => {
     if (op.kind !== 'rows' || op.op !== 'insert') return op;
@@ -2061,6 +2341,12 @@ function _planRowKey(plan, key, route, leagueId) {
         + ' (every mutable property of a game request is derived at read time — storage.js foldGameRequests()).');
       continue;
     }
+    if (route.noPatch) {
+      // D1 DI-531 — competition_members has no UPDATE grant (0033): a row is added or removed, never edited. A planned patch could only be a stale local copy disagreeing with the server's
+      // row; it is dropped, said, and the next hydrate shows the server's.
+      console.warn(`[sb] ${key} has no UPDATE path (a row is inserted or deleted, never edited): a field change on row ${p.id} is DROPPED — the next hydrate shows the server's row.`);
+      continue;
+    }
     plan.push({ kind: 'rows', op: 'patch', key, table: route.table, rowId: p.id, changed: p.changed });
   }
 
@@ -2121,6 +2407,49 @@ export function flush() {
     return _flushQueued;
   }
   return _startFlushRun();
+}
+
+/**
+ * PF-467 / FB-005 — SEND NOW, AND SAY WHETHER `key` REACHED THE SERVER.
+ *
+ * A caller that must not act on a write until the server has it (the SCRIBE review rows: "Approved" is shown,
+ * and an approved fact is applied to SCRIBE's memory, only once the approval is saved) cannot read that off
+ * `flush()`'s return: a run coalesced behind another, or a key held by an earlier refusal, says nothing about
+ * THIS key. So the answer is read from the two places this module keeps it:
+ *   'saved'   — nothing of `key` is pending and nothing is refused: the server acknowledged every edit to it;
+ *   'refused' — the key is latched refused (by the server, or client-side); the run has already raised the banner;
+ *   'pending' — still queued (offline, a retry held, the adapter not serving). NOT a success.
+ * A newer edit to the same key made while a run was in flight (a second Approve) needs ITS run too, so the
+ * flush is repeated while the key keeps changing — at most three runs, never a blind retry of the same write.
+ */
+export async function flushAndConfirm(key) {
+  for (let i = 0; i < 3; i += 1) {
+    const seq = _dirty.has(key) ? _dirty.get(key).seq : null;
+    try { await flush(); } catch (e) { /* the run reports its own failure (banner / status); the answer is read below */ }
+    if (_refusedKeys.has(key)) return 'refused';
+    if (!_dirty.has(key)) return 'saved';
+    if (_state !== 'ACTIVE' || _dirty.get(key).seq === seq) return 'pending';
+  }
+  return 'pending';
+}
+
+/**
+ * D1 Lane C (DI-643/644) — THE SERVER ROW ID OF EVERY ITEM IN A SCRIBE REVIEW KEY, BY MIRROR POSITION. The profile pane's rows come from the `scribe-profile` function
+ * with the server's own ids; the review decisions (batch O) are keyed by the item's position in the mirror array. This is the bridge, and it is the SAME keying the planner
+ * uses (`_serverRowIdsByPosition`, FB-005): position -> the server row the item was read from, CHECKED for identity against the base. Returns `string[]` aligned with the
+ * mirror array, or `null` when the key is not a serverRowIds route, the mirror is not serving, or any item cannot be placed (never a guessed id — the caller refuses and
+ * asks for a refresh). Pure read: it changes no state.
+ */
+export function mirrorRowIds(key) {
+  const route = ROUTES[key];
+  if (!route || !route.serverRowIds || !_mirrorTag || !_mirror.has(key) || typeof toRows[key] !== 'function') return null;
+  try {
+    const projected = toRows[key](stripCredentials(key, _mirror.get(key)), _ctx(_mirrorTag.leagueId));
+    const rows = _serverRowIdsByPosition(key, (projected && projected[route.table]) || [], _baseRows.get(key) || new Map(), _mirrorTag.leagueId);
+    return rows.map((r) => (r && r.id != null ? String(r.id) : null));
+  } catch (e) {
+    return null;
+  }
 }
 
 /** Await a promise for its SETTLEMENT only — a failed run must not cancel the follow-up. */
@@ -2292,9 +2621,11 @@ async function _runFlush() {
         }
         errors.push(e);
         if (e instanceof AdapterWriteRefusedError) {
+          // D1 (N3) - the weeks of every row refused under this key THIS run (several ops of one key can each be refused: their weeks are one set).
+          const weekIds = [...new Set([...(refusedThisRun.has(op.key) ? ((_refusedKeys.get(op.key) || {}).weekIds || []) : []), ..._opWeekIds(op)])];
           _refusedKeys.set(op.key, {
             code: e.code, serverMessage: e.serverMessage, atHydrateSeq: _hydrateSeq,
-            fp: fingerprint(op.key), message: e.message,
+            fp: fingerprint(op.key), message: e.message, weekIds,
           });
           refusedThisRun.add(op.key);
         }
@@ -2391,6 +2722,7 @@ async function _runFlush() {
       ...(Array.isArray(first.moved) ? { moved: first.moved.map((m) => ({ ...m })) } : {}),
       keys: [...failedKeys],
       refusedKeys: [..._refusedKeys.keys()],
+      refusedWeeks: _refusedWeeks(),   // D1 (N3): the weeks of the refused rows, per key
       banner: `The server refused to save ${[...failedKeys].join(', ') || 'a change'}: `
         + `${first.serverMessage || first.message} Nothing was saved.`,
     });
@@ -2480,6 +2812,7 @@ async function _runFlush() {
       error: _lastError,
       keys: [],
       refusedKeys: [..._refusedKeys.keys()],
+      refusedWeeks: _refusedWeeks(),   // D1 (N3): the weeks of the rows still latched, per key
       banner: _lastError || `Still unsaved: ${[..._refusedKeys.keys()].join(', ')}.`,
     });
     return { pushed: sentKeys.size, stillRefused: [..._refusedKeys.keys()] };
@@ -3053,7 +3386,11 @@ async function _executeOp(client, op, leagueId) {
       // one-row insert and failed for a mixed batch: one game with an ESPN line (spread_source
       // 'espn') and one without (null, omitted) in one save sent NULL for the second → 23502, red
       // banner, cfbp_games latched. A key a row DOES carry, null included, is sent exactly as before.
-      res = await client.from(op.table).insert(op.rows, { defaultToNull: false }).select(returning);
+      // D1 DI-531 — a GENERATED ALWAYS column (competition_members.id) is stripped HERE, at the wire, and nowhere earlier: Postgres refuses a value for it, but the planned row keeps it because
+      // the base fold, the already-saved narrowing (`_narrowInsertAgainstBase`) and the plan fingerprint all key a row by `id`.
+      const gen = (ROUTES[op.key] && ROUTES[op.key].generatedCols) || null;
+      const wireRows = gen ? op.rows.map((r) => { const c = { ...r }; for (const col of gen) delete c[col]; return c; }) : op.rows;
+      res = await client.from(op.table).insert(wireRows, { defaultToNull: false }).select(returning);
     } else if (op.op === 'patch') {
       res = await client.from(op.table).update(op.changed).eq('league_id', leagueId).eq('id', op.rowId).select(returning);
     } else {
@@ -3630,6 +3967,15 @@ function _pendingRowEdits(key, table, base) {
   try {
     const projected = toRows[key](stripCredentials(key, _mirror.get(key)), _ctx(_mirrorTag.leagueId));
     local = (projected && projected[table]) || [];
+    // FB-005 / F1 (security) — THE REPLAY KEYS EVERY ROW THE WAY THE PLANNER DOES. For the two SCRIBE review keys the
+    // projection names a row by ARRAY POSITION, which is not the id the server's writers gave it; `_diffRows` re-keys
+    // each row to the server row it was read from (`_serverRowIdsByPosition`) before it compares anything, and so must
+    // this, or the fold lays a pending approve back onto the position-derived id: a NEIGHBOUR's row (a different
+    // proposal reads as approved in the mirror) or an id the server never wrote (a phantom duplicate item). It is
+    // checked against the SAME base the mirror was built from (the caller captures this before the base moves). A
+    // row that resolves to no server row throws `row_identity_unresolved`, which the catch below reads as "the edit
+    // could not be read as rows": the mirror keeps the edit and the next hydrate rebases it. Never a guessed id.
+    if (route.serverRowIds) local = _serverRowIdsByPosition(key, local, base, _mirrorTag.leagueId);
   } catch (e) {
     console.warn(`[sb] ${key}: the unsent edit could not be read as rows (${e && e.message}) — the Realtime event`
       + ' advances the base only; the mirror keeps the edit.');
@@ -3836,6 +4182,52 @@ export async function scribeMemoryApply(/* { adminPasswordHash } ignored */) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// 12c · the 2K25 carryover ledger — a PLAYER's own balance (0046, R-19 follow-up)
+// ══════════════════════════════════════════════════════════════════════════
+
+/** The server's named refusals for settle_2025_obligation (0046 PART D). Anything else is `unavailable`. */
+const OB2025_REFUSALS = frozenList(['not_authenticated', 'not_member', 'not_pilot', 'league_paused', 'bad_action',
+  'not_found', 'not_party', 'illegal_transition']);
+const OB2025_ACTIONS = frozenList(['mark', 'confirm', 'deny']);
+
+/**
+ * A player's Mark Paid / Confirm / Deny on one of HIS 2K25 carryover balances. Their status lives in the league_kv
+ * `settings` row (`ob2025`, a map), which only the commissioner may write — so a player's `saveSetting('ob2025', …)`
+ * was refused on his device and never reached the server. 0046's `settle_2025_obligation` is the narrow path: the
+ * SERVER checks the pilot league, the caller's own seat, that he is party to that row, and the transition (the same
+ * four rows obligations_guard enforces), and writes that one map key under a row lock.
+ *
+ * Resolves only once the server has it, with `{ ok: true, obligationId, status }`; the settings row it returns is
+ * folded into the mirror EXACTLY as a Realtime league_kv event is (`_foldRealtimeRow`), so the card re-renders from
+ * server truth and nothing is marked dirty. REJECTS on any refusal — never a silent no-op — with an Error whose
+ * `.code` is the server's named refusal (OB2025_REFUSALS) or `unavailable`. The caller owns the loud-fail banner.
+ */
+export async function settleOb2025({ obligationId = '', action = '' } = {}) {
+  const fail = (code, message) => { const e = new Error(message); e.code = code; return e; };
+  const client = _safe('getClient');
+  const leagueId = _safe('getActiveLeagueId');
+  if (!client || !leagueId) throw fail('unavailable', 'Not signed in to a league on this device.');
+  if (!obligationId || !OB2025_ACTIONS.includes(action)) throw fail('bad_action', 'That is not an action this balance offers.');
+  let res;
+  try {
+    res = await client.rpc('settle_2025_obligation', { p_league: leagueId, p_obligation: String(obligationId), p_action: action });
+  } catch (err) {
+    throw fail('unavailable', `The server could not be reached (${(err && err.message) || 'network'}).`);
+  }
+  const { data, error } = res || {};
+  if (error || !data) {
+    const msg = String((error && (error.message || error.details)) || 'no answer');
+    const named = OB2025_REFUSALS.find((c) => msg === c || msg.startsWith(`${c} `) || msg.startsWith(`${c}:`));
+    throw fail(named || 'unavailable', msg);
+  }
+  const row = data.row;
+  if (row && row.key === 'settings' && row.league_id === leagueId && _mirrorTag && _mirrorTag.leagueId === leagueId) {
+    _foldRealtimeRow('league_kv', { eventType: 'UPDATE', new: row });
+  }
+  return { ok: true, obligationId: data.obligationId, status: data.status };
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // 13 · test seams (the `_xxxForTest` convention; no production call site)
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -3846,7 +4238,7 @@ export function _resetForTest() {
   _mirror = new Map(); _baseRows = new Map(); _baseValues = new Map();
   _overlay.clear(); _dirty.clear(); _refusedKeys.clear(); _statusLegFrom.clear(); _picksReadPublic = new Set();
   _lastContacts = new Map();
-  _mirrorTag = null; _switchSeq = 0; _hydrateSeq = 0;
+  _mirrorTag = null; _switchSeq = 0; _hydrateSeq = 0; _progressFlight = null;
   // RG-180 — the flush latch is per-PAGE state like the rest of this list. A section that left it
   // set would make every later `flush()` queue behind a promise that had already settled, and the
   // suite would hang rather than fail, which is the worst way for a test to go wrong.

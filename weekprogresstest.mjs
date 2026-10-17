@@ -578,6 +578,44 @@ console.log('\n[6] §5.1 — isContentWithheld()\'s third clause tracks the adap
   quiet(() => auth._setAccountUserIdForTest(''));
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+console.log('\n[7] UN-412 / DI-502e — refreshWeekProgress(): the seam\'s wrapper, and what it must never do');
+{
+  // The adapter's own behaviour (single flight, the discard guards, merge-not-replace, a failed read keeping the previous answer) is adaptertest
+  // [A-PROG]. What belongs HERE is the seam: the wrapper is the only door, it is gated on supabase mode, it answers instead of throwing, and
+  // the answer it leaves behind is read through getWeekProgress() — never through the adapter.
+  const { readFileSync } = await import('node:fs');
+  const quiet = (fn) => { const w = console.warn, e = console.error; console.warn = () => {}; console.error = () => {}; try { return fn(); } finally { console.warn = w; console.error = e; } };
+  seedFixture();
+  sheetsMode();
+  storage.setBackendMode('local');
+  assert(typeof storage.refreshWeekProgress === 'function', '[7] js/storage.js exports refreshWeekProgress() — the adapter\'s refresh is reached from the seam and nowhere else');
+  const local = await storage.refreshWeekProgress();
+  assert(local && local.ok === false && local.reason === 'not-supabase' && Array.isArray(local.refreshed) && Array.isArray(local.failed),
+    '[7] in local mode it answers { ok:false, reason:"not-supabase" } and does nothing (every row is on the device; there is nothing to re-ask)');
+
+  seedFixture();
+  supabaseMode({ mirror: { cfbp_players: PLAYERS }, progress: progressBlob({ [ME]: 3, [FULL]: 3, [NONE]: 0 }) });
+  storage.setBackendMode('supabase');
+  const before = JSON.stringify(storage.getWeekProgress());
+  const noClient = await storage.refreshWeekProgress();
+  assert(noClient && noClient.ok === false && ['no-client', 'not-active'].includes(noClient.reason),
+    `[7] with the adapter ACTIVE but no hydrate behind it (no mirror tag) it REFUSES ("${noClient && noClient.reason}") rather than guess a league`);
+  assert(JSON.stringify(storage.getWeekProgress()) === before, '[7] …and the answer already on the device is untouched by a refused refresh');
+  quiet(() => sb._setStateForTest('OFFLINE-READONLY', 'weekprogresstest'));
+  const offline = await storage.refreshWeekProgress();
+  assert(offline && offline.ok === false && offline.reason === 'not-active' && storage.getWeekProgress() === null,
+    '[7] OFFLINE-READONLY: refused ("not-active"), and the seam still answers null — a refresh can never put a count back on a device that stopped asking');
+  quiet(() => sb._setStateForTest('ACTIVE', 'weekprogresstest'));
+
+  const src = readFileSync(new URL('./js/storage.js', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  const wrapper = src.slice(src.indexOf('export async function refreshWeekProgress'), src.indexOf('export function getWeeklyResults') > 0 ? src.indexOf('export function getWeeklyResults') : undefined);
+  assert(/try \{ return await sb\.refreshWeekProgress\(opts\); \}\s*catch\(e\)\{[^}]*return \{ ok: false, reason: 'error'/.test(wrapper) && !/throw /.test(wrapper),
+    '[7] the wrapper CATCHES: a failed refresh is a result ({ ok:false, reason:"error" }), never a thrown error or a rejection reaching a render path');
+  const appSrc = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  assert(!/sb\.refreshWeekProgress/.test(appSrc) && /refreshWeekProgress\(\)/.test(appSrc), '[7] app.js calls the SEAM\'s refreshWeekProgress(), never the adapter\'s');
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 sheetsMode();
 storage.setBackendMode('local');

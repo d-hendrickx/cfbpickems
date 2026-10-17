@@ -892,28 +892,34 @@ console.log('\n[T26] captions: exact strings, constant-led, honest, never "bye" 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────
-// [T27] THE FINALIZE NOTICE COMPOSER (DI-469) — pure; the app wrapper and the three sites are proven in ranktest/weekwizardtest
+// [T27] THE FINALIZE NOTICE COMPOSER (DI-469) — pure; its one site, the guided Step 4, is proven in weekwizardtest [15-26] and wizardfinalizetest
+// RE-DERIVED 2026-10-07 (FB-027 / DI-518, bug batch W): every Finalize now opens the guided flow, so the browser-dialog variant (`confirm`, and its
+// shared-league `confirmShared` wording) is RETIRED with the dialogs, and Step 3 is titled "Longest field goal (Extra Point)". The assertions that pinned
+// the dialog wording are replaced one for one by pins on the Step 4 wording, a drift guard against the step titles, and a guard that the dialog wording
+// cannot come back through a stray argument. The silent cases are unchanged.
 // ─────────────────────────────────────────────────────────────────────────────────────────
-console.log('\n[T27] composeFinalizeTieNotice: every kind, both variants, shared mode, every silent case…');
+console.log('\n[T27] composeFinalizeTieNotice: every kind, the guided Step 4 wording, every silent case…');
 {
   const { composeFinalizeTieNotice, TIE_COPY } = tieCtx;
-  const c = (o) => composeFinalizeTieNotice({ legacyTrigger: false, winnerStage: null, loserStage: null, epEnabled: true, epUsable: true, variant: 'confirm', shared: false, ...o });
+  const { FINALIZE_STEPS } = await import('./js/week-wizard.js');
+  const c = (o) => composeFinalizeTieNotice({ legacyTrigger: false, winnerStage: null, loserStage: null, epEnabled: true, epUsable: true, ...o });
   const B = TIE_COPY.finalizeBody, S = TIE_COPY.finalizeSuffix;
   let n = c({ legacyTrigger: true, winnerStage: 'alma' });
-  assert(n.show && n.kind === 'tb-missing' && n.text === B['tb-missing'] + S.confirm.tb, 'T27: tb-missing, confirm: the body plus the Cancel/OK suffix, exactly');
-  assert(n.text.includes('tie in correct picks') && n.text.includes('Enter the tiebreaker first (Cancel)') && n.text.includes('finalize anyway') && !/arbitrar/i.test(n.text), 'T27: …keeping the substrings ranktest [8a] pins, and never "arbitrarily"');
-  assert(n.text === "This week has a tie in correct picks and no tiebreaker value entered. If you finalize now, it is settled by each tied player's alma mater against the spread, then the Extra Point. Enter the tiebreaker first (Cancel), or finalize anyway and fix it later; entering the tiebreaker or the Extra Point afterward recalculates the week (OK).", 'T27: the exact string (DI-469)');
+  assert(n.show && n.kind === 'tb-missing' && n.text === B['tb-missing'] + S.wizard.tb, 'T27: tb-missing: the body plus the Step 4 suffix, exactly');
+  assert(n.text.includes('tie in correct picks') && n.text.includes("alma mater against the spread, then the Extra Point") && !/arbitrar/i.test(n.text) && !/\((Cancel|OK)\)/.test(n.text),
+    'T27: …it names what decides the tie, never says "arbitrarily", and carries no dialog wording (Cancel/OK)');
+  assert(n.text === "This week has a tie in correct picks and no tiebreaker value entered. If you finalize now, it is settled by each tied player's alma mater against the spread, then the Extra Point. Enter it in Confirm Tiebreaker, then continue to Finalize.", 'T27: the exact string (DI-469, Step 4 wording)');
   n = c({ legacyTrigger: true, winnerStage: 'draw' });
-  assert(n.kind === 'tb-missing-draw' && n.text.startsWith("This week has a tie in correct picks and no tiebreaker value entered, and as it stands it would end at the week's draw.") && n.text.endsWith(S.confirm.tb), 'T27: tb-missing-draw when EITHER end reaches the draw');
+  assert(n.kind === 'tb-missing-draw' && n.text.startsWith("This week has a tie in correct picks and no tiebreaker value entered, and as it stands it would end at the week's draw.") && n.text.endsWith(S.wizard.tb), 'T27: tb-missing-draw when EITHER end reaches the draw');
   assert(c({ legacyTrigger: true, loserStage: 'draw' }).kind === 'tb-missing-draw' && c({ legacyTrigger: true, winnerStage: 'ep', loserStage: 'alma' }).kind === 'tb-missing', 'T27: …the loser end counts too; an ep/alma pair does not reach the draw');
   n = c({ winnerStage: 'draw', epEnabled: true, epUsable: false });
-  assert(n.show && n.kind === 'ep-missing' && n.text === B['ep-missing'] + S.confirm.ep && n.text === "This tie would be settled by the Extra Point, and no longest field goal is entered yet. Enter it first (Cancel), or finalize anyway and let the week's draw decide; entering it afterward recalculates the week (OK).",
-    'T27: ep-missing: a tiebreaker value is on file, the tie reaches the draw, the Extra Point is enabled with no result — the exact string');
-  assert(c({ legacyTrigger: true, winnerStage: 'draw', variant: 'wizard' }).text === B['tb-missing-draw'] + ' Enter it in Confirm Tiebreaker, then continue to Finalize.'
-    && c({ winnerStage: 'draw', epUsable: false, variant: 'wizard' }).text === B['ep-missing'] + " Enter it in Confirm Extra Point, or the week's draw decides.", 'T27: the guided Step 4 variant carries the wizard suffixes');
-  assert(c({ legacyTrigger: true, shared: true }).text === B['tb-missing'] + ' Enter the tiebreaker first (Cancel), or finalize anyway (OK). A value entered later is applied by moving the week back to live and finalizing it again.'
-    && c({ winnerStage: 'draw', epUsable: false, shared: true }).text === B['ep-missing'] + " Enter it first (Cancel), or finalize anyway and let the week's draw decide (OK). To apply it later, move the week back to live and finalize it again.", 'T27: in a SHARED league the suffix never says "recalculates" (re-finalizing a final week is refused there, N-1)');
-  assert(!c({ legacyTrigger: true, shared: true }).text.includes('recalculates') && c({ legacyTrigger: true, shared: true }).text.includes('Enter the tiebreaker first (Cancel)') && c({ legacyTrigger: true, shared: true }).text.includes('finalize anyway'), 'T27: …and still holds the pinned substrings');
+  assert(n.show && n.kind === 'ep-missing' && n.text === B['ep-missing'] + S.wizard.ep && n.text === "This tie would be settled by the Extra Point, and no longest field goal is entered yet. Enter it in Longest field goal (Extra Point) to finalize." && !/draw decides/.test(n.text),
+    'T27: ep-missing: a tiebreaker value is on file, the tie reaches the draw, the Extra Point is enabled with no result — the exact string, naming Step 3 by its title (FB-027), and never offering "the week\'s draw decides" (Step 4 refuses to finalize without the yards; review R2)');
+  assert(S.wizard.tb.includes(`Enter it in ${FINALIZE_STEPS.find((s) => s.id === 'confirm-tiebreaker').title},`) && S.wizard.ep.includes(`Enter it in ${FINALIZE_STEPS.find((s) => s.id === 'confirm-extra-point').title} to finalize.`),
+    'T27: the wording sends the commissioner to the steps BY THEIR TITLES (js/week-wizard.js FINALIZE_STEPS) — a renamed step turns this red');
+  assert(Object.keys(S).join(',') === 'wizard', `T27: only the Step 4 suffix table remains — the browser-dialog tables (confirm, confirmShared) are retired with the dialog (got ${Object.keys(S).join(',')})`);
+  const stray = c({ legacyTrigger: true, variant: 'confirm', shared: true });
+  assert(stray.text === B['tb-missing'] + S.wizard.tb && !/recalculates|\((Cancel|OK)\)/.test(stray.text), 'T27: a stray legacy argument (variant "confirm", shared) cannot bring the dialog wording back');
   // SILENT cases
   assert(c({}).show === false && c({}).text === '' && c({}).kind === null, 'T27: no tie at all: silent');
   assert(c({ winnerStage: 'tiebreaker', loserStage: null }).show === false && c({ winnerStage: 'alma' }).show === false && c({ winnerStage: 'ep' }).show === false, 'T27: a tie the tiebreaker, the alma mater step or the Extra Point decides, with a tiebreaker value on file: silent');
@@ -1212,10 +1218,10 @@ console.log('\n[T27b] no source string says "arbitrarily"; finalizeTieNotice() i
   const snap = () => JSON.stringify(Object.keys(globalThis.localStorage.constructor === Object ? {} : {}).concat([...store.entries()].sort()));
   const before = snap();
   const pl = storage.getPlayers().filter(p => p.active && ['p3', 'p4'].includes(p.playerId));
-  const n1 = app.finalizeTieNotice(storage.getWeek('w_t27b'), pl, storage.getPicks('w_t27b'), storage.getGames('w_t27b'), 'confirm');
-  const n2 = app.finalizeTieNotice(storage.getWeek('w_t27b'), pl, storage.getPicks('w_t27b'), storage.getGames('w_t27b'), 'wizard');
+  // FB-027 / DI-518 (2026-10-07): the wrapper has one surface (the guided Step 4) and no variant argument; the 'confirm' call this used to make is retired.
+  const n1 = app.finalizeTieNotice(storage.getWeek('w_t27b'), pl, storage.getPicks('w_t27b'), storage.getGames('w_t27b'));
   assert(snap() === before, 'T27b: finalizeTieNotice() is READ-ONLY: the whole storage mirror is byte-identical before and after (no saveGame, saveWeek or saveAllWeeklyResults)');
-  assert(n1.show && n1.kind === 'tb-missing-draw' && n2.show && n2.text.endsWith('Enter it in Confirm Tiebreaker, then continue to Finalize.'), `T27b: the preview names the stage it reaches (the draw) and honours the variant (got ${n1.kind})`);
+  assert(n1.show && n1.kind === 'tb-missing-draw' && n1.text.endsWith('Enter it in Confirm Tiebreaker, then continue to Finalize.'), `T27b: the preview names the stage it reaches (the draw) in the guided Step 4's wording (got ${n1.kind})`);
   assert(app.finalizeTieNotice(null, [], [], []).show === false, 'T27b: no week, no notice');
   assert(app.finalizeTieNotice({ ...storage.getWeek('w_t27b'), status: 'open' }, pl, storage.getPicks('w_t27b'), storage.getGames('w_t27b')).show === false,
     'T27b: BLIND RULE — an OPEN week answers with silence (the preview reads other players\' picks and guesses, so it only answers once picks are public)');

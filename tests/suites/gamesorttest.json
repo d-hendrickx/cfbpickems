@@ -1,0 +1,24 @@
+{
+  "id": "gamesorttest",
+  "script": "gamesorttest.mjs",
+  "summary": "strict",
+  "floor": 118,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/game-sort.js",
+    "js/game-arrange.js",
+    "js/game-order.js",
+    "js/nav-gestures.js",
+    "js/control-center.js",
+    "css/styles.css",
+    "service-worker.js",
+    "index.html",
+    "statsfixtures.mjs",
+    "minidom.mjs"
+  ],
+  "note": "RAISED from 114 by D1 Game Day fix round 1 (small fix, 2026-10-08): 6d2/6d3/7d2 the identity chokepoint drops the Sort sheet and its frozen Live first order. | RAISED from 103 by D1 Game Day fix round 1 (N1, 2026-10-08): [4b2] the Standard web matrix's 'Showing picks by person. Switch to Compact to see them by team.' note and its 44 pt Compact button (DI-612 / PBD-B11): drawn only for Standard + By team, written through the layout toggle's own path, absent signed out and on the iOS shell. | D1 Lane B (DI-607 / DI-581 / PF-445 rev 3): the Dashboard's Sort button and sheet, Custom arranging and Live first movement, run on the real app.js over a real tree. The words (exact strings; the copy scan that the word 'order' is in no Sort or Arrange label, help line, toast, aria-label or announcement), the pure move and drop, the renderers (refuse without an escaper, hostile data inert), the row and the sheet through the real Dashboard (one write per change, Reset, the Standard layout's note), arranging (grip and arrows, one write per move, announcements, focus, Done and its toast, gestures stand down, a tab change ends it), Live first parked under an open sheet and named when it plays, the FLIP, source pins. Registered 2026-10-08."
+}

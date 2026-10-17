@@ -1,0 +1,12 @@
+{
+  "id": "refreshtest",
+  "script": "refreshtest.mjs",
+  "label": "88",
+  "summary": "loose",
+  "floor": 100,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "raised 77 -> 89 on 2026-09-28 by RG-292 (bugfixer, hotfix/logo-backfill): [9] with serverJobs.scoresRefresh ON the display-only poll on the COMMISSIONER device persists a logo-only merge (the real PATCH carries home_logo/away_logo/updated_at only, never a score/status column) …"
+}

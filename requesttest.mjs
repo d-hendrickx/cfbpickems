@@ -356,14 +356,9 @@ console.log('\n[10] Escaping — all six render paths (CONVENTIONS #12/#21)…')
     homeRank: null, awayRank: null, kickoff: `${FUTURE}T17:00:00Z`, spread: -3, favorite: 'Ohio State',
     status: 'scheduled', homeScore: null, awayScore: null, dataQuality: 'complete',
   };
-  // The `data-game='{…json…}'` attribute on the PRE-EXISTING add path is
-  // stripped before the scan, deliberately and with the reason stated: JSON
-  // inside a single-quoted attribute value is never parsed as markup (the HTML
-  // tokenizer is in attribute-value state), and availAddPayloadJSON() escapes
-  // the only character that could break out of it — the single quote. Scanning
-  // it would make this guard cry wolf against behaviour that shipped long
-  // before this feature. The escape itself is asserted separately below.
-  const stripPayloads = (html) => html.replace(/data-game='[^']*'/g, "data-game=''");
+  // RE-DERIVED 2026-10-14 (D1 W-69): the Games rows no longer serialize the game as `data-game='…'` JSON (the Add reads the live pool game by the row's key when tapped), so there is no payload attribute to
+  // strip before scanning - the scan runs on the WHOLE markup, which is stricter than before.
+  const stripPayloads = (html) => html;
   const clean = (html, label) => {
     assert(!/<script>/.test(stripPayloads(html)), label + ' — no raw <script> survives');
     assert(html.includes('&lt;script&gt;'), label + ' — the hostile string is present, escaped (proving the check is not vacuous)');
@@ -379,15 +374,11 @@ console.log('\n[10] Escaping — all six render paths (CONVENTIONS #12/#21)…')
   clean(app.renderGameRequestsAdminSectionHTML(XWEEK, [poolGame], []), 'path 3: Comm Player Requests card');
 
   // 4/5/6: the three chip surfaces carry the requester NAME in an aria-label.
-  clean(app.renderAvailableGamesList([poolGame], [], XWEEK), 'path 4: Available Games row chip');
-  // renderSuggestedGameRow() is module-private; renderSuggestedSlatePreview()
-  // is its only caller and covers BOTH the suggested 10 and the DI-4
-  // shortlist, which is exactly the pair the one helper serves.
-  clean(app.renderSuggestedSlatePreview(
-    { suggested: [poolGame], shortlist: [poolGame], almaCount: 0, morningAnchorFilled: true, closingAnchorFilled: true },
-    [], XWEEK), 'path 5: suggested + shortlist row chip');
-  clean(app.renderAdminGamesList([{ ...poolGame, gameId: 'x_g', weekId: 'x_w', lockedSpread: null }], XWEEK, {}),
-    'path 6: Selected Slate row chip');
+  // The three chip surfaces are ONE Games row now (js/games-list.js), in its three states: a Not-on-slate row, a Suggested / Next-best row, an On-slate row.
+  clean(app._gamesRowsHTMLForTest({ week: XWEEK, slate: [], pool: [poolGame] }), 'path 4: Games row chip (Not on slate)');
+  clean(app._gamesRowsHTMLForTest({ week: XWEEK, slate: [], pool: [poolGame], suggested: [poolGame] }), 'path 5a: Games row chip (Suggested)');
+  clean(app._gamesRowsHTMLForTest({ week: XWEEK, slate: [], pool: [poolGame], shortlist: [poolGame] }), 'path 5b: Games row chip (Next best)');
+  clean(app._gamesRowsHTMLForTest({ week: XWEEK, slate: [{ ...poolGame, gameId: 'x_g', weekId: 'x_w', lockedSpread: null }], pool: [] }), 'path 6: Games row chip (On slate)');
 
   // The chip itself: count-only, named for assistive tech, and never a tooltip.
   const chip = app.gameRequestChipHTML(poolGame);
@@ -398,12 +389,11 @@ console.log('\n[10] Escaping — all six render paths (CONVENTIONS #12/#21)…')
     'a game nobody asked for grows no chip at all');
   assert(/aria-label="Requested by &lt;script&gt;/.test(chip),
     'the requester NAME — the one piece of user-typed data this feature adds to the three admin lists — is escaped inside the aria-label');
-  const availHtml = app.renderAvailableGamesList([poolGame], [], XWEEK);
-  const payloadAttr = (availHtml.match(/data-game='([^']*)'/) || [])[1] || '';
-  assert(payloadAttr.length > 0 && !payloadAttr.includes("'") && payloadAttr.includes('&#39;') === false,
-    'the add-path payload sits inside a single-quoted attribute and contains no unescaped single quote (this fixture has none to escape)');
-  assert(JSON.parse(payloadAttr).homeTeam === XSS,
-    '…and round-trips the hostile team name intact as DATA, which is what the add path needs');
+  const availHtml = app._gamesRowsHTMLForTest({ week: XWEEK, slate: [], pool: [poolGame] });
+  assert(!/data-game=/.test(availHtml) && availHtml.includes('&lt;script&gt;'), 'the row carries no serialized game (nothing to close or break out of) and the hostile team name is escaped text');
+  const GLmod = await import('./js/games-list.js');
+  assert(GLmod.poolGameToSlateData(poolGame, XWEEK).homeTeam === XSS,
+    '…and the add path\'s payload (built from the live pool game when the Add is tapped) round-trips the hostile team name intact as DATA, which is what the add path needs');
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -469,7 +459,7 @@ console.log('\n[12] Placement + the exact copy strings (DI-175a/g)…');
     'the league block renders for a signed-out visitor (coordinator ruling Q6)');
 
   const admin = app.renderGameRequestsAdminSectionHTML(null, [], []);
-  assert(/^\s*<div class="admin-section" data-comm-tab="games">/.test(admin),
+  assert(/^\s*<div class="admin-section" data-comm-tab="games" id="game-requests-section">/.test(admin),
     'the commissioner card is tagged data-comm-tab="games" — an untagged .admin-section renders on ALL FIVE tabs (RG-10)');
   assert(admin.includes('🙋 Player Requests (0)') && admin.includes("No player requests for this week's dates."),
     'empty state copy is verbatim');
@@ -492,15 +482,16 @@ console.log('\n[12] Placement + the exact copy strings (DI-175a/g)…');
     homeScore: null, awayScore: null, dataQuality: 'complete' };
   const openHtml = app.renderGameRequestsAdminSectionHTML(OPEN_W, [pooled], []);
   assert(openHtml.includes('requested by Drew'), 'requester names are VISIBLE TEXT on the commissioner row, not a hover');
-  assert(openHtml.includes('class="btn btn-primary btn-sm add-avail-game-btn gr-add-btn"'),
-    'the action reuses the EXACT .add-avail-game-btn class the existing handler binds — not a parallel add path');
-  const m = openHtml.match(/data-game='([^']+)'/);
-  assert(!!m, 'fixture check: the add button carries a data-game payload');
-  const payload = JSON.parse(m[1].replace(/&#39;/g, "'"));
+  // RE-DERIVED 2026-10-14 (D1 W-69): the button is a delegated `data-action="gr-add"` carrying only the event id - the SAME door as the Games list's Add (requestAddToSlate), not a parallel add path - and the
+  // game it adds is built from the POOLED object when the button is TAPPED (gameslisttest [8] taps it), never from the months-old request snapshot.
+  assert(/<button type="button" class="btn btn-primary btn-sm games-row-btn gr-add-btn" data-action="gr-add" data-event-id="add_e1">\+ Add to slate<\/button>/.test(openHtml),
+    'the action is the delegated gr-add button, carrying the event id only');
+  assert(!/data-game=/.test(openHtml), 'fixture check: no game JSON is serialized into the page');
+  const payload = (await import('./js/games-list.js')).poolGameToSlateData(pooled, OPEN_W);
   assert(payload.kickoff === `${FUTURE}T20:00:00Z` && payload.spread === -7.5 && payload.broadcastNetwork === 'FOX',
     'the payload comes from the POOLED ESPN object — current spread/kickoff/TV — never from the months-old request snapshot');
   const noPool = app.renderGameRequestsAdminSectionHTML(OPEN_W, [], []);
-  assert(noPool.includes('Fetch ESPN for these dates to add') && !noPool.includes('add-avail-game-btn'),
+  assert(noPool.includes('Fetch ESPN for these dates to add') && !noPool.includes('data-action="gr-add"'),
     'with nothing fetched for those dates the row says so plainly instead of offering a button that cannot work');
 
   // Later-weeks block: the guarantee that nothing silently vanishes.

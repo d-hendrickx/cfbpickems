@@ -1,0 +1,13 @@
+{
+  "id": "recaptest",
+  "script": "recaptest.mjs",
+  "label": "126b",
+  "summary": "loose",
+  "floor": 55,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 100,
+  "note": "the picks-page recap / Permanent Record footer: previous-finalized-week ordering on same-weekNumber siblings, every exclusion (non-final, prior-season, hidden and — SB-04 — demo weeks never enter the \"Standings after…\" line), the genuine Week-1 fallback, and the live 2026-09-04 …"
+}

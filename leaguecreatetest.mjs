@@ -192,6 +192,22 @@ console.log('\n[4] Error mapping, and the picker (registry ∩ offered)…');
   assert(k(Object.assign(new Error('x'), { name: 'LeagueCreatedNotLoadedError' })) === 'created_not_loaded', '[4c] a created-but-not-loaded league is its own outcome (frame 13), never a failure');
   for (const m of ['Failed to fetch', 'bad_sports', 'not_authenticated', 'something new']) assert(k(new TypeError(m)) === 'failed' && k(new Error(m)) === 'failed', `[4d] ${m} → failed (an unrecognised message is never something reassuring)`);
   assert(k(null) === 'failed' && k(undefined) === 'failed', '[4e] no error object → failed');
+  // D1 Lane A (2026-10-08) - DI-550 (RP-1) and 0049: the two new named refusals of create_league.
+  assert(k(new Error('creation_admins_only')) === 'admins_only' && k(new Error('P0001: creation_admins_only')) === 'admins_only', '[4e1] DI-550: creation_admins_only → its OWN look (the paused look with its own sentence)');
+  assert(k(new Error('push_not_ready')) === 'paused' && k(new Error('P0001: push_not_ready')) === 'paused', '[4e2] 0049: push_not_ready (the release gate would open before push is ready) → the paused look');
+  assert(LC.LC_COPY.adminsOnly === "Creating a league isn't available to your account yet." && LC.LC_COPY.rejoinLimit === "You've joined and left this league too many times. Ask the commissioner.",
+    '[4e3] the two sentences are exactly the approved copy (DI-550, DI-548 #10) - and name no cap, no window');
+  {
+    const esc = (x) => String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const s0 = LC.createInitialState({ signupsOpen: true, groups: LC.pickerGroups({ profiles: (await import('./js/sports/index.js')).listProfiles(), offered: ['cfb', 'nfl'] }) });
+    const sAdm = LC.reduce(s0, { type: 'paused', reason: 'admins_only' });
+    const sPaused = LC.reduce(s0, { type: 'paused' });
+    const bAdm = LC.phaseBannerHTML(sAdm, { escHtml: esc }); const bPaused = LC.phaseBannerHTML(sPaused, { escHtml: esc });
+    assert(sAdm.phase === 'paused' && bAdm.includes(esc(LC.LC_COPY.adminsOnly)) && !bAdm.includes(esc(LC.LC_COPY.paused)) && bPaused.includes(esc(LC.LC_COPY.paused)) && !bPaused.includes(esc(LC.LC_COPY.adminsOnly)),
+      '[4e4] DI-550: reduce({paused, reason:"admins_only"}) shows ITS sentence in the same gold banner; the plain paused event still shows the old one');
+    assert(!LC.canAdvance(sAdm) && !LC.canCreate(sAdm) && LC.nameStepHTML(sAdm, { escHtml: esc }).includes(' disabled'), '[4e5] …and the field and Next are disabled exactly as for any pause (the same frame-10 look)');
+    assert(LC.reduce(sAdm, { type: 'paused' }).pausedReason === null, '[4e6] a later plain pause clears the reason (the sentence follows the last refusal)');
+  }
   // Picker
   const profiles = (await import('./js/sports/index.js')).listProfiles();
   const g = LC.pickerGroups({ profiles, offered: ['cfb', 'nfl'] });
@@ -507,7 +523,7 @@ console.log('\n[10] Source tripwires — the wiring that no render test can see�
   // The claim screen: no auto-join.
   const claim = (app.match(/function claimScreenHTML\([\s\S]*?\n\}\n/) || [''])[0];
   assert(!/joinLeague\(/.test(claim) && /resolvePendingInviteView\(\)/.test(claim), '[10n] claimScreenHTML() reads the invite and renders; it never joins');
-  assert(/const createChoice = _linkFlow\.state === 'unmatched' \? LC\.claimCreateEntryHTML\(\{ escHtml \}\) : '';/.test(claim) && /\$\{createChoice\}`;/.test(claim),
+  assert(/const createChoice = \(_linkFlow\.state === 'unmatched' && leagueCreationAvailable\(\)\) \? LC\.claimCreateEntryHTML\(\{ escHtml \}\) : '';/.test(claim) && /\$\{createChoice\}`;/.test(claim),
     '[10ae] claimScreenHTML() renders the third choice only after a CLEAN "found nothing" (R-F8: an auto-link ERROR never offers it), after the card, and (below) only past the gate');
   // R-F1 / S-9: the WHOLE invite surface (segments, invite card, loud invite notice, Create) is behind the release gate; closed → the pre-N1 claim card, and nothing above the gate line
   // reads or consumes the stored invite.
@@ -515,7 +531,22 @@ console.log('\n[10] Source tripwires — the wiring that no render test can see�
     const gateLine = claim.indexOf('if (!getCachedLeagueCreationOpen()) return claimCodeScreenHTML();');
     assert(gateLine > -1 && gateLine < claim.indexOf('resolvePendingInviteView()') && gateLine < claim.indexOf('landingSegmentsHTML'),
       '[10af] R-F1: claimScreenHTML() returns the pre-N1 claim card BEFORE it reads the pending invite or renders the segments — with the door closed nothing on this screen is new (source-order scan; the byte-level golden is authtest [80a2])');
-    assert(!/getCachedLeagueCreationOpen\(\)/.test(claim.slice(gateLine + 70)), '[10ag] …and there is exactly one gate check on the screen (no second predicate to drift)');
+    assert(!/getCachedLeagueCreationOpen\(\)|getCachedLeagueCreationScope\(\)/.test(claim.slice(gateLine + 70)) && (claim.slice(gateLine + 70).match(/leagueCreationAvailable\(\)/g) || []).length === 1 && /const createChoice = \(_linkFlow\.state === 'unmatched' && leagueCreationAvailable\(\)\)/.test(claim),
+      '[10ag] …and below the release-gate line there is NO raw gate or scope read and exactly ONE door check, on the Create choice alone (F-1: joining is untouched by who may create)');
+  }
+  // D1 Lane A (2026-10-08) - DI-550: ONE predicate draws the door, everywhere.
+  {
+    const fn = (app.match(/function leagueCreationAvailable\(\) \{[\s\S]*?\n\}\n/) || [''])[0];
+    assert(/if \(!getCachedLeagueCreationOpen\(\)\) return false;/.test(fn) && /return getCachedLeagueCreationScope\(\) === 'everyone' \|\| getIsSuperAdmin\(\) === true;/.test(fn) && !/isPlatformAdmin|getIsPlatformAdmin/.test(fn.replace(/\/\*[\s\S]*?\*\//g, '')),
+      '[10ah] DI-550: the door = the gate open AND (scope "everyone" OR the SUPER admin) - getIsSuperAdmin(), never the platform-admin signal');
+    const outside = app.replace(fn, '');
+    // F-1 (2026-10-08): ONE named exception - the claim screen's invite surface sits behind the release gate alone, not behind who may create.
+    const claimFn = (outside.match(/function claimScreenHTML\(\) \{[\s\S]*?\n\}\n/) || [''])[0];
+    assert((stripComments(outside).match(/getCachedLeagueCreationOpen\(\)/g) || []).length === 1 && (stripComments(claimFn).match(/getCachedLeagueCreationOpen\(\)/g) || []).length === 1,
+      '[10ai] DI-550: no other place reads the raw gate except the claim screen\'s invite-surface line (the named F-1 exception: joining is untouched by who may create); every card, toast and Create branch asks leagueCreationAvailable()');
+    assert((outside.match(/leagueCreationAvailable\(\)/g) || []).length === 7, `[10aj] DI-550: all six former gate sites ask it (landing card, Leagues Home x2, the claim screen, the selector sheet card, the sheet opener), and so does the one-time repaint when the super-admin flag lands (got ${(outside.match(/leagueCreationAvailable\(\)/g) || []).length})`);
+    assert(/\['creation_admins_only', LC\.LC_COPY\.adminsOnly\]/.test(app) && /\['push_not_ready',\s+SIGNUPS_CLOSED_COPY\]/.test(app) && (app.match(/\['rejoin_limit',\s+LC\.LC_COPY\.rejoinLimit\]/g) || []).length === 2,
+      '[10ak] the join table AND the claim-code table both answer rejoin_limit with the approved sentence; the create/join table answers creation_admins_only and push_not_ready');
   }
   // The sheet: hold-teardown, the dismiss list, the gestures list
   const shell = (app.match(/function mountSheetShell\([\s\S]*?\n\}\n/) || [''])[0];
@@ -537,7 +568,7 @@ console.log('\n[10] Source tripwires — the wiring that no render test can see�
   // The picker is fed by the registry and the offered list, nothing hand-typed
   const open = (app.match(/function openLeagueCreateSheet\([\s\S]*?\n\}\n/) || [''])[0];
   assert(/LC\.pickerGroups\(\{ profiles: listProfiles\(\), offered: getCachedOfferedSports\(\) \}\)/.test(open), '[10z] the picker = listProfiles() ∩ getCachedOfferedSports()');
-  assert(/getCachedLeagueCreationOpen\(\)/.test(open) && /showComingSoonToast\(LC\.LC_COPY\.landingClosed\)/.test(open), '[10aa] a stale button under a closed gate answers with the ordinary "isn\'t available yet" toast and opens nothing');
+  assert(/leagueCreationAvailable\(\)/.test(open) && /showComingSoonToast\(LC\.LC_COPY\.landingClosed\)/.test(open), '[10aa] a stale button under a closed gate answers with the ordinary "isn\'t available yet" toast and opens nothing');
   // The prompt waits for a serving app, boundedly
   assert(/const PENDING_INVITE_MAX_TRIES = 20;/.test(app) && /attempt < PENDING_INVITE_MAX_TRIES/.test(prompt) && /isContentWithheld\(\)/.test(prompt), '[10ac] the pending-invite prompt WAITS while the app is withheld (hydrating, or a hold) and stops after a bounded number of tries');
   // The new modules are boot-critical: precached
@@ -602,8 +633,9 @@ console.log('\n[12] The storage inventory names the new device-local key…');
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 console.log('\n[13] The pilot-only registry…');
 {
-  assert(JSON.stringify(PO.PILOT_ONLY_KEYS) === JSON.stringify(['trainer', 'scribeLearn', 'canonMemory', 'season2025Record', 'recap2025', 'lorePersona', 'sixSchoolAlmaMaters', 'irbCopy']),
-    '[13a] the closed key list is exactly the DI\'s eight');
+  // D1 Lane C (DI-479 / DI-670, 2026-10-08): the ninth key, `newsPilotSources` (pilot-status news sources reach pilot-league members only; pilotonlytest [1b] pins its sites).
+  assert(JSON.stringify(PO.PILOT_ONLY_KEYS) === JSON.stringify(['trainer', 'scribeLearn', 'canonMemory', 'season2025Record', 'recap2025', 'lorePersona', 'sixSchoolAlmaMaters', 'newsPilotSources', 'irbCopy']),
+    '[13a] the closed key list is exactly the DI\'s eight plus D1 Lane C\'s newsPilotSources');
   assert(PO.isPilotOnlyAllowed('irbCopy', { pilot: true }) === true && PO.isPilotOnlyAllowed('irbCopy', { pilot: false }) === false, '[13b] delegates to isPilotLeague(): pilot === true only');
   for (const bad of [null, undefined, {}, { pilot: 'true' }, { pilot: 1 }]) assert(PO.isPilotOnlyAllowed('irbCopy', bad) === false, `[13c] ${JSON.stringify(bad)} is NOT the pilot (an unloaded or old record is never shown another league's content)`);
   let e = null; try { PO.isPilotOnlyAllowed('irbcopy', { pilot: true }); } catch (x) { e = x; }

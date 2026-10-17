@@ -1,0 +1,21 @@
+{
+  "id": "relatedtest",
+  "script": "relatedtest.mjs",
+  "summary": "strict",
+  "floor": 46,
+  "tags": [
+    "slow",
+    "tz"
+  ],
+  "timeoutMs": 300000,
+  "deps": [
+    "js/**",
+    "d1homeenv.mjs",
+    "gamedayenv.mjs",
+    "statsfixtures.mjs",
+    "minidom.mjs",
+    "index.html"
+  ],
+  "expectedMs": 12000,
+  "note": "RAISED from 36 by D1 Game Day fix round 1 (N2 / security F2.1, 2026-10-08): 3e rewritten on a FINAL game with a positive control (3e-0), 3h (rows not landed, the subset property in four states), and the mutants R4 (the reviewer's M4: resolveGameView passes {entered:true}) and R5 (DI-614 mutation 9: Related reads the raw card source) are killed. | D1 Lane B (DI-610, PF-452 rev 3; security C3 C4 C7 S3): the Related region of the Game view: cardsForGame filters the cards the feed already derived (by game, gameIds, team + the game's own week; a SCRIBE post only when the server minted it, relayed === false; junk is []), a subset of Home in Home's order capped at three with 'See all on Home' and absent when there is none, nothing that names a pick in a Locked / Open week or for a viewer who has not joined the sport, no Game view for a draft or demo week (a member) or a withheld Home, hostile names inert; three mutation proofs (server-minted, not-joined, same-week) in separate processes. Registered 2026-10-08."
+}

@@ -17,6 +17,8 @@
 
 import * as wizard from './js/week-wizard.js';
 import { getAutoFinalizeEnabled } from './js/data-model.js';
+// D1 integration (2026-10-07): the source chip reads DI-516's one answer (live-tiebreak.js is a pure leaf over data-model.js: no DOM, so this file stays DOM-free).
+import { effectiveTiebreakerActual } from './js/live-tiebreak.js';
 
 let pass = 0, fail = 0;
 function assert(cond, label) {
@@ -874,7 +876,8 @@ console.log('\n[15] DI-359 — Finalize Week guided flow: FINALIZE_STEPS shape, 
       const dyn = wizard.unresolvedTieWarning({ week: wk, players: pl, picks: pk, games: gm,
         deps: { weekHasUnresolvedTie: () => { legacyCalls++; return true; }, finalizeTieNotice: (...a) => { seen = a; return { show: true, kind: 'ep-missing', text: 'DYNAMIC TEXT' }; } } });
       assert(dyn.show === true && dyn.text === 'DYNAMIC TEXT', '15-26b (SP-54): with a finalizeTieNotice dependency the warning IS its text and show');
-      assert(seen && seen[0] === wk && seen[1] === pl && seen[2] === pk && seen[3] === gm && seen[4] === 'wizard', '15-26c (SP-54): …called with (week, players, picks, games) UNCHANGED and the \'wizard\' variant');
+      // RE-DERIVED 2026-10-07 (FB-027 / DI-518): the notice has one surface (this inline box), so the 'wizard' variant argument is retired with the dialog.
+      assert(seen && seen.length === 4 && seen[0] === wk && seen[1] === pl && seen[2] === pk && seen[3] === gm, '15-26c (SP-54, FB-027): …called with exactly (week, players, picks, games), UNCHANGED, and no variant argument');
       assert(legacyCalls === 0, '15-26d (SP-54): …and the legacy weekHasUnresolvedTie dependency is NOT consulted when the dynamic one is present');
       const quiet = wizard.unresolvedTieWarning({ week: wk, players: pl, picks: pk, games: gm, deps: { weekHasUnresolvedTie: () => true, finalizeTieNotice: () => ({ show: false, kind: null, text: '' }) } });
       assert(quiet.show === false && quiet.text === '', '15-26e (SP-54): a silent notice (a true dead heat, no tie) shows nothing, even when the legacy trigger would have');
@@ -1198,6 +1201,203 @@ console.log('\n[18] DI-404 (UN-388, N16, 2026-09-29) — the mandatory weekly bl
     const res = w.finishWeekSetup({ week: draftBlank, mode: 'now', ...gateOk });
     assert(res.ok === false && res.reason === 'blurb_required' && calls.status === 0, '18-46: the deps-bound finishWeekSetup refuses a blank draft the same way');
   }
+}
+
+console.log('\n[19] FB-027 / DI-518 / DI-519 (bug batch W, 2026-10-07) — the guided Finalize flow\'s decisions: entry, visible steps, the tiebreaker gate, the review, the awaited save…');
+{
+  const final = (id) => ({ gameId: id, status: 'final', lockedSpread: -3 });
+  const live = (id) => ({ gameId: id, status: 'in_progress', lockedSpread: -3 });
+  // ── finalizeEntry(): LIVE only, never keyed to pendingFinalization
+  for (const status of ['draft', 'open', 'locked', 'final']) {
+    assert(wizard.finalizeEntry({ status, games: [final('a')] }).show === false, `19-1 (${status}): no Finalize entry outside LIVE`);
+  }
+  const e1 = wizard.finalizeEntry({ status: 'live', games: [final('a'), final('b')] });
+  assert(e1.show && e1.allFinal && e1.label === 'Finalize Week', `19-2: LIVE, every game final ⇒ "Finalize Week" + the all-final banner (got ${JSON.stringify(e1)})`);
+  const e2 = wizard.finalizeEntry({ status: 'live', games: [final('a'), live('b')] });
+  assert(e2.show && !e2.allFinal && e2.label === 'Review & finalize', `19-3: LIVE, a game still on ⇒ "Review & finalize", no banner (got ${JSON.stringify(e2)})`);
+  assert(wizard.finalizeEntry({ status: 'live', games: [] }).allFinal === false, '19-4 (mutation guard): an EMPTY slate is not "every game final" (every() of nothing is true)');
+  assert(wizard.finalizeEntry({ status: 'live', games: [final('a')], sportCode: 'NFL', weekNumber: 6, multiSport: true }).label === 'Finalize NFL Week 6'
+    && wizard.finalizeEntry({ status: 'live', games: [live('a')], sportCode: 'NFL', weekNumber: 6, multiSport: true }).label === 'Review & finalize NFL Week 6',
+    '19-5: a multi-sport league names the sport and week ("Finalize NFL Week 6")');
+  assert(wizard.finalizeEntry({ status: 'live', games: [final('a')], sportCode: 'NFL', weekNumber: 6, multiSport: false }).label === 'Finalize Week',
+    '19-6: …a single-sport league never does');
+
+  // ── the visible steps: Step 3 only when the contest is on
+  assert(wizard.FINALIZE_STEPS.find((s) => s.step === 3).title === 'Longest field goal (Extra Point)', '19-7: Step 3 carries the DI\'s title');
+  assert(wizard.finalizeStepsFor({}).length === 4 && wizard.finalizeStepsFor({ extraPointEnabled: true }).length === 4, '19-8: the contest on (or unset — opt-out default) ⇒ four steps');
+  const off = { extraPointEnabled: false };
+  assert(wizard.finalizeStepsFor(off).map((s) => s.step).join(',') === '1,2,4', '19-9: the contest OFF ⇒ Step 3 is not shown');
+  assert(wizard.finalizeNextStep(2, off) === 4 && wizard.finalizePrevStep(4, off) === 2 && wizard.finalizeNextStep(2, {}) === 3 && wizard.finalizePrevStep(4, {}) === 3,
+    '19-10: Next from Step 2 / Back from Step 4 skip the hidden step, and only then');
+  assert(wizard.finalizeNextStep(4, {}) === null && wizard.finalizePrevStep(1, {}) === null, '19-11: nothing past either end');
+  assert(wizard.finalizeNormalizeStep(3, off) === 4 && wizard.finalizeNormalizeStep(3, {}) === 3, '19-12: a step that became hidden mid-flow lands on the next visible one');
+  assert(JSON.stringify(wizard.finalizeStepPosition(4, off)) === '{"index":3,"count":3}' && JSON.stringify(wizard.finalizeStepPosition(2, {})) === '{"index":2,"count":4}',
+    '19-13: the tracker counts visible steps ("Step 3 of 3" with the contest off)');
+
+  // ── Step 1's count line
+  const sum = wizard.finalizeApproveScoresSummary([final('a'), final('b'), live('c')]);
+  assert(sum.finalCount === 2 && wizard.finalizeScoresCountLabel(sum) === '2 of 3 games final · spreads locked', `19-14: "{F} of {N} games final · spreads locked" (got ${wizard.finalizeScoresCountLabel(sum)})`);
+  assert(wizard.finalizeScoresCountLabel(wizard.finalizeApproveScoresSummary([final('a'), { gameId: 'b', status: 'final', lockedSpread: null }])) === '2 of 2 games final · 1 spread not locked',
+    '19-15: …and names a missing locked spread instead of claiming "spreads locked"');
+
+  // ── the tiebreaker gate: required once there is a question AND a guess
+  const q = { tiebreakerQuestion: 'Total points?' };
+  assert(wizard.tiebreakerRequirement({ week: q, guessCount: 1 }).required === true, '19-16: a question + one guess ⇒ the tiebreaker is REQUIRED');
+  assert(wizard.tiebreakerRequirement({ week: q, guessCount: 0 }).required === false && wizard.tiebreakerRequirement({ week: { tiebreakerQuestion: '  ' }, guessCount: 3 }).required === false,
+    '19-17: no guesses, or no (whitespace-only) question ⇒ optional (the existing "blank is legal" path)');
+  const store19 = new Map([['w19', { weekId: 'w19', status: 'live' }]]);
+  const d19 = { saveWeek: (w) => store19.set(w.weekId, w), getWeek: (id) => store19.get(id) || null, finalizeWeek: () => {} };
+  const r1 = wizard.confirmFinalizeTiebreaker({ week: store19.get('w19'), actualValue: null, required: true, deps: d19 });
+  assert(r1.ok === false && r1.reason === 'required' && store19.get('w19').actualTiebreakerValue === undefined, '19-18: required + blank ⇒ refused with reason "required", nothing written');
+  const r2 = wizard.confirmFinalizeTiebreaker({ week: store19.get('w19'), actualValue: 51, required: true, provisional: true, deps: d19 });
+  assert(r2.ok === false && r2.reason === 'required', '19-19: required + a PROVISIONAL value (DI-516\'s live total) ⇒ refused too: provisional is never final');
+  const r3 = wizard.confirmFinalizeTiebreaker({ week: store19.get('w19'), actualValue: 0, required: true, deps: d19 });
+  assert(r3.ok === true && store19.get('w19').actualTiebreakerValue === 0 && store19.get('w19').tiebreakerFinalized === true, '19-20 (mutation guard): a real 0 is a value, not a missing one');
+  const r4 = wizard.confirmFinalizeTiebreaker({ week: { weekId: 'w20', status: 'live' }, actualValue: null, deps: { ...d19, getWeek: () => null } });
+  assert(r4.ok === true, '19-21: not required ⇒ null stays legal ([15-19g]\'s contract, unchanged)');
+
+  // ── the source chip — D1 integration (2026-10-07): FB-027's own comparison (tiebreakerValueSource) is retired in favour of DI-516's ONE answer,
+  //    effectiveTiebreakerActual() and its `matchesCalculated`; these drive the REAL live module over an alma slate (Texas 31 + Iowa 20 = 51).
+  const almaGame = (id, home, away, hs, as, status = 'final') => ({ gameId: id, homeTeam: home, awayTeam: away, homeScore: hs, awayScore: as, status, isAlmaMaterGame: true });
+  const almaFinal = [almaGame('a', 'Texas', 'Oklahoma', 31, 24), almaGame('b', 'Purdue', 'Iowa', 17, 20)];
+  const almaPartial = [almaGame('a', 'Texas', 'Oklahoma', 31, 24), almaGame('b', 'Purdue', 'Iowa', 17, 20, 'live')];
+  const effOf = (actualTiebreakerValue, games = almaFinal, status = 'live') => effectiveTiebreakerActual({ week: { status, actualTiebreakerValue }, games, almaMaters: ['Texas', 'Iowa'] });
+  assert(effOf(51).matchesCalculated === true && wizard.tiebreakerSourceChip(effOf(51)) === 'Calculated'
+    && effOf(null).source === 'calculated' && wizard.tiebreakerSourceChip(effOf(null)) === 'Calculated',
+    '19-22: a stored value equal to the COMPLETE calculated total (51), and the live calculated total itself, ⇒ "Calculated"');
+  assert(wizard.tiebreakerSourceChip(effOf(75)) === 'Commissioner-set' && wizard.tiebreakerSourceChip(effOf(0)) === 'Commissioner-set',
+    '19-23: anything else stored (75; a real 0 too) ⇒ "Commissioner-set"');
+  assert(effOf(51, almaPartial).matchesCalculated === false && wizard.tiebreakerSourceChip(effOf(51, almaPartial)) === 'Commissioner-set'
+    && wizard.tiebreakerSourceChip(effOf(null, [], 'final')) === '' && wizard.tiebreakerSourceChip(null) === '' && wizard.tiebreakerSourceChip({ value: null, source: 'manual' }) === ''
+    && typeof wizard.tiebreakerValueSource === 'undefined',
+    '19-24: a value equal to a PROVISIONAL total is not "Calculated" (DI-516: only a complete total matches); no value ⇒ no chip; FB-027\'s own comparison is gone (one rule)');
+
+  // ── the review card
+  const players = [{ playerId: 'p1', displayName: 'Drew' }, { playerId: 'p2', displayName: 'Kevin' }];
+  const graded = { winners: ['p1'], rows: [{ playerId: 'p1', displayName: 'Drew' }, { playerId: 'p2', displayName: 'Kevin' }] };
+  const wk = { tiebreakerQuestion: 'Total points?', actualTiebreakerValue: 51, extraPointEnabled: true, extraPointActual: 50 };
+  const rv = wizard.finalizeReview({ week: wk, games: [final('a'), final('b')], guessCount: 2, effective: effOf(51), epGraded: graded, entrants: 2, members: 2 });
+  const line = (r) => [r.label, ...r.parts].join(' · ');
+  assert(rv.rows.map((r) => r.id).join(',') === 'scores,tiebreaker,extra-point,players', '19-25: four rows, in the DI\'s order');
+  assert(line(rv.rows[0]) === 'Scores · 2 of 2 final' && line(rv.rows[1]) === 'Tiebreaker · Total points? · 51 · Calculated'
+    && line(rv.rows[2]) === 'Longest field goal · 50 yd · closest without going over: Drew' && line(rv.rows[3]) === 'Players counted · 2 of 2' && rv.blocked === false,
+    `19-26: every row reads as the DI writes it, and nothing blocks (got ${JSON.stringify(rv.rows.map(line))})`);
+  const rvMissing = wizard.finalizeReview({ week: { ...wk, actualTiebreakerValue: null }, games: [final('a')], guessCount: 2, effective: effOf(51), epGraded: graded, entrants: 2, members: 2 });
+  assert(line(rvMissing.rows[1]) === 'Tiebreaker · Total points? · Missing' && rvMissing.blocked === true && rvMissing.missing.join() === 'tiebreaker',
+    '19-27: a REQUIRED tiebreaker that is null reads "Missing" (never 0) and blocks');
+  const rvOptional = wizard.finalizeReview({ week: { ...wk, actualTiebreakerValue: null }, games: [final('a')], guessCount: 0, effective: effOf(51), epGraded: graded, entrants: 2, members: 2 });
+  assert(line(rvOptional.rows[1]) === 'Tiebreaker · Total points? · Missing' && rvOptional.blocked === false, '19-28: …the same null with nobody guessing reads "Missing" but does not block');
+  const rvProv = wizard.finalizeReview({ week: wk, games: [final('a')], guessCount: 2, effective: effOf(51), provisional: true, epGraded: graded, entrants: 2, members: 2 });
+  assert(line(rvProv.rows[1]) === 'Tiebreaker · Total points? · Missing' && rvProv.blocked === true, '19-29: a PROVISIONAL value is shown as Missing and blocks — provisional is never treated as final');
+  const rvNoEp = wizard.finalizeReview({ week: { ...wk, extraPointEnabled: false, extraPointActual: null }, games: [final('a')], guessCount: 2, effective: effOf(51), entrants: 2, members: 2 });
+  assert(line(rvNoEp.rows[2]) === 'Longest field goal · Not used this week' && rvNoEp.blocked === false, '19-30: the contest off ⇒ "Not used this week", never a block');
+  const rvEpMissing = wizard.finalizeReview({ week: { ...wk, extraPointActual: null }, games: [final('a')], guessCount: 2, effective: effOf(51), epGraded: null, entrants: 2, members: 2 });
+  assert(line(rvEpMissing.rows[2]) === 'Longest field goal · Missing' && rvEpMissing.blocked === true, '19-31: the contest on with no yards ⇒ "Missing" and blocks');
+  const rvHidden = wizard.finalizeReview({ week: wk, games: [final('a')], guessCount: 2, effective: effOf(51), epGraded: null, entrants: 2, members: 2 });
+  assert(line(rvHidden.rows[2]) === 'Longest field goal · 50 yd', '19-32: grading not visible (blind gate) ⇒ the yards only, never a guess at who was closest');
+  const rvNobody = wizard.finalizeReview({ week: wk, games: [final('a')], guessCount: 2, effective: effOf(51), epGraded: { winners: [], rows: [] }, entrants: 2, members: 2 });
+  assert(/closest without going over: no one$/.test(line(rvNobody.rows[2])), '19-33: everyone busted ⇒ "no one"');
+  const rvNoQ = wizard.finalizeReview({ week: { ...wk, tiebreakerQuestion: '' }, games: [final('a')], guessCount: 2, entrants: 2, members: 2, epGraded: graded });
+  assert(line(rvNoQ.rows[1]) === 'Tiebreaker · Not used this week', '19-34: no question ⇒ "Not used this week"');
+  const rvScores = wizard.finalizeReview({ week: wk, games: [final('a'), live('b')], guessCount: 2, effective: effOf(51), epGraded: graded, entrants: 2, members: 2 });
+  assert(rvScores.blocked === true && line(rvScores.rows[0]) === 'Scores · 1 of 2 final', '19-35: a game not final blocks the review too (Step 1\'s rule, re-checked at Step 4)');
+
+  // ── the awaited save
+  const mk = (answer) => {
+    const st = new Map([['w21', { weekId: 'w21', status: 'live' }]]);
+    let fin = 0, asked = 0;
+    const deps = { saveWeek: (w) => st.set(w.weekId, w), getWeek: (id) => st.get(id) || null, finalizeWeek: () => { fin++; },
+      confirmSaved: answer === undefined ? undefined : async () => { asked++; if (answer === 'throw') throw new Error('x'); return answer; } };
+    return { st, deps, counts: () => ({ fin, asked }) };
+  };
+  {
+    const t = mk('saved');
+    const r = await wizard.finalizeWeekFromWizard({ week: t.st.get('w21'), deps: t.deps });
+    assert(r.ok === true && r.state === 'saved' && t.st.get('w21').status === 'final' && t.counts().fin === 1 && t.counts().asked === 1, '19-36: "saved" ⇒ ok, the week final, finalizeWeek() ran once, the server was asked once');
+  }
+  for (const answer of ['refused', 'pending', 'throw']) {
+    const t = mk(answer);
+    const r = await wizard.finalizeWeekFromWizard({ week: t.st.get('w21'), deps: t.deps });
+    assert(r.ok === false && r.state === (answer === 'throw' ? 'pending' : answer), `19-37 (${answer}): anything but "saved" is NOT success (got ${JSON.stringify({ ok: r.ok, state: r.state })})`);
+  }
+  {
+    const t = mk(undefined);
+    const r = await wizard.finalizeWeekFromWizard({ week: t.st.get('w21'), deps: t.deps });
+    assert(r.ok === true && r.state === 'saved', '19-38: no confirmSaved dependency (local mode) ⇒ success at once');
+  }
+  {
+    const t = mk('saved');
+    const r = await wizard.finalizeWeekFromWizard({ week: t.st.get('w21'), blocked: true, deps: t.deps });
+    assert(r.ok === false && r.state === 'blocked' && t.st.get('w21').status === 'live' && t.counts().fin === 0 && t.counts().asked === 0,
+      '19-39: a BLOCKED review writes nothing and asks nothing (a missing value never finalizes as zero)');
+  }
+  {
+    const t = mk('saved');
+    const w = wizard.createWeekWizard(t.deps);
+    const r = await w.finalizeWeekFromWizard({ week: t.st.get('w21') });
+    assert(r.ok === true && t.st.get('w21').status === 'final', '19-40: the factory exposes finalizeWeekFromWizard, deps-bound');
+  }
+}
+
+console.log('\n[20] FB-027 / DI-518 amendment (coordinator, 2026-10-07) — the live week hiding behind a next-week draft, and its row\'s words…');
+{
+  const draft = { weekId: 'd7', weekNumber: 7, status: 'draft' };
+  const live6 = { weekId: 'w6', weekNumber: 6, status: 'live' };
+  assert(wizard.liveWeekBehindDraft({ draft, weeks: [live6, draft] }) === live6, '20-1: a draft with a LIVE week of the same sport on file ⇒ that week');
+  for (const status of ['draft', 'open', 'locked', 'final']) {
+    assert(wizard.liveWeekBehindDraft({ draft, weeks: [{ ...live6, status }, draft] }) === null, `20-2 (${status}): only a LIVE week hides behind a draft`);
+  }
+  assert(wizard.liveWeekBehindDraft({ draft: { ...draft, status: 'open' }, weeks: [live6] }) === null && wizard.liveWeekBehindDraft({ draft: null, weeks: [live6] }) === null,
+    '20-3: not a draft (or no week) ⇒ nothing: the row belongs to the draft view only');
+  assert(wizard.liveWeekBehindDraft({ draft: { ...draft, status: 'live' }, weeks: [{ ...draft, status: 'live' }] }) === null, '20-4: a week never hides behind itself');
+  assert(wizard.liveWeekBehindDraft({ draft, weeks: [live6], statusOf: (w) => (w.weekId === 'w6' ? 'locked' : w.status) }) === null,
+    '20-5 (mutation guard): the caller\'s status reader decides (app.js passes the SERVER-confirmed status): a mirror that says live over a server at locked shows no row');
+  assert(wizard.liveWeekBehindDraft({ draft, weeks: [live6], sameSport: () => false }) === null, '20-6: another sport\'s live week does not hide behind this draft');
+  const live5 = { weekId: 'w5', weekNumber: 5, status: 'live' }, live9 = { weekId: 'w9', weekNumber: 9, status: 'live' };
+  assert(wizard.liveWeekBehindDraft({ draft, weeks: [live9, live6, live5] }) === live5, '20-7: several live weeks ⇒ the lowest-numbered (the oldest one still open to finalize)');
+  assert(wizard.liveWeekBehindDraft({ draft, weeks: [live9] }) === live9, '20-8: a live week numbered ABOVE the draft is hidden the same way, so it qualifies too');
+  assert(JSON.stringify(wizard.liveWeekRowCopy({ weekNumber: 6 })) === JSON.stringify({ text: 'Week 6 is live', button: 'Finalize Week 6' }), '20-9: "Week 6 is live" · "Finalize Week 6"');
+  assert(wizard.liveWeekRowCopy({ weekNumber: 6, sportCode: 'NFL', multiSport: true }).button === 'Finalize NFL Week 6'
+    && wizard.liveWeekRowCopy({ weekNumber: 6, sportCode: 'NFL', multiSport: false }).button === 'Finalize Week 6', '20-10: a multi-sport league names the sport; a single-sport league never does');
+}
+
+console.log('\n[21] FB-027 review round 1, B1 — a press never finalizes twice; the server\'s answer as the sheet shows it (DI-519 amended)…');
+{
+  const act = wizard.finalizePressAction;
+  assert(act({ serverFinal: false, deviceStatus: 'live', blocked: false }) === 'finalize', '21-1: a LIVE week, nothing missing ⇒ the one first-time finalize');
+  assert(act({ serverFinal: false, deviceStatus: 'final', blocked: false }) === 'reask', '21-2: this device already shows it final (a press is queued) ⇒ RE-ASK only, never a second finalize');
+  assert(act({ serverFinal: true, deviceStatus: 'final', blocked: false }) === 'confirmed' && act({ serverFinal: true, deviceStatus: 'live', blocked: false }) === 'confirmed',
+    '21-3: the SERVER holds it final ⇒ confirmed (success), whatever this device shows');
+  assert(act({ serverFinal: false, deviceStatus: 'live', blocked: true }) === 'blocked', '21-4: a missing required value on a live week ⇒ blocked, nothing written');
+  assert(act({ serverFinal: false, deviceStatus: 'final', blocked: true }) === 'reask' && act({ serverFinal: true, deviceStatus: 'final', blocked: true }) === 'confirmed',
+    '21-5 (mutation guard): a week already finalized is never re-judged by the review — a re-ask or a success, never "blocked"');
+  const v = wizard.finalizeOutcomeView;
+  assert(v('saved').kind === 'success' && v('saved').action === null, '21-6: saved ⇒ success, no row');
+  assert(v('pending').kind === 'not-sent' && v('pending').text === "Not sent yet. It will finish when you're back online." && v('pending').action === 'retry' && v('pending').actionLabel === 'Retry',
+    '21-7: pending ⇒ "Not sent yet. It will finish when you\'re back online." with Retry (a re-ask)');
+  // PF-416 / FB-026 follow-up, item 2 (2026-10-07) — the refused row is TRUTHFUL and TERMINAL. "Reload and try again" invited the loop the adapter
+  // makes certain: a refused week write stays queued across a re-sync, so the next press re-sent the same refused finalize and was refused again.
+  for (const st of ['refused', 'error', undefined]) {
+    assert(v(st).kind === 'refused' && v(st).text === "Couldn't finalize. The server didn't accept it, so the week is still live for everyone." && v(st).action === 'reload' && v(st).actionLabel === 'Reload app',
+      `PF-416 21-8 (${st}): a refusal or an error ⇒ "Couldn't finalize. The server didn't accept it, so the week is still live for everyone." with Reload app (got ${JSON.stringify(v(st))})`);
+  }
+  assert(![v('pending').text, v('refused').text].some((t) => /Nothing was saved/.test(t)), '21-9: neither row says "Nothing was saved"');
+  assert(wizard.FINALIZE_COPY.FINALIZING === 'Finalizing…' && wizard.FINALIZE_COPY.EP_DETECT === 'Detect', '21-10: the in-flight label and Step 3\'s Detect label');
+  assert(!/try again|retry/i.test(`${v('refused').text} ${v('refused').actionLabel}`) && v('refused').action !== 'retry',
+    'PF-416 21-11: the refused row never invites the same request again — no "try again", no Retry');
+  // PF-416 follow-up, item 3 — where a Finalize entry opens.
+  const entry = wizard.finalizeEntryState;
+  assert(typeof entry === 'function' && JSON.stringify(entry({ committed: false, refused: false })) === JSON.stringify({ step: 1, outcome: null })
+    && JSON.stringify(entry({ committed: false, refused: true })) === JSON.stringify({ step: 1, outcome: null }) && JSON.stringify(entry()) === JSON.stringify({ step: 1, outcome: null }),
+    'PF-416 21-12: nothing committed on this device ⇒ the flow opens at Step 1 with no outcome row (a refusal latched elsewhere does not move it)');
+  assert(typeof entry === 'function' && JSON.stringify(entry({ committed: true, refused: false })) === JSON.stringify({ step: 4, outcome: 'pending' }),
+    'PF-416 21-13: a finalize committed here and not yet held by the server ⇒ Step 4, "Not sent yet" (a re-ask), never Steps 1-3');
+  assert(typeof entry === 'function' && JSON.stringify(entry({ committed: true, refused: true })) === JSON.stringify({ step: 4, outcome: 'refused' }),
+    'PF-416 21-14: …and when the week write is latched refused ⇒ Step 4 on the terminal refused row');
+  // PF-416 review follow-up copy (coordinator decision, 2026-10-08) — the success toast says when a reload is coming, so it does not read as a crash.
+  const C = wizard.FINALIZE_COPY;
+  assert(C.SUCCESS(6) === 'Week 6 is final.' && typeof C.SUCCESS_REFRESHING === 'function' && C.SUCCESS_REFRESHING(6) === 'Week 6 is final. Refreshing…',
+    `PF-416 21-15: the success copy is "Week 6 is final.", and "Week 6 is final. Refreshing…" when a reload follows (got ${JSON.stringify([C.SUCCESS(6), typeof C.SUCCESS_REFRESHING === 'function' ? C.SUCCESS_REFRESHING(6) : null])})`);
 }
 
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);

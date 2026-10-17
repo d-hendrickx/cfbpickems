@@ -1,0 +1,12 @@
+{
+  "id": "joinoffertest",
+  "script": "joinoffertest.mjs",
+  "summary": "strict",
+  "floor": 39,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 3800,
+  "note": "D1 DESIGN_D1_E (2026-10-15, Drew D-88): the APP half of the join nudge over the real js/app.js on the multisport harness (sportenv): joinOffers() is exactly the league overview's own 'Also in this league' cards (open / locked / live / final, three sports, an archived sport, the commissioner who has not joined), empty signed out, withheld, for a member who plays the sport and for the LATE JOINER (plays the sport, not in this week); a confirmed Join repaints Home when it is showing and ends the offer, a refused Join and a Join made elsewhere repaint nothing; static wiring; 10 in-memory app.js mutants (S-3)."
+}

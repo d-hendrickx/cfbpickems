@@ -26,9 +26,20 @@ import { getExtraPointGuess } from './storage.js';
 // ── Detection ─────────────────────────────────────────────────────────────────
 
 const SUMMARY_ROOT = 'https://site.api.espn.com/apis/site/v2/sports/football/college-football/summary';
+// D1 (DI-533 #7, D-31, 2026-10-07) - the NFL's summary root. The scoringPlays shape is the same ("Field Goal Good": "Cameron Dicker 31 Yd Field Goal",
+// checked against a real NFL summary on 2026-10-07 and pinned by eptest [NFL]), so the SAME parse settles the optional longest-field-goal contest.
+const NFL_SUMMARY_ROOT = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary';
 
-async function fetchSummary(eventId) {
-  const res = await fetch(`${SUMMARY_ROOT}?event=${encodeURIComponent(eventId)}`);
+/** The summary root for one game, or null when this engine has no summary feed for the game's sport. A game with no `espnSport` is college football (as everywhere else). */
+function summaryRootFor(game) {
+  const sport = game && game.espnSport;
+  if (!sport || sport === 'college-football') return SUMMARY_ROOT;
+  if (sport === 'nfl') return NFL_SUMMARY_ROOT;
+  return null;
+}
+
+async function fetchSummary(eventId, root = SUMMARY_ROOT) {
+  const res = await fetch(`${root}?event=${encodeURIComponent(eventId)}`);
   if (!res.ok) throw new Error(`ESPN summary HTTP ${res.status}`);
   return res.json();
 }
@@ -61,11 +72,15 @@ function parseFieldGoals(summary, game) {
  * Never throws — per-game failures are collected into `skipped`.
  */
 export async function detectLongestFieldGoal(games) {
-  const withIds = games.filter(g => g.espnEventId);
+  // A game of a sport this engine has no summary feed for is SKIPPED AND SAID SO (never looked up on the college scoreboard, which would answer a wrong game or nothing).
+  const feedable = games.filter(g => g.espnEventId && summaryRootFor(g));
+  const withIds = feedable;
   const skipped = games.filter(g => !g.espnEventId)
-    .map(g => ({ game: `${g.awayTeam} @ ${g.homeTeam}`, reason: 'no ESPN event id (manual game)' }));
+    .map(g => ({ game: `${g.awayTeam} @ ${g.homeTeam}`, reason: 'no ESPN event id (manual game)' }))
+    .concat(games.filter(g => g.espnEventId && !summaryRootFor(g))
+      .map(g => ({ game: `${g.awayTeam} @ ${g.homeTeam}`, reason: `no summary feed for sport "${String(g.espnSport).slice(0, 20)}"` })));
   const all = [];
-  const results = await Promise.allSettled(withIds.map(g => fetchSummary(g.espnEventId).then(s => ({ g, s }))));
+  const results = await Promise.allSettled(withIds.map(g => fetchSummary(g.espnEventId, summaryRootFor(g)).then(s => ({ g, s }))));
   results.forEach((r, i) => {
     if (r.status === 'fulfilled') {
       all.push(...parseFieldGoals(r.value.s, r.value.g));

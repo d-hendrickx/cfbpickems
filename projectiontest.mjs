@@ -1,10 +1,15 @@
 /**
  * CFB Pickems — projectiontest.mjs (Phase III, Step 2, §5.2 B2)
  * =================================================================
- * MANDATORY per the Step 2 design input. Run:
+ * MANDATORY per the Step 2 design input. Drew runs it (it drives both import CLIs). Run:
  *
- *   node projectiontest.mjs
- *   TZ=UTC node projectiontest.mjs && TZ=America/Los_Angeles node projectiontest.mjs
+ *   CFBP_LIVE_OK=1 node projectiontest.mjs
+ *   CFBP_LIVE_OK=1 TZ=UTC node projectiontest.mjs && CFBP_LIVE_OK=1 TZ=America/Los_Angeles node projectiontest.mjs
+ *
+ * CFBP_LIVE_OK=1 opens the LIVE LATCH (supabase/tests/_live-latch.mjs), typed per run and never stored.
+ * The CLI children it spawns inherit it: every spawn passes `{ ...process.env, … }` or no env at all.
+ * The latch also requires a real terminal on stdin (M-46, 2026-10-14), so every spawn of a latched CLI passes
+ * `stdio: ['inherit', 'pipe', 'pipe']`: the child shares Drew's terminal as stdin; stdout and stderr stay captured.
  *
  * Covers:
  *   [1]  fromRows(toRows(v)) round-trips for every key in KEY_TABLES, on
@@ -44,9 +49,10 @@
  *        client cannot.
  */
 
+// LIVE LATCH, first statement on purpose: ES modules evaluate imports in order, so without CFBP_LIVE_OK=1 the latch exits before any later import, .env read or client creation is evaluated.
+import './supabase/tests/_live-latch.mjs';
 import { spawnSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 
@@ -64,18 +70,24 @@ import {
   verifyScribeMemory, verifySeasonArchive,
   computeResultsDrift, crossCheckBackup, findOrphans, EXIT,
 } from './supabase/import/import-backup.mjs';
+import { latestFunctionDefinition, replayTableColumns } from './supabase/import/migration-schema.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ─── the JS<->SQL seam (REV F3/F4) ─────────────────────────────────────────
 // Every mock client below is constructed WITH the column lists parsed out of
-// the real `0003_functions.sql`, so every suite in this file is also asserting
-// that what the projection emits is what `import_rows` will actually accept.
-// Without this, a key the SQL does not name is dropped silently by
-// jsonb_to_recordset and BOTH sides of the round-trip hash end up missing the
-// same field — the test passes while the data is gone.
-const FUNCTIONS_SQL_PATH = path.join(__dirname, 'supabase', 'migrations', '0003_functions.sql');
-const SCHEMA = parseImportRowsSchema(readFileSync(FUNCTIONS_SQL_PATH, 'utf8'));
+// the LATEST `import_rows` definition on disk, so every suite in this file is
+// also asserting that what the projection emits is what `import_rows` will
+// actually accept. Without this, a key the SQL does not name is dropped
+// silently by jsonb_to_recordset and BOTH sides of the round-trip hash end up
+// missing the same field — the test passes while the data is gone.
+// W-37 (2026-10-07): this read `0003_functions.sql`, which 0028 and 0033
+// redefine (`create or replace`, last wins), so the mock refused games.home_logo
+// from 0028 on. The definition is now resolved from the directory listing, so
+// the next migration that redefines import_rows is picked up with no edit here.
+const MIGRATIONS_DIR = path.join(__dirname, 'supabase', 'migrations');
+const IMPORT_ROWS_DEF = latestFunctionDefinition(MIGRATIONS_DIR, 'import_rows');
+const SCHEMA = parseImportRowsSchema(IMPORT_ROWS_DEF.sql);
 const newMock = () => new MockImportRowsClient({ schema: SCHEMA });
 
 let pass = 0, fail = 0;
@@ -756,10 +768,12 @@ console.log('\n[4] Importer upsert planner is idempotent against MockImportRowsC
 // check is only evidence if it goes RED on the shapes that were actually broken — so each case
 // below rebuilds a deliberately PRE-FIX schema (a scratch copy in memory, never a mutated file)
 // and asserts the mock refuses rows the projection really emits.
-console.log('\n[4b] import_rows seam — parsed from 0003_functions.sql, RED on the pre-fix shapes…');
+console.log(`\n[4b] import_rows seam — parsed from ${IMPORT_ROWS_DEF.file}:${IMPORT_ROWS_DEF.line} (the latest definition), RED on the pre-fix shapes…`);
 {
-  assert(SCHEMA.size >= 20, `seam: parsed ${SCHEMA.size} import_rows branches out of 0003_functions.sql`);
-  assert(SCHEMA.has('league_seq_counters'), 'seam: 0003 now HAS a league_seq_counters branch (REV F3)');
+  assert(IMPORT_ROWS_DEF.file.slice(0, 4) >= '0033',
+    `seam: the schema is read from the LATEST import_rows definition on disk (${IMPORT_ROWS_DEF.file}:${IMPORT_ROWS_DEF.line}), never 0003's (W-37)`);
+  assert(SCHEMA.size >= 20, `seam: parsed ${SCHEMA.size} import_rows branches out of ${IMPORT_ROWS_DEF.file}`);
+  assert(SCHEMA.has('league_seq_counters'), 'seam: import_rows HAS a league_seq_counters branch (REV F3)');
   assert(SCHEMA.get('comments').has('extra'), 'seam: import_rows("comments") accepts `extra` (REV F4)');
   assert(SCHEMA.get('notifications').has('extra'), 'seam: import_rows("notifications") accepts `extra` (REV F4)');
   assert(!SCHEMA.get('scribe_reports').has('run_id'), 'seam: import_rows("scribe_reports") has no run_id column (REV n11)');
@@ -1045,10 +1059,10 @@ const cliPath = path.join(__dirname, 'supabase', 'import', 'import-backup.mjs');
   const env = { ...process.env };
   delete env.SUPABASE_URL;
   delete env.SUPABASE_SERVICE_ROLE_KEY;
-  const res = spawnSync(process.execPath, [cliPath, '--export', 'nonexistent.json', '--league', 'L1', '--commissioner', 'p1'], { env, encoding: 'utf8' });
+  const res = spawnSync(process.execPath, [cliPath, '--export', 'nonexistent.json', '--league', 'L1', '--commissioner', 'p1'], { env, encoding: 'utf8', stdio: ['inherit', 'pipe', 'pipe'] });
   assert(res.status === EXIT.NO_SERVICE_ROLE, `import-backup.mjs exits ${EXIT.NO_SERVICE_ROLE} with SUPABASE_SERVICE_ROLE_KEY unset (got ${res.status})`);
 
-  const res2 = spawnSync(process.execPath, [cliPath, '--service-role-key', 'shouldnotmatter'], { env, encoding: 'utf8' });
+  const res2 = spawnSync(process.execPath, [cliPath, '--service-role-key', 'shouldnotmatter'], { env, encoding: 'utf8', stdio: ['inherit', 'pipe', 'pipe'] });
   assert(res2.status === EXIT.NO_SERVICE_ROLE, 'import-backup.mjs refuses a --service-role-key argument outright, never reads it');
   assert(!res2.stdout.includes('shouldnotmatter') && !res2.stderr.includes('shouldnotmatter'), 'the refused key value is never echoed anywhere');
 }
@@ -1076,7 +1090,7 @@ console.log('\n[11] REV F2 — the real CLI against a local PostgREST stand-in (
    */
   function runNode(args, env) {
     return new Promise((resolve) => {
-      const child = spawn(process.execPath, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(process.execPath, args, { env, stdio: ['inherit', 'pipe', 'pipe'] });
       let stdout = '', stderr = '';
       child.stdout.on('data', (d) => { stdout += d; });
       child.stderr.on('data', (d) => { stderr += d; });
@@ -1302,7 +1316,7 @@ console.log('\n[12] SEC F10 — export-sheet.mjs refuses an --out path inside a 
   assert(gitWorkingTreeFor(path.join(outsideDir, 'x.json')) === null,
     'gitWorkingTreeFor: a path under the OS temp dir is not in any working tree');
 
-  const inTree = spawnSync(process.execPath, [exportCli, '--out', path.join(__dirname, 'supabase', 'import', 'dump.json')], { encoding: 'utf8' });
+  const inTree = spawnSync(process.execPath, [exportCli, '--out', path.join(__dirname, 'supabase', 'import', 'dump.json')], { encoding: 'utf8', stdio: ['inherit', 'pipe', 'pipe'] });
   assert(inTree.status === 2, `export-sheet refuses an in-tree --out (exit 2, got ${inTree.status})`);
   assert(inTree.stderr.includes('inside the git working tree'), 'the refusal says why');
   assert(inTree.stderr.includes('pinHash'), 'the refusal says what is in the file that makes it matter');
@@ -1588,36 +1602,19 @@ console.log('\n[13b] notify-log `actor` — an OBJECT in a TEXT column (the noti
 // because nothing in memory performs the coercion. `MockImportRowsClient` stores what it is given,
 // so sections [4], [6] and [11] all ran green on the broken `actor` row for as long as it existed.
 //
-// The column TYPES are parsed out of the real `0001_schema.sql`, the same way `SCHEMA` above is
-// parsed out of `0003_functions.sql` and for the same reason: a hand-kept list of "which columns
-// are jsonb" is a second opinion that drifts. Every `cfbp_*` key must appear in the fixture
-// registry below, asserted — a guard that quietly stops covering a key is not a guard.
+// The column TYPES are read from the DDL itself, the same way `SCHEMA` above is read from the
+// latest import_rows, and for the same reason: a hand-kept list of "which columns are jsonb" is a
+// second opinion that drifts. W-37 (2026-10-07): they were parsed out of `0001_schema.sql` alone,
+// so every column a later migration ADDs (0028's games.home_logo, 0033's tournament_only_guest …)
+// read as "no such column"; replayTableColumns() replays every migration's CREATE/ALTER TABLE in
+// order. Every `cfbp_*` key must appear in the fixture registry below, asserted — a guard that
+// quietly stops covering a key is not a guard.
 console.log('\n[13c] no structured value reaches a non-jsonb column (the CLASS the `actor` defect belonged to)…');
 {
-  const SCHEMA_SQL_PATH = path.join(__dirname, 'supabase', 'migrations', '0001_schema.sql');
-  const schemaSql = readFileSync(SCHEMA_SQL_PATH, 'utf8');
-
-  /** table -> Map(column -> declared type token), from the DDL text. */
-  function parseColumnTypes(sql) {
-    const byTable = new Map();
-    const re = /create table (?:if not exists )?public\.(\w+)\s*\(([\s\S]*?)\n\);/g;
-    const RESERVED = new Set(['primary', 'foreign', 'unique', 'check', 'constraint', 'exclude', 'like']);
-    let m;
-    while ((m = re.exec(sql)) !== null) {
-      const cols = new Map();
-      for (const raw of m[2].split('\n')) {
-        const line = raw.replace(/--.*$/, '').trim();
-        if (!line) continue;
-        const cm = /^([a-z_][a-z0-9_]*)\s+([a-z][a-z0-9_ ]*?)(\s|\(|,|$)/.exec(line);
-        if (!cm || RESERVED.has(cm[1])) continue;
-        cols.set(cm[1], cm[2].trim().split(/\s+/)[0]);
-      }
-      byTable.set(m[1], cols);
-    }
-    return byTable;
-  }
-  const COLUMN_TYPES = parseColumnTypes(schemaSql);
-  assert(COLUMN_TYPES.size >= 20, `class guard: parsed ${COLUMN_TYPES.size} tables out of 0001_schema.sql`);
+  /** table -> Map(column -> declared type token), from the replay of every migration's DDL. */
+  const COLUMN_TYPES = new Map([...replayTableColumns(MIGRATIONS_DIR)]
+    .map(([table, cols]) => [table, new Map([...cols].map(([col, info]) => [col, info.type]))]));
+  assert(COLUMN_TYPES.size >= 20, `class guard: replayed ${COLUMN_TYPES.size} tables out of every migration`);
   assert(COLUMN_TYPES.get('notifications').get('actor') === 'text',
     'class guard: and it really reads `notifications.actor` as TEXT — the fact the whole rule turns on');
   assert(COLUMN_TYPES.get('notifications').get('meta') === 'jsonb' &&
@@ -1659,6 +1656,21 @@ console.log('\n[13c] no structured value reaches a non-jsonb column (the CLASS t
     id: 'mem_c1', playerId: 'p1', kind: 'fact', key: 'k', value: 'v', provenance: 'chat',
     confidence: 0.7, createdAt: '2026-09-05T20:15:00.000Z', reviewAt: '', sourceMessageId: 'm1', refreshedAt: null,
   };
+  // W-37 review (2026-10-07): cfbp_competitions joined KEY_TABLES with migration 0033 and had no fixture here.
+  // `settings` is the table's one jsonb column, so it carries a nested object.
+  const richCompetition = {
+    id: '6f1c2b8e-0d4a-4c1e-9b7a-3e5d2f1a0c9b', sport: 'mm', kind: 'tournament', seasonLabel: '2026',
+    parentCompetitionId: null, enrollment: 'opt_in', isDefault: false, archivedAt: null, activeWeekId: 'w1',
+    settings: { bracket: { rounds: 6, regions: ['East', 'West'] } },
+    createdAt: '2026-09-05T20:15:00.000Z', updatedAt: '2026-09-05T20:15:00.000Z',
+  };
+
+  // D1 (v0.30.0) DI-531: competition_members joined KEY_TABLES. `id` is the table's GENERATED column (competition_id:league_member_id); `joinedAt` is carried so a restore keeps each
+  // entry's original join time (C1b) — the projection maps it; only the ADAPTER's route (serverOwnedCols) withholds it from a client's insert.
+  const richCompetitionMember = {
+    id: '6f1c2b8e-0d4a-4c1e-9b7a-3e5d2f1a0c9b:p1', competitionId: '6f1c2b8e-0d4a-4c1e-9b7a-3e5d2f1a0c9b', memberId: 'p1',
+    enrolledBy: 'self', joinedAt: '2026-09-05T20:15:00.000Z',
+  };
 
   const CLASS_FIXTURES = {
     cfbp_settings: { season: '2026', nested: { a: 1 } },
@@ -1684,10 +1696,18 @@ console.log('\n[13c] no structured value reaches a non-jsonb column (the CLASS t
     cfbp_scribe_canon: [canon1],
     cfbp_scribe_reports: [report1],
     cfbp_game_requests: [gameRequest1],
+    cfbp_competitions: [richCompetition],
+    cfbp_competition_members: [richCompetitionMember],
     SEASON_2025: { season: { label: 'CFP 2K25' }, obligations: [{ id: 'x' }] },
   };
   const uncovered = Object.keys(KEY_TABLES).filter((k) => !(k in CLASS_FIXTURES));
   assert(uncovered.length === 0, 'class guard: EVERY key in KEY_TABLES has a fixture here', JSON.stringify(uncovered));
+
+  // NO named exemptions (D1 DI-531, 2026-10-08). The one that stood here, `competitions.extra` (the projection emitted `extra` on competitions rows and 0033's public.competitions has no
+  // such column), was the batch T finding Lane A owns: the projection now drops `extra` for competitions and competition_members (a `decorateRow`), so every column it emits exists in the
+  // DDL. The mechanism stays (a future, deliberate exemption is added here AND in static.check's W-37 section, and must still be HIT or this section turns red).
+  const DDL_EXEMPT = [];
+  const exemptHits = new Set();
 
   /** Every column of every row: an object value is only legal in a json/jsonb column. RETURNS the
    *  offenders rather than asserting, so the same scanner can be pointed at the defect it was
@@ -1696,11 +1716,15 @@ console.log('\n[13c] no structured value reaches a non-jsonb column (the CLASS t
     const offenders = [];
     for (const [table, rows] of Object.entries(rowsByTable)) {
       const cols = COLUMN_TYPES.get(table);
-      if (!cols) { offenders.push(`${table}: NOT FOUND in 0001_schema.sql`); continue; }
+      if (!cols) { offenders.push(`${table}: NOT FOUND in the replayed migrations`); continue; }
       for (const row of rows) {
         for (const [col, v] of Object.entries(row)) {
           const type = cols.get(col);
-          if (!type) { offenders.push(`${table}.${col}: no such column in the DDL`); continue; }
+          if (!type) {
+            if (DDL_EXEMPT.includes(`${table}.${col}`)) { exemptHits.add(`${table}.${col}`); continue; }
+            offenders.push(`${table}.${col}: no such column in the DDL`);
+            continue;
+          }
           if (type === 'jsonb' || type === 'json') continue;
           if (v !== null && typeof v === 'object') {
             offenders.push(`${table}.${col} is ${type} but received a ${Array.isArray(v) ? 'array' : 'object'}`);
@@ -1723,6 +1747,9 @@ console.log('\n[13c] no structured value reaches a non-jsonb column (the CLASS t
   checkRows('messageToRow', { messages: [messageToRow(richMessage, CTX)] });
   checkRows('notifyLogToRow', { notifications: [notifyLogToRow(richNotifyLogRec, CTX)] });
   checkRows('memoryToRow', { scribe_memory: [memoryToRow(richMemory, CTX)] });
+  assert(DDL_EXEMPT.every((x) => exemptHits.has(x)),
+    `class guard: every named exemption (${DDL_EXEMPT.join(', ')}) is still a real mismatch — a stale exemption is red, remove it`,
+    JSON.stringify([...exemptHits]));
 
   // And the rule is load-bearing, proven the only honest way: point the scanner at the PRE-FIX row
   // (the actor object put straight into the text column) and require it to report exactly that.
@@ -1734,6 +1761,24 @@ console.log('\n[13c] no structured value reaches a non-jsonb column (the CLASS t
       'class guard: RED on the PRE-FIX row — an actor OBJECT in the text column is caught, and named',
       JSON.stringify(offenders));
   }
+}
+
+// ── D1 DI-531 (v0.30.0) — competition_members: the projection round-trips, keeps joined_at for a restore, and never writes `extra` ───────────────────────────────────────────────────
+{
+  const CTX_CM = { leagueId: 'L-cm', memberIds: new Set(['p1']) };
+  const entry = { id: 'c1:p1', competitionId: 'c1', memberId: 'p1', enrolledBy: 'commissioner', joinedAt: '2026-09-05T20:15:00.000Z' };
+  const out = toRows.cfbp_competition_members([entry], CTX_CM);
+  const row = (out.competition_members || [])[0] || {};
+  assert(Object.keys(out).join() === 'competition_members' && out.competition_members.length === 1,
+    'competition_members: toRows names exactly the one table');
+  assert(row.competition_id === 'c1' && row.league_member_id === 'p1' && row.enrolled_by === 'commissioner' && row.league_id === 'L-cm' && row.id === 'c1:p1',
+    'competition_members: the typed columns, the league, and the generated id (competition_id:league_member_id)', JSON.stringify(row));
+  assert(row.joined_at === '2026-09-05T20:15:00.000Z', 'competition_members: joined_at is PROJECTED (a restore keeps each entry\'s original join time, C1b)', JSON.stringify(row));
+  assert(!('extra' in row), 'competition_members: no `extra` column (the table has none, 0033 section 5)', JSON.stringify(Object.keys(row)));
+  const back = fromRows.cfbp_competition_members({ competition_members: out.competition_members }, CTX_CM);
+  assert(JSON.stringify(back) === JSON.stringify([entry]), 'competition_members: fromRows(toRows(x)) is x, field for field', JSON.stringify(back));
+  const outComp = toRows.cfbp_competitions([{ id: 'c1', sport: 'nfl' }], CTX_CM);
+  assert(!('extra' in (outComp.competitions[0] || {})), 'competitions: no `extra` column either (the batch T finding, retired)', JSON.stringify(Object.keys(outComp.competitions[0] || {})));
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────

@@ -165,9 +165,13 @@ export const ICONS = {
   megaphone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10v4h3l9 5V5L7 10H4Z"/><line x1="7.5" y1="14.5" x2="9" y2="19.5"/><path d="M19.5 9.5a3.5 3.5 0 0 1 0 5"/></svg>',
   // A closed padlock. Replaces 🔒 (Lock Week).
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/></svg>',
+  // A clock face: a circle with the hour and minute hands. Replaces ⏳ on the lock countdown (D1 / DI-510, 2026-10-07). Same 24-unit grid, stroke weight and linecaps as the rest of the family.
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>',
   // An open padlock (shackle swung up and off). Replaces 🔓 (Re-open Picks).
   unlock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 7.6-1.8"/></svg>',
   // A play triangle. Replaces ▶️ (Go Live).
+  // D1 Lane C (N7, 2026-10-08) — the on/off switch's glyph on the Trainer card (it was the emoji-like character U+23FB): the standard power mark, same stroke family as the rest.
+  power: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="3" x2="12" y2="11"/><path d="M6.3 6.6a8 8 0 1 0 11.4 0"/></svg>',
   play: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5.5v13l10.5-6.5L8 5.5Z"/></svg>',
   // Two bars. Replaces ⏸ (Pause / Re-lock).
   pause: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="5.5" x2="9" y2="18.5"/><line x1="15" y1="5.5" x2="15" y2="18.5"/></svg>',
@@ -194,10 +198,11 @@ export const ICONS = {
   // the app's center tab (ICONS.home below, the same shapes) and the sign-in gate/brand
   // surfaces; the header trigger (#control-center-trigger) now wears ICONS.menu.
   munera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9 12 4.5 20.5 9Z"/><line x1="7" y1="12" x2="7" y2="16"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="17" y1="12" x2="17" y2="16"/><line x1="4" y1="19.5" x2="20" y2="19.5"/></svg>',
-  // Home wiring (2026-10-01, DESIGN_NEEDS_HOME Amendment 3 A3.5) — the Home tab's mark: the literal of ICONS.munera with class="home-roof" on the pediment, so CSS can FILL the roof when
-  // Home is the selected tab (.nav-item.active .nav-home-disc .home-roof). One SVG, no second asset; ICONS.munera above is byte-unchanged. index.html's static Home button carries this
-  // markup (as icon('home') returns it), and homenavtest pins the two equal.
-  home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path class="home-roof" d="M3.5 9 12 4.5 20.5 9Z"/><line x1="7" y1="12" x2="7" y2="16"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="17" y1="12" x2="17" y2="16"/><line x1="4" y1="19.5" x2="20" y2="19.5"/></svg>',
+  // D1 DI-584 / PF-450 (FB-025; Drew chose candidate B, D-56) — the Home tab's mark is the FULL filled Munera temple, the six shapes of the home-screen icon (the same shapes as brand.js getGateMarkSVG(),
+  // cropped to viewBox 205 250 614 495), `fill="currentColor"`, no stroke. It is the ONE named brand-mark exception to this file's stroked family (like GOOGLE_G_MARK_SVG, AD-55): a mark,
+  // not a chrome icon. Colour comes from the disc (`.nav-icon.nav-home-disc{color:var(--chrome-tab-bg)}`), so it follows the theme. ICONS.munera above (the outline) is byte-unchanged.
+  // index.html's static Home button carries this markup (as icon('home') returns it), and homenavtest pins the two equal and pins the shapes equal to getGateMarkSVG()'s.
+  home: '<svg viewBox="205 250 614 495" fill="currentColor"><path d="M 212 393 L 499.25 262.78 Q 512 257 524.75 262.78 L 812 393 L 812 401 Q 812 417 796 417 L 228 417 Q 212 417 212 401 L 212 393 Z"/><rect x="296" y="445.57" width="78" height="154.29"/><rect x="473" y="445.57" width="78" height="154.29"/><rect x="650" y="445.57" width="78" height="154.29"/><rect x="260" y="599.86" width="504" height="51.43" rx="7.71"/><rect x="212" y="679.86" width="600" height="57.14" rx="22.86"/></svg>',
   // Three horizontal strokes (y = 7, 12, 17, x = 4 to 20): the header MENU glyph, replacing the Munera mark in #control-center-trigger (UN-320c, Amendment 2 A2.7, Amendment 3 A3.6):
   // the mark now lives in the center tab, and the header button says what it does. Stroked, current-colour, the same grid; no label, badge or morph.
   menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>',
@@ -222,6 +227,10 @@ export const ICONS = {
   // handle at the right end of every Dashboard / Standings section title row while a layout is being rearranged.
   // Decorative (aria-hidden by icon()); the section's own name and the hidden Move buttons carry the meaning.
   grip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="8" x2="19" y2="8"/><line x1="5" y1="12" x2="19" y2="12"/><line x1="5" y1="16" x2="19" y2="16"/></svg>',
+
+  // Two opposed arrows (down on the left, up on the right): the iOS "sort" glyph. D1 Lane B (DI-607, 2026-10-08): the Dashboard's Sort button. The ONE glyph that lane adds to the family (D-1 allows
+  // chrome glyphs from it); decorative (aria-hidden by icon()) — the button's own name and its current mode carry the meaning.
+  sort: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 4 7 20"/><polyline points="3.5 16.5 7 20 10.5 16.5"/><polyline points="17 20 17 4"/><polyline points="13.5 7.5 17 4 20.5 7.5"/></svg>',
 
   // ── Social Platform v1 Home (DI-367, 2026-10-01) — THREE card-eyebrow glyphs the approved Home mockups (card-sheet.html / home-states.html) draw and the family did not yet have,
   // copied from those mockups' own paths. Every other eyebrow icon is an entry that already existed (calendarWeek, unlock, trophy, scribeSpark). Same convention as everything above. ──

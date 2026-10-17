@@ -1,0 +1,13 @@
+{
+  "id": "notifytest",
+  "script": "notifytest.mjs",
+  "label": "93",
+  "summary": "loose",
+  "floor": 660,
+  "tags": [
+    "smoke"
+  ],
+  "isolate": "tree",
+  "expectedMs": 2600,
+  "note": "D1 W-68 / W-69 review round 1 (2026-10-14): RAISED 658 -> 660: I-1 STATIC_ASSETS has no duplicate entry (cache.addAll() rejects a duplicate request). RG-193-adjacent (release v0.23.0) — the push/notification suite, including [25e]'s STATIC_ASSETS completeness scan over every module app.js statically imports, the service-worker reload-loop convergence proof, and DI-T6.2's reminder-rules.js/notifyServer.mjs parity twin ([30]). … Raised 647 -> 658 (security N-1, 0045 delta, 2026-10-08: [26n1] six relay cases, the never-silenceable announcement only for a confirmed commissioner of the row's league, and its 5-mutant data:URL kit)."
+}

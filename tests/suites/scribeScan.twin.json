@@ -1,0 +1,18 @@
+{
+  "id": "scribeScan.twin",
+  "script": "supabase/tests/functions/scribeScan.twin.mjs",
+  "summary": "strict",
+  "floor": 139,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "supabase/functions/scribe-scan/index.js",
+    "supabase/functions/_shared/scribe-autonomous-core.mjs",
+    "supabase/functions/_shared/scribe-evidence.mjs",
+    "js/scribe-callout.js",
+    "js/scribe-standards.js"
+  ],
+  "expectedMs": 4000,
+  "note": "D1 Lane C (DI-649..656): scribe-scan against an in-memory database: the deadline call-out (who is named, the re-check, the ceiling, spacing, C2 forgeries, hard lines, heat), the moment scan through the shared pipeline (one event one post, the shared ticket, eligibility), non-participation, the pools"
+}

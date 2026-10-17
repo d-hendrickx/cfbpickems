@@ -1,0 +1,15 @@
+{
+  "id": "scribeschematest",
+  "script": "scribeschematest.mjs",
+  "summary": "strict",
+  "floor": 50,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "supabase/functions/**/*.js",
+    "supabase/functions/**/*.mjs"
+  ],
+  "expectedMs": 400,
+  "note": "W-91 (LIVE 2026-10-16): every structured-output and strict tool schema SCRIBE sends walked against the API's keyword allow-list (minItems 0/1 only, no maxItems), a per-file source pin on json_schema/input_schema, planted shapes refused, the best-of-three cap held in parseCandidates()."
+}

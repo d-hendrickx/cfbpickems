@@ -46,7 +46,8 @@ export const NEWS_SETTINGS_COPY = Object.freeze({
   maxTeams: 'You are following the most teams News allows. Remove one to add another.',
   teamsHint: "NFL / NBA / NHL / CBB teams aren't selectable yet — those sports are followed at the sport level only until the shared team catalog work lands.",
   leagueOff: "The commissioner has turned off league news. Your own settings are saved for when it's back on.",
-  footer: "News never uses AI-generated text and never costs anything extra to run — it's headlines, images, and links, fetched directly from ESPN, the same way Google News works.",
+  // D1 Lane C (DI-673, 2026-10-08): the old sentence ("fetched directly from ESPN, the same way Google News works") became FALSE when publishers moved server-side. DI-673's text, verbatim.
+  footer: 'News never uses AI-generated text. Headlines, images and links come from the publishers named on each card, collected by our servers and kept for 14 days.',
 });
 
 /** The row for the drawer's "My Preferences" list: a nav row (label + chevron) that pushes the News pane. */

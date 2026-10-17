@@ -1,0 +1,12 @@
+{
+  "id": "scribeAutonomousVoiceDrift.check",
+  "script": "supabase/tests/scribeAutonomousVoiceDrift.check.mjs",
+  "label": "81l",
+  "summary": "loose",
+  "floor": 13,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "DI-T6.12 G5, autonomous's own small addition — AUTONOMOUS_VOICE_BRIEF is byte-identical to its backend/Code.gs source, extracted by anchor, plus a reachability assertion that scribe-autonomous/index.js's real request body actually carries it"
+}

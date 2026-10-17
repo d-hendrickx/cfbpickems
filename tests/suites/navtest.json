@@ -1,0 +1,13 @@
+{
+  "id": "navtest",
+  "script": "navtest.mjs",
+  "label": "88d",
+  "summary": "strict",
+  "floor": 384,
+  "tags": [
+    "browser",
+    "slow"
+  ],
+  "expectedMs": 62200,
+  "note": "RAISED from 361 by the Chat lift (Drew M-11 Q2, 2026-10-02): [7m] measures the chat composer >= 8 pt clear of the disc's collar keyboard-down and the keyboard-up gap unchanged at 8 pt, at insets 0/21/34 and widths 320/375/430 (+18), with two mutants (+2); sheetAt() now …"
+}

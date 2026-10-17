@@ -1,0 +1,12 @@
+{
+  "id": "privacytest",
+  "script": "privacytest.mjs",
+  "label": "117",
+  "summary": "loose",
+  "floor": 43,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "RAISED from 33 to 43 at the v4.0.0 re-pin (2026-10-15, same count under TZ=UTC and TZ=America/Los_Angeles): the v4 golden, the no-placeholder date rule, the R-13 paragraph and Sports publishers bullet asserted by name, the four deleted v3 ESPN clauses asserted absent, and the v4 teeth (Fox News dropped, R-13 sentence/paragraph dropped, Sports publishers bullet dropped, 14 days dropped, date left at 2026-10-02, each deleted v3 clause put back). Earlier note: RAISED from 24 at the v3.0.0 re-pin (2026-10-02): the placeholder-once / publishable-body / News-sentences assertions in [1] and the placeholder-left-in, wrong-date, page-placeholder and two dropped-promise mutations in [4]. …"
+}

@@ -1,0 +1,12 @@
+{
+  "id": "reasonchiptest",
+  "script": "reasonchiptest.mjs",
+  "label": "97",
+  "summary": "loose",
+  "floor": 204,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 4500,
+  "note": "SCRIBE v3 feedback v2: the eleven-chip closed set and its two opposed families, the allow-list at the write boundary (an invented chip never enters the log), set-not-diff folding with toggle-off, reason_note's 280 beside rewrite's 1000 (and the null-prototype clamp table), the …"
+}

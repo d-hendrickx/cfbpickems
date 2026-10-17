@@ -1,0 +1,10 @@
+{
+  "id": "livestatustest",
+  "script": "livestatustest.mjs",
+  "summary": "strict",
+  "floor": 157,
+  "tags": [
+    "quick"
+  ],
+  "note": "Live status / Game Day render paths (DI-2 in-place patch, halftime, stale, FINAL). W-22/DI-543 (2026-10-08): REGISTERED - it had no manifest, so nothing ran it; 4 assertions were stale against DI-570 and re-derived with dated notes."
+}

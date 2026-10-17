@@ -1,0 +1,19 @@
+{
+  "id": "comparetest",
+  "script": "comparetest.mjs",
+  "summary": "strict",
+  "floor": 182,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/compare.js",
+    "js/week-detail.js",
+    "js/stats.js",
+    "js/game-state.js",
+    "js/feed-cards.js",
+    "statsfixtures.mjs",
+    "supabase/functions/_shared/scribe-tools.mjs"
+  ],
+  "note": "D1 Lane B DI-594/595/596: headToHeadRecord (hand-derived, parity with the SCRIBE tool over every pair and week state, fails closed), the comparison and week detail models (one competition at a time, the blind rule, entrants, denominators in words, live is tentative) and their markup (escaper required, hostile strings inert). Registered 2026-10-08."
+}

@@ -1,0 +1,17 @@
+{
+  "id": "core",
+  "kind": "core",
+  "script": "loadtest.mjs",
+  "label": "core",
+  "summary": "strict",
+  "floor": 1796,
+  "tags": [
+    "slow",
+    "tz"
+  ],
+  "env": {
+    "CFBP_CORE": "full"
+  },
+  "expectedMs": 5000,
+  "note": "MERGE int deeb4e7d into feat/d1-history (2026-10-14): floor = the merged tree's measured 1796 (this branch 1789, int 1781). | D1 W-68 / W-69 (2026-10-14, MERGE int a6ee12a5 into feat/d1-slate): floor re-measured on the merged tree = 1781 (int 1775 plus the W-68/W-69 [1f] and import-list changes). D1 W-68 / W-69 (2026-10-14): RAISED 1774 -> 1777: section [1f] and the three new modules in the [1] import list. (D1 combine, 2026-10-08: RAISED from 1755 to 1767 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - loadtest.mjs minus the spawned blocks: every inline section. Its own counts are the contribution (the old harness counted them one by one). | MERGED int/v0.30.0 (d6e8ac5a) into feat/d1-gameday 2026-10-08: floor = the higher side's (1763 / 1774), to be re-measured on the merged tree. | RAISED from 1762 by D1 Game Day fix round 2 (DI-599, 2026-10-08): js/next-up.js joins section [1]'s import list. | RAISED to 1762, the Game Day merge of int/v0.30.0 (2026-10-08): measured on the merged tree. | (D1 combine, 2026-10-08: RAISED from 1755 to 1767 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - loadtest.mjs minus the spawned blocks: every inline section. Its own counts are the contribution (the old harness counted them one by one)."
+}

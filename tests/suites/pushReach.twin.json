@@ -1,0 +1,12 @@
+{
+  "id": "pushReach.twin",
+  "script": "supabase/tests/functions/pushReach.twin.mjs",
+  "label": "81n",
+  "summary": "loose",
+  "floor": 125,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 400,
+  "note": "D1 Lane A (2026-10-08, DI-548/549/545/546): RAISED 106 -> 125 to the measured count. Before that: DI-206 — push-reach end to end: the class-U gate (and that nothing at all happens before it), the server-side 60s rate limit that writes no run row and reads no send secret, per-member failure isolation (a timeout is `lookup failed`, NEVER `no device`), the untrusted-response …"
+}

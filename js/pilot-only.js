@@ -47,6 +47,7 @@ export const PILOT_ONLY_REGISTRY = Object.freeze({
       { file: 'js/app.js', marker: 'renderSeason2025OutstandingSection() — the 2K25 outstanding balances (Standings)' },
       { file: 'js/app.js', marker: 'renderSeason2025RecordSection() — the 2K25 Historical Record (Standings)' },
       { file: 'js/app.js', marker: 'renderSeason2025ObligationsAdmin() — the 2K25 carryover ledger (Comm)' },
+      { file: 'js/app.js', marker: 'getHomeWiring() — pilotHistoryAllowed: the Home "A year ago" card and its detail (D1 Lane B, security O1)' },
     ]),
     server: Object.freeze([]),
   }),
@@ -64,6 +65,12 @@ export const PILOT_ONLY_REGISTRY = Object.freeze({
       { file: 'js/data-model.js', marker: 'getAlmaMaters() — the ONLY way to read the six-school list (getAlmaMaterMatch()\'s, data-provider\'s and the cfb profile\'s defaults all go through it)' },
     ]),
     server: Object.freeze([]),
+  }),
+  // D1 Lane C (DI-479 / DI-670, 2026-10-08): `pilot`-status news sources reach pilot-league members only. The BOUNDARY is the server (0053's news_visible_source_ids(), RLS);
+  // the client keeps a MIRROR (belt and braces) that drops any item whose source is not `cleared` in a non-pilot league.
+  newsPilotSources: Object.freeze({
+    client: Object.freeze([{ file: 'js/newsTransport.js', marker: 'fetchServerNews() — a non-pilot league drops every item whose source is not cleared' }]),
+    server: Object.freeze([{ file: 'supabase/migrations/0053_news_sources_and_articles.sql', note: 'the visible-sources function: pilot sources only to an active member of a pilot league (or a platform admin); the articles policy and every client news RPC read it' }]),
   }),
   irbCopy: Object.freeze({
     client: Object.freeze([

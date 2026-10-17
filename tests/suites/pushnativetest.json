@@ -1,0 +1,21 @@
+{
+  "id": "pushnativetest",
+  "script": "pushnativetest.mjs",
+  "label": "96b",
+  "summary": "strict",
+  "floor": 140,
+  "post": [
+    {
+      "kind": "noLeaked",
+      "dir": "$TMPDIR",
+      "pattern": "^push-native\\.pre-mutation\\.",
+      "label": "pushnativetest.mjs's mutation scratch file was cleaned up (nothing leaked into its TMPDIR)"
+    }
+  ],
+  "tags": [
+    "quick"
+  ],
+  "isolate": "tree",
+  "expectedMs": 11700,
+  "note": "RAISED 139 -> 140 by W-22 (2026-10-08): [17d2], an earlier section's module copy with a retry armed inside [17d]'s window never reaches [17]'s plugin ([17] retires every copy the suite created). pushnativetest.mjs actually ran its full set (floor 139 — RAISED 96 -> 139 by UN-315 / DI-436 (2026-09-30): the native identity flow, [17]; earlier note: raised from 88 by RG-243's [13f]-[13m] (2026-09-24: the security gate on f2c3297 noted that the subscription repair re-armed …"
+}

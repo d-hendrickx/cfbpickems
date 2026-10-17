@@ -1,0 +1,13 @@
+{
+  "id": "layouttest",
+  "script": "layouttest.mjs",
+  "label": "112k",
+  "summary": "loose",
+  "floor": 469,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 300,
+  "note": "+1 SP57-c7a (release-notes exemption bounded, 2026-10-02); before that, floor 460 — the v0.29.0 batch-5b SP-54 merge (2026-10-01): 442 + SP-54's [SP54-L] pins; before that, floor 442 — set to the measured merged count at the v0.29.0 batch-5b integration (2026-10-01): Breathing …"
+}

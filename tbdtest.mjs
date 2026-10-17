@@ -123,7 +123,8 @@ const dm  = await import('./js/data-model.js');
 const app = await import('./js/app.js');
 const { fetchByDateRange, computeScore, scoreCandidateGames } = dp;
 const { formatGameTime, gameDataReadiness, TIME_ZONES, createGame } = dm;
-const { renderGameCard, renderAvailableGamesList } = app;
+const { renderGameCard } = app;
+const GamesList = await import('./js/games-list.js');   // D1 W-69: the one add payload builder (it replaced renderAvailableGamesList()'s hand-built data-game JSON)
 
 console.log('[tbdtest] data-provider.js exports —', Object.keys(dp).length);
 
@@ -367,52 +368,50 @@ console.log('\n[8] Defensive: a payload with no timeValid field must not silentl
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-console.log('\n[9] The SECOND false-TBD path — "Available Games -> + Add" drops the flags');
+console.log('\n[9] The SECOND false-TBD path — the Games list\'s "Add" must not drop the flags');
 {
   // A correctly-parsed, confirmed game. Even with the parser fixed, adding it
-  // to a slate through the Available Games button must not lose its kickoff
-  // state: renderAvailableGamesList() hand-builds its data-game payload field
-  // by field (it does NOT spread the game object), and createGame() defaults
-  // kickoffConfirmed/kickoffDateOnly to false/false — the fall-through state.
+  // to a slate through the Games list's Add must not lose its kickoff state:
+  // createGame() defaults kickoffConfirmed/kickoffDateOnly to false/false —
+  // the fall-through state. RE-DERIVED 2026-10-14 (D1 W-69): the Add no longer
+  // hand-builds a `data-game` JSON field by field in the markup; EVERY single add
+  // builds its data with ONE function, poolGameToSlateData(), from the live pool
+  // game when the button is tapped. That builder spreads the pool game, so the
+  // flags ride along - proven below for the confirmed game AND the genuine TBD.
   const res = await parseFixture([...REAL_8PM, GENUINE_TBD, CONTROL], ...WINDOW);
   const byId = new Map(res.games.map(g => [g.espnEventId, g]));
   const okla = byId.get('401856664');
   const tbd  = byId.get('401858465');
   assert(okla?.kickoffConfirmed === true, 'fixture check: the source game is confirmed before it is added');
 
-  const html = renderAvailableGamesList([okla], [], { weekId: 'w_tbd', dataSourceMode: 'espn_historical' });
-  const m = html.match(/data-game='([^']*)'/);
-  assert(!!m, 'fixture check: the add-avail-game-btn data-game attribute rendered');
-  const payload = JSON.parse(m[1].replace(/&#39;/g, "'"));
+  const payload = GamesList.poolGameToSlateData(okla, { weekId: 'w_tbd', dataSourceMode: 'espn_historical' });
+  assert(!!payload && typeof payload === 'object' && payload.homeTeam === 'Oklahoma' && payload.espnEventId === '401856664', 'fixture check: the add payload is built from the live pool game (its teams and event id ride along)');
   assert(payload.kickoff === okla.kickoff, 'fixture check: the payload carries the kickoff timestamp (non-vacuous)');
   assert(payload.kickoffConfirmed === true,
-    'the Available Games payload carries kickoffConfirmed — otherwise createGame() defaults it to false and the game shows "Time TBD" forever');
-  assert(payload.kickoffDateOnly === false, 'the Available Games payload carries kickoffDateOnly');
+    'the add payload carries kickoffConfirmed — otherwise createGame() defaults it to false and the game shows "Time TBD" forever');
+  assert(payload.kickoffDateOnly === false, 'the add payload carries kickoffDateOnly');
 
   // Exactly what the real click handler does.
   const added = createGame('w_tbd', payload);
   assert(added.homeTeam === 'Oklahoma', 'fixture check: createGame() built the added game (non-vacuous)');
   assert(added.kickoffConfirmed === true && added.kickoffDateOnly === false,
-    'a game added via Available Games keeps its confirmed kickoff');
+    'a game added via the Games list keeps its confirmed kickoff');
   const card = renderGameCard(added, null, 'pending', false, false);
   assert(card.includes('Oklahoma') && !card.includes('Time TBD'),
     'the added game renders a real time on the player card — not "Time TBD"');
 
-  // The three sibling add-paths ("Apply Suggested 10", "Add suggested
-  // individually", shortlist) call createGame(weekId, {...game}) — a full
-  // spread — so they carry the flags free. Prove that, so the claim that only
-  // the hand-built payload needed fixing is checked rather than assumed.
+  // The bulk add ("Add k suggested") calls createGame(weekId, {...game}) — a full
+  // spread — so it carries the flags free. Prove that, so the claim is checked
+  // rather than assumed.
   const spreadAdded = createGame('w_tbd', { ...okla, weekId: 'w_tbd' });
   assert(spreadAdded.kickoffConfirmed === true && spreadAdded.kickoffDateOnly === false,
     'the {...game} add-paths preserve the kickoff flags without a hand-built payload');
 
   // And the mirror: a genuine TBD added the same way must STAY TBD.
-  const tbdHtml = renderAvailableGamesList([tbd], [], { weekId: 'w_tbd', dataSourceMode: 'espn_historical' });
-  const tm = tbdHtml.match(/data-game='([^']*)'/);
-  const tbdPayload = JSON.parse(tm[1].replace(/&#39;/g, "'"));
+  const tbdPayload = GamesList.poolGameToSlateData(tbd, { weekId: 'w_tbd', dataSourceMode: 'espn_historical' });
   const addedTbd = createGame('w_tbd', tbdPayload);
   assert(addedTbd.kickoffDateOnly === true && addedTbd.kickoffConfirmed === false,
-    'a genuine TBD added via Available Games stays TBD');
+    'a genuine TBD added via the Games list stays TBD');
   assert(renderGameCard(addedTbd, null, 'pending', false, false).includes('Time TBD'),
     'the added genuine TBD still renders "Time TBD" (non-vacuous mirror)');
 }
@@ -451,8 +450,12 @@ const DP_SRC  = await readFile(new URL('./js/data-provider.js', import.meta.url)
 const mergeMatch = APP_SRC.match(/saveGame\(\{\.\.\.stored,([^}]*)\}\)/);
 assert(!!mergeMatch,
   '[10] fixture check: located the doRefreshScores() merge expression in js/app.js');
-const MERGE_FIELDS = mergeMatch[1].split(',').map(s => s.split(':')[0].trim()).filter(Boolean);
-const applyRefreshMerge = new Function('stored', 'upd', `return {...stored,${mergeMatch[1]}};`);
+// RE-DERIVED 2026-10-08 (W-22 / DI-543): the real merge now ends in a spread of a LOCAL (`...logoBackfill`, the commissioner-only logo backfill, 2026-09-27/28), which does not exist inside this
+// new Function() and crashed the whole suite with a ReferenceError (it was never registered, so no run noticed). The kickoff-flag half this section proves is the `key:value` terms, so the
+// spread terms are dropped from both the field list and the rebuilt merge; every key:value term is still taken from the shipped source text.
+const MERGE_TERMS = mergeMatch[1].split(',').map(t => t.trim()).filter(t => t && !t.startsWith('...'));
+const MERGE_FIELDS = MERGE_TERMS.map(t => t.split(':')[0].trim()).filter(Boolean);
+const applyRefreshMerge = new Function('stored', 'upd', `return {...stored,${MERGE_TERMS.join(',')}};`);
 
 // Drive the real refresh entry point against a stubbed ESPN scoreboard.
 async function refreshFixture(events, stored) {
@@ -955,7 +958,8 @@ console.log('\n[M2] Mutation battery for the self-heal path');
   }
   function mergeFromSource(src) {
     const m = src.match(/saveGame\(\{\.\.\.stored,([^}]*)\}\)/);
-    return m ? new Function('stored', 'upd', `return {...stored,${m[1]}};`) : null;
+    // RE-DERIVED 2026-10-08 (W-22 / DI-543): the `...logoBackfill` spread of a local is dropped, exactly as in [10] above.
+    return m ? new Function('stored', 'upd', `return {...stored,${m[1].split(',').map(t => t.trim()).filter(t => t && !t.startsWith('...')).join(',')}};`) : null;
   }
 
   // ── The three scenarios the heal has to get right, as reusable fixtures ────

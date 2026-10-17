@@ -1,0 +1,16 @@
+{
+  "id": "chatfoottest",
+  "script": "chatfoottest.mjs",
+  "summary": "strict",
+  "floor": 58,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "deps": [
+    "js/chat-ui.js",
+    "js/app.js",
+    "css/styles.css"
+  ],
+  "note": "D1 Lane B DI-573: the time (and edited / Sending\u2026 / Not sent + Retry) sits BENEATH the chat bubble, in the main chat and the thread sheet. Registered 2026-10-07."
+}

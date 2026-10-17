@@ -1,0 +1,20 @@
+{
+  "id": "d1wiringtest",
+  "script": "d1wiringtest.mjs",
+  "summary": "strict",
+  "floor": 96,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/home.js",
+    "js/pushed-screen.js",
+    "js/card-detail.js",
+    "index.html",
+    "statsfixtures.mjs",
+    "minidom.mjs"
+  ],
+  "note": "(95: [10] also taps the ✕ for real (10h-2) and proves P-3 — a tap during the slide-out (10q).) RAISED from 73 by the D1 Game Day consolidated round (2026-10-08): [10] the DI-592 thread sheet through the real dispatcher (subtitle, the icon close, Open in chat's own row, web vs native grabber and drag, Esc closes only the sheet, empty copy per game state); 2a-2 and the [8] sweep's Share to chat (DI-597). | RAISED from 67 by D1 Game Day review round 3 note N1 (2026-10-08): 8f-8h tampered What's next taps (next-picks, week-results, open-gameday) in states that do not offer them do nothing; 8-K the reviewer's three gap mutants (R-next, R-results, R-gday) each turn their case red. | RAISED from 65 by D1 Game Day fix round 2 Part B (5)/(3), 2026-10-08: [8] the tap sweep covers What's next's See week results, Make your picks / Edit My Picks and Open Game Day (eleven kinds, 27 buttons in 7 states) and boots through THIS module's navigateTo; [9] 9m/9n See week results pushes the week's result card above the game and Back returns to it. | RAISED from 52 by D1 Game Day fix round 2 Part B (1)/(2)/(4), 2026-10-08: [9] the Game view repaints IN PLACE through a REAL Home paint (logo <img>s, the score and status parts, the focused button and the scroll offset survive; no whole-body write), the stepper's buttons are patched (focus moves to the enabled one at the end), the polite live region speaks a cover flip and the game ending only with focus inside the screen (after the 5 s throttle), and Game Day's row logos go through the app's one logo binder on #page-home. | RAISED from 47 by D1 Game Day fix round 1 (B2, 2026-10-08): [8] every Game view button (Open thread, Locker Room, See all on Home, Make your picks, Back to Home, a Related card, Previous, Next) tapped through the real onGameViewClick, 8a-e. minidom learned :last-child. | D1 Lane B: the app.js side of the Home work RUN on the real app over a real tree: a card opens its detail as a pushed screen (forged ids and tampered buttons refused), the hold teardown and identity chokepoint close it, reading position per identity and week, the blind rule where the league's picks are read; mutation-proven on scratch copies of app.js. Registered 2026-10-07."
+}

@@ -1,0 +1,23 @@
+{
+  "id": "newsrendertest",
+  "script": "newsrendertest.mjs",
+  "summary": "strict",
+  "floor": 63,
+  "tags": [
+    "browser"
+  ],
+  "deps": [
+    "css/**",
+    "js/app.js",
+    "js/content-card.js",
+    "js/haptics.js",
+    "js/icons.js",
+    "js/nav-gestures.js",
+    "js/newsCard.js",
+    "js/newsRules.js",
+    "js/platform.js",
+    "js/pushed-screen.js"
+  ],
+  "expectedMs": 30000,
+  "note": "D1 Lane C P-8 / S-2 (DI-663, DI-672; 2026-10-08): the grouped news card, the storyline card and the \"Also from\" sheet MEASURED IN CHROMIUM inside Home's real page chrome, light and dark, 320 / 375 pt, default and 1.35x text: the grouped card wears the plain card's shell, the Also from button is 44 pt+, 16 pt from the card's inner edges and aligned with the text, 16 pt below the text and above the edge, its own fill; the storyline eyebrow is 12 pt with an 8 pt gap and an ellipsis; the sheet fits a 375x667 phone, scrolls inside, 44x44 close, 44 pt rows 8 pt apart, 16 pt inset; 97% press with no double scale and none under Reduce Motion; THE REAL DISPATCHERS tapped with real input events (main block -> article, Also from -> sheet and never the article, sheet row -> that alternate, Enter -> article, focus ring inside the clip); three measurement canaries; source pins on app.js so the sheet replica cannot drift. The first run caught the inset being read from the outer border edge (measurement fixed to the inner edge, where the body's own 16 pt is measured). EXTENDED 2026-10-08 (D1 Lane C content cards, floor 36 -> 60): [G] the four Home content cards measured in the feed card's own shell (padding, gap, 16 pt kind icons, 44 pt Retry) light and dark, 320 / 375, 1x and 1.35x; the SCRIBE caption in the secondary tone and the stale caption in the MUTED tone (the first run caught .feed-card-caption overriding it; fixed); real taps through the content dispatcher, Enter, Retry, the 97% press; [H] each kind's detail in the REAL pushed-screen shell: DI-669's sections in order, 44 pt actions centred 8 pt apart, 16 pt section insets, no overflow at 375x667 and 320 at 1.35x; canary 4."
+}

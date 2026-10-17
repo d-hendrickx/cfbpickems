@@ -1,0 +1,11 @@
+{
+  "id": "budgettest",
+  "script": "budgettest.mjs",
+  "summary": "strict",
+  "floor": 73,
+  "tags": [
+    "smoke"
+  ],
+  "expectedMs": 100,
+  "note": "D1 Lane C DI-636 (Drew D-32): the $25 split per job class - class counters and caps (fail closed), per-attempt metering into both counters, the platform ledger for the feed class, and the retry limits (2 per hash per 6 h, backoff, 3 failures a day, 25 subjects, 4 in flight). Money math: registered 2026-10-08 (Lane C 3.A)."
+}

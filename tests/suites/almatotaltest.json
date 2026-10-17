@@ -1,0 +1,30 @@
+{
+  "id": "almatotaltest",
+  "script": "almatotaltest.mjs",
+  "label": "73d",
+  "summary": {
+    "regex": "(✅ ALL PASS|❌ \\d+ FAILED) — (\\d+) passed, (\\d+) failed",
+    "flags": "",
+    "passed": 2,
+    "failed": 3,
+    "verdict": {
+      "group": 1,
+      "equals": "✅ ALL PASS",
+      "combined": false
+    },
+    "skipped": null
+  },
+  "floor": 86,
+  "forbid": [
+    {
+      "regex": "ERR_MODULE_NOT_FOUND",
+      "flags": "",
+      "label": "almatotaltest.mjs resolves its whole module graph — a hand-listed tmpdir copy is how it broke, so the specific symptom is named here"
+    }
+  ],
+  "tags": [
+    "smoke"
+  ],
+  "expectedMs": 3600,
+  "note": "D1 W-68 / W-69 (2026-10-14): RAISED 84 -> 86: the Games list rows now come from js/games-list.js. )"
+}

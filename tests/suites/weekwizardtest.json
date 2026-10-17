@@ -1,0 +1,12 @@
+{
+  "id": "weekwizardtest",
+  "script": "weekwizardtest.mjs",
+  "label": "106",
+  "summary": "strict",
+  "floor": 362,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "Review follow-up (2026-10-08): RAISED 361 -> 362 by 21-15 (SUCCESS / SUCCESS_REFRESHING copy). PF-416 / FB-026 follow-ups (2026-10-07): RAISED 357 -> 361 by [21] 21-8 rewritten, 21-11..21-14 (the terminal refused row; finalizeEntryState). Review round 1: RAISED 345 -> 357 by [21] (finalizePressAction, finalizeOutcomeView); FB-027 (W-46, 2026-10-07): RAISED 332 -> 345 by [20] (the DI-518 amendment: the live week hiding behind a next-week draft); RAISED from 287 by [19], the guided Finalize flow's decisions (entry, visible steps, the tiebreaker gate, the review card, the awaited save); earlier: (SP-54, 2026-10-01: RAISED from 280 — the guided finalize step's notice now comes from the one composer; the earlier history follows) — RAISED from 274 by the DI-404 coordinator override (2026-09-30): dueForScheduledOpen() now holds a due draft with no valid blurb …"
+}

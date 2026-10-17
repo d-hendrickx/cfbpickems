@@ -1,0 +1,12 @@
+{
+  "id": "scoringtest",
+  "script": "scoringtest.mjs",
+  "label": "80",
+  "summary": "strict",
+  "floor": 301,
+  "tags": [
+    "smoke"
+  ],
+  "expectedMs": 200,
+  "note": "— a near-zero count would mean the guard is vacuous)"
+}

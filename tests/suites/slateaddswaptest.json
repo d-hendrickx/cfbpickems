@@ -1,0 +1,17 @@
+{
+  "id": "slateaddswaptest",
+  "script": "slateaddswaptest.mjs",
+  "summary": "strict",
+  "floor": 160,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "deps": [
+    "js/**",
+    "css/styles.css",
+    "index.html",
+    "tests/kits/w68-w69-mutants.json"
+  ],
+  "note": "D1 W-68 / W-69 review round 1 (2026-10-14): RAISED 152 -> 160: [10b] F-1 the picker swiped down over the wizard (a real touch sequence, native) and F-2 the stale Step 2 note. D1 W-68 (2026-10-14): add or swap on a full slate. Red-first reproduction of the report, the rule, the sheets, add-then-delete swap, NFL tiebreaker reference, entry-point matrix, bulk caps, the double-bound Add, the swap picker, the NFL max; the mutation kit's old strings kept honest."
+}

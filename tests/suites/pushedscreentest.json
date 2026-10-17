@@ -1,0 +1,17 @@
+{
+  "id": "pushedscreentest",
+  "script": "pushedscreentest.mjs",
+  "summary": "strict",
+  "floor": 92,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/pushed-screen.js",
+    "js/nav-gestures.js",
+    "js/control-center.js",
+    "js/app.js",
+    "css/styles.css"
+  ],
+  "note": "RAISED from 86 by D1 Game Day fix round 2 Part B (1), 2026-10-08: [5b] the optional in-place patch hook (body and right slot get prev/next markup; true = no rewrite, the untouched node and the scroll survive; false or a throw = the whole write; an uncovered stale level goes through it too). | D1 Lane B DI-571: the pushed-screen shell on a real element tree (stack, inert, restore, swipe-back, repaint, exclusion lists). Registered 2026-10-07."
+}

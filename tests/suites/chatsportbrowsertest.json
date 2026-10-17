@@ -1,0 +1,24 @@
+{
+  "id": "chatsportbrowsertest",
+  "script": "chatsportbrowsertest.mjs",
+  "summary": "strict",
+  "floor": 125,
+  "tags": [
+    "browser"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/sw-register.js",
+    "css/**",
+    "index.html",
+    "service-worker.js",
+    "manifest.json",
+    "config.json",
+    "icons/**",
+    "vendor/**",
+    "reveal/**",
+    "favicon.*"
+  ],
+  "expectedMs": 20000,
+  "note": "D1 DI-553 (W-57), measured in a real engine: two sports on the storage seam, real taps on the sport pills (the one shared room is filtered in place, game pills narrow, draft kept, nothing written, newest message), 44 pt targets and 8 pt gaps at 390/375 and a 400% text stress, per-pill unread dots, 97% press compress and the 150 ms fade, Reduce Motion, a target is never hidden, per-account filter, a one-sport league with no row."
+}

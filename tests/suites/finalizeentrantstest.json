@@ -1,0 +1,10 @@
+{
+  "id": "finalizeentrantstest",
+  "script": "finalizeentrantstest.mjs",
+  "summary": "strict",
+  "floor": 18,
+  "tags": ["quick", "tz"],
+  "deps": ["js/app.js", "js/sport-seam.js", "js/scoring.js", "js/week-wizard.js", "js/tie-context.js", "js/competition.js"],
+  "expectedMs": 1500,
+  "note": "(D1 combine, 2026-10-08: RAISED from 16 to 18 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - D1 / reviewer B2 (money path): a week is settled among its ENTRANTS - results, ranks, winner/loser and the obligation exclude a non-entrant and a late joiner who picked every game right; one sport is byte-identical; the review card, Step 3/4, the tie warning, the Extra Point card and the locked notice read the same roster. scoring.js is handed the roster, not changed."
+}

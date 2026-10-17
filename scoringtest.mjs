@@ -1294,6 +1294,47 @@ console.log('\n[26] PHASE 5 — the Edge Function stand-down gate: byte-identica
 }
 // ═══ END STEP 6 PHASE 5 ═══
 
+// ═══════════════════════════════════════════════════════════════════════════
+// [FB008] FB-008 (Deployment 1, 2026-10-07) — A MESSAGE-DRIVEN TRIGGER HANDS ITS MESSAGE ID TO THE
+// AUTONOMOUS CANDIDATE.
+//
+// Drew: "scribe not autonomously posting in the chat to instigate". One genuine defect turned up in
+// the diagnosis (the rest is design and configuration — see the bugfixer report): `scribeTrigger()`
+// is the choke point every tier-0 detector feeds the opportunity score through, and it called
+// `considerAutonomous(trigger, { subject, gameTag })` — DROPPING the `triggerMessageId` its own
+// message-driven callers (drinkDebt, verbosity) pass it. The server's verifiers for exactly those two
+// triggers refuse without that id (`_shared/scribe-evidence.mjs` drinkDebt/verbosity: "VERIFIES:
+// evidence.triggerMessageId names a real message"), so whenever one of them cleared the dial — alone
+// at Unhinged, or combined in a bucket at Balanced/Active — the device reserved the cooldown (which
+// drops the free canned line), the server answered `unverified`, and the room got NOTHING.
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[FB008] FB-008 — drinkDebt / verbosity candidates carry their trigger message id to the server…');
+{
+  resetAll();
+  storage.saveSetting('scribeFrequency', 'unhinged');   // 15: drinkDebt (15) clears on its own here
+  const calls = wireStub({ autonomousResult: { ok: true, posted: true } });
+  scribeInspectMessage({ author: 'p1', authorName: 'Drew', body: 'Kevin owes me a beer from last week', gameTag: '', triggerMessageId: 'm_fb008_beer' });
+  const sent = calls.autonomous.find((b) => b && b.trigger === 'drinkDebt');
+  assert(!!sent, `FB008-1 (fixture): a drink-debt message at Unhinged reaches the autonomous relay (calls: ${JSON.stringify(calls.autonomous.map((b) => b.trigger))})`);
+  assert(!!sent && sent.evidence && sent.evidence.triggerMessageId === 'm_fb008_beer',
+    `FB008-2: …carrying the HUMAN message's id, which is the only thing the server's drinkDebt verifier can check (got ${JSON.stringify(sent && sent.evidence)})`);
+
+  resetAll();
+  storage.saveSetting('scribeFrequency', 'unhinged');
+  const calls2 = wireStub({ autonomousResult: { ok: true, posted: true } });
+  scribeTrigger('drinkDebt', { gameTag: 'g_fb008', subject: 'debt', triggerMessageId: 'm_fb008_direct' });
+  const sent2 = calls2.autonomous.find((b) => b && b.trigger === 'drinkDebt');
+  assert(!!sent2 && sent2.evidence && sent2.evidence.triggerMessageId === 'm_fb008_direct' && sent2.evidence.gameTag === 'g_fb008',
+    `FB008-3: scribeTrigger() itself forwards triggerMessageId (and still the room) to considerAutonomous (got ${JSON.stringify(sent2 && sent2.evidence)})`);
+
+  resetAll();
+  const calls3 = wireStub();
+  scribeTrigger('unanimous', { subject: 'w1' });
+  assert(calls3.autonomous.every((b) => !b.evidence || !('triggerMessageId' in b.evidence)),
+    'FB008-4: an EVENT-driven trigger (no human message) still sends no triggerMessageId at all — nothing is invented for it');
+  resetAll();
+}
+
 console.log('\n══════════════════════════════════════════════════');
 console.log(fail === 0 ? `✅ ALL PASS — ${pass} passed, ${fail} failed` : `❌ FAILURES — ${pass} passed, ${fail} failed`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.

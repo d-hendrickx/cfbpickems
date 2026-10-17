@@ -1,0 +1,13 @@
+{
+  "id": "pilotonlytest",
+  "script": "pilotonlytest.mjs",
+  "label": "115",
+  "summary": "loose",
+  "floor": 206,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 200,
+  "note": "D1 integration 21 (2026-10-08): 199 -> 206 measured by the batch 5b-2 gate on 82a2799 (both zones; the routing / status cards' pilot-gated sites). (D1 combine, 2026-10-08: RAISED from 194 to 199 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - D1 integration 13 (2026-10-07): 186 -> 190 measured on the merged tree (feat/d1-scribe-profile + int). D1 integration 11 (2026-10-07): 184 -> 186 measured on the merged tree (feat/d1-home + int). The pilot-only registry: well-formed and closed, every registered client site contains its gate, every gate names a registered key (both directions, string-literal keys only), the server half is registered against real files, a non-pilot render carries none of the pilot league's …"
+}

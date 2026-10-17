@@ -111,10 +111,16 @@ if (ROOT !== here) console.log(`  (WEEKSWIPE_ROOT — serving ${ROOT})`);
 // ── the app server: the real tree, local-mode config, no service worker ─────
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
   '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json' };
+let configDelayMs = 0, configServed = false;
 const server = createServer(async (req, res) => {
   let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (p.endsWith('/')) p += 'index.html';
-  if (p === '/config.json') { res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end('{}'); return; }
+  if (p === '/config.json') {   // W-22: `configDelayMs` holds the answer back (the boot-race guard); `configServed` says it has gone out
+    const send = () => { res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end('{}'); configServed = true; };
+    configServed = false;
+    if (configDelayMs) setTimeout(send, configDelayMs); else send();
+    return;
+  }
   if (p === '/service-worker.js') { res.writeHead(404); res.end(); return; }
   // App files only: no dot-segments, no dotfiles (.env*, .git…), nothing
   // under /supabase/ (tests/.env* live there).
@@ -245,6 +251,64 @@ try {
     return true;
   })()`);
   const frames = async (ms) => { await sleep(ms + 80); return evaluate('window.__frames'); };
+  // W-22 review N2 — the release half on the 60 Hz ANIMATION clock (weekpagertest's __slideFrames idiom), for
+  // the frame counts a loaded machine starved (A-4: >= 4 frames with both weeks part-way; A-8: a spring frame
+  // part-way). From the frame the page's OWN animation starts, every finite animation the release started (the
+  // page and the outgoing clone) is paused and stepped one 60 Hz frame per RENDERED frame across its span, so
+  // the real frames cover the whole slide whatever the frame rate; then `ms` of wall-clock frames as before.
+  // And at that first frame every pose (each 1000/60 ms) is read in one task (`poses`): computed geometry at
+  // seeked animation times, NOT rendered frames — the assertions that accept them say so. Bars unchanged.
+  const startSlideFrames = (id, ms) => evaluate(`(() => {
+    window.__frames = []; window.__poses = []; window.__slideDone = false;
+    const probe = () => ${PAGE(id).replace(/\n\s*/g, ' ')};
+    const FRAME = 1000 / 60, t0 = performance.now(), before = new Set(document.getAnimations()), root = document.getElementById('${id}');
+    const endOf = (a) => a.effect.getComputedTiming().endTime;
+    const shot = (pose) => { const s = probe(); s.t = Math.round(performance.now() - t0); s.pose = pose === null ? null : Math.round(pose); return s; };
+    let anims = null, endAt = 0, k = 0;
+    const seek = (p) => { for (const a of anims) if (a.playState !== 'idle') a.currentTime = Math.min(p, endOf(a)); };
+    (function loop() {
+      if (!anims) {
+        const fresh = document.getAnimations().filter(a => !before.has(a) && a.effect && Number.isFinite(endOf(a)) && a.playState !== 'finished');
+        const exitLayer = document.querySelector('.week-swipe-exit-layer');
+        // The release has started once the page's own animation exists — and, when it made an outgoing layer, that layer's too (the
+        // Reduce Motion fade-out starts from a rAF callback after this one, in the same frame as the page's fade-in).
+        if (fresh.some(a => a.effect.target === root) && (!exitLayer || fresh.some(a => a.effect.target === exitLayer))) {
+          anims = fresh; anims.forEach(a => a.pause()); endAt = Math.max(...anims.map(endOf));
+          for (let p = 0; p < endAt; p += FRAME) { seek(p); window.__poses.push(shot(p)); }
+          seek(0);
+        }
+      }
+      let pose = null;
+      if (anims && k * FRAME <= endAt + FRAME) { pose = Math.min(k++ * FRAME, endAt); seek(pose); }
+      window.__frames.push(shot(pose));
+      const stepping = anims && k * FRAME <= endAt + FRAME;
+      if ((stepping || performance.now() - t0 < ${ms}) && performance.now() - t0 < 8000) requestAnimationFrame(loop);
+      else { (anims || []).forEach(a => { try { if (a.playState !== 'idle') a.finish(); } catch { a.play(); } }); window.__slideDone = true; }
+    })();
+    return true;
+  })()`);
+  // The Reduce Motion cross-fade's release, sampled (A-19 / A-20): its real frames and every pose of it, on the fade's own clock.
+  // W-22 — its two animations (the page fading in, the outgoing clone fading out) start in the same frame, the clone's from a rAF
+  // callback that runs AFTER this sampler's, so a sampler that pauses what it sees could only catch them a frame later, already that
+  // far along on the machine's clock (at a 20x clock: finished). The document timeline is therefore FROZEN for the release (CDP
+  // Animation.setPlaybackRate 0, the previous rate restored after): every animation the release starts waits at its first pose until
+  // startSlideFrames steps it, all from the frame the page's own animation appears. A sampler that did not take the clock is red
+  // under A-20b, as the old one is.
+  const sampleCrossFade = async (id, ms, beforeUp = null) => {
+    await pg.send('Animation.enable');
+    const { playbackRate } = await pg.send('Animation.getPlaybackRate');
+    await pg.send('Animation.setPlaybackRate', { playbackRate: 0 });
+    try { return await sampleRelease(id, ms, beforeUp); }
+    finally { await pg.send('Animation.setPlaybackRate', { playbackRate }); }
+  };
+  // The release half of a gesture, sampled: its real frames and every pose of its animation.
+  const sampleRelease = async (id, ms, beforeUp = null) => {
+    await startSlideFrames(id, ms);
+    if (beforeUp) await beforeUp();
+    await touch.up();
+    await waitFor('window.__slideDone', 10000);
+    return { fr: await evaluate('window.__frames'), poses: await evaluate('window.__poses') };
+  };
   const dragH = async (id, x0, y, x1, step = 10) => {   // a horizontal drag, sampled after every move
     const out = [];
     await touch.down(x0, y);
@@ -296,12 +360,37 @@ try {
   })()`);
   assert(seeded.players === 6 && seeded.weeks === 4 && seeded.picks === 6 * 8 * 4,
     `1-1: fixture — 6 players, 4 final weeks, 192 picks seeded through the app's own storage.js (got ${JSON.stringify(seeded)})`);
+  // The boot, then the Dashboard. W-22 (2026-10-08) — in local mode the boot's own last step is navigateTo(bootDefaultTab()), i.e. Home,
+  // after an async config fetch (js/app.js); waiting only for window.navigateTo let a loaded machine land that navigation AFTER the
+  // harness's navigateTo('dashboard'), and every case after it ran on Home. Wait for the boot's own landing first (bounded), then go.
+  // The landing is Home's first RENDER: index.html ships #page-home already active, holding a loading skeleton marked
+  // aria-busy="true" ("Loading Home"), which the boot's navigateTo('home') replaces — measured: it goes the moment the config
+  // answer arrives, however late; window.navigateTo exists from the first milliseconds.
+  // Returns whether the boot landed; a boot that never does within 10 s is LOGGED and FAILS its caller's assertion (review note, 2026-10-08).
+  const bootThenDashboard = async () => {
+    const landed = await waitFor(`document.querySelector('#page-home.active') && !document.querySelector('#home-root .home-feed[aria-busy="true"]')`, 10000);
+    if (!landed) console.log('  (W-22: the boot never landed — no first Home render within 10 s; navigating to the Dashboard anyway, and the fixture fails)');
+    await evaluate(`window.navigateTo('dashboard')`);
+    return landed;
+  };
+  // W-22 — the boot race, made permanent: the config answer held back 1.5 s, so the boot's own landing (local mode: Home, after the async
+  // config fetch) comes after the harness is ready to navigate. Load did this on a gate run; the harness must still end on the Dashboard.
+  configDelayMs = 1500;
+  await navigate();
+  await waitFor(`!document.getElementById('site-gate-overlay') && window.navigateTo`);
+  const bootedLate = await bootThenDashboard();
+  for (let t = 0; t < 6000 && !configServed; t += 50) await sleep(50);
+  await sleep(400);                                         // the boot's chain after the answer (this only delays the guard's own look)
+  configDelayMs = 0;
+  const raced = await evaluate(`({ dash: !!document.querySelector('#page-dashboard.active'), home: !!document.querySelector('#page-home.active') })`);
+  assert(bootedLate && configServed && raced.dash && !raced.home,
+    `1-2b: with the boot's config answer held back 1.5 s (machine load), the harness still ends on the Dashboard once the boot has landed — not on the boot's own Home (boot landed ${bootedLate}; Dashboard active ${raced.dash}, Home active ${raced.home})`);
   await navigate();
   assert(await waitFor(`!document.getElementById('site-gate-overlay') && window.navigateTo`),
     '1-2: fixture — after reload the app is past the site gate with a verified player session');
-  await evaluate(`window.navigateTo('dashboard')`);
-  assert(await waitFor(`document.querySelector('#page-dashboard.active .picks-week-nav-label')`),
-    '1-3: fixture — navigateTo("dashboard") (the real path that binds the week swipe) rendered the week card');
+  const booted = await bootThenDashboard();
+  assert(booted && await waitFor(`document.querySelector('#page-dashboard.active .picks-week-nav-label')`),
+    `1-3: fixture — the boot landed (its first Home render, within 10 s: ${booted}) and navigateTo("dashboard") (the real path that binds the week swipe) rendered the week card`);
   const boot = await evaluate(`(async () => ({ label: document.querySelector('#page-dashboard .picks-week-nav-label').textContent,
     chips: document.querySelectorAll('#page-dashboard .dc-chip[draggable="true"]').length,
     suspended: (await import('./js/nav-gestures.js')).gesturesSuspended(), vw: innerWidth }))()`);
@@ -322,10 +411,9 @@ try {
   assert(mid.every(s => s && Math.abs(s.x - s.dx) <= 1.5 && s.cloneX === null),
     `A-2: THE BUG — the page follows the finger 1:1 for the whole drag, not just the first 40 px (page offset at dx −60/−120/−170: ${mid.map(s => s?.x).join(' / ')}; an animating clone present: ${mid.map(s => s?.cloneX !== null).join('/')})`);
   assert(drag.every(s => s.animating === null), `A-3: no transition is attached while the finger drives the page — raw tracking, never lagging behind it (${[...new Set(drag.map(s => s.animating))].join(',')})`);
-  await startFrames('page-dashboard', 520);
-  await touch.up();
-  let fr = await frames(520);
-  const both = fr.filter(f => f.cloneX !== null && f.cloneX < -171 && f.cloneX > -f.w + 1 && f.x > 0 && f.x < f.w - 171);
+  const relA4 = await sampleRelease('page-dashboard', 520);   // W-22 review N2: the animation's clock (real frames + poses)
+  let fr = relA4.fr;
+  const both = [...relA4.poses, ...fr].filter(f => f.cloneX !== null && f.cloneX < -171 && f.cloneX > -f.w + 1 && f.x > 0 && f.x < f.w - 171);
   assert(both.length >= 4,
     `A-4: THE BUG — after release BOTH weeks are on screen and moving together: ${both.length} frames with the outgoing week part-way off to the left and the incoming week part-way in from the right (need ≥4; frames: ${JSON.stringify(fr.slice(0, 8).map(f => [f.t, f.x, f.cloneX]))})`);
   const firstMoving = fr.find(f => f.cloneX !== null);
@@ -340,10 +428,10 @@ try {
   drag = await dragH('page-dashboard', 300, cardY, 270);
   assert(Math.abs(drag.at(-1).x - -30) <= 1.5 && drag.at(-1).label === 'Week 3', `A-7: fixture — a 30 px drag follows the finger (offset ${drag.at(-1).x}) on Week 3`);
   await sleep(150);   // the finger rests before lifting — distance decides (a FAST 30 px flick commits: A-24)
-  await startFrames('page-dashboard', 300);
-  await touch.up();
-  fr = await frames(300);
-  assert(fr.some(f => f.x < -2 && f.x > -28), `A-8: a release short of the threshold SPRINGS back through intermediate frames, not a snap (${JSON.stringify(fr.slice(0, 6).map(f => f.x))})`);
+  const relA8 = await sampleRelease('page-dashboard', 300);   // W-22 review N2: the animation's clock (real frames + poses)
+  fr = relA8.fr;
+  const springA8 = [...relA8.poses, ...fr];
+  assert(springA8.some(f => f.x < -2 && f.x > -28), `A-8: a release short of the threshold SPRINGS back through intermediate frames, not a snap (${JSON.stringify(springA8.slice(0, 6).map(f => f.x))})`);
   await settleIdle('page-dashboard');
   now = await evaluate(PAGE('page-dashboard'));
   assert(now.label === 'Week 3' && Math.abs(now.x) <= 0.5, `A-9: …and stays on Week 3, at rest (label "${now.label}", offset ${now.x})`);
@@ -405,13 +493,12 @@ try {
   const rmMid = [drag.find(s => s.dx === -60), drag.find(s => s.dx === -170)];
   assert(rmMid.every(s => s && Math.abs(s.x - s.dx) <= 1.5 && s.label === rmLabel0),
     `A-18: Reduce Motion — the page STILL follows the finger 1:1 during the drag, and the week does not change while it is down (offsets at dx −60/−170: ${rmMid.map(s => s?.x).join(' / ')}) — the DI-409 version froze it at 0, which is "it just jumps"`);
-  await startFrames('page-dashboard', 320);
-  await touch.up();
-  fr = await frames(320);
+  const relA20 = await sampleCrossFade('page-dashboard', 320);
+  fr = relA20.fr;
   const slid = fr.filter(f => f.x < -2 && f.x > -168);
   assert(slid.length === 0 && fr.every(f => f.cloneX === null || Math.abs(f.cloneX - -170) <= 1.5),
     `A-19: Reduce Motion — the RELEASE never animates movement: the incoming week is placed straight at rest (no frame part-way, ${slid.length} found) and the outgoing week stays exactly where the finger let go (outgoing offsets ${[...new Set(fr.filter(f => f.cloneX !== null).map(f => f.cloneX))].join(',')})`);
-  const xfade = fr.filter(f => f.cloneOpacity !== null && f.opacity > 0.05 && f.opacity < 0.95 && f.cloneOpacity > 0.05 && f.cloneOpacity < 0.95);
+  const xfade = [...relA20.poses, ...fr].filter(f => f.cloneOpacity !== null && f.opacity > 0.05 && f.opacity < 0.95 && f.cloneOpacity > 0.05 && f.cloneOpacity < 0.95);
   assert(xfade.length >= 2,
     `A-20: THE REDUCE-MOTION HALF — the weeks CROSS-FADE: ${xfade.length} frames with the incoming week part-way in AND the outgoing week part-way out (need ≥2; in/out opacity: ${JSON.stringify(fr.filter(f => f.opacity < 1 || f.cloneOpacity !== null).slice(0, 8).map(f => [f.opacity, f.cloneOpacity]))}; v0.27.2 swapped instantly)`);
   await settleIdle('page-dashboard');
@@ -430,6 +517,26 @@ try {
     `A-22: Reduce Motion — a release short of the threshold SETTLES straight back to rest: no spring frames in between (offsets ${[...new Set(fr.map(f => f.x))].join(',')}) — the Reduce-Motion-OFF spring is A-8`);
   now = await evaluate(PAGE('page-dashboard'));
   assert(now.label === rmLabel1, `A-23: …and stays on ${rmLabel1} (got ${now.label})`);
+  // W-22 — A-20 under LOAD, made permanent: the same Reduce Motion commit (to the previous week here) with the cross-fade's clock run 20x
+  // (CDP Animation.setPlaybackRate: one 16 ms frame = 320 ms of fade — what a 320 ms gap between frames does; a stall inside the page
+  // cannot open that gap). Machine load is not a cut instead of a cross-fade.
+  {
+    const wk = (await evaluate(PAGE('page-dashboard'))).label;
+    drag = await dragH('page-dashboard', 200, cardY, 370);   // left→right 170 px, outside the drawer zone: a commit to the previous week
+    await pg.send('Animation.enable');
+    await pg.send('Animation.setPlaybackRate', { playbackRate: 20 });
+    const relX = await sampleCrossFade('page-dashboard', 320);
+    await pg.send('Animation.setPlaybackRate', { playbackRate: 1 });
+    await pg.send('Animation.disable');
+    await settleIdle('page-dashboard');
+    const landedX = (await evaluate(PAGE('page-dashboard'))).label;
+    const xfadeX = [...relX.poses, ...relX.fr].filter(f => f.cloneOpacity !== null && f.opacity > 0.05 && f.opacity < 0.95 && f.cloneOpacity > 0.05 && f.cloneOpacity < 0.95);
+    assert(landedX !== wk && xfadeX.length >= 2,
+      `A-20b: …and with the cross-fade's frames 320 ms of fade apart (machine load) the weeks are still seen to CROSS-FADE: ${xfadeX.length} frames with both part-way (need >= 2; ${wk} → ${landedX})`);
+    await evaluate(`document.querySelector('#page-dashboard .picks-week-nav > button[aria-label="Next week"]')?.click()`);
+    await sleep(250);
+    assert((await evaluate(PAGE('page-dashboard'))).label === wk, `A-20b-post: fixture — back on ${wk} for A-24`);
+  }
   await reducedMotion(false);
 
   // A-24..27 — reviewer's velocity note: release reads the finger's MOTION.
@@ -528,6 +635,53 @@ try {
     `A-32: SAFETY NET — a new touch that finds a STALE claim swipes normally: the node under the finger is untouched (${midS.probe}), the week follows it (offset ${midS.x}), and the new swipe owns the touch (${midS.claim})`);
   assert(!endS.probe && endS.parked === 0 && Math.abs(endS.x) <= 0.5,
     `A-33: …and the stale claim's parked repaint lands AFTER that touch ends (probe node gone ${!endS.probe}, parked ${endS.parked}, at rest ${endS.x})`);
+
+  // W-22 review N2 — A-4 / A-8 under LOAD, made permanent. A-4 (>= 4 frames with
+  // both weeks part-way through the commit slide) under a 450 ms main-thread
+  // hitch in the slide's second frame; A-8 (a spring frame part-way back)
+  // with the spring's own clock run 20x (CDP Animation.setPlaybackRate: one
+  // 16 ms frame = 320 ms of spring — what a 320 ms gap between frames does;
+  // a stall inside the page cannot open that gap, since Blink starts the
+  // clock at the commit of the frame that created the transition and draws
+  // the next frame one vsync later, ahead of queued tasks). Machine load is
+  // not the page snapping or the weeks failing to move together.
+  {
+    const weekNow = async () => (await evaluate(PAGE('page-dashboard'))).label;
+    const goWeek = async (want) => { for (let i = 0; i < 8 && (await weekNow()) !== want; i++) {
+      const n = Number(String(await weekNow()).replace(/\D+/g, '')), w = Number(want.replace(/\D+/g, ''));
+      await evaluate(`document.querySelector('#page-dashboard .picks-week-nav > button[aria-label="${w > n ? 'Next' : 'Previous'} week"]')?.click()`); await sleep(200); }
+      return (await weekNow()) === want; };
+    await evaluate(`window.navigateTo('dashboard')`);
+    await waitFor(`document.querySelector('#page-dashboard.active .picks-week-nav-label')`);
+    const weekA = await weekNow();
+    await evaluate(`window.scrollTo({ top: 0, behavior: 'instant' })`);
+    await sleep(150);
+    assert(await goWeek('Week 2'), `A-4b-pre: fixture — the Dashboard on Week 2 (from "${weekA}")`);
+    const gy = await evaluate(`(() => { const r = document.querySelector('#page-dashboard .dc-game')?.getBoundingClientRect(); return r ? Math.round(r.top + 12) : 400; })()`);
+    // A-8 under load: a short release, the spring's clock 20x.
+    drag = await dragH('page-dashboard', 300, gy, 270);
+    await sleep(150);
+    await pg.send('Animation.enable');
+    await pg.send('Animation.setPlaybackRate', { playbackRate: 20 });
+    let relL = await sampleRelease('page-dashboard', 300);
+    await pg.send('Animation.setPlaybackRate', { playbackRate: 1 });
+    await pg.send('Animation.disable');
+    await settleIdle('page-dashboard');
+    const springL = [...relL.poses, ...relL.fr];
+    assert(springL.some(f => f.x < -2 && f.x > -28) && (await weekNow()) === 'Week 2',
+      `A-8b: …and with the spring's frames 320 ms of spring apart (machine load) it is still seen to spring back through intermediate frames, not a snap (${JSON.stringify(springL.slice(0, 6).map(f => f.x))}; still "${await weekNow()}")`);
+    // A-4 under load: a commit, a 450 ms hitch in the slide's second frame.
+    drag = await dragH('page-dashboard', 320, gy, 150);
+    relL = await sampleRelease('page-dashboard', 520, () => evaluate(`(() => { window.__hitch = null; let seen = 0; const root = document.getElementById('page-dashboard');
+      (function w() { if (root.dataset.weekSwipeAnimating === 'commit' && ++seen === 2) { const t = performance.now(); while (performance.now() - t < 450) {} window.__hitch = Math.round(performance.now() - t); }
+        else requestAnimationFrame(w); })(); return true; })()`));
+    await settleIdle('page-dashboard');
+    const hitchL = await evaluate('window.__hitch');
+    const bothL = [...relL.poses, ...relL.fr].filter(f => f.cloneX !== null && f.cloneX < -171 && f.cloneX > -f.w + 1 && f.x > 0 && f.x < f.w - 171);
+    assert(hitchL >= 450 && bothL.length >= 4 && (await weekNow()) === 'Week 3',
+      `A-4b: …and a ${hitchL} ms main-thread hitch in the slide's second frame (machine load) does not change A-4: ${bothL.length} frames with both weeks part-way and moving together (need >= 4; landed "${await weekNow()}")`);
+    assert(await goWeek(weekA), `A-4b-post: fixture — the Dashboard back on "${weekA}" for [B]`);
+  }
 
   // ═════════════════════════════════════════════════════════════════════════
   console.log('\n[B] RG-TBD-A2 — a reorder drag in the compact Dashboard never becomes a week swipe (or opens the drawer)…');

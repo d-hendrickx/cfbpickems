@@ -265,7 +265,11 @@ console.log('\n[7] isInDrawerOpenZone() (js/nav-gestures.js) — RETIRED _isWith
   assert(isInDrawerOpenZone({ tab: 'picks', clientX: 300, viewportWidthPx: 400 }) === false, '7d: well inside the content, never within the zone');
   assert(isInDrawerOpenZone({ tab: 'picks', clientX: -1, viewportWidthPx: 400 }) === false, '7e: negative x rejected');
   assert(isInDrawerOpenZone({ tab: 'picks', clientX: undefined, viewportWidthPx: 400 }) === false, '7f: non-numeric x rejected');
-  assert(isInDrawerOpenZone({ tab: 'commissioner', clientX: 399, viewportWidthPx: 400 }) === true, '7g: [DI-419] on any tab OTHER than Picks/Dashboard, "anywhere" opens the drawer — the widened zone this DI added');
+  // W-70 (2026-10-14, DI-W70.4) - Comm joined Picks and Dashboard in the zone set (it gained a tab swipe, so it needs the same left-quarter split); 7g now names a tab that KEEPS
+  // "anywhere" (Standings), and 7g2 pins Comm's new rule. Re-derived, not weakened: the DI-419 ruling still holds for every tab outside the set.
+  assert(isInDrawerOpenZone({ tab: 'leaderboard', clientX: 399, viewportWidthPx: 400 }) === true, '7g: [DI-419] on any tab OTHER than Picks/Dashboard/Comm, "anywhere" opens the drawer — the widened zone this DI added');
+  assert(isInDrawerOpenZone({ tab: 'commissioner', clientX: 399, viewportWidthPx: 400 }) === false && isInDrawerOpenZone({ tab: 'commissioner', clientX: 99, viewportWidthPx: 400 }) === true,
+    '7g2: [W-70, DI-W70.4] Comm follows the Picks/Dashboard rule: the left quarter opens the drawer, further in does not (that touch pages the Comm tabs)');
   assert(DRAWER_ZONE_FRACTION === 0.25, '7h: DRAWER_ZONE_FRACTION is 25% — a fraction of the viewport, not the retired 28px pixel constant');
 }
 
@@ -2031,6 +2035,63 @@ console.log('\n[Q] SP-52 / DI-452 (2026-10-01) — the QUICK LIGHT/DARK TOGGLE a
     }
     assert(px(rulesFor('.cc-quick-seg'), 'min-height').length >= 1 && /\.cc-quick-seg\{[^}]*min-height:44px/.test(css),
       'Q6b: fixture — the base rule really declares min-height:44px (a regex that finds no rule would pass vacuously)');
+  }
+
+  // ═══ [16] D1 Lane B / DI-613 (2026-10-08, PF-457, Drew D-64) — the "Show picks" row ═══════════════════════════════════════════════════════════════════════════════════════════
+  // The row sits directly after Team logos, is absent signed out, shows a muted summary collapsed and two labelled segmented controls expanded, writes ONE value per change through
+  // the callback (an allow-list on place and value; a tap on the chosen segment writes nothing), and patches in place (no innerHTML: the tapped segment keeps VoiceOver focus).
+  {
+    const pvCtx = (o = {}) => baseCtx({ picksView: { dashboard: 'person', gameday: 'team' }, ...o });
+    const closed = renderSettingsAccordion(pvCtx(), initialControlCenterState());
+    const order = ['logo-view', 'picks-view', 'theme'].map((r) => closed.indexOf(`data-row="${r}"`));
+    assert(order.every((x, i) => x > -1 && (i === 0 || x > order[i - 1])), `16a: the Show picks row sits directly after Team logos and before Theme (indices ${JSON.stringify(order)})`);
+    assert(!renderSettingsAccordion(baseCtx(), initialControlCenterState()).includes('picks-view') && !renderSettingsAccordion(baseCtx({ picksView: null }), initialControlCenterState()).includes('Show picks'),
+      '16b: signed out (no ctx.picksView) the row is absent — settings are for members');
+    assert(closed.includes('Show picks') && closed.includes('Dashboard: By person · Game Day: By team') && !closed.includes('cc-pv-seg'),
+      '16c: collapsed, the row shows the muted summary "Dashboard: By person · Game Day: By team" and none of the segments');
+    assert(CC.picksViewSummary({ dashboard: 'team', gameday: 'person' }) === 'Dashboard: By team · Game Day: By person' && CC.picksViewSummary({ dashboard: '<img src=x>', gameday: null }) === 'Dashboard: By person · Game Day: By team' && CC.picksViewSummary(null) === 'Dashboard: By person · Game Day: By team',
+      '16d: the summary is built from the allow-list only: junk or missing values read as the defaults, no stored string is ever printed');
+    const open = renderSettingsAccordion(pvCtx(), { ...initialControlCenterState(), settingsOpenRow: 'picks-view' });
+    const groups = [...open.matchAll(/<div class="cc-quick-track" role="radiogroup" aria-label="([^"]*)">/g)].map((m) => m[1]);
+    assert(groups.join('|') === 'Show picks on the Dashboard|Show picks in Game Day', `16e: expanded, two radio groups named for VoiceOver ("Show picks on the Dashboard" / "Show picks in Game Day"): ${groups.join(' | ')}`);
+    const radios = [...open.matchAll(/<button type="button" role="radio" class="cc-quick-seg cc-pv-seg" data-action="cc-set-picks-view" data-place="(\w+)" data-value="(\w+)" aria-checked="(true|false)" tabindex="(0|-1)"/g)].map((m) => `${m[1]}:${m[2]}:${m[3]}:${m[4]}`);
+    assert(radios.join(' ') === 'dashboard:person:true:0 dashboard:team:false:-1 gameday:person:false:-1 gameday:team:true:0', `16f: four radios, the chosen one checked and the roving tab stop (${radios.join(' ')})`);
+    assert(open.includes('By person lists each member’s pick beside their initials. By team groups the initials under the team they picked. Picks stay hidden until kickoff either way.') && /On the Dashboard<\/span>/.test(open) && /In Game Day<\/span>/.test(open),
+      '16g: the labels and the one helper line are the DI\'s words, and the helper says picks stay hidden until kickoff either way');
+    // behaviour through the mounted drawer
+    const calls = [];
+    const root = new FakeElement('div');
+    const api = mountControlCenter(root, pvCtx({ callbacks: { onSetPicksView: (place, value) => { calls.push(`${place}:${value}`); return { changed: true, value }; } } }), {});
+    api.open();
+    root._dispatch('click', { target: root.querySelector('[data-action="cc-toggle-row"][data-group="settings"][data-row="picks-view"]') });
+    const seg = (place, value) => root.querySelector(`[data-action="cc-set-picks-view"][data-place="${place}"][data-value="${value}"]`);
+    assert(!!seg('dashboard', 'team') && api.getState().settingsOpenRow === 'picks-view', '16h: fixture — tapping the row header opens it (single-open, like its neighbours)');
+    root._dispatch('click', { target: seg('dashboard', 'person') });
+    assert(calls.length === 0, '16i: a tap on the segment that is already chosen writes nothing');
+    root._dispatch('click', { target: seg('dashboard', 'team') });
+    assert(calls.join() === 'dashboard:team', `16j: choosing By team on the Dashboard calls onSetPicksView('dashboard', 'team') ONCE (${calls.join()})`);
+    assert(seg('dashboard', 'team').getAttribute('aria-checked') === 'true' && seg('dashboard', 'person').getAttribute('aria-checked') === 'false' && seg('gameday', 'team').getAttribute('aria-checked') === 'true' && seg('dashboard', 'team').getAttribute('tabindex') === '0',
+      '16k: …and the segments patch IN PLACE (aria-checked, tabindex), the other place untouched');
+    assert(/Dashboard: By team · Game Day: By team/.test(root.querySelector('[data-row="picks-view"]').querySelector('.cc-row-secondary').textContent), '16l: …and the summary under the row title follows');
+    const forged = (place, value) => { const el = seg('gameday', 'person'); el.dataset.place = place; el.dataset.value = value; root._dispatch('click', { target: el }); el.dataset.place = 'gameday'; el.dataset.value = 'person'; };
+    forged('__proto__', 'team'); forged('dashboard', 'everyone'); forged('settings', 'person'); forged('gameday', '<img>');
+    assert(calls.length === 1, `16m: a forged place or value (__proto__, "everyone", an unknown place, markup) writes nothing (${calls.join()})`);
+    const refused = [];
+    const root3 = new FakeElement('div');
+    const api3 = mountControlCenter(root3, pvCtx({ callbacks: { onSetPicksView: (p, v) => { refused.push(`${p}:${v}`); return { changed: false, refused: true, value: 'person' }; } } }), {});
+    api3.open();
+    root3._dispatch('click', { target: root3.querySelector('[data-action="cc-toggle-row"][data-group="settings"][data-row="picks-view"]') });
+    root3._dispatch('click', { target: root3.querySelector('[data-action="cc-set-picks-view"][data-place="gameday"][data-value="person"]') });
+    assert(refused.length === 1 && root3.querySelector('[data-action="cc-set-picks-view"][data-place="gameday"][data-value="team"]').getAttribute('aria-checked') === 'true',
+      '16n: a refused write leaves the stored value on screen (never a silent local fallback)');
+    api.destroy(); api3.destroy();
+    const src16 = readFileSync(new URL('./js/control-center.js', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const body16 = src16.slice(src16.indexOf('const PV_PLACES'), src16.indexOf('export function patchPicksView') + 800);
+    assert(!/localStorage|\bsave\(|\bload\(|setPicksView|getPicksView|innerHTML\s*=/.test(body16) && /import \{ haptic \} from '\.\/haptics\.js'/.test(readFileSync(new URL('./js/control-center.js', import.meta.url), 'utf8')),
+      '16o: the row\'s render and patch code touches no storage and assigns no innerHTML (the write path is the callback; the haptic is the wrapper)');
+    const css16 = readFileSync(new URL('./css/styles.css', import.meta.url), 'utf8');
+    assert(/\.cc-pv-seg\{[^}]*flex:1 1 7rem/.test(css16) && /\.cc-quick-seg\{[^}]*min-height:44px/.test(css16),
+      '16p: the segments are the 44 pt .cc-quick-seg, equal width, wrapping to a stack at large text');
   }
 }
 

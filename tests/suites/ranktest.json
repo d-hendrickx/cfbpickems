@@ -1,0 +1,12 @@
+{
+  "id": "ranktest",
+  "script": "ranktest.mjs",
+  "label": "124b",
+  "summary": "strict",
+  "floor": 142,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 300,
+  "note": "FB-027 review round 1 R1 (2026-10-07): RAISED 137 -> 142 — [8] restores the guided Step 4 notice proofs per fixture; SP-54 delta C2, 2026-10-01: RAISED from 131 by [11](d2), a real save-tb-btn click in a shared league; earlier: floor 131 — SP-54 BM-1, 2026-10-01, the real count at its first spawned run, after [9]'s stale wrapper assertion was re-derived and [11] (N-1) added; the ratchet only …"
+}

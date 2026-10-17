@@ -1,0 +1,11 @@
+{
+  "id": "synctest",
+  "script": "synctest.mjs",
+  "summary": "strict",
+  "floor": 8,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "RG-39 (players' emails and PINs wiped by a sync): the retired Sheets-era mechanism stays gone — source pins on backend.js, supabase-projection.js and supabase-backend.js. Registered 2026-10-07 (W-11)."
+}

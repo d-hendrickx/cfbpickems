@@ -469,9 +469,12 @@ function makeFakeSupabase() {
         // A2 is that `emitted_by` is not in the list — a fake that returned whole rows would let a
         // transport that asked for it look identical to one that did not.
         const cols = (q.cols || '').split(',').map((c) => c.trim()).filter(Boolean);
+        // 0045 (W-54 / DI-680): `relayed` is kept equal to `emitted_by IS NOT NULL` by a trigger on the server and is present on EVERY row once 0045
+        // is applied. Modelled as derived at read time from the row's own emitted_by, so no test row can carry a wrong one.
+        const withGenerated = (r) => ({ ...r, relayed: r.emitted_by != null });
         const projected = cols.length
-          ? out.map((r) => Object.fromEntries(cols.map((c) => [c, r[c]])))
-          : out.map((r) => ({ ...r }));
+          ? out.map((r) => { const g = withGenerated(r); return Object.fromEntries(cols.map((c) => [c, g[c]])); })
+          : out.map((r) => withGenerated(r));
         resolve({ data: projected, error: null });
         return Promise.resolve({ data: projected, error: null });
       },
@@ -490,13 +493,17 @@ function makeFakeSupabase() {
       }
       if (fn === 'chat_append' || fn === 'chat_append_system') {
         const out = [];
+        // D1 (DI-553): the column's CHECK (0033 §6) is the SERVER's final judge of a tag, modelled here: a value outside the set aborts the whole call, exactly as the INSERT would.
+        if (args.p_events.some((ev) => !['', 'cfb', 'nfl', 'nba', 'cbb', 'mm', 'nhl', 'wjc'].includes(ev.sportTag === undefined ? '' : String(ev.sportTag)))) {
+          return { data: null, error: { code: '23514', message: 'new row for relation "messages" violates check constraint "messages_sport_tag_check"' } };
+        }
         for (const ev of args.p_events) {
           const existing = S.rows.find((r) => r.id === ev.id);
           if (existing) { out.push({ id: ev.id, seq: existing.seq, deduped: true, ts: existing.ts }); continue; }
           const seq = S.nextSeq++;
           const r = row(seq, {
             id: ev.id, type: ev.type, author: ev.author,
-            game_tag: ev.gameTag || '', body: ev.body || '',
+            game_tag: ev.gameTag || '', sport_tag: ev.sportTag === undefined ? '' : String(ev.sportTag), body: ev.body || '',
             target_id: ev.targetId || '', reply_to: ev.replyTo || '',
             // The server's own packing rule, modelled: `notify` comes from meta._n and the stored
             // meta is `meta - '_n'`. If the transport stopped packing, this fake would store
@@ -589,8 +596,10 @@ _realLog('\n[6] Supabase mode — the reads, and ZERO Apps Script fetches (S1, S
 
   // THE COLUMN LIST, on the wire. Annotation A2 lives or dies here.
   const sel = fake.S.selects.find((q) => q.table === 'messages');
-  assert(sel && sel.cols === 'league_id,id,seq,ts,type,author,game_tag,body,target_id,reply_to,notify,meta',
-    'S2/A2: the select names TWELVE columns explicitly — never `*`, and never emitted_by/author_member_id/author_kind');
+  assert(sel && sel.cols === 'league_id,id,seq,ts,type,author,game_tag,sport_tag,body,target_id,reply_to,notify,meta,relayed',
+    'S2/A2: the select names FOURTEEN columns explicitly (the twelve wire fields, D1 DI-553\'s sport_tag — a column `authenticated` may SELECT since 0033 — and 0045\'s server-set `relayed`) — never `*`, and never emitted_by/author_member_id/author_kind');
+  assert(since.events.every((e) => e.relayed === false && !('emitted_by' in e)),
+    'S2/0045: every delivered event carries the server\'s `relayed` (false on these server-written rows) at the TOP LEVEL, and still no emitted_by');
   assert(fake.S.selects.every((q) => q.filters.some(([op, c, v]) => op === 'eq' && c === 'league_id' && v === LEAGUE)),
     'S2: every read is scoped league_id=eq.<active league>');
 
@@ -926,6 +935,45 @@ _realLog('\n[10] Realtime — the CONTIGUITY rule, the gap drain, and duplicates
   fake.S.channels[0].emit(r10);
   assert(known === 10 && fake.S.selects.length === afterHole,
     `S9/R6: …and the cost is paid ONCE. The next public row is known+1 again and is delivered straight off Realtime with no read at all (known=${known}, extra reads=${fake.S.selects.length - afterHole})`);
+  sub();
+  resetToFlagOff();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+_realLog('\n[10b] 0045 (W-54 / DI-680) — the server-set `relayed` column rides BOTH read paths: the page read and the Realtime payload…');
+{
+  // The column is the ONLY evidence the client has that a SCRIBE row was server-minted. It must arrive on the page read (the fake projects it from
+  // emitted_by, as the server's trigger keeps it) AND on a Realtime INSERT payload, because a live answer reaches the watching device by Realtime.
+  const fake = makeFakeSupabase();
+  installFake(fake);
+  fake.S.rows.push(row(1), row(2, { id: 'scribe_m2', author: 'scribe', emitted_by: 'p2' }));
+  fake.S.nextSeq = 3;
+  const delivered = [];
+  let known = 0;
+  const sub = transport.subscribe(
+    (events) => { delivered.push(...events); for (const e of events) if (e.seq > known) known = e.seq; },
+    { getMode: () => 'closed', getKnownHead: () => known, onStatus: () => {} },
+  );
+  await new Promise((r) => setTimeout(r, 20));
+  fake.S.channels[0].status('SUBSCRIBED');
+  await new Promise((r) => setTimeout(r, 40));
+  const e1 = delivered.find((e) => e.seq === 1), e2 = delivered.find((e) => e.seq === 2);
+  assert(e1 && e1.relayed === false && e2 && e2.relayed === true && !('emitted_by' in e2),
+    'S2/0045: the page read delivers relayed TOP-LEVEL — false on a server row, true on a member-relayed one — and never the emitted_by it is derived from');
+  // A Realtime payload is the whole row as the server streams it. `relayed` is a PLAIN column (0045 keeps it with a trigger, because a GENERATED
+  // column is not decoded into postgres_changes payloads by default), so it is in the payload like any other.
+  const r3 = { ...row(3, { id: 'scribe_srv3', author: 'scribe' }), relayed: false };
+  fake.S.rows.push(r3); fake.S.nextSeq = 4;
+  fake.S.channels[0].emit(r3);
+  const e3 = delivered.find((e) => e.seq === 3);
+  assert(e3 && e3.relayed === false,
+    'S9/0045: a Realtime INSERT payload carrying relayed false is delivered at known+1 with relayed === false at the top level');
+  const r4 = row(4, { id: 'scribe_old4', author: 'scribe' });            // a payload WITHOUT the column (a database before 0045)
+  fake.S.rows.push(r4); fake.S.nextSeq = 5;
+  fake.S.channels[0].emit(r4);
+  const e4 = delivered.find((e) => e.seq === 4);
+  assert(e4 && !('relayed' in e4),
+    'S9/0045: …and a payload WITHOUT the column delivers an event WITHOUT the key — never a default — so every reader\'s `relayed === false` fails closed on it');
   sub();
   resetToFlagOff();
 }
@@ -1416,6 +1464,143 @@ _realLog('\n[17] AMENDMENT A7 — park a `bad_state` and re-send it, bounded…'
       'N2/A7: the log has the player\'s event, and the parked post is STILL parked — being brake-refused for a batch is not the same as being released from the ladder');
     resetToFlagOff();
   }
+
+  // (f) THE PRODUCTION LADDER OUTLASTS THE SERVER'S PER-MINUTE CRONS (0045 review, 2026-10-08). 0045 gates
+  //     `sys_lc_PICKS_LOCKED_<week>` on the SERVER's week status, which 0043's cfbp_auto_lock_weeks cron sets once a minute,
+  //     while the client posts the notice from the week's EFFECTIVE status (the lock time passed on its clock). Nothing on the
+  //     posting device releases the park early, so the LADDER is what must last. Driven on a VIRTUAL clock (setTimeout and
+  //     Date.now replaced for the drive only), with the PRODUCTION schedule (_setParkScheduleForTest({}) = the module's own).
+  {
+    const realSetTimeout = globalThis.setTimeout, realClearTimeout = globalThis.clearTimeout, realNow = Date.now;
+    const drive = async ({ steps = null, ceilingMs = null, stateAt, id }) => {
+      let vnow = realNow();
+      const timers = new Set();
+      const fake = makeFakeSupabase();
+      globalThis.setTimeout = (fn, ms) => { const tm = { fn, at: vnow + Math.max(0, ms || 0), unref() { return tm; } }; timers.add(tm); return tm; };
+      globalThis.clearTimeout = (tm) => { timers.delete(tm); };
+      Date.now = () => vnow;
+      try {
+        installFake(fake);
+        transport._setParkScheduleForTest({ steps, ceilingMs });
+        const t0 = vnow;
+        // the server: bad_state until the cron has run (`stateAt` ms after the first post), then the row lands
+        fake.S.refuse = (fn) => (fn === 'chat_append_system' && vnow - t0 < stateAt ? { message: 'bad_state', code: 'P0001' } : null);
+        await transport.appendEvents([sysEv(id)]).then(() => null, () => null);
+        const sendTimes = [];
+        for (let guard = 0; timers.size && guard < 100; guard++) {
+          const next = [...timers].sort((a, b) => a.at - b.at)[0];
+          timers.delete(next);
+          vnow = next.at;
+          const before = fake.S.rpc.filter((c) => c.fn === 'chat_append_system').length;
+          next.fn();
+          await new Promise((r) => setImmediate(r));
+          await new Promise((r) => setImmediate(r));
+          if (fake.S.rpc.filter((c) => c.fn === 'chat_append_system').length > before) sendTimes.push(vnow - t0);
+        }
+        return { landed: fake.S.rows.some((r) => r.id === id), sendTimes, state: transport._refusalStateForTest() };
+      } finally {
+        resetToFlagOff();
+        globalThis.setTimeout = realSetTimeout; globalThis.clearTimeout = realClearTimeout; Date.now = realNow;
+      }
+    };
+    const LADDER = [2000, 7000, 17000, 37000, 67000, 97000, 127000];
+    const late = await drive({ stateAt: 59000, id: 'sys_lc_PICKS_LOCKED_wk_cron59' });
+    assert(late.landed && late.sendTimes[late.sendTimes.length - 1] === 67000 && late.state.parked.length === 0 && !late.state.permanent.includes('sys_lc_PICKS_LOCKED_wk_cron59'),
+      `A7/0045 [17f]: a lock notice posted the moment the lock time passed, with the cron flipping the week 59 s later, LANDS on the 67 s rung and is not marked failed (resends at ${JSON.stringify(late.sendTimes)})`);
+    const skipped = await drive({ stateAt: 119000, id: 'sys_lc_PICKS_LOCKED_wk_cron119' });
+    assert(skipped.landed && skipped.sendTimes[skipped.sendTimes.length - 1] === 127000,
+      `A7/0045 [17f]: …and with ONE cron run late or skipped (the week flips at 119 s) it still lands, on the 127 s rung (resends at ${JSON.stringify(skipped.sendTimes)})`);
+    const never = await drive({ stateAt: Infinity, id: 'sys_lc_PICKS_LOCKED_wk_never' });
+    assert(!never.landed && JSON.stringify(never.sendTimes) === JSON.stringify(LADDER) && never.state.parked.length === 0 && never.state.permanent.includes('sys_lc_PICKS_LOCKED_wk_never'),
+      `A7/0045 [17f]: …and it is still BOUNDED: a state that never arrives gets exactly seven resends, at 2, 7, 17, 37, 67, 97 and 127 s, then the permanent refusal (resends at ${JSON.stringify(never.sendTimes)})`);
+    // MUTANT (the previous production schedule): 2, 5, 10, 20 s under a 60 s ceiling gives up at 37 s, before the cron's worst case
+    const old = await drive({ steps: [2000, 5000, 10000, 20000], ceilingMs: 60000, stateAt: 59000, id: 'sys_lc_PICKS_LOCKED_wk_oldladder' });
+    assert(!old.landed && old.state.permanent.includes('sys_lc_PICKS_LOCKED_wk_oldladder') && old.sendTimes[old.sendTimes.length - 1] === 37000,
+      `A7/0045 [17f] MUTANT: the OLD ladder (2, 5, 10, 20 s; 60 s ceiling) LOSES the same notice — its last resend is at 37 s and the id becomes a permanent refusal before the 59 s cron (resends at ${JSON.stringify(old.sendTimes)}, landed ${old.landed})`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+_realLog('\n[18] D1 (DI-553 / DI-530) — sportTag rides the wire END TO END: pack, the column, the read, Realtime — a closed set, from the column only, and NO key when untagged…');
+{
+  const fake = makeFakeSupabase();
+  installFake(fake);
+  const stored = (id) => fake.S.rows.find((r) => r.id === id);
+  const sentEvents = () => fake.S.rpc.filter((c) => c.fn === 'chat_append' || c.fn === 'chat_append_system').flatMap((c) => c.args.p_events);
+
+  // (a) the pack: a TAGGED event carries sportTag, an untagged one has NO such key, an invalid one is dropped BEFORE the wire (the CHECK would refuse the whole append for it).
+  await transport.appendEvents([
+    { id: 'st_nfl', type: 'message', author: 'p1', body: 'thread', gameTag: 'g_nfl', sportTag: 'nfl', notify: true, meta: null },
+    { id: 'st_none', type: 'message', author: 'p1', body: 'plain', notify: true, meta: null },
+    { id: 'st_bad1', type: 'message', author: 'p1', body: 'forged', sportTag: 'football', notify: true, meta: null },
+    { id: 'st_bad2', type: 'message', author: 'p1', body: 'markup', sportTag: '<img src=x onerror=alert(1)>', notify: true, meta: null },
+    { id: 'st_bad3', type: 'message', author: 'p1', body: 'upper', sportTag: 'NFL', notify: true, meta: null },
+    { id: 'st_bad4', type: 'message', author: 'p1', body: 'proto', sportTag: '__proto__', notify: true, meta: null },
+    { id: 'st_bad5', type: 'message', author: 'p1', body: 'number', sportTag: 5, notify: true, meta: null },
+  ]);
+  const wire = Object.fromEntries(sentEvents().map((e) => [e.id, e]));
+  assert(wire.st_nfl.sportTag === 'nfl', '[18a] a tagged event goes out WITH sportTag (the key chat_append reads: v_ev->>\'sportTag\', 0033 §6)');
+  assert(!('sportTag' in wire.st_none), '[18a] an UNTAGGED event has NO sportTag key at all (a one-sport league\'s wire payload is byte-identical to before)');
+  assert(['st_bad1', 'st_bad2', 'st_bad3', 'st_bad4', 'st_bad5'].every((id) => !('sportTag' in wire[id])),
+    '[18a] a tag outside the closed set (a near miss, markup, upper case, a prototype name, a number) never reaches the wire — dropped at the pack, not left for the CHECK to refuse the whole append');
+  assert(fake.S.rows.length === 7, '[18a] …and all seven messages landed (no append was refused for a bad tag)');
+  assert(JSON.stringify(wire.st_none) === JSON.stringify({ id: 'st_none', type: 'message', author: 'p1', gameTag: '', body: 'plain', targetId: '', replyTo: '', meta: { _n: 1 } }),
+    '[18a] BYTE-IDENTITY: the packed untagged event is exactly the pre-D1 shape, key for key');
+
+  // (b) the column, as the server stored it.
+  assert(stored('st_nfl').sport_tag === 'nfl' && stored('st_none').sport_tag === '' && stored('st_bad1').sport_tag === '',
+    '[18b] the row\'s sport_tag is the tag for a tagged message and \'\' for every other');
+
+  // (c) the server is the final judge: a tag outside the set sent DIRECTLY (a hostile or buggy client) is refused by the column\'s CHECK, and nothing is stored.
+  const before = fake.S.rows.length;
+  const direct = await fake.client.rpc('chat_append', { p_league: LEAGUE, p_events: [{ id: 'st_direct', type: 'message', author: 'p1', body: 'x', sportTag: 'basketball', meta: { _n: 1 } }] });
+  assert(direct.error && direct.error.code === '23514' && fake.S.rows.length === before,
+    '[18c] non-vacuity: the model server REFUSES a tag outside the closed set (23514) and stores nothing — so (a)\'s absence of an error is the client\'s doing, not a lenient fake');
+
+  // (d) the read: the column is NAMED in the select, and comes back as sportTag on a tagged row only.
+  const since = await transport.fetchSince(0, 300);
+  const sel = fake.S.selects.filter((q) => q.table === 'messages').at(-1);
+  assert(/(^|,)sport_tag(,|$)/.test(sel.cols), '[18d] the select NAMES sport_tag (a granted column; never `*`)');
+  const ev = Object.fromEntries(since.events.map((e) => [e.id, e]));
+  assert(ev.st_nfl.sportTag === 'nfl', '[18d] a tagged row reads back as sportTag \'nfl\'');
+  assert(!('sportTag' in ev.st_none) && !('sportTag' in ev.st_bad1), '[18d] an untagged row reads back with NO sportTag key');
+  assert(JSON.stringify(ev.st_none) === JSON.stringify({ leagueId: LEAGUE, seq: ev.st_none.seq, id: 'st_none', ts: ev.st_none.ts, type: 'message', author: 'p1', gameTag: '', body: 'plain', targetId: '', replyTo: '', notify: true, meta: null, relayed: false }),
+    '[18d] BYTE-IDENTITY: an untagged row\'s event is exactly the pre-D1 shape, key for key and in order, plus 0045\'s server-set `relayed` (false: a player\'s row) LAST');
+
+  // (e) the column ONLY: a row whose sport_tag is outside the set, or whose camelCase twin or meta carries a tag, yields no tag. (A row from a corrupt cache or a hostile payload.)
+  const hostile = [
+    { ...row(900), id: 'h1', sport_tag: 'CFB' },
+    { ...row(901), id: 'h2', sport_tag: '<b>nfl</b>' },
+    { ...row(902), id: 'h3', sport_tag: '', sportTag: 'nfl', meta: { sportTag: 'nfl' } },
+    { ...row(903), id: 'h4', sport_tag: null },
+    { ...row(904), id: 'h5', sport_tag: ['nfl'] },
+    { ...row(905), id: 'h6', sport_tag: 'constructor' },
+  ].map(projection.rowToMessage);
+  assert(hostile.every((e) => !('sportTag' in e)), '[18e] a tag is read from the sport_tag COLUMN and only if it is exactly one of the seven codes — never from a camelCase twin, never from meta, never as an array or a prototype name');
+  assert(projection.rowToMessage({ ...row(906), sport_tag: 'wjc' }).sportTag === 'wjc', '[18e] …and every code of the closed set is honored (wjc)');
+
+  // (f) Realtime: the same map, on the live path (a row at known+1 is handed up immediately, one with an invalid tag has none).
+  const live = makeFakeSupabase();
+  installFake(live);
+  for (let i = 1; i <= 2; i++) live.S.rows.push(row(i));
+  live.S.nextSeq = 3;
+  const delivered = [];
+  let known = 0;
+  const sub = transport.subscribe(
+    (events) => { delivered.push(...events); for (const e of events) if (e.seq > known) known = e.seq; },
+    { getMode: () => 'closed', getKnownHead: () => known, onStatus: () => {} },
+  );
+  await new Promise((r) => setTimeout(r, 20));
+  live.S.channels[0].status('SUBSCRIBED');
+  await new Promise((r) => setTimeout(r, 40));
+  const rt3 = { ...row(3), id: 'rt3', sport_tag: 'cfb' }, rt4 = { ...row(4), id: 'rt4', sport_tag: 'NFL' }, rt5 = { ...row(5), id: 'rt5', sport_tag: '' };
+  live.S.rows.push(rt3, rt4, rt5); live.S.nextSeq = 6;
+  live.S.channels[0].emit(rt3); live.S.channels[0].emit(rt4); live.S.channels[0].emit(rt5);
+  const rt = Object.fromEntries(delivered.filter((e) => e.id.startsWith('rt')).map((e) => [e.id, e]));
+  assert(rt.rt3 && rt.rt3.sportTag === 'cfb', '[18f] a Realtime INSERT carries its sport_tag onto the event (the live path maps through the same rowToMessage)');
+  assert(rt.rt4 && !('sportTag' in rt.rt4) && rt.rt5 && !('sportTag' in rt.rt5), '[18f] …a Realtime row with an invalid or empty tag has no sportTag key, and is still delivered');
+  sub.unsubscribe && sub.unsubscribe();
+  resetToFlagOff();
 }
 
 _realLog(`\n${pass} passed, ${fail} failed.`);

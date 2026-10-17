@@ -1,0 +1,13 @@
+{
+  "id": "profiletest",
+  "script": "profiletest.mjs",
+  "label": "MS-0",
+  "summary": "loose",
+  "floor": 250,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 100,
+  "note": "D1 W-68 / W-69 (2026-10-14): RAISED 249 -> 250: the slate size comes from the sport profile through the Games list. D1 third pass item 5 (2026-10-08): RAISED 245 -> 249 - [ab-1..ab-4] one team-abbreviation lookup (NFL first) for teamAbbr and buildAbbrMap. Multi-Sport Phase 0 (DI-219): the sport-profile registry is strict, deeply frozen and Edge-importable, and EVERY profile value equals the legacy constant it replaces (proven through the real data-provider / extra-point / createWeek code, or pinned by source text where no seam …"
+}

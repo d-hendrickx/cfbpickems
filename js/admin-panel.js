@@ -171,8 +171,13 @@ export const ADMIN_CARD_TAB = Object.freeze({
   // exactly like 'account-linking' (Admin-panel placement, commissioner
   // write path). Same precedent, same reason: the `league_kv` settings blob.
   'scribe-model': 'settings',
+  // D1 Lane C (DI-634, UN-477) — the administrator's routing card: which model handles each kind of SCRIBE work. Directly AFTER the "Chat model for this league" card above (its
+  // retitled `scribe-model`), Admin → Settings. Read: platform admins; write: Super Admin only (js/scribe-routes-card.js, js/roles.js CARD_OPERABILITY).
+  'scribe-routes': 'settings',
   'pilot-league-flag': 'settings',
   // Data (league-scoped where noted, all relocated whole)
+  // D1 Lane C (DI-637, UN-482) — the content and AI status card, FIRST on the Data tab: what stopped, most severe first (js/content-status-card.js). Platform admins, read-only.
+  'content-ai-status': 'data',
   'export-data': 'data',
   'data-management': 'data',
   'chat-retention': 'data',
@@ -217,7 +222,10 @@ const ADMIN_CARD_TITLE = Object.freeze({
   'randomize-picks-shortcut': 'Randomize Picks Shortcut',
   'security-settings': 'Security & Settings',
   'scribe-caps-limits': 'SCRIBE Caps & Limits',
-  'scribe-model': 'SCRIBE Model',
+  // D1 Lane C (DI-634) — retitled, no behavior change: it is the LEAGUE's chat model; the new card beside it is the PLATFORM's routing.
+  'scribe-model': 'Chat model for this league',
+  'scribe-routes': 'SCRIBE models',
+  'content-ai-status': 'Content & AI status',
   'pilot-league-flag': 'Pilot League Flag',
   'export-data': 'Export Data',
   'data-management': 'Data Management',
@@ -430,7 +438,8 @@ export function renderSuperAdminPlaceholder({ escHtml, leagues = [], allLeaguesL
   // just above (an unread value must never render an open door, or invite an operator to "confirm" one).
   const creationOpen = kv.leagueCreationOpen === true;
   // R-F7 / S-1 — the first precondition is DATABASE-visible: the marker `push_alias_mode_live`. Same default direction as the gate: an unread or missing value is NOT live.
-  const aliasLive = kv.pushAliasModeLive === true;
+  // Review (2026-10-08): 0049's door interlock is satisfied by EITHER marker - `push_alias_mode_live` (SB-11) or `push_nonpilot_alias_only` (Part D) - so the card recognises both; neither (or an unread kv) is NOT live.
+  const aliasLive = kv.pushAliasModeLive === true || kv.pushNonpilotAliasOnly === true;
 
   // REVIEWER FINDING 7 (2026-09-25) — a failed platform_kv read used to
   // degrade SILENTLY into the guessed defaults above, with the Save button

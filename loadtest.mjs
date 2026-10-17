@@ -22,30 +22,24 @@
 
 import { readFile, readdir } from 'node:fs/promises';
 
-/**
- * ══ REVIEWER F8 (sixth gate, 2026-09-17) — A HUNG CHILD MUST FAIL, NOT HANG ══
- *
- * Eleven suites are run as CHILD PROCESSES from this file (scribeToolsTwin,
- * trainertest, backendtest, authtest, persisttest, almatotaltest, boottest,
- * cachetest, memorytest, scoringtest, groupdtest), every one of them through a
- * `spawnSync` with no deadline. spawnSync with no timeout waits FOREVER — so a
- * child that deadlocks (an un-awaited promise, a timer nobody unref'd, a stubbed
- * clock that never advances, a `process.exit` that never runs) does not turn the
- * sweep red. It turns the sweep into a process that never returns, which reads
- * to a human as "the machine is slow" and, in a terminal that has been left
- * alone, as nothing at all. A test harness that can hang is a test harness that
- * can be silently skipped, and this whole arc is a list of guards that were
- * green while proving nothing.
- *
- * Five minutes is roughly twenty times the slowest child today (authtest, ~15s
- * on this machine), so it can only be reached by a genuine hang. On the timeout
- * spawnSync kills the child, `result.status` comes back null and `result.error`
- * is set — and every one of the eleven call sites already asserts
- * `result.status === 0` and prints `result.error.message`, so the existing
- * assertion turns red with the reason attached. No new failure plumbing needed;
- * the deadline is the whole fix.
- */
-const SPAWNED_SUITE_TIMEOUT_MS = 300000;
+// ── TIERED RUNNER GUARD (docs/TESTING.md) ──────────────────────────────────────────────────────────────
+// `node loadtest.mjs` is still THE full harness (deploy.sh Gate 1 runs exactly this). The standalone
+// suites it used to spawn one after another now live as one manifest each in tests/suites/ and run in
+// parallel under testrun.mjs; THIS FILE IS THE CORE SUITE (module-load smoke + every inline section).
+// testrun.mjs launches it with CFBP_CORE=full (everything) or CFBP_CORE=load (section [1] only, the
+// --quick tier). Run bare, it delegates to the runner, so a human or deploy.sh typing the old command
+// gets the whole sweep — never just the core, which would read as a pass it is not.
+{
+  const { spawnSync: spawnTestrun } = await import('node:child_process');
+  const { fileURLToPath: toPathTestrun } = await import('node:url');
+  if (!process.env.CFBP_CORE) {
+    const r = spawnTestrun(process.execPath, [toPathTestrun(new URL('./testrun.mjs', import.meta.url)), '--full', ...process.argv.slice(2)], { stdio: 'inherit' });
+    process.exit(r.status === null ? 1 : r.status);
+  }
+}
+
+// Spawned-suite timeouts (reviewer F8, 2026-09-17: a hung child must FAIL, not hang) moved to testrun.mjs with the suites:
+// every manifest carries a deadline (default 300000 ms) and the runner kills the whole process group when it passes.
 
 // ── DOM / browser stubs ───────────────────────────────────────────────────────
 const store = new Map();
@@ -128,7 +122,7 @@ for (const m of ['data-model', 'storage', 'scoring', 'data-provider', 'notificat
   // the same day the wiring window adds their own dedicated spawned suites
   // below. A module missing from THIS list is a module RG-03 cannot see.
   'nav-gestures', 'haptics', 'icons', 'roles', 'leagues-home', 'week-wizard',
-  'control-center', 'admin-panel', 'comm-panel-layout',
+  'control-center', 'admin-panel', 'comm-panel-layout', 'wizard-nav', 'spread-fallback', 'spread-find-ui', 'odds-lookup-client',
   // Multi-Sport Phase 0/1a (2026-09-29) — the sport-profile registry (DI-219) and the competition read API
   // (DI-220). Nothing in the boot path imports either yet (their consumers land in 1b), so without this line
   // a broken import in them would be invisible to every suite that starts from app.js (RG-03). `sports/index`
@@ -136,6 +130,11 @@ for (const m of ['data-model', 'storage', 'scoring', 'data-provider', 'notificat
   // The two profile modules are ALSO named explicitly (v0.28.0 integration round 2, step 2, kept at round 3a per the coordinator):
   // through `sports/index` alone a broken cfb.js/nfl.js would surface as index's error, not its own line.
   'competition', 'sports/index', 'sports/cfb', 'sports/nfl',
+  // D1 (DI-553 / DI-530, 2026-10-08) — the Locker Room's sport pills: 'sport-tag' (the closed set of sport tags; a leaf chat.js and supabase-projection.js import) and 'chat-sport-pills' (the pure row
+  // builder chat-ui.js imports). A broken import in either blanks the chat module graph and with it the app (RG-03); service-worker.js precaches both; chatsporttest.mjs owns their behavior.
+  'sport-tag', 'chat-sport-pills',
+  // D1 (W-68 / W-69, 2026-10-14) - Comm -> Games' one list (games-list) and the add-or-swap rule (slate-add), both imported STATICALLY by app.js, and the keyed reconciler it now imports (keyed-list). A broken import in any blanks the app (RG-03).
+  'games-list', 'slate-add', 'keyed-list',
   // N1 league creation (2026-09-30) — the New League flow's three pure modules: league-defaults (NEW_LEAGUE_DEFAULTS, the migration's twin), league-create (the sheet's copy,
   // invite-code helpers, `cfbp_pending_join`, step machine and renderers) and pilot-only (the pilot-only registry). leagues-home, recap and control-center now import them, so a
   // broken import in any of the three would take Leagues Home / the recap / the drawer down with it (RG-03).
@@ -158,10 +157,56 @@ for (const m of ['data-model', 'storage', 'scoring', 'data-provider', 'notificat
   // SP-54 / DI-466 (2026-10-01) — the weekly tie-break's leaf key builder and words: it builds the alma mater / Extra Point / draw keys scoring.js is handed and words every caption, notice and
   // recap phrase. app.js imports it statically, so a broken import in it would take the whole app down with it (RG-03); service-worker.js precaches it.
   'tie-context',
+  // Deployment 1, Lane B (2026-10-07) — the game-state model (DI-570), the viewer's game order (DI-579), the pushed-screen shell (DI-571), the keyed-list / team-lockup helpers (DI-572) and the
+  // Home card detail (DI-575/576). game-state, game-order and keyed-list are leaves; pushed-screen imports nav-gestures + icons; card-detail imports the feed/stats/scoring modules. home.js and
+  // app.js import them, so a broken import in any of the five would take the app down with it (RG-03); service-worker.js precaches them.
+  'game-state', 'game-order', 'pushed-screen', 'keyed-list', 'card-detail',
+  // Deployment 1, Lane B Game Day (2026-10-08) -- the gate and the chip helper (pick-chips: the ONLY module that reads another member's pick, behind pickVisibilityFor), the one By person / By team renderer
+  // (pick-groups: receives only the gate's return), the Game Day model / open body / DOM half (gameday, gameday-sheet, gameday-dom), the Game view (game-view) and the Dashboard's Sort words and
+  // hold-and-drag Custom arrange (game-sort, game-arrange). home.js and app.js import them statically, so a broken import in any of the eight blanks the app (RG-03); service-worker.js precaches them.
+  'pick-chips', 'pick-groups', 'gameday', 'gameday-sheet', 'gameday-dom', 'game-view', 'game-sort', 'game-arrange',
+  // D1 Lane B Game Day fix round 2 (DI-599, 2026-10-08) — "What's next" (next-up: a pure leaf, no imports). home.js imports it statically, so a broken import in it blanks Home (RG-03); service-worker.js precaches it; nexttest.mjs owns its behavior.
+  'next-up',
+  // D1 Lane B (DI-597, 2026-10-08) — Share to chat: chat-share, a pure leaf (no imports) that app.js, home.js, chat-ui.js and card-detail.js import statically, so a broken import in it blanks the app (RG-03);
+  // service-worker.js precaches it; sharetest.mjs owns it.
+  'chat-share',
+  // D1 Lane C (FB-006 / UN-468, 2026-10-07) — the SCRIBE profile pane's four modules: the shared text rules (also imported by supabase/functions/scribe-profile, Deno), the pure markup, the one Edge
+  // Function call, and the written-standards digest. app.js imports all four statically, so a broken import in any of them takes the whole app down with it (RG-03); scribeprofiletest.mjs owns their behavior.
+  'scribe-profile-rules', 'scribe-profile-view', 'scribe-profile-client', 'scribe-standards',
+  // D1 (2026-10-07) — FB-001 / DI-509 week-lock (the one week-lock state: badge, countdown, submit, Edit My Picks) and FB-002 / DI-515 live-tiebreak (the live alma-mater tiebreaker): two LEAF modules that
+  // app.js imports statically, so a broken import in either blanks the app (RG-03); service-worker.js precaches both. weeklocktest.mjs and livetiebreaktest.mjs own their behavior.
+  'week-lock', 'live-tiebreak',
+  // D1 Lane B (DI-595 / DI-596, history, 2026-10-08) — the member comparison and the week detail: two pure leaves (models and markup) that app.js imports STATICALLY, so a broken import in either blanks the
+  // app (RG-03); service-worker.js precaches both; comparetest.mjs owns their behavior.
+  'compare', 'week-detail',
+  // UN-412 / DI-500…502 ("Who's in", 2026-10-01; carried into D1 as W-18 / DI-539) — the pure pick-status model / copy / markup / patcher / throttle. app.js imports it statically, so a broken import in it takes the whole
+  // app down with it (RG-03); pickstatustest owns its behavior. Above 'account-exit' on purpose (accountexittest [11x] pins that name as the list's last entry).
+  'pick-status',
+  // D1 (2026-10-07; Lane A, DI-532..536) — the commissioner's multisport operations (pure) and the seam to the client branch's sport context. app.js imports both statically, so a broken
+  // import in either blanks the app (RG-03); multisporttest and commsporttest own their behavior. Above 'account-exit' for the same reason as 'pick-status'.
+  'multisport-admin', 'sport-seam', 'sport-rules',
+  // D1 (2026-10-08; the sports client, DI-520..DI-528, DI-554) — the four pure leaves behind the sport context's surfaces (the card status words, the overview and League Page Sports markup, the segmented
+  // switcher, the Dashboard's combined slate) and the Home feed's per-sport merge. app.js imports the first four, and home.js the last, STATICALLY, so a broken import in any of them blanks the app (RG-03);
+  // service-worker.js precaches all five (notifytest [25e]). Their behavior is owned by sportstatustest, leagueoverviewtest, sportswitchertest, allsportstest and homesportstest.
+  'sport-status', 'league-overview', 'sport-switcher', 'all-sports', 'home-sports',
+  // D1 (DI-557, 2026-10-14) - the stall banner's pure half (rows, copy, markup, the poll-health record): a leaf app.js imports STATICALLY, so a broken import in it blanks the app (RG-03);
+  // service-worker.js precaches it. sportstalltest.mjs owns its behavior.
+  'sport-stall',
+  // D1 Lane C (2026-10-08) - SCRIBE routing and the AI status, the client half: the pure routing (resolution, class shares, cost ratio; the Edge Functions import the same file), the two Admin cards'
+  // pure model and markup (SCRIBE models in Settings, Content & AI status in Data) and the source chips under a SCRIBE answer. app.js and chat-ui.js import them statically, so a broken import in
+  // any of the four takes the whole app down with it (RG-03); service-worker.js precaches them. routingtest.mjs owns the first two, rolestest/adminpaneltest the card wiring.
+  'scribe-routing', 'scribe-routes-card', 'content-status-card', 'source-chips', 'source-labels',
+  // D1 Lane C (2026-10-08; DI-649..652) - the deadline call-out's pure rules (moments, ceilings, the league-scoped post id, the line pools). Imported by two Deno functions (`reminders`, `scribe-scan`)
+  // and by no browser module, the same dual-runtime shape as 'reminder-rules' above; listed here so a broken import in it is seen (RG-03). scribeScan.twin owns its behavior.
+  'scribe-callout',
   // SP-57 (2026-10-01) — the long-press section-drag engine (DI-475/476/385/386): a LEAF module that app.js imports statically (it is on the boot path of the Dashboard and Standings
   // renderers) and that imports nav-gestures.js, haptics.js and icons.js. A broken import in it would blank both pages' renderers (RG-03); service-worker.js precaches it.
   // Placed ABOVE 'league-settings-view' at the v0.29.0 batch-5a integration (2026-10-01): leaguesettingsuitest [6zc] pins 'league-settings-view' as the entry directly above account-exit's comment.
   'section-drag',
+  // D1 Lane C (DI-668, 2026-10-08) — the ONE team matcher (pure, zero imports), extracted from newsRank.js: newsRank imports it statically, so a broken import in it
+  // blanks News (RG-03); service-worker.js precaches it.
+  'team-match',
+  'feed-relevance', 'content-card',
   // SP-53 (2026-10-01) — League Settings' RENDERED half (the page, the name card, the switch, the Leave row, the three action sheets, the hand-off sheet, the Comm Panel's borrowed sentences).
   // app.js imports it statically and it imports league-create.js and account-exit.js, so a broken import in it would take the whole app down with it (RG-03); service-worker.js precaches it.
   // Above 'account-exit' for the same reason as the line above.
@@ -178,6 +223,27 @@ for (const m of ['data-model', 'storage', 'scoring', 'data-provider', 'notificat
     console.error('  ❌ js/' + m + '.js —', e.message);
     fail++;
   }
+}
+// D1 (2026-10-08, Part 2 item 5) — the eight modules the sports work added are NAMED in the list above (a module dropped from it would stop being import-checked without anyone noticing), and each
+// one a static import of app.js or home.js is also in the service worker's precache (notifytest [25e] owns the rest of that rule).
+{
+  const loadSrc = await readFile(new URL('./loadtest.mjs', import.meta.url), 'utf8');
+  const listText = loadSrc.slice(loadSrc.indexOf("for (const m of ['data-model'"), loadSrc.indexOf('mods[m] = await import(`./js/${m}.js`);'));
+  const D1_SPORTS = ['multisport-admin', 'sport-seam', 'sport-rules', 'sport-status', 'league-overview', 'sport-switcher', 'all-sports', 'home-sports'];
+  assert(D1_SPORTS.every((m) => new RegExp(`'${m}'`).test(listText) && !!mods[m]), '[1b] the sports modules (multisport-admin, sport-seam, sport-rules, sport-status, league-overview, sport-switcher, all-sports, home-sports) are in the import list and imported');
+  const sw = await readFile(new URL('./service-worker.js', import.meta.url), 'utf8');
+  assert(D1_SPORTS.every((m) => sw.includes(`'./js/${m}.js'`)), '[1c] ...and the service worker precaches every one of them (the union of the server and client lists)');
+}
+
+
+// ── CFBP_CORE=load (docs/TESTING.md) ───────────────────────────────────────────────────────────────
+// --quick tier: stop after section [1] (every js/ module imports cleanly) and print the same summary line.
+if (process.env.CFBP_CORE === 'load') {
+  console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
+  // same flush-then-exit shim as the end of this file (reviewer F3 / security F-6): a bare exit can drop the summary line off a pipe
+  process.stdout.write('', () => process.stderr.write('', () => process.exit(fail === 0 ? 0 : 1)));
+  setTimeout(() => process.exit(fail === 0 ? 0 : 1), 5000).unref();
+  await new Promise(() => {});    // park here: the callbacks above exit the process, and nothing below may run in load mode
 }
 
 // ── 1b. DI-331j (B7, 3c fix window, 2026-09-25) — team-logo render path ───────
@@ -592,8 +658,9 @@ console.log('\n[1e] DI-428(b) — _slateRowLogoHTMLForTest()…');
   }
 }
 
-// ── 1f. DI-428(b) — a REAL render of renderAvailableGamesList()/
-//    renderAdminGamesList(), toggle on/off, through the real getLogoView()
+// ── 1f. DI-428(b) — a REAL render of the Games row (D1 W-69: renderAvailableGamesList() and
+//    renderAdminGamesList() are ONE list now; a not-on-slate row and an on-slate row are its two
+//    states, reached through app._gamesRowsHTMLForTest), toggle on/off, through the real getLogoView()
 //    seam (player.preferences.logoView), not just the pure predicate above.
 //    Mutation-proven: a scratch-copy mutant that hardcodes
 //    slateRowLogoHTML() to always return '' turns 1e-5…5e and 1f-3/1f-4 red
@@ -619,25 +686,25 @@ console.log('\n[1f] DI-428(b) — real render: Games-tab slate row logos, toggle
   try {
     store.set('cfbp_weeks', JSON.stringify([WEEK428]));
     setLogoView(false);
-    const availOff = app.renderAvailableGamesList([availGame], [], WEEK428);
-    assert(!/slate-row-logo/.test(availOff), '1f-1: renderAvailableGamesList(), toggle OFF -> no slate-row-logo <img>');
-    const slateOff = app.renderAdminGamesList([slateGame], WEEK428, {});
-    assert(!/slate-row-logo/.test(slateOff), '1f-2: renderAdminGamesList() (Selected Slate), toggle OFF -> no slate-row-logo <img>');
+    const availOff = app._gamesRowsHTMLForTest({ week: WEEK428, slate: [], pool: [availGame] });
+    assert(!/slate-row-logo/.test(availOff), '1f-1: the Games row (Not on slate), toggle OFF -> no slate-row-logo <img>');
+    const slateOff = app._gamesRowsHTMLForTest({ week: WEEK428, slate: [slateGame], pool: [] });
+    assert(!/slate-row-logo/.test(slateOff), '1f-2: the Games row (On slate), toggle OFF -> no slate-row-logo <img>');
 
     setLogoView(true);
     assert(storageMod.getLogoView() === true, '1f-pre: fixture — the commissioner\'s preferences.logoView is ON');
-    const availOn = app.renderAvailableGamesList([availGame], [], WEEK428);
+    const availOn = app._gamesRowsHTMLForTest({ week: WEEK428, slate: [], pool: [availGame] });
     assert((availOn.match(/slate-row-logo/g) || []).length === 2,
-      `1f-3: renderAvailableGamesList(), toggle ON -> BOTH team logos render (got ${(availOn.match(/slate-row-logo/g) || []).length})`);
+      `1f-3: the Games row (Not on slate), toggle ON -> BOTH team logos render (got ${(availOn.match(/slate-row-logo/g) || []).length})`);
     assert(availOn.includes(HOME_LOGO) && availOn.includes(AWAY_LOGO), '1f-3b: both logo URLs are present');
     assert(availOn.includes('Home Univ') && availOn.includes('Away Univ'), '1f-3c: the team names are UNCHANGED — still present, right beside the logos');
 
-    const slateOn = app.renderAdminGamesList([slateGame], WEEK428, {});
+    const slateOn = app._gamesRowsHTMLForTest({ week: WEEK428, slate: [slateGame], pool: [] });
     assert((slateOn.match(/slate-row-logo/g) || []).length === 2,
-      `1f-4: renderAdminGamesList() (Selected Slate), toggle ON -> BOTH team logos render (got ${(slateOn.match(/slate-row-logo/g) || []).length})`);
+      `1f-4: the Games row (On slate), toggle ON -> BOTH team logos render (got ${(slateOn.match(/slate-row-logo/g) || []).length})`);
 
     // Manual game — never a logo, even with the toggle ON.
-    const manualOn = app.renderAdminGamesList([manualGame], WEEK428, {});
+    const manualOn = app._gamesRowsHTMLForTest({ week: WEEK428, slate: [manualGame], pool: [] });
     assert(!/slate-row-logo/.test(manualOn), '1f-5: a manual game never renders a logo, even with the toggle ON');
     assert(manualOn.includes('Home Univ') && manualOn.includes('Away Univ'), '1f-5b: …the team names still render plainly');
   } finally {
@@ -1062,7 +1129,10 @@ for (const f of VOCAB_FILES) {
   const src = await readFile(new URL(`./js/${f}`, import.meta.url), 'utf8');
   src.split('\n').forEach((l, i) => {
     if (!code(l)) return;                            // skip comments
-    for (const lit of l.match(STRING_LITERAL) || []) {
+    // D1 Lane B (2026-10-07): a MODULE SPECIFIER is a path, not copy (js/game-order.js is DI-579's own module name) — only the specifier is blanked (`from './x.js'`, `import './x.js'`, `import('./x.js')`);
+    // the rest of the line, import list included, is still scanned (a reviewer note: the old whole-line skip also hid any copy on an import line).
+    const scanned = l.replace(/(\bfrom\s*|\bimport\s*\(?\s*)(['"])[^'"\n]*\2/g, '$1""');
+    for (const lit of scanned.match(STRING_LITERAL) || []) {
       if (/\border(s)?\b/i.test(lit)) ordersHits.push(`${f}:${i + 1} ${lit.trim().slice(0, 60)}`);
     }
   });
@@ -1637,7 +1707,8 @@ assert(/gameThreadHeaderClass\(myViewPick, g\)/.test(chatUiSrc) && /chat-view-he
 // The spread stays on the sheet header — batch 1 removed it from message
 // CHIPS specifically because the header already carries it; don't remove it
 // twice and leave nowhere the spread shows in that view.
-assert(/chat-sheet-sub">\$\{g \? esc\(formatSpread/.test(chatUiSrc),
+// W-57 / DI-530 (N6, 2026-10-08): the sub-line may now LEAD with the sport (`${sportLead}`, '' in a one-sport league); the spread is still what follows it.
+assert(/chat-sheet-sub">(?:\$\{sportLead\})?\$\{g \? esc\(formatSpread/.test(chatUiSrc),
   'the bottom-sheet header still shows the spread (only message chips dropped it, per batch 1)');
 
 // ── 17. Item C — read marking: per-tag cursors while reading the Locker Room ─
@@ -2537,8 +2608,11 @@ assert(demoGridBody.length > 0 && /batch-grid-scroll/.test(demoGridBody),
 // that general behavior is what this assertion now checks. The relocated
 // wrapper's own initScrollFades() coverage is renderAdminPage()'s job now
 // (checked separately below).
-assert((commBody.match(/initScrollFades\(/g) || []).length >= 2,
-  'renderCommPage still calls initScrollFades() at BOTH initial render and on tab switch, for this panel\'s own remaining scroll wrappers');
+// W-70 (2026-10-14, DI-W70.3) - RE-DERIVED, not weakened: the tab switch is now ONE function, setCommTab(), shared by the tap and the swipe, so the "on tab switch" half of this
+// property lives there (the click handler in renderCommPage() just calls it). Still BOTH moments are covered: the initial render here, the tab switch in setCommTab().
+const setCommTabBody = stripComments(appJsSrc.slice(appJsSrc.indexOf('export function setCommTab('), appJsSrc.indexOf('function renderCommPanePreview(')));
+assert((commBody.match(/initScrollFades\(/g) || []).length >= 1 && /initScrollFades\(/.test(setCommTabBody) && /setCommTab\(btn\.dataset\.commTabBtn/.test(commBody),
+  'renderCommPage still calls initScrollFades() at BOTH initial render and on tab switch (the tab switch is setCommTab(), the one path for a tap and a swipe), for this panel\'s own remaining scroll wrappers');
 const adminPageBody = stripComments(fnBody('renderAdminPage'));
 assert(/renderDemoBatchGrid\(/.test(appJsSrc.match(/function renderDemoSimulationBody\([\s\S]*?\n\}/)?.[0] || '') &&
   (adminPageBody.match(/initScrollFades\(/g) || []).length >= 2,
@@ -3622,6 +3696,19 @@ console.log('\n[34] UN-116 — others\' picks stay blind until kickoff…');
     'a commissioner who can NO LONGER act still sees everything — the bypass narrows, it does not disappear');
   storage.saveWeek({ ...OW, status: 'open' });
 
+  // ── D1 (2026-10-08, security C6) — AN INDEPENDENT "CAN THIS VIEWER STILL ACT" ORACLE ────────────────────────────────────────────────────────────────────────────
+  // [34g]/[34h]/[34i] decided whether a state was "actionable" by asking canPlayerSubmitPicks() - the predicate under test's own input. D1 widened that predicate (the entrant clause: "You haven't
+  // joined this sport's picks"), so a commissioner outside a sport read as "cannot act", the sweeps SKIPPED him, and the bypass opened unseen (security F1). This oracle reads only what a week IS:
+  // its stored status, its EXPLICIT lock instant and the clock, plus whether there is a player at all. It deliberately knows nothing about entrants: a viewer who has not joined a sport could still
+  // JOIN (open until the lock) and then act, so for the blind rule he has the same stake as an entrant. (One-sport league: it agrees with canPlayerSubmitPicks on every state below - the swept/skipped
+  // counts of [34h]/[34i] are unchanged by the swap.)
+  const couldStillAct34 = (week, playerId = 'un116_me', nowMs = Date.now()) => {
+    if (!week || !playerId) return false;
+    if (week.status !== 'open') return false;                                   // draft is not open yet; locked, live and final are over
+    const lockAt = week.picksLockAt ? Date.parse(week.picksLockAt) : null;
+    return lockAt === null || !(nowMs >= lockAt);                               // an explicit lock instant that has passed closed it
+  };
+
   // 34g — THE INVARIANT, stated directly instead of inferred from two separate
   // predicates. This is the assertion that would have caught RG-37 on day one,
   // and it is deliberately exhaustive over BOTH roles because the whole defect
@@ -3641,7 +3728,7 @@ console.log('\n[34] UN-116 — others\' picks stay blind until kickoff…');
           const wid = `inv_${isAdmin ? 'a' : 'p'}_${st}_${lbl.replace(/\W/g, '')}`;
           storage.saveWeek({ weekId: wid, weekNumber: 1, season: 2026, status: st, ...d });
           const w = W(wid);
-          if (app34.canPlayerSubmitPicks(w, 'un116_me').allowed && app34.canViewOtherPicks(w)) {
+          if (couldStillAct34(w) && app34.canViewOtherPicks(w)) {   // C6 (2026-10-08): the independent oracle, not canPlayerSubmitPicks
             violations.push(`${isAdmin ? 'admin' : 'player'}/${st}/${lbl}`);
           }
         }
@@ -3690,7 +3777,7 @@ console.log('\n[34] UN-116 — others\' picks stay blind until kickoff…');
         storage.saveWeek({ ...OW, status: st });
         storage.setSession('un116_me', isAdmin, true);
         const wk = W(OW.weekId);
-        if (!app34.canPlayerSubmitPicks(wk, 'un116_me').allowed) { skipped++; continue; }
+        if (!couldStillAct34(wk)) { skipped++; continue; }   // C6 (2026-10-08): the independent oracle, not canPlayerSubmitPicks
         swept++;
 
         // Surface 1 — the standard matrix. The viewer picked Ohio State and the
@@ -3772,6 +3859,78 @@ console.log('\n[34] UN-116 — others\' picks stay blind until kickoff…');
     storage.setSession(null, false, false);
   }
 
+  // 34h-D1 — Deployment 1, Lane B (DI-614, security C3 / C6 / S1 / S2, 2026-10-08): THE SURFACES "SHOW PICKS" ADDED TO THE RG-37 SWEEP. By team / By person is drawn by ONE renderer (js/pick-groups.js
+  // `picksRowHTML`, behind the ONE gate in js/pick-chips.js) in three forms: the Dashboard's compact row ('dash'), Game Day's open-card row ('card') and the Game view's League picks panel ('panel'). The
+  // same canary as the sweep above: the viewer picked Ohio State, the rival picked Texas, so "Texas" / "TEX" anywhere in a served pick region is the rival's selection disclosed.
+  // Every state where arePicksPublic is FALSE is swept — Open, Locked and DERIVED-LOCKED (stored open, lock instant passed) — as a player and as a commissioner, in both views, on the served markup
+  // INCLUDING every aria-label and title, with the viewer's OWN pick required to survive (a blanked row would otherwise pass). A public-but-not-yet-confirmed week (supabase mode, the rows have not
+  // landed, S-C10) is swept the same way. Game Day's collapsed pills and the open card through the real Home are swept in gamedaytest, on the markup Home serves.
+  {
+    const PG = mods['pick-groups'], PC = mods['pick-chips'];
+    const ents = players34.map(p => ({ ...p }));
+    const g1 = games34[0];
+    const past = '2020-01-01T00:00:00.000Z';
+    const worlds = [
+      ['open', { ...OW, status: 'open' }], ['locked', { ...OW, status: 'locked' }], ['derived-locked', { ...OW, status: 'open', picksLockAt: past }],
+    ];
+    const leaksD1 = [];
+    let sweptD1 = 0;
+    const esc34 = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const check = (label, html, { own = true } = {}) => {
+      sweptD1++;
+      if (/Texas|TEX\b/.test(html)) leaksD1.push(`${label}/rival-team`);
+      if (/pg-cluster|pg-split|\bon (?:TEX|OSU|OHIO)\b/i.test(html)) leaksD1.push(`${label}/cluster-or-count`);
+      if (own && !/Ohio State|OSU|OHIO|Ohio/i.test(html)) leaksD1.push(`${label}/own-pick-hidden`);
+    };
+    for (const isAdmin of [false, true]) {
+      const role = isAdmin ? 'commissioner' : 'player';
+      for (const [wl, wk] of worlds) {
+        storage.saveWeek(wk);
+        storage.setSession('un116_me', isAdmin, true);
+        storage.setPicksView('dashboard', 'team'); storage.setPicksView('gameday', 'team');
+        const where = `${role}/${wl}`;
+        // surface: the Dashboard compact row, By team
+        const cmp = app34.renderDashboardCompact(players34, games34, PICKS34, [], OW.weekId, null);
+        const chipsRegion = (cmp.match(/<div class="dc-chips">[\s\S]*?<\/div>\s*<\/div>/g) || []).join('');
+        if (!chipsRegion) leaksD1.push(`${where}/dashboard-by-team-no-chips-region`);
+        check(`${where}/dashboard-by-team`, chipsRegion);
+        // surfaces: the three forms of the one renderer, both views
+        for (const form of ['dash', 'card', 'panel']) for (const view of ['person', 'team']) {
+          const html = PG.picksRowHTML({ game: g1, week: wk, entrants: ents, viewerId: 'un116_me', view, form, escHtml: esc34, numHtml: n => String(n) });
+          if (!html) leaksD1.push(`${where}/${form}-${view}-empty-for-a-submitted-viewer`);
+          check(`${where}/${form}-${view}`, html);
+        }
+      }
+    }
+    storage.setSession(null, false, false);
+    storage.saveWeek({ ...OW, status: 'open' });
+    assert(sweptD1 >= 3 * 2 * (1 + 6), `fixture check: the Lane B sweep reached ${sweptD1} surface renders (3 non-public states x 2 roles x [the Dashboard By team row + 3 forms x 2 views])`);
+    assert(leaksD1.length === 0, `THE LANE B SURFACE SWEEP — Dashboard By team, Game Day's open-card row and the Game view panel disclose NOTHING in Open, Locked or derived-locked weeks, as a player and as a commissioner, in either view, in markup and in aria-label / title, and the viewer's own pick survives (leaks: ${leaksD1.join(', ') || 'none'})`);
+    // S-C10: public on the clock, but the other members' rows have not landed (supabase mode): the gate refuses, not "reveals what the mirror happens to hold"
+    const wkLive = { ...OW, status: 'live' };   // the record is passed in directly: in supabase mode storage.getWeek reads the (unhydrated) mirror, which is empty in this harness
+    storage.saveWeek(wkLive);
+    storage.setSession('un116_me', false, true);
+    const wasMode = storage.getBackendMode();
+    const leaksSb = [];
+    try {
+      storage.setBackendMode('supabase');
+      PC.configurePickGate({ picksReadConfirmed: () => false, submissionStateFor: () => 'yes' });
+      for (const form of ['dash', 'card', 'panel']) for (const view of ['person', 'team']) {
+        const html = PG.picksRowHTML({ game: g1, week: wkLive, entrants: ents, viewerId: 'un116_me', view, form, escHtml: esc34, numHtml: n => String(n) });
+        if (/Texas|TEX\b|Ohio|OSU|pg-cluster|pg-split/i.test(html) || html !== '') leaksSb.push(`${form}-${view}`);
+      }
+      PC.configurePickGate({ picksReadConfirmed: () => true, submissionStateFor: () => 'yes' });
+      const open = PC.pickVisibilityFor({ game: g1, week: wkLive, viewerId: 'un116_me', entrants: ents });
+      if (open.state !== 'public') leaksSb.push('confirmed-live-should-be-public');   // (the supabase mirror holds no rows in this harness, so the control is the gate's verdict, not the markup)
+    } finally {
+      storage.setBackendMode(wasMode || 'local');
+      PC._resetPickGateForTest();
+    }
+    assert(leaksSb.length === 0, `S-C10 on the Lane B surfaces: a week that reads public while the server has NOT confirmed the rows draws nothing in any form or view, and the same week once confirmed does reveal (the positive control) (${leaksSb.join(', ') || 'none'})`);
+    storage.setSession(null, false, false);
+    storage.saveWeek({ ...OW, status: 'open' });
+  }
+
   // 34i — RG-40, THE EXTRA POINT. The SAME defect as RG-37, one surface over.
   // The commissioner panel's "Guesses on file" block printed every active
   // player's Extra Point guess in plaintext, gated only on `session.isAdmin`,
@@ -3826,7 +3985,7 @@ console.log('\n[34] UN-116 — others\' picks stay blind until kickoff…');
             // sweep stays correct if the status rules move. States where
             // nobody can act are skipped rather than asserted, so this can
             // never be satisfied by blinding the card forever.
-            if (!app34.canPlayerSubmitPicks(wk, 'un116_me').allowed) { skipped34i++; continue; }
+            if (!couldStillAct34(wk)) { skipped34i++; continue; }   // C6 (2026-10-08): the independent oracle, not canPlayerSubmitPicks
             swept34i++;
             const card = app34.renderCommExtraPointCardHTML(wk);
             if (new RegExp(`\\b${RIVAL_EP_34}\\b`).test(card)) leaks34i.push(`${where}/rival-guess`);
@@ -3858,6 +4017,53 @@ console.log('\n[34] UN-116 — others\' picks stay blind until kickoff…');
 
     storage.saveWeek({ ...OW, status: 'open', extraPointActual: null });
   }
+
+  // ═══ BEGIN D1 [34j] (2026-10-08, security F1 / C6) — THE SWEEP OVER A SEVERAL-SPORT LEAGUE ═══════════════════════════════════════════════════════════════════════
+  // A separate block (Game Day's branch edits [34h] too). Two competitions; the viewer ('un116_me', the commissioner or a player) is in NEITHER the opt-in NFL's entry list; the NFL week's picks
+  // belong to 'un116_rival'. The independent oracle says whether he could still act (or join and then act); the predicate under test must never show him the field while he could.
+  {
+    storage.saveCompetition({ id: 'c34-cfb', sport: 'cfb', isDefault: true, enrollment: 'all', kind: 'season' });
+    storage.saveCompetition({ id: 'c34-nfl', sport: 'nfl', isDefault: false, enrollment: 'opt_in', kind: 'season' });
+    localStorage.setItem('cfbp_competition_members', JSON.stringify([{ id: 'c34-nfl:un116_rival', competitionId: 'c34-nfl', memberId: 'un116_rival', enrolledBy: 'self', joinedAt: '2026-01-01T00:00:00.000Z' }]));
+    const PAST34j = '2026-08-01T00:00:00Z', FUT34j = '2026-12-01T00:00:00Z';
+    const cfgs34j = [['none', {}], ['lock@past', { picksLockAt: PAST34j }], ['open@past+lock@fut', { picksOpenAt: PAST34j, picksLockAt: FUT34j }], ['both@past', { picksOpenAt: PAST34j, picksLockAt: PAST34j }]];
+    const viol34j = []; let acting34j = 0, bypass34j = 0, ownMemberCtl34j = 0;
+    for (const isAdmin of [false, true]) {
+      storage.setSession('un116_me', isAdmin, true);
+      for (const stt of ['draft', 'open', 'locked', 'live', 'final']) {
+        for (const [lbl, d] of cfgs34j) {
+          const wid = `inv_ms_${isAdmin ? 'a' : 'p'}_${stt}_${lbl.replace(/\W/g, '')}`;
+          storage.saveWeek({ weekId: wid, weekNumber: 1, season: 2026, status: stt, competitionId: 'c34-nfl', ...d });
+          const w = W(wid);
+          const acts = couldStillAct34(w);
+          const sees = app34.canViewOtherPicks(w);
+          if (acts && sees) viol34j.push(`${isAdmin ? 'admin' : 'player'}/${stt}/${lbl}`);
+          if (acts && isAdmin) acting34j++;
+          if (!acts && isAdmin && !storage.arePicksPublic(w) && sees) bypass34j++;
+          // control: the same week as an ENTRANT would be asked (asIfEntrant is the whole difference for a non-member)
+          if (app34.canPlayerSubmitPicks(w, 'un116_me', { asIfEntrant: true }).allowed !== acts) viol34j.push(`oracle-vs-asIfEntrant/${stt}/${lbl}`);
+          ownMemberCtl34j += app34.canPlayerSubmitPicks(w, 'un116_me').allowed === false || !acts ? 0 : 1;
+        }
+      }
+    }
+    storage.setSession(null, false, false);
+    localStorage.removeItem('cfbp_competitions'); localStorage.removeItem('cfbp_competition_members');
+    assert(viol34j.length === 0, `THE SEVERAL-SPORT INVARIANT — across 5 statuses x 4 date configs x 2 roles, a viewer who has NOT joined the NFL (and so is refused the Submit button) never sees the field while he could still join and act (violations: ${viol34j.join(', ') || 'none'})`);
+    assert(acting34j >= 2 && bypass34j >= 2, `fixture check: the sweep reached the F1 case (${acting34j} acting-commissioner states) and the surviving bypass (${bypass34j} no-stake states) - a sweep that asserted nothing would pass silently`);
+    assert(ownMemberCtl34j === 0, 'fixture check: the viewer really is outside the NFL (canPlayerSubmitPicks refuses him on every state the oracle says he could act in)');
+  }
+  // The All sports list is a surface that prints other members' picks too. Its RENDERED sweep (2 roles x open / derived-locked / locked / live) is dashboardallsportstest [3g]: this harness has no
+  // page DOM (navigateTo is unreachable here, see [27e]), so what [34] can hold is the structure that sweep depends on: the rows gate on the WEEK's public state, never on the viewer's role or stake.
+  {
+    const appSrc34j = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+    const allBody = appSrc34j.slice(appSrc34j.indexOf('function renderDashboardAllSports('), appSrc34j.indexOf('function allSportsDateSpan('));
+    const code = allBody.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    assert(allBody.length > 500 && /otherPicksReadable\(week\)/.test(code) && !/canViewOtherPicks|isAdmin\s*\?|session\.isAdmin\s*\|\|/.test(code.replace(/!session\.isAdmin/g, '')),
+      'the All sports list reveals a row from otherPicksReadable(week) (the week is public AND the server read landed) and from no role: no canViewOtherPicks, no commissioner branch');
+    assert(/export function canPlayerSubmitPicks\(week, playerId, \{ asIfEntrant = false \} = \{\}\)/.test(appSrc34j) && /canPlayerSubmitPicks\(week, sess\.playerId, \{ asIfEntrant: true \}\)/.test(appSrc34j),
+      'canViewOtherPicks() judges the commissioner\'s stake with { asIfEntrant: true } (security F1)');
+  }
+  // ═══ END D1 [34j] ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
   // 34f — an anonymous viewer gets nothing either.
   storage.setSession(null, false, false);
@@ -5978,8 +6184,8 @@ console.log('\n[47i-ter] T-36/DI-346 — chat bubble sides (own right, others le
   assert(/^\.sr-only\{position:absolute!important;width:1px!important;height:1px!important;/m.test(cssSrc) && /clip:rect\(0,0,0,0\)!important/.test(cssSrc),
     'R4 [structural]: the .sr-only utility exists (off-screen, not display:none)');
   // Reviewer R1 — the retry button's 40px hit area, out of flow.
-  assert(/^\.chat-retry\{[^}]*position:relative\}/m.test(cssSrc) && /^\.chat-retry::before\{content:'';position:absolute;[^}]*height:40px;/m.test(cssSrc),
-    'R1 [structural]: .chat-retry gets a 40px ::before hit area (the .dc-meta .chat-bubble-btn technique), without growing the meta row');
+  assert(/^\.chat-retry\{[^}]*position:relative\}/m.test(cssSrc) && /^\.chat-retry::before\{content:'';position:absolute;[^}]*height:44px;/m.test(cssSrc),
+    'R1 [structural]: .chat-retry gets a 44px ::before hit area (the .dc-meta .chat-bubble-btn technique; 40 until D1 DI-573), without growing the foot row');
   assert(/\.chat-msg\.chat-mine \.chat-bubble\{border-radius:12px 12px 4px 12px\}/.test(cssSrc),
     'DI-346 [structural]: own-message corner radius mirrors (square corner on the right, matching the now-right-side avatar position)');
 
@@ -6900,7 +7106,9 @@ console.log('\n[51] UN-119 — tap-target overlays extend vertically without cro
   const headGap51 = px51((/margin-bottom:\s*([^;}]+)/.exec(headRule51) || [])[1]);
   assert(Number.isFinite(headGap51) && headGap51 > 0,
     `fixture check: .dc-game-head still separates the meta row from .dc-chips with a margin-bottom (got ${headGap51}px)`);
-  assert(/draggable="true"/.test(appJsSrc) && /class="dc-chip /.test(appJsSrc.replace(/dc-chip /g, 'dc-chip ')),
+  // D1 Lane B (DI-612): the member chips moved VERBATIM from renderDashboardCompact into js/pick-chips.js (gamePickChipsHTML); the Dashboard still passes `draggable` (default true).
+  const chipsSrc51 = await readFile(new URL('./js/pick-chips.js', import.meta.url), 'utf8');
+  assert(/draggable="true"/.test(appJsSrc + chipsSrc51) && /class="dc-chip /.test(chipsSrc51) && /draggable = true/.test(chipsSrc51),
     'fixture check: the .dc-chip row below is genuinely draggable — an overlay reaching into it steals a real gesture');
   assert(/\.chat-bubble-btn\{[^}]*position:relative/.test(cssSrc),
     'fixture check: .chat-bubble-btn is position:relative, so its ::before paints ABOVE the static .dc-chips that follows it [structural]');
@@ -8222,10 +8430,13 @@ console.log('\n[60] UN-127 item 4 (relocated) — feedback shortcut moved under 
     // (f) The decoupling mechanism, proven in TWO parts. First, source: the
     // function that rewrites the week text (refreshHeader()) must target a
     // DIFFERENT element than the one this button was appended into.
+    // RE-DERIVED 2026-10-08 (D1 Part 2 item 1): the week block's WRITER moved out of refreshHeader() into renderHeaderWeek() so a navigation or a sport switch can repaint the week block alone. OLD: refreshHeader()
+    // itself targeted #header-meta-week. NEW: refreshHeader() CALLS renderHeaderWeek(), and renderHeaderWeek() is the one that targets #header-meta-week - still a DIFFERENT element than #header-meta.
     const refreshHeaderBody60 = (appJsSrc.match(/function refreshHeader\(\)\s*\{[\s\S]*?\n\}/) || [''])[0];
-    assert(refreshHeaderBody60.length > 0, 'refreshHeader() located in js/app.js');
-    assert(/getElementById\('header-meta-week'\)/.test(refreshHeaderBody60),
-      '[structural] refreshHeader() targets #header-meta-week — a DIFFERENT element than #header-meta, which is what actually keeps the injected button alive across every week/tab refresh');
+    const renderHeaderWeekBody60 = (appJsSrc.match(/function renderHeaderWeek\(\)\s*\{[\s\S]*?\n\}/) || [''])[0];
+    assert(refreshHeaderBody60.length > 0 && renderHeaderWeekBody60.length > 0, 'refreshHeader() and renderHeaderWeek() located in js/app.js');
+    assert(/renderHeaderWeek\(\)/.test(refreshHeaderBody60) && /getElementById\('header-meta-week'\)/.test(renderHeaderWeekBody60) && !/getElementById\('header-meta'\)/.test(renderHeaderWeekBody60),
+      '[structural] refreshHeader() calls renderHeaderWeek(), which targets #header-meta-week — a DIFFERENT element than #header-meta, which is what actually keeps the injected button alive across every week/tab refresh');
     assert(!/getElementById\('header-meta'\)/.test(refreshHeaderBody60),
       '[structural] refreshHeader() no longer targets #header-meta directly — that would wipe the button via innerHTML replacement on the very next refresh');
     // Second, behavior: mutate #header-meta-week repeatedly, exactly the way
@@ -8647,11 +8858,13 @@ console.log('\n[64] [structural] every surface reading another player\'s submiss
     // SB-19b follow-up + SP-54 MC-1 (v0.29.0 batch-5b integration, 2026-10-01): the pooled-picks read lives in weeklyHistoryOutcome()
     // (SP-54's exported seam); weeklyHistoryResult() (SB-19b, shared with the email digest) delegates to it. The exemption follows the
     // function that reads the picks, by name (the DI-425 precedent below).
-    weeklyHistoryOutcome:
-      'scoring internal — pooled group picks are read only inside `memberWeeks.every(m => m.status === "final")`, a STRICTER condition than arePicksPublic(), and yield a winner/loser aggregate (extracted from renderLeaderboard by SP-54 MC-1: the same code under its own name, so the Weekly History group compute is a tested seam; renderLeaderboard itself now reads no pick)',
-    // Aggregate count, no attribution.
-    scribeLiveGameCheck:
-      'aggregate only — after the `arePicksPublic(week)` gate that now opens the whole function (N8, DI-439 §1) it counts DISTINCT ACTIVE PICKERS per team (L, G) and a raw `.length` threshold on an already-LIVE game; it names no player and prints no selection, and the server call it may make carries no name and no pick — the roll call is re-derived on the server from its own revealed rows',
+    // D1 Lane B (DI-596, 2026-10-08): the pooled-picks read moved one function down - weeklyHistoryOutcome() now CALLS pooledGroupResults(), which carries the all-members-final gate itself (so the week detail's
+    // standings read the SAME rows Weekly History does, and a caller that forgets the gate still reads nothing). The exemption follows the function that reads the picks, by name, exactly as the SP-54 move did.
+    pooledGroupResults:
+      'scoring internal — pooled group picks are read only after `memberWeeks.every(m => m.status === "final")` (its first statement returns [] otherwise), a STRICTER condition than arePicksPublic(), and yield the group\'s weekly rows (the winner/loser aggregate Weekly History prints, and the standings rows the week detail prints; extracted from weeklyHistoryOutcome by D1 Lane B: the same code under its own name, so the Weekly History group compute stays one tested seam)',
+    // RE-DERIVED 2026-10-08 (D1 Part 2 item 10, security N2): scribeLiveGameCheck no longer reads another player's picks itself - it reads the game's rows through scribeLivePicksFor(), which opens with the
+    // arePicksPublic(week) gate (so the deny-by-default scan counts it as a GATED reader, not an exemption) and returns the week's ENTRANTS' rows. The old exemption for scribeLiveGameCheck was stale and is gone:
+    // an exemption for a function that no longer reads picks is a standing permission for nothing.
     // Self-directed exports. The bright line for this bucket is that the
     // artifact goes to the commissioner's OWN device — his disk or his
     // clipboard — and is not published to anybody else. buildWeeklySummary is
@@ -8679,6 +8892,10 @@ console.log('\n[64] [structural] every surface reading another player\'s submiss
     // gated function; it renders nothing and returns only counts.
     reconcileGameEvents:
       'the winner/loser id lists it builds are handed straight to emitGameFinalEvent(), which gates on arePicksPublic() (RG-45) — this function itself renders and publishes nothing',
+    // D1 / DI-510 (2026-10-07) — the week locked under a member who holds an unsaved draft: is the draft different from what he SAVED? It reads the signed-in member's OWN saved picks and guesses
+    // (the playerId argument is the session's own) and returns a boolean; nothing is rendered or published from it, and no other member's submission is touched.
+    hasUnsavedDraft:
+      'reads only the signed-in member\'s OWN saved picks and guesses to decide whether his draft differs — returns a boolean, renders and publishes nothing, never another member\'s submission',
   };
 
   //    TRACKED — CONFIRMED TO DISCLOSE, deliberately NOT fixed in this pass.
@@ -8755,13 +8972,14 @@ console.log('\n[64] [structural] every surface reading another player\'s submiss
   //    (memberWeeks.every(…)) {` → `} else {`, the gate removed) leaves every
   //    other [64] assertion green — the name is still exempt — and turns THIS red.
   {
-    // v0.29.0 batch-5b SP-54 merge (2026-10-01): the pooled-picks read now lives in weeklyHistoryOutcome() (the exempt name; weeklyHistoryResult() delegates to it), so the pin follows it.
-    const whr64 = regionsOf(appJsSrc).find(r => r.name === 'weeklyHistoryOutcome');
+    // v0.29.0 batch-5b SP-54 merge (2026-10-01): the pooled-picks read lived in weeklyHistoryOutcome() (weeklyHistoryResult() delegates to it), so the pin followed it.
+    // D1 Lane B (DI-596, 2026-10-08): it now lives in pooledGroupResults() (weeklyHistoryOutcome() calls it), so the pin follows it again - and the gate is the function's own first statement.
+    const whr64 = regionsOf(appJsSrc).find(r => r.name === 'pooledGroupResults');
     const whrBody64 = whr64 ? whr64.body : '';
     const gateAt64 = whrBody64.search(/\.every\(\s*m\s*=>\s*m\.status\s*===\s*'final'\s*\)/);
     const readAt64 = whrBody64.search(/\bgetPicks\s*\(/);
     assert(!!whr64 && gateAt64 >= 0 && readAt64 >= 0 && gateAt64 < readAt64,
-      `weeklyHistoryOutcome's exemption still holds: in its comment-blanked body the all-members-final gate \`.every(m=>m.status==='final')\` comes BEFORE the first getPicks( (gate at ${gateAt64}, first read at ${readAt64}; -1 = absent)`);
+      `pooledGroupResults's exemption still holds: in its comment-blanked body the all-members-final gate \`.every(m=>m.status==='final')\` comes BEFORE the first getPicks( (gate at ${gateAt64}, first read at ${readAt64}; -1 = absent)`);
   }
 
   // ── CANARIES. A green scan must mean "absent", never "unmatchable". Each
@@ -9039,66 +9257,6 @@ console.log('\n[66] Items E/F re-review close-out — SCRIBE feedback + image pr
   storage.saveSetting('chatImagePreviewEnabled', false);
   assert(chatMod66.isChatImagePreviewEnabled() === false,
     'turning the toggle OFF (chatImagePreviewEnabled=false, also the shipped default) is honored by isChatImagePreviewEnabled()');
-}
-
-// ── 67. B2 remediation (2026-09-10, reviewer BLOCK) — scribeToolsTwin.mjs is
-// NOW ACTUALLY part of this mandatory run ──────────────────────────────────
-// backend/Code.gs's own header comment on the C3 ported-twin block claimed
-// scribeToolsTwin.mjs was "wired into loadtest.mjs's mandatory run" — it was
-// not: the file existed and passed standalone, but `node loadtest.mjs` never
-// executed it, so a drift regression between Code.gs's twins and the real
-// js/scoring.js|storage.js|data-model.js functions they port would have
-// shipped silently, one release at a time, with every OTHER loadtest section
-// green. Spawned as a subprocess (same precedent as section [33]'s
-// execFileSync probes) rather than imported directly: scribeToolsTwin.mjs
-// loads backend/Code.gs into a fresh `vm` context of its own, and doing that
-// import-side-effect-laden work a second time inside THIS process's already-
-// populated module graph risks exactly the "dirty state" class of false pass
-// section [33] warns about for storage.js. A subprocess gets a clean process,
-// full stop.
-console.log('\n[67] scribeToolsTwin.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['scribeToolsTwin.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `scribeToolsTwin.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch, `scribeToolsTwin.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch) {
-    assert(summaryMatch[1] === '✅ ALL PASS', `scribeToolsTwin.mjs itself reports ALL PASS (got: ${summaryMatch[0]})`);
-    assert(Number(summaryMatch[3]) === 0, `scribeToolsTwin.mjs reports zero failed assertions (got ${summaryMatch[3]} failed, ${summaryMatch[2]} passed)`);
-    assert(Number(summaryMatch[2]) >= 10, `scribeToolsTwin.mjs actually ran a non-trivial number of assertions (got ${summaryMatch[2]} — a near-zero count would mean the drift guard is vacuous)`);
-  }
-}
-
-// ── 68. trainertest.mjs — spawned as a subprocess, same shape as [67] ───────
-// Build 2b, Group E (2026-09-10, UN-161…163). Same "clean process" reasoning
-// section [67] gives for scribeToolsTwin.mjs: trainertest.mjs loads
-// backend/Code.gs into its OWN fresh `vm` context AND does real ESM imports
-// of js/app.js/js/storage.js/js/scribeAgent.js — doing all of that a second
-// time inside THIS already-populated module graph risks the same "dirty
-// state" false-pass class [67]'s own comment names.
-console.log('\n[68] trainertest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['trainertest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `trainertest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch68 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch68, `trainertest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch68 ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch68) {
-    assert(summaryMatch68[1] === '✅ ALL PASS', `trainertest.mjs itself reports ALL PASS (got: ${summaryMatch68[0]})`);
-    assert(Number(summaryMatch68[3]) === 0, `trainertest.mjs reports zero failed assertions (got ${summaryMatch68[3]} failed, ${summaryMatch68[2]} passed)`);
-    // RATCHETED to the real count by the Step 6 Phase 4 gate closure (2026-09-20). A floor of 10
-    // against a suite of 290 would not notice 280 assertions going missing — the same reasoning
-    // the Step 6 twins' floors carry, applied to the suite that now also pins the PORTED Trainer
-    // input assembly byte-for-byte against Code.gs ([28]/[28b], reviewer BLOCK 1).
-    assert(Number(summaryMatch68[2]) >= 317, `trainertest.mjs actually ran its full set (got ${summaryMatch68[2]}, floor 317, tightened from 293 at the v0.26.0 stamp 2026-09-26) — includes [28]'s byte-parity proof that js/scribe-trainer-rules.js's buildTrainerInputText matches scribeTrainerBuildInputText_ exactly. Raise the floor when the suite grows; the ratchet only tightens`);
-  }
 }
 
 // ── 69. RG — the dashboard chat teaser re-announces a message already READ ──
@@ -9786,264 +9944,6 @@ console.log('\n[72] RG BUG-B — a cold boot against a log longer than the 500-r
   }
 }
 
-// ── 73. backendtest.mjs — spawned as a subprocess, same shape as [68] ───────
-// BUG-A (2026-09-11). Own process for the reason synctest.mjs states: it drives
-// the real hydrate()/chatTransport against a stubbed fetch and leaves the
-// backend singleton hydrated, which would poison every suite after it.
-console.log('\n[73] backendtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['backendtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `backendtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch73 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch73, `backendtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch73 ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch73) {
-    assert(summaryMatch73[1] === '✅ ALL PASS', `backendtest.mjs itself reports ALL PASS (got: ${summaryMatch73[0]})`);
-    assert(Number(summaryMatch73[3]) === 0, `backendtest.mjs reports zero failed assertions (got ${summaryMatch73[3]} failed, ${summaryMatch73[2]} passed)`);
-    assert(Number(summaryMatch73[2]) >= 72, `backendtest.mjs actually ran its full set (got ${summaryMatch73[2]}, floor 72 — LOWERED from 203 by UN-237/238 and then the Sheets retirement (2026-09-23), the one direction the ratchet is allowed to move and only for this reason: assertions were DELETED WITH THE MECHANISM THEY TESTED, never weakened. First 203 -> 183 when the four scribeMemory*Remote relays went (UN-237/238), then 183 -> 72 when [1]-[9], [13] and [14] went with call() itself: BUG-A's misroute guard, BUG-E's transient ladder, the token-on-every-request proof and the allow-list all describe an Apps Script transport this app no longer has. What SURVIVES in that file is the SERVER twin, [10]-[12], which executes backend/Code.gs in a vm — and Code.gs is still in the repo because the Sheet is kept read-only for the season as the archive. scribememtest.mjs [4], adaptertest [A17] and nativeguardtest [1]-[7] assert the ABSENCE, which is a stronger claim than 'the relay refuses'. Raised from 200 at v0.23.3's FINISH sweep, from 40 before that)`);
-  }
-}
-
-// ── 73b. authtest.mjs — spawned as a subprocess, same shape as [73] ─────────
-// Phase III Step 3a. Own process for the same class of reason backendtest.mjs
-// and cachetest.mjs get one: it installs a fake window.supabase.createClient
-// and repeatedly calls auth.js's _resetAuthForTest()/configureAuth(), which
-// would leak Supabase client/session state into every suite after it if run
-// inline.
-console.log('\n[73b] authtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['authtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `authtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch73b = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch73b, `authtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch73b ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch73b) {
-    assert(summaryMatch73b[1] === '✅ ALL PASS', `authtest.mjs itself reports ALL PASS (got: ${summaryMatch73b[0]})`);
-    assert(Number(summaryMatch73b[3]) === 0, `authtest.mjs reports zero failed assertions (got ${summaryMatch73b[3]} failed, ${summaryMatch73b[2]} passed)`);
-    assert(Number(summaryMatch73b[2]) >= 2574, `authtest.mjs actually ran its full set (got ${summaryMatch73b[2]}, floor 2574 — set to the real merged count by the merge-review fix (release 2570 + SP-53's four); before that, floor 2573 — RAISED from 2569 by SP-53's UI wiring (2026-10-01): [63-8]..[63-11] the League Page overlay's settings view — one level back through the real goBack/snap path, the spring-back-and-prompt when the name is dirty; before that, floor 2569 — RAISED from 2480 by the v0.28.0 integration round 3b (2026-09-30): UN-389 / DI-446's +89 (floor 2384 on that side, +89 over N1's 2295) run on top of the release branch's 2480: [57i] the Delete Account sheet for a sole commissioner through its real handlers — the preflight gate, skeleton -> rows, a blocked league keeping Delete disabled, the hand-off (one tap and the picker), the archive QUEUED until the final tap, the final order archive_league_on_exit then account-delete by spy order, an archive failure stopping before account-delete, a stale refusal re-asking, fail-closed preflights incl. PGRST202, the pilot row with no Archive control, the auto-archive row, dismissal inert while the sequence runs, escaped names; [57d]-[57f] UNCHANGED; before that, floor 2480 — RAISED from 2314 by the v0.28.0 integration round 3a (2026-09-30): N1 league creation's assertions run on top of the release branch's 2314 (Batch B + N16 + Push). N1's own floor was 2342 (+166 over main's 2176): RAISED 2295 -> 2342 by the N1 fix pass (R-F1 the closed claim screen frozen byte-for-byte + the open one, R-F4 Try Again, R-F8, R-F9 exit, R-F6 clamp, S-4 handover-only keep, R-F7 Super Admin preconditions and the refusal toast); was RAISED from 2176 by N1 league creation ([80] the claim screen's third choice (hidden while the gate is closed) and the pilot-only six-school fallback, the boot-order and 42703-retry proofs (DI-432 §8), the zero-week empty state (Picks and Dashboard), the claim screen S-9, the landing and the release gate, the New League sheet through its real handlers into create_league, the identity-sweep exemption, the pending-invite prompt, the origin-only redirectTo and the Super Admin gate toggle; plus the re-derived [KEEP-list], createLeague write-rule mutation and [79] typed-code assertions); before that, floor 2314 — RAISED from 2310 by the v0.28.0 integration round 2 step 3 (2026-09-30): Push's UN-315 assertions (floor 2180 on that side, +4 over main's 2176: the two signOut({ unlinkPush:false }) refusal paths each prove the SDK's logout lands via the SIGNED_OUT backstop) run on top of the release branch's 2310; before that, floor 2310 — the v0.27.4 integration merge 2/6 (2026-09-30) takes max(2184 on the Chat side, 2310 on N16's): N16's count already includes Batch B RG-303's assertions once, so the merged tree reproduces 2310, not the sum; before that, floor 2310 — RAISED from 2285 by the DI-404 reviewer notes (2026-09-30): Step 4's blurb guard exists only once an Auto-Open time is entered (nothing reserved before), a typed time is carried through Write it to Step 6's prefilled schedule field and applied by Schedule Open (never dropped, never leaked into another session), and the tick's once-only alert is kept per week AND reason; before that floor 2285 — RAISED from 2261 by the DI-404 coordinator override (2026-09-30): Step 4's Auto-Open At refuses a time while the blurb is missing (inline, live re-validation, Write it keeps the other timing edits but not the time; valid/demo weeks proceed, a stored legacy time is refused on confirm and clearable) and the tick HOLDS a due draft with no valid blurb (one loud error toast, then opens on the next tick after a blurb is written; demo exempt) — [44k4]/[44k4b]/[44k4c] fixtures now carry a blurb; before that floor 2261 — RAISED from 2176 by DI-404 (UN-388, N16, the mandatory weekly blurb, 2026-09-29): [81] drives the REAL wizard sheet (Step 4 Next lands on Step 5 for a blank draft and still skips for a written/demo week; the inline role=alert validation — exact copy, aria-invalid, focus back in the field, live re-validation only after the first failure, no toast/alert; Step 6's fourth checklist row + Write it + disabled Open/Schedule Open with the reason beside it, Keep as draft exempt, the blurb_required backstop), the REAL Week-tab card (an existing blurb cannot be blanked; unchanged and blank->blank are silent no-ops), Duplicate Week gated, the scheduled-open tick still opening a blank draft, and web/iOS parity + CSS scans; [74g]/[77a] rewritten for the new Step 4 -> 5 flow; before that floor 2176 — RAISED from 2172 by round 5 (Opus, feat/control-center-v0272, 2026-09-29): [79f2] reviewer N1 — the pill-sheet join's welcome toast appears only after SWITCH_START and the adapter's return to ACTIVE; [79h] security note 3 — League A missing from the post-join list with B its only row still switches (cover, SWITCHING for B, B-only hydrate), because the check compares against the PRE-join league; before that, floor 2172 — RAISED from 2161 by round 4 (Opus, feat/control-center-v0272, 2026-09-29): [79] R3 — a join from the header pill sheet by a player already in League A, driven through the real pill -> Join a League -> Join League controls in supabase data mode, puts up the Switching-leagues cover, runs beginSwitch (SWITCHING for B), re-hydrates ONLY League B to ACTIVE, and lands on B's member; [79g] joinLeague(activate:false) leaves the pointer, the default still moves it; before that, floor 2161 — RAISED from 2158 by round 3 (Opus, feat/control-center-v0272, 2026-09-29): the join landing now shares leagueJoinFormHTML()/bindLeagueJoinForm() with the header pill's Join sheet (R1) — count is the round-2 additions, confirmed on this run; before that, floor 1886, raised from 1877 by the UX Revamp post-deploy pass (2026-09-27): [10] DI-348's needsLeagueFlowScreen() single-membership branch now depends on a boot-time warm/cold snapshot — cold (Leagues Home) and warm (six-tab fast path) cases both driven explicitly via the new _setWarmRelaunchAtBootForTest() seam; [44k4] tickAutoTransition()'s new DRAFT→OPEN scheduled-open leg (DI-358) — due+gated opens, not-yet-due/blocked/never-scheduled all stay draft, and the blocked commissioner notice fires once, not every tick. Before that 1877, raised from 1870 by the 6178906 re-gate (2026-09-26): [44k4] tick — the ESPN score refresh runs while the round's re-hydrate is pending, the status tick runs off that hydrate (control), overlapping rounds are skipped (security N2); [44k5] refusal copy from the adapter's REAL emit — key-specific copy only when that key is the whole refusal; before that 1870, raised from 1864 by the f16d87c security pass (2026-09-26): [44k4] the auto-refresh tick awaits its own re-hydrate before tickAutoTransition() (security F1), [44k3] the reveal ledger goes through the storage seam (source scan); before that 1864, raised from 1846 by RG-256 (2026-09-26, reviewer F1 on f16d87c): [44k4] clicks the REAL Save Blurb / Save Tiebreaker / Save Week Settings / Admin Save Data Source Mode / Dismiss-pending handlers after the week LOCKED under a tab painted while OPEN and asserts no transition_week(open) is planned; [44k3] SEC-1 now also asserts the first hydrate that sees a week live does not unlock the reveal (reviewer F3); before that 1846, raised from 1828 by RG-253/RG-255 (2026-09-26): [44k3] drives the blind rule from the SERVER-confirmed status on a polluted mirror, the reveal post withheld until a hydrate has read the week as public (SEC-1), the tick standing down before the hydrate lands and for a week the server does not hold (reviewer F1), and the wizard Manage screen from a polluted mirror (reviewer note 2); [44k] now hydrates the commissioner control; [44k2] 5b narrows live>locked (SEC-4); before that 1828, raised from 1801 by RG-251 (2026-09-26): [44k2] drives the real tickAutoTransition() from a HYDRATED open base with the lock time and first kickoff both past and asserts exactly one status leg (lock_week) per tick, the live leg and pendingFinalization sequenced, no advance from an unconfirmed status, and the Week-tab buttons offered from the server-confirmed status and narrowed to the allow-list; before that 1801, tightened from 1782 by the final-gate fix (authtest [73], 2026-09-26); before that from 1745 at the v0.26.0 stamp 2026-09-26 — RAISED from 1649 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 1649 \u2014 raised from 1646 by [59] (3c fix window, B2, 2026-09-25): a cold-load runtime proof that verifyPasswordRecovery() fires exactly once, with the real token_hash, once a LATE-arriving vendored SDK actually loads. Earlier: 1646, raised from 1546 by [58] (3c fix window, security gate F1, 2026-09-25): the REAL listener chain (PASSWORD_RECOVERY, then SIGNED_IN/TOKEN_REFRESHED/USER_UPDATED re-fired mid-recovery) proven to hold the gate and skip every membership read, with non-vacuity controls and the successful set-password path's explicit gate release. Earlier: 1546, raised from 1529 by [52] (2026-09-23, re-gate MUST-FIX): the commissioner-password RE-PROMPTS are retired in supabase mode. The panel login went at Step 3b but four in-panel prompts did not, and they compared btoa(pw) against a settings field the cutover importer had correctly STRIPPED \u2014 so the merge fell through to js/data-model.js\'s published btoa(\'admin123\') and a password in the public repo was guarding a paid Anthropic call. [52] drives commReauthMode() and commPasswordCardHTML() in BOTH modes (the positive control is the point: "supabase does not prompt" is satisfied by a build that removed the PIN-mode gate too), and adds the structural rule that every getSettings().adminPasswordHash comparison sits behind that gate plus the allow-list that stops it degrading into a truthiness test. Earlier: 1529 (merged v0.23.3: RG-196 + RG-197) — was 1528 — raised from 1520 by RG-197's [51] (2026-09-21, security A-3: the dead \"Logout Commissioner\" button); and from 1503 by RG-195's [50] (2026-09-21: the Picks page's PIN-era Log Out button is not rendered in supabase mode, and is byte-identical in PIN mode); before that from 1501 by RG-193's closure pass (2026-09-21): [49](j) now injects the card's clock and (j2)/(j3) pin both sides of the grace window, so the suite no longer goes red for six hours every Monday morning; before that from 1400 when REVIEWER R1/R2 sections [47]/[48] landed, then to 1501 by the coordinator's shared-foundation merge's [49] (trainer's low-frequency staleness rule); the ratchet only tightens)`);
-  }
-}
-
-// ── 73e/73f. adaptertest.mjs + transporttest.mjs — spawned, same shape ─────
-//
-// Phase III STEP 4. Both were written in Part A's isolated worktree and neither
-// was in any gate list, which is the same gap that let persisttest.mjs and
-// almatotaltest.mjs sit broken and unnoticed through Step 3a (see 73c/73d
-// below). Part A's security review made adding them a Part-B ENTRY CONDITION
-// rather than a nicety: a suite nothing spawns is a suite nobody runs.
-//
-// Own process, for the reason backendtest.mjs gets one: adaptertest installs a
-// PostgREST-shaped fake client and drives js/supabase-backend.js's real state
-// machine to ACTIVE, which would leave the seam routed through a live mirror
-// for every suite after it. transporttest installs and removes
-// chatTransport.js's dataMode predicate, whose NEVER-INSTALLED state no
-// production path can return to.
-//
-// adaptertest prints "N passed, N failed, N skipped" rather than the ALL PASS
-// banner, so its summary regex is its own; the SKIP count is asserted as a
-// CEILING, because a skip that quietly grows back is how a Part-B follow-up
-// gets forgotten.
-console.log('\n[73e] adaptertest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['adaptertest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `adaptertest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m73e = out.match(/(\d+) passed, (\d+) failed, (\d+) skipped/);
-  assert(!!m73e, `adaptertest.mjs printed its own pass/fail/skip summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73e ? '' : '\n' + out.slice(-800)}`);
-  if (m73e) {
-    assert(Number(m73e[2]) === 0, `adaptertest.mjs reports zero failed assertions (got ${m73e[2]} failed, ${m73e[1]} passed)`);
-    assert(Number(m73e[1]) >= 1045, `adaptertest.mjs actually ran its full set (got ${m73e[1]}, floor 1045 (SP-54, 2026-10-01: RAISED from 1018 — [A-SNAP] the lockedAlmaByPlayer projection restore/never-emit proofs and [A-RECALC] the shared-league Recalculate refusal and the finalize_week descriptor payload; the earlier history follows) — raised from 1008 by SB-01 pass 3 (2026-09-27, reviewer N1/N2): [A-PAGE](10)/(11) every request, offset pages included, carries .eq('league_id') with league-B rows planted where an unscoped page would pull them in; (12) a short page the count contradicts continues by keyset to an empty page instead of restarting — cap drop mid-read, inflated count (adopted, never truncated), sustained deletions no longer HOLD, the offset-path residual stays loud and bounded, an offset-path shortfall re-reads; before that 1008, raised from 986 by SB-01 pass 2 (2026-09-27, security S-C1 + reviewer R-3/R-4): [A-PAGE](10) a member-planted 6 KB key at a page boundary never enters a URL (offset read, anchored on it) and the device ends ACTIVE with every row, first hydrate and re-hydrate alike, against a fake gateway that refuses URLs over 16,384; (11) an offset page whose anchor moved is re-read, never skipped; (12) a read short of its own count is re-read, and refused loudly when it stays short; (13) no gateway HTML or paging detail reaches the banner or the retry toast; (3b) a short page ends a read only when it is short of a page the server already returned; before that 986, raised from 960 by SB-01 / RG-265 HYDRATE-ROW-CAP (rebased onto v0.28.0, 2026-09-30): [A-PAGE] every hydrate read is paged (key-ordered, keyset .gt past page one) and proven complete by the first page's exact count, a full page, or an empty page — never by a short page, so a server Max rows below the page size cannot truncate a table silently; the fake now models the 1,000-row hosted cap, count, order, limit and gt; competitions (0033) pages like every other READ_TABLE and [A-PAGE](7) derives page keys from every migration; before that 960, raised from 915 by the merge of Multi-Sport Phase 1a into the v0.27.3 line (2026-09-30): [A-MS] adds 26 and [A-MS2] adds 16 assertions (competitions through the real planner, and a 404 / PGRST205 on the competitions hydrate HOLDS) — earlier: raised from 860 by RG-TBD-N14 (live, 2026-09-29): [A-NN2] a multi-row games insert through the REAL vendored SDK into a PostgREST-rule emulator — a slate mixing an ESPN-lined game with an unlined one (spreadSource null) saves, the omitted spread_source takes the DEFAULT 'manual', every NOT NULL games column (derived from ALL migrations) survives the same mixed batch, and every adapter insert passes { defaultToNull: false }; [A-NN] now derives NOT_NULL_COLS from every migration (0024's scribe_*.origin, scribe_canon.kind) and requires an entry per routed table. Raised from 849 to 860 by the f16d87c security pass (2026-09-26): [A-PRIME] a re-hydrate never re-primes a serving or dirty mirror from the snapshot (RG-257), [A-RT1](10) a Realtime DELETE drops a pending patch instead of re-creating the row (security F4), [A-RT1](11) the fold re-applies only edits captured under this mirror's token (security F5); before that 849, raised from 842 by the f16d87c review (2026-09-26): [A-RT2] the hydrate that straddles a reveal does not count the week as read while public (F3); [A5c](5) a status_moved refusal carries code/key/moved rows and one follow-up run sends the key's other queued week edits (F5); [F6] live>locked is out of the planner allow-list; [A-RETRY9](b) amended to the compare-and-set outcome; before that 842, raised from 779 by RG-252/253/254/255 (2026-09-26, suite 779 -> 842): [A-RT1] a Realtime fold never discards an unsent edit (picks, weeks, settings, comments), keeps other devices' rows, stays a clean no-op on the echo of my own write; [A5c] the week-status compare-and-set (a leg made against one server status is refused loudly, never replayed over another — final->live, and the snapshot-boot live->locked); [A-LATCH2] the refusal latch describes what is refused NOW (a valid re-save is sent at once; the banner never repeats a released refusal; an identical plan is still not retried); [A-RT2] a week that goes public over Realtime is re-read; before that 779, raised from 761 by RG-251 (2026-09-26, suite 763 -> 779): [A5b] every skipped-leg status diff is still refused client-side, each single leg plans exactly one RPC, and getConfirmedWeekStatus() reports the server base, not the mirror; before that 761, raised from 745 by the RG-202 GATE (2026-09-20): [A-NARROW-DIVERGE] (security F1: same id is not same row) and [A-RETRY9] (F2: a committed-then-lost week-status RPC); before that from 676 by RG-202 (2026-09-20): [A-OBL] the finalize duplicate-obligation send, [A-LATCH] the refusal latch released when the key has nothing left to save, [A-RETRY1..8] the bounded automatic write retry, plus the [A-FLUSH4] amendments that now assert the WHOLE lifecycle of a 504/502/23505 instead of its first instant; before that from 675 by the COMBINED RELEASE MERGE (2026-09-20) ([A-LSV]'s corrected fixture now also asserts the MAPPED id/display_name, proving the input shape is the one PLAYER_COLS reads); before that from 643 by [A-LSV] (DI-218: the two new league_members columns are invisible to the diff/upsert path), 2026-09-20; before that from 594 by the RG-180 gate findings (SEC-F1 write-path status, SEC-F2 mid-flight drop, the N2 fold probe and the N3 contact convergence), 2026-09-19) — a FLOOR at the CURRENT count, not a token one: a floor of 300 against a suite of 499 would not notice two hundred assertions going missing. Raise it when the suite grows; the ratchet only tightens (2026-09-18)`);
-    assert(Number(m73e[3]) === 0, `adaptertest.mjs has NO remaining Part-B skips (got ${m73e[3]}) — A9b, A14b and A17 were all closed by Part B, and a skip that reappears is a follow-up nobody is tracking`);
-  }
-}
-
-console.log('\n[73f] transporttest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['transporttest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `transporttest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m73f = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m73f, `transporttest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73f ? '' : '\n' + out.slice(-800)}`);
-  if (m73f) {
-    assert(Number(m73f[2]) === 0, `transporttest.mjs reports zero failed assertions (got ${m73f[2]} failed, ${m73f[1]} passed)`);
-    assert(Number(m73f[1]) >= 198, `transporttest.mjs actually ran its full set (got ${m73f[1]}, floor 198 — raised from 175 on 2026-09-24 by v0.25.1 (§[8](e) N4: an outage-class refusal breaks the run loop, one RPC not three; §[8](f)/§[17](g) N2: the narrowed local brakes hold back only the id they name and the refusal carries \`assigned\` for the run that landed — a mutation that restored the pre-v0.25.0 whole-list brake killed those six and NOTHING ELSE in the suite, which is why they had to be written); before that from 169 by the COMBINED RELEASE MERGE (2026-09-20) (§[10](d) S9/R6: the permanent seq hole a private test row leaves costs exactly ONE gap drain, not a retry loop); before that from 40 when Step 5 landed; the ratchet only tightens)`);
-  }
-}
-
-// ── 73h. xsstest.mjs — spawned as a subprocess, same shape ─────────────────
-//
-// SECURITY F1 (Part B gate, 2026-09-18). xsstest.mjs has been the app's ONLY
-// escaping guard since 2026-09-12 and nothing has ever spawned it — its own
-// header says "Standalone by design … loadtest.mjs is not edited by this work",
-// which was true of the pass that wrote it and has been quietly false of every
-// pass since. A suite nothing spawns is a suite nobody runs, and this one holds
-// the generic interpolation ratchet over js/app.js: the thing that catches a
-// NEW unescaped sink the day it is written, rather than the day it is exploited.
-//
-// Own process for the same reason the rest of this list gets one: it installs
-// its own DOM stubs and drives real render paths, and it is the third suite
-// whose absence from a gate list was found by a sweep rather than by a failure
-// (persisttest and almatotaltest were the first two — see 73c/73d).
-console.log('\n[73h] xsstest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['xsstest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `xsstest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m73h = out.match(/xsstest\.mjs — (\d+) passed, (\d+) failed/);
-  assert(!!m73h, `xsstest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73h ? '' : '\n' + out.slice(-800)}`);
-  if (m73h) {
-    assert(Number(m73h[2]) === 0, `xsstest.mjs reports zero failed assertions (got ${m73h[2]} failed, ${m73h[1]} passed)`);
-    assert(Number(m73h[1]) >= 569, `xsstest.mjs actually ran its full set (got ${m73h[1]}, floor 569 — RAISED from 557 by the v0.29.0 Home wiring window (2026-10-01): News option A's +12 (feat/news-espn, merged at b47afe5) on top of int/batch5b's 557 = 569 measured on the merged tree; before that, floor 557 — the v0.29.0 batch-5b SP-54 merge (2026-10-01): 544 + SP-54's +13; before that, floor 544 — set to the measured merged count at the v0.29.0 batch-5b SB-24 merge (2026-10-01): fix/sb24-dataproof-xss (c4344a5) merged onto the spacing-sweep floor (491 + SB-24's classifier/data-proof additions = 544 measured, with the one control-center.js ctx.escHtml(v) pin the new classifier surfaced); earlier: floor 491 — set to the measured merged count at the v0.29.0 batch-5b integration (2026-10-01): Breathing Room spacing sweep (feat/spacing-sweep @ 7077da8, AD-103) merged onto int/batch5b. The sweep branch read floor 480 — RAISED from 475 by the Breathing Room sweep (2026-10-01): one new EXEMPTIONS entry, icon('pencil') for the Edit My Picks glyph (+5 = 480 measured), and one APP_BACKLOG digest re-pinned, not added; earlier: floor 475 — … (the shared earlier history continues in int/batch5b's text below). int/batch5b read floor 486 — RAISED from 475 by the v0.29.0 batch-5a integration (2026-10-01): SP-53 League Settings UI (feat/sp53-league-settings-ui @ a55ac4a) merged onto the batch-4 count, measured 486 on the merged tree (475 + SP-53's +11 over its own 471 base) — SP-53's security fix (C-U2, 2026-10-01): [9c-1g] js/league-settings-view.js is swept on its own as a ratchet (pinned injected-family sites, none for a person's text), three named unescape mutations (handedLine, Waive's data-ob-id, the league name) and a sweep that unwraps EACH of its 52 escHtml() sites, plus js/league-settings.js proved markup-free (on its own branch that read: floor 482, RAISED from 463). SP-57 section drag (feat/sp57-section-drag-wiring @ 56347a0), merged next in the same batch-5a integration, leaves the merged count at 486, measured: its delta is 0 (on its own branch the floor read 471, set to the real count at the SP-57 merge of release/v0.29.0 (2026-10-01; release's own count with SP-57's delta of 0: its pageKey pin moved 4 to 3, no assertion added or removed; the stale 463 sat 8 under the suite's real size)). Floor 475 was RAISED from 463 by the v0.29.0 batch-4 integration (2026-10-01): the Home renderer's js/home.js joins SWEPT, [9c-1f] and [13a], plus its [13a canary], on top of the release tip's 471 = 475 measured. Floor 463 was RAISED from 452 by the v0.28.0 integration round 3a (2026-09-30): N1 league creation's +11 (floor 458 on that side: floor 453 at the sweep, 458 with the zero-week empty state's icon exemption and its dead-exemption check — [9c-1e] js/league-create.js swept on its own as a ratchet, with the mutation proof that unwrapping the typed league name is reported; the seven pinned app.js sites and two leagues-home.js sites that interpolate markup league-create.js has already escaped) on top of the release branch's 452; before that, floor 452 — RAISED from 447 by DI-443 (UN-386, 2026-09-29: the icon-only alma-mater badges' icon('almaMater', { label }) exemption and its sweep); earlier: floor 447 — RAISED from 442 by round 3 (Opus, feat/control-center-v0272, 2026-09-29): round-2 additions confirmed on this run; before that, floor 442 — RAISED from 422 by DI-398/DI-399 round 2 (2026-09-28, reviewer round 2): the icon(iconName, { label }) EXEMPTIONS entry was re-derived to icon(iconName) (the sync icon's glyph is now decorative — #sync-badge itself carries the aria-label since it became a real role="button" control, DI-399(a)). Before that, LOWERED from 427 by the UX Revamp post-deploy pass (2026-09-27, REVIEWER note 4): the icon('chevronRight') EXEMPTIONS entry was DELETED WITH THE TEXT IT TESTED — that call site (renderControlCenterTrigger()'s web chevron affordance) was removed entirely (the coordinator's design ruling: a trailing "›" reads as push-forward navigation, not "open a drawer"; the web trigger now carries icon('munera') + the brand name instead), so its own "still matches a real finding" assertion had nothing left to match — the one direction the ratchet is allowed to move, and only for this reason, matching the backendtest.mjs precedent above. Before that, 427, tightened from 412 by the v0.27.0 bugfix pass 2026-09-27 (icon('munera')/icon('chevronRight') classified) — tightened from 395 at the v0.26.0 stamp 2026-09-26 — RAISED from 324 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 324 — RAISED from 297 by the UX Revamp wiring window (2026-09-25): [9c-2]'s js/app.js sweep now ALSO routes through EXEMPTIONS (same escape hatch [9c-1] already gave the other four files), and nine new EXEMPTIONS entries were added — four imported js/control-center.js render functions (renderStarredPanels/renderSettingsAccordion/renderFeedbackRulesGroup/renderHelpFooter, all requiring ctx.escHtml internally) for the new Settings page, plus icon('almaMater')'s four call sites (a hard-coded string-literal argument, no injection vector). Before that LOWERED from 298 by the Sheets retirement (2026-09-23): the pinned-backlog list lost its two Cloud Sync entries (the googleSheets status ternary and syncStatus.pendingWrites) because the card that interpolated them is deleted, and a STALE PIN hides the next regression — that list going DOWN is the rule working. Raised from 296 at v0.23.3's unread-count reconciliation, which added two swept interpolation sites to js/chat-ui.js) — a FLOOR rather than a count, because the ratchet only tightens and a suite that shrank is a guard somebody removed`);
-  }
-}
-
-// ── 73g. weekprogresstest.mjs — spawned as a subprocess, same shape ────────
-//
-// DI-T4.11. Own process because it drives js/app.js's dashboard renderers with
-// the storage seam pointed at the Supabase adapter and auth.js in
-// `dataMode:'supabase'` — three globals that would poison every suite after it.
-console.log('\n[73g] weekprogresstest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['weekprogresstest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `weekprogresstest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m73g = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m73g, `weekprogresstest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73g ? '' : '\n' + out.slice(-800)}`);
-  if (m73g) {
-    assert(m73g[1] === '✅ ALL PASS', `weekprogresstest.mjs itself reports ALL PASS (got: ${m73g[0]})`);
-    assert(Number(m73g[3]) === 0, `weekprogresstest.mjs reports zero failed assertions (got ${m73g[3]} failed, ${m73g[2]} passed)`);
-    assert(Number(m73g[2]) >= 71, `weekprogresstest.mjs actually ran its full set (got ${m73g[2]}, floor 71 — raised from 25; the ratchet only tightens)`);
-  }
-}
-
-// ── 73c/73d. persisttest.mjs + almatotaltest.mjs — spawned, same shape ──────
-//
-// WHY THEY ARE HERE NOW (2026-09-17). A full sweep of every `*test*.mjs` found
-// two suites that Phase III Step 3a had broken and nobody had noticed, because
-// neither was in any gate list and neither is spawned by this file:
-//
-//   • persisttest.mjs [7] (RG-51's one-pick-draft-reset rule) went 37/1 the day
-//     a COMMENT in js/app.js came to contain both of the anchors its source
-//     scan keys on. A rule reporting the app's own documentation as a defect.
-//   • almatotaltest.mjs CRASHED at module scope with ERR_MODULE_NOT_FOUND —
-//     its mutation battery hand-listed the modules it copies into a tmpdir, and
-//     js/storage.js gained an `import './auth.js'`. A crash, not a failure, so
-//     not even a pass/fail line came out of it.
-//
-// Both are cheap (≈1s and ≈4s), and both guard rules about DATA LOSS — one
-// player's draft pre-filling another's box, and the alma-mater totals. Spawned
-// here so they cannot rot silently a second time. ADDED to the existing list
-// ([73] backendtest, [73b] authtest, [76] boottest, [78] cachetest,
-// [79] memorytest, …) — this file is never regenerated.
-console.log('\n[73c] persisttest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['persisttest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `persisttest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m73c = out.match(/(✅ ALL PASS|❌ \d+ FAILED) — (\d+) passed, (\d+) failed/);
-  assert(!!m73c, `persisttest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73c ? '' : '\n' + out.slice(-800)}`);
-  if (m73c) {
-    assert(m73c[1] === '✅ ALL PASS', `persisttest.mjs itself reports ALL PASS (got: ${m73c[0]})`);
-    assert(Number(m73c[3]) === 0, `persisttest.mjs reports zero failed assertions (got ${m73c[3]} failed, ${m73c[2]} passed)`);
-    assert(Number(m73c[2]) >= 30, `persisttest.mjs actually ran a non-trivial number of assertions (got ${m73c[2]})`);
-  }
-}
-
-console.log('\n[73d] almatotaltest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['almatotaltest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `almatotaltest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  // A CRASH is the failure mode this guard is really about — it produces no
-  // summary line at all, which is why the line's PRESENCE is asserted first.
-  const m73d = out.match(/(✅ ALL PASS|❌ \d+ FAILED) — (\d+) passed, (\d+) failed/);
-  assert(!!m73d, `almatotaltest.mjs printed its own pass/fail summary line — i.e. it did not die at module scope (fixture check)${m73d ? '' : '\n' + out.slice(-800)}`);
-  assert(!/ERR_MODULE_NOT_FOUND/.test(out),
-    'almatotaltest.mjs resolves its whole module graph — a hand-listed tmpdir copy is how it broke, so the specific symptom is named here');
-  if (m73d) {
-    assert(m73d[1] === '✅ ALL PASS', `almatotaltest.mjs itself reports ALL PASS (got: ${m73d[0]})`);
-    assert(Number(m73d[3]) === 0, `almatotaltest.mjs reports zero failed assertions (got ${m73d[3]} failed, ${m73d[2]} passed)`);
-    assert(Number(m73d[2]) >= 50, `almatotaltest.mjs actually ran a non-trivial number of assertions (got ${m73d[2]})`);
-  }
-}
-
-// ── 73d2. almaprototest.mjs — spawned, same shape as 73d (SB-12, 2026-10-01) ──
-// SB-12 / security finding SF-1: a self-edited alma mater named after an
-// Object.prototype member ("constructor", "__proto__", "toString", …) made
-// getAlmaMaterMatch()'s bare table reads throw for EVERY alma-mater surface in
-// the league — Watch, Rankings, the ⭐ ripple, the Auto-Calc (live and the
-// lock-frozen roster), and the live alma call-out on the client and the
-// scribe-autonomous Edge Function. The guard is ownGet() (js/data-model.js);
-// this suite is its proof: all 12 prototype names through every consumer, a
-// non-string element in a frozen jsonb roster, and a tree-wide scan of js/ and
-// supabase/functions/ for any bare ALMA_MATER_(EXACT|EXCLUDE)_PATTERNS[ read.
-// Its summary lines are written to match 73d's regex in BOTH states.
-console.log('\n[73d2] almaprototest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['almaprototest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `almaprototest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m73d2 = out.match(/(✅ ALL PASS|❌ \d+ FAILED) — (\d+) passed, (\d+) failed/);
-  assert(!!m73d2, `almaprototest.mjs printed its own pass/fail summary line — i.e. it did not die at module scope (fixture check)${m73d2 ? '' : '\n' + out.slice(-800)}`);
-  assert(!/ERR_MODULE_NOT_FOUND/.test(out), 'almaprototest.mjs resolves its whole module graph (it imports app.js, the widest closure)');
-  if (m73d2) {
-    assert(m73d2[1] === '✅ ALL PASS', `almaprototest.mjs itself reports ALL PASS (got: ${m73d2[0]})`);
-    assert(Number(m73d2[3]) === 0, `almaprototest.mjs reports zero failed assertions (got ${m73d2[3]} failed, ${m73d2[2]} passed)`);
-    assert(Number(m73d2[2]) >= 121, `almaprototest.mjs actually ran its full set (got ${m73d2[2]}, floor 121 — set 2026-10-01 at its first spawned run: [1]-[10] the SB-12 prototype-name proofs (114), [11] reviewer finding 2's non-string roster element (+4), [12] the tree-wide bare-probe scan (+3)). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── 73e2. feedbackrlstest.mjs — spawned, same shape as 73d ──────────────────
-// (Relabelled [73e] -> [73e2], and its summary match m73e -> m73e2, at the v0.29.0 batch-4 integration, 2026-10-01 — reviewer N3: [73e] is
-// adaptertest.mjs's label, earlier in this file. The ledger's wiring-pass 3a-bis record (B-05 / RG-248) still cites this registration as `[73e]`.)
-console.log('\n[73e2] feedbackrlstest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['feedbackrlstest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `feedbackrlstest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  // A CRASH is the failure mode this guard is really about — it produces no
-  // summary line at all, which is why the line's PRESENCE is asserted first.
-  const m73e2 = out.match(/(✅ ALL PASS|❌ \d+ FAILED) — (\d+) passed, (\d+) failed/);
-  assert(!!m73e2, `feedbackrlstest.mjs printed its own pass/fail summary line — i.e. it did not die at module scope (fixture check)${m73e2 ? '' : '\n' + out.slice(-800)}`);
-  assert(!/ERR_MODULE_NOT_FOUND/.test(out),
-    'feedbackrlstest.mjs resolves its whole module graph');
-  if (m73e2) {
-    assert(m73e2[1] === '✅ ALL PASS', `feedbackrlstest.mjs itself reports ALL PASS (got: ${m73e2[0]})`);
-    assert(Number(m73e2[3]) === 0, `feedbackrlstest.mjs reports zero failed assertions (got ${m73e2[3]} failed, ${m73e2[2]} passed)`);
-    assert(Number(m73e2[2]) >= 15, `feedbackrlstest.mjs actually ran a non-trivial number of assertions (got ${m73e2[2]})`);
-  }
-}
-
 // ── [74] ─────────────────────────────────────────────────────────────────────
 // RG-95 — THE SAME HOLE, THROUGH THE OTHER WRITER. BUG-B (§[72]) made the
 // transport's page deliveries honest: a delivery only reports the server's TRUE
@@ -10435,27 +10335,6 @@ console.log('\n[75b] SECURITY F-4 (eighth gate) — a queued event carries its L
   }
 }
 
-// ── [76] ─────────────────────────────────────────────────────────────────────
-// BUG-F / BUG-E (2026-09-11). Own process, like [73]: boottest.mjs replaces the
-// global CLOCK (setTimeout/clearTimeout/Math.random) for whole sections, which
-// would make every suite after it in this file non-deterministic.
-console.log('\n[76] boottest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['boottest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `boottest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch76 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch76, `boottest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch76 ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch76) {
-    assert(summaryMatch76[1] === '✅ ALL PASS', `boottest.mjs itself reports ALL PASS (got: ${summaryMatch76[0]})`);
-    assert(Number(summaryMatch76[3]) === 0, `boottest.mjs reports zero failed assertions (got ${summaryMatch76[3]} failed, ${summaryMatch76[2]} passed)`);
-    assert(Number(summaryMatch76[2]) >= 812, `boottest.mjs actually ran its full set (got ${summaryMatch76[2]}, floor 812 — RAISED from 797 by the v0.29.0 Home wiring window (2026-10-01): [HOME] S-C7 / W8 (+15): with no identity proven (no session, an expired session, no session and the SDK never lands) the real Home wiring writes NOTHING into #page-home, with a fixture trio and a positive control per state; before that, floor 797 — set to the measured merged count at the v0.29.0 batch-5b integration (2026-10-01): SB-18v2 + SP-52 themes (fix/sb18-readiness-motion-v2 @ 379c937, with themes DI A1.10/A1.11) merged onto int/batch5b. The SB-18v2 branch read floor 792 — RAISED from 754 by A1.9 review round (2026-10-01) (+38): [SP52-a] F4 (cfbp_scheme_hint IS in DEVICE_LOCAL_KEYS — reviewer mutation R3 had survived) +2; [SP52-h] security C1 (a record holding a junk theme paints theme-neutral, never throws incl. through resyncPlayerPreferences, records no hint; bootThemeKey does not let it shadow the hint; setTheme refuses outside THEMES; onSetTheme repaints the persisted palette) +29; [SP52-i] the refused-write state is reachable (setColorScheme returns the REAL result; the calm toast fires with the exact copy) +7; and the [25] bootThemeKey pin kept verbatim; earlier: floor 754 — RAISED from 702 by SP-52 THEMES (merged onto release/v0.29.0 9a10869) (2026-10-01): [SP52-g] +8 (DI-454 / A1.1: syncChromeFromTokens() tints theme-color from --chrome-bg, keeps the round-1 short-circuit, and on native delegates the status bar to the SB-08 tracker with a FORCED sync — proved with a dark --chrome-bg over a light page, where the tracker answers LIGHT and a chrome-bg-derived style would have said DARK — plus the structural pin); [SP52] +44 (the first-paint scheme hint's getColorSchemeBoot/recording-rule/sign-out-keep/handover matrix, withSchemeFade and its fake-timer proofs, onQuickColorScheme's one write path, and the boot-order scan + the late-precondition runtime case); the line-number pins [35a]/[35b] are the release's position-independent text anchors (not touched here); before that, floor 702 — … (the shared earlier history continues in int/batch5b's text below). int/batch5b read floor 707 — RAISED from 705 by the v0.29.0 batch-5a integration (2026-10-01): SB-20 (fix/sb20-chat-store-scope @ 51b3225) merged onto the batch-4 count, 705 + 2 = 707, measured on the merged tree — SB-20 review N1 (2026-10-01): [30] seeds the device-data owner marker its returning-device fixture always implied (the early phase now refuses an unowned cache on a last-known-supabase device), and [30](A2) asserts through the real boot() that a marker-less cache is NOT replayed (+2) (on its own branch that read: floor 704, RAISED from 702). Floor 705 was RAISED from 702 by the v0.29.0 batch-4 integration (2026-10-01): reviewer N1 — [35c-owner] (c), an import whose closer is split across two lines names its own source (+1); reviewer N4 — [35e-latch] pins attemptAutoLink()'s once-per-page latch by text, with [35e-latch-canary] (+2). Floor 702 was RAISED from 692 by int/batch3 (2026-10-01, reviewer R-C1 + security S-C1/S-C2/S-O1): hardened topLevelOwner() with [35c-owner] (a)/(a')/(a'')/(b), the union scan's [35a-strip-glob]/[35a-strip-slashslash], [35c-openers] + canary, [35d-preamble] (nine gate preamble counts) + canary; before that, floor 692 — RAISED from 685 by int/pins-and-sb14 (2026-10-01): the [35a]/[35b] pins became position-independent (text + enclosing function, no line numbers) and gained [35a-each], [35a-order], [35a-shift], [35a-move], [35b-order], [35b-shift], [35b-move]; before that, floor 685 — RAISED from 677 by round 3 (Opus, feat/control-center-v0272, 2026-09-29): round-2 [40]/[41] confirmed on this run; [35a]/[35b] pins re-derived BY TEXT after R1/R2 shifted app.js; before that, floor 642, raised from 629 by the v0.27.0 bugfix pass 2026-09-27 ([36] the #control-center-trigger is filled at boot, web/native/held) — raised from 621 by the f16d87c review (2026-09-26): [26d] the status_moved banner copy — its own title and hint, the week named by label, no storage key or raw id — and the notice surviving the follow-up run's synced (reviewer F2/F5); before that 621, tightened from 612 at the v0.26.0 stamp 2026-09-26 — RAISED from 607 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 607 — RAISED from 588 by [33]/[34] (3c fix window, B2 + iOS shell parity, 2026-09-25): the password-recovery token-hash verify's boot-order proof (after the SDK load AND wireAuthUIEvents(), scrub-after-not-before) plus the no-@capacitor-literal static scan. Earlier: 588, RAISED from 567 by RG-246/B-03 (2026-09-25, UX Revamp wiring window): [31-D] added seven assertions through the real auth listener chain for the fourth mid-boot palette flash (resyncPlayerPreferences() delegating to bootThemeKey() when signed in, keeping the existing body class when signed out per Drew's 'keep' ruling), and the [31-C](iii) comment-matching pin at boottest.mjs:4597-4599 was retired (dated reason) in favor of [31-B]. Before that, LOWERED from 598 by the Sheets retirement (2026-09-23): [8] (BUG-E's transient-HTTP ladder), §8b (the transientHttpStatus predicate), [10]'s TIMING SIMULATION and [19]'s two setBackendConfig writes all describe a transport that is deleted. [10]'s boot ORDER — the half a future edit could actually undo — is kept and now anchors on the ADAPTER hydrate. Raised from 553 by SECURITY A-1-R + REVIEWER F1's §[30] (2026-09-21: the pre-config window is observed by PARKING the config fetch, and every terminal boot outcome either lifts the identity cover or paints a gate on top of it); before that from 530 by RG-198's §29 (2026-09-21: the first frame is the device's last-painted palette, Drew-approved); and from 494 by RG-196's §28 (2026-09-21, security A-1: the cached chat room is not readable before the device knows who it is); and from 474 by RG-194's §27 (a returning signed-in player is never shown the sign-in screen on a cold open); before that from 471 by the RG-202 gate (2026-09-20, reviewer note 3: a 'syncing' status may not take the amber held-offline banner down while its keys are still queued); before that from 462 by §26's held-offline banner, 2026-09-19; and from a token 30 earlier that day, the adaptertest precedent: a floor of 30 against a suite of 462 would not notice four hundred assertions going missing)`);
-  }
-}
-
 // ── [77] ─────────────────────────────────────────────────────────────────────
 // DI-168 (2026-09-11) — manual chat refresh. Added to this file's existing
 // chat-fold/transport section (DI-168i: "no new file — this DI adds no new
@@ -10751,570 +10630,6 @@ console.log('\n[77c] BUG-12 — the push-driven wake() fast path (bounded, and s
     globalThis.fetch = _realFetch77c; globalThis.setTimeout = _realST77c; globalThis.clearTimeout = _realCT77c;
     backend77c.setDataMode('sheets');
     chat77c._resetForTest();
-  }
-}
-
-// ── [78] ─────────────────────────────────────────────────────────────────────
-// DI-169 (2026-09-11). Own process, like [73]/[76]: cachetest.mjs drives real
-// chat.js/chatTransport.js/chat-ui.js code through several full cache-primed
-// boots, which would otherwise leave localStorage/backend-config/module state
-// behind for every suite after it in this file.
-console.log('\n[78] cachetest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['cachetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `cachetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch78 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch78, `cachetest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch78 ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch78) {
-    assert(summaryMatch78[1] === '✅ ALL PASS', `cachetest.mjs itself reports ALL PASS (got: ${summaryMatch78[0]})`);
-    assert(Number(summaryMatch78[3]) === 0, `cachetest.mjs reports zero failed assertions (got ${summaryMatch78[3]} failed, ${summaryMatch78[2]} passed)`);
-    assert(Number(summaryMatch78[2]) >= 20, `cachetest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch78[2]} — a near-zero count would mean the guard is vacuous)`);
-  }
-}
-
-// ── 79. memorytest.mjs — spawned as a subprocess, same shape as [68] ────────
-// Build 3, Group D (2026-09-11, DI-D1/DI-D2). Same "clean process" reasoning
-// section [67]/[68] give: memorytest.mjs loads backend/Code.gs into its OWN
-// fresh `vm` context (twice over, for its two source mutations).
-console.log('\n[79] memorytest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['memorytest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `memorytest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch79 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch79, `memorytest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch79 ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch79) {
-    assert(summaryMatch79[1] === '✅ ALL PASS', `memorytest.mjs itself reports ALL PASS (got: ${summaryMatch79[0]})`);
-    assert(Number(summaryMatch79[3]) === 0, `memorytest.mjs reports zero failed assertions (got ${summaryMatch79[3]} failed, ${summaryMatch79[2]} passed)`);
-    assert(Number(summaryMatch79[2]) >= 100, `memorytest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch79[2]} — a near-zero count would mean the guard is vacuous)`);
-  }
-}
-
-// ── 80. scoringtest.mjs — spawned as a subprocess, same shape as [79] ───────
-// Build 3, DI-D1. Own process because its [12] mutation section imports
-// MUTATED copies of js/scribeLines.js as data: URLs — doing that inside THIS
-// already-populated module graph is the "dirty state" false-pass class
-// section [67] names.
-console.log('\n[80] scoringtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['scoringtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `scoringtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch80 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch80, `scoringtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch80 ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch80) {
-    assert(summaryMatch80[1] === '✅ ALL PASS', `scoringtest.mjs itself reports ALL PASS (got: ${summaryMatch80[0]})`);
-    assert(Number(summaryMatch80[3]) === 0, `scoringtest.mjs reports zero failed assertions (got ${summaryMatch80[3]} failed, ${summaryMatch80[2]} passed)`);
-    assert(Number(summaryMatch80[2]) >= 60, `scoringtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch80[2]} — a near-zero count would mean the guard is vacuous)`);
-  }
-}
-
-// ── 81. groupdtest.mjs — spawned as a subprocess, same shape as [79]/[80] ───
-// Build 3, Group D pass 2 (2026-09-11, DI-D1 UI / DI-D3 / DI-D4). Own process
-// for the reason [67]/[68] give AND one of its own: it drives the REAL
-// commissioner-settings writes, the REAL week-signal ledger, and app.js's
-// module-level memory cache, all of which would otherwise leave settings,
-// localStorage keys and module state behind for every suite after it here.
-console.log('\n[81] groupdtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['groupdtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `groupdtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch81 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch81, `groupdtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch81 ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch81) {
-    assert(summaryMatch81[1] === '✅ ALL PASS', `groupdtest.mjs itself reports ALL PASS (got: ${summaryMatch81[0]})`);
-    assert(Number(summaryMatch81[3]) === 0, `groupdtest.mjs reports zero failed assertions (got ${summaryMatch81[3]} failed, ${summaryMatch81[2]} passed)`);
-    assert(Number(summaryMatch81[2]) >= 341, `groupdtest.mjs actually ran its full set (got ${summaryMatch81[2]}, floor 341 — raised from 315 by SCRIBE v3's DI-282 §[17] (2026-09-23: the commissioner's Sonnet/Opus Model card — its RG-10 wrapper, both radios, the default-when-unset, the cost copy, the refusal of an off-list id, and the proof that writing the model field preserves the rest of the scribe bag); before that raised from 295 by SCRIBE v3 Package A's §[16] (2026-09-23: the Heat card's RG-10 wrapper, its five rungs and their approved copy, the heat-is-not-frequency and hard-lines-still-win sentences, the refusal of an unknown level, My SCRIBE File's tolerance note, and the one-time hard-line nudge firing exactly once and only above Dry); before that raised from a token 100 by UN-235/DI-252's §[15] (2026-09-21: the SCRIBE pacing controls, 78 assertions including the nested-bag merge rule). A floor of 100 against a suite of 295 would not notice two hundred assertions going missing; the ratchet only tightens)`);
-  }
-}
-
-// ── 86. drafttest.mjs — spawned as a subprocess, same shape as [79]-[81] ────
-// RG-174 (2026-09-19): "the chat will delete my message halfway through me
-// typing it." Its own process for a reason this file cannot work around — it
-// needs a DOM stub where `innerHTML =` REPLACES nodes (so the #chat-input you
-// read back after a re-render is a different, empty element), which is the
-// single fact the defect lives in and the opposite of loadtest.mjs's own
-// top-level document, whose getElementById() always answers null.
-console.log('\n[86] drafttest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['drafttest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `drafttest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch86 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch86, `drafttest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch86 ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch86) {
-    assert(summaryMatch86[1] === '✅ ALL PASS', `drafttest.mjs itself reports ALL PASS (got: ${summaryMatch86[0]})`);
-    assert(Number(summaryMatch86[3]) === 0, `drafttest.mjs reports zero failed assertions (got ${summaryMatch86[3]} failed, ${summaryMatch86[2]} passed)`);
-    assert(Number(summaryMatch86[2]) >= 122, `drafttest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch86[2]}, floor 122 — RAISED from 84 by DI-398 round 2 (2026-09-28): §10/§16 re-derived off #pref-nick/#chat-prefs-btn (removed) onto a new #cc-body-chat fixture / #chat-search-input, plus a bindChatPage()-has-no-bindPrefsPanel() structural check — a near-zero count would mean the guard is vacuous)`);
-  }
-}
-
-// ── 87. pushtest.mjs — spawned as a subprocess, same shape as [86] ──────────
-// RG-177 (2026-09-19). pushtest.mjs owns the push-active predicate — the flag
-// that decides whether the in-app notification banner stands down because the
-// phone's push already delivered the notice (DI-N3/R10) — and until now NOTHING
-// ran it as part of the mandatory sweep. It is a standalone file for a real
-// reason (its own header: it leaves the backend singleton hydrated and
-// `_backendMode` flipped to googleSheets, which would poison every suite after
-// it), and spawning it in its OWN PROCESS answers that objection completely:
-// the poisoning cannot cross a process boundary. So the reason it was excluded
-// stops being a reason to leave it unrun.
-//
-// This is the protocol hole RG-177 exposed. The fix that broke its two
-// structural assertions would have shipped with a green mandatory sweep,
-// because the mandatory sweep had never heard of the file.
-console.log('\n[87] pushtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['pushtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `pushtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch87 = out.match(/(✅|❌) pushtest: (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch87, `pushtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch87 ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch87) {
-    assert(summaryMatch87[1] === '✅', `pushtest.mjs itself reports ALL PASS (got: ${summaryMatch87[0]})`);
-    assert(Number(summaryMatch87[3]) === 0, `pushtest.mjs reports zero failed assertions (got ${summaryMatch87[3]} failed, ${summaryMatch87[2]} passed)`);
-    assert(Number(summaryMatch87[2]) >= 389, `pushtest.mjs actually ran its full set (floor 389 — RAISED 380 -> 389 (2026-10-02, reviewer notes): [12z3] the Notifications row's saved copy leaves the Turn On card after a granted tap, [12z4] a flipped switch re-opens showing the saved value and a save that did not take snaps back; RAISED 379 -> 380 (2026-10-02): [13-3a] the self-test's no-device line names the menu (top left) → Notifications, not the retired 🔔 screen; RAISED 364 -> 379 by the control-center Turn On fix (2026-10-02, Drew on live v0.28.0): [12z] the Notifications row binds Turn On / Reconnect and both toggles, [12z2] the page reloaded after a deploy re-subscribes and re-links with no prompt, [18] the shipped worker update keeps the push subscription, the registration and IndexedDB; earlier RAISED 309 -> 364 by UN-315 / DI-436 (2026-09-30): the alias-first identity, league-switch no-op, sign-out ordering and readiness gate ([17] and the 12x updates); earlier note: 306 -> 309 by the coordinator's SECURITY finding 1/2 fixes (2026-09-24): section [14g] gains the coincidental-id-collision refusal case (a public row's model-supplied learningId ending in the reserved suffix must still refuse isPrivateScribeChangelog(), via the meta.playerId second lock) and section [14g2] proves search results carry the same chip AND dim as the bubble for a private changelog hit, and neither for a public one. RAISED 303 -> 306 by the coordinator's DI-293 fix-forward (2026-09-24): section [14h] asserts the APPROVED behaviour — a private changelog row DOES badge (isUnreadFor()'s named exception), attributed to 'system', while the public/windowed row and the self-test row do not, all three at one call site. RAISED 292 -> 303 by UN-266/DI-290...293 (2026-09-24): section [14g] extends Drew's residual-3 private-row suite to the SCRIBE changelog row's private shape — isPrivateScribeChangelog()'s three-signature predicate (positive, the public/windowed non-match, and six forgery/adjacent shapes refused), and the SAME chat-private-chip render reused for it. LOWERED 292 <- 293 on 2026-09-24 (teaser retired, Drew 2026-09-24 Option A): exactly ONE assertion was deleted, 15-16, and it was deleted on purpose because it asked for the OPPOSITE of what shipped -- it pinned that the dashboard teaser was UNCHANGED by the native push-active fix, and was written that same morning with the explicit instruction that a later pass which DID retire the teaser must come back and delete it with a dated note. This is that note. No other assertion was removed; 9-8/9-9/10-6/14-16 were rewritten in place (same count, stronger claims: the pick reveal raises no toast at all, and chat-ui.js now has ZERO showToast() call sites). A lowered floor is only ever acceptable for deleted assertions about a deleted surface, which is what this is. Floor was 293, raised from 276 by RG-243's §[16] (2026-09-24: the WEB half of "chat preview is on webview desktop/mobile and ios". The web pushActive ladder turned out to be CORRECT — a subscribed browser resolves TRUE and shows no preview, an unsubscribed one shows it BY DESIGN (UN-N3) — and 16-1…16-5 pin all three terms against a fake v16 SDK so that stays recorded rather than re-litigated. The DEFECT was one layer back: maybeAutoOptInPush(), RG-192's prompt-free "permission granted, no subscription" repair, spent its page-lifetime latch ABOVE its own identity guard and had exactly ONE caller — the boot tail, at the one moment authMode:'supabase' cannot guarantee an identity (RG-177) — so a boot that lost that race left the browser allowed-to-notify and registered-nowhere until reload. 17 assertions: the three-term ladder, the by-design preview on an unsubscribed device, the repair running once the identity lands, the latch still budgeting one attempt, the two prompt-free refusals, and the structural pins on the chokepoint re-arm and the guard/latch ORDER). Raised from 259 by RG-242's §[15] (2026-09-24: the native iOS shell could never resolve push-ACTIVE, because refreshPushActiveFlag() asked the WEB OneSignal SDK, whose subscriptionState() answers the literal 'native-unavailable' inside the Capacitor shell — so Drew's iPhone got the push AND the in-app chat preview on the Picks tab, for every message, forever. 16 assertions: the flag on a granted handset, both in-app surfaces going quiet, the three fail-closed native states, the master toggle's unchanged veto, web inertness both behaviourally and structurally, the priming button's native arm recomputing on grant, and a pin recording that the DASHBOARD teaser is deliberately untouched — DI-93 specified it and DI-N3 retained it by name). Before that LOWERED from 300 by the Sheets retirement (2026-09-23): [1]-[8] were RG-56's Sheets cell cap and the all-or-nothing batch it broke, and there is no cell. [9]-[14] — the push half, which is what this file is for — are untouched. Raised from 281 by DI-254's \u00a7[12t] (the OneSignal identity token: the token reaches login() as its second argument, a failed mint is a deliberate NO LOGIN with no storage write and no prompt, the existing bounded ladder recovers a transient failure, a token inside its five-minute margin is re-minted while a fresh one is reused, a handover never replays the previous occupant's token, and the structural pins that keep the credential out of storage and auth.js out of a static import cycle); before that raised from 274 by the security gate's §[14f] (the 0019 obligation pin) and the narrowed self-test id shape; raised from 243 at v0.23.3 by section [14] (Drew's residual 3: the private self-test row is labelled, subdued, findable with the same marker, and badges nobody) and [11-30]'s rewritten no-device advice; before that from 205 by RG-193 (2026-09-21): section [13]'s "the push service has no device for this account" copy, the Background-jobs counts line, and [12m]'s token/browser-subscription evidence behind "push is on for this device"; before that from 160 by RG-192 section [12] (the OneSignal identity/subscription regression: login-before-init, the bounded retry, the honest three-fact device status, the reviewer's Reconnect/optIn BLOCK, the coordinator's prompt-free boot registration, and security F2's stale-completion re-assert); before that from 129 by the COMBINED RELEASE MERGE (2026-09-20) (reviewer R1's real-roster-lookup section [11r], reviewer R2's switch-off section, and [11c]'s card-coherence pins), and from 73 by [11], the DI-204/205/206/218 client copy + boot-hook section; the ratchet only tightens) (got ${summaryMatch87[2]} — a near-zero count would mean the guard is vacuous)`);
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-// 81b / 81c / 81d — PHASE III STEP 6: the Edge Functions' own verification.
-//
-// THREE SUITES, ALL SPAWNED, ALL WITH FLOORS. `supabase/functions/*/test.js`
-// are DENO tests and **deno is not installed on this machine** — they have
-// never been executed and say so in their own headers. What runs today is:
-//
-//   notifyFanout.twin.mjs  drives the REAL `notify-fanout` handler through a
-//   keepalive.twin.mjs     fake Supabase client and a fake fetch, and asserts
-//                          what the function DECIDED to do — including the
-//                          ORDERINGS that are the whole of Step 6's safety
-//                          (auth before the service client; the kill switch
-//                          before any send secret, any write and any fetch;
-//                          the job_runs start row before the work).
-//   functions.check.mjs    the static half: S6-R1…R6, A3's no-log rule, the
-//                          envelope contract, and no literal secret anywhere.
-//
-// SPAWNED RATHER THAN IMPORTED for the reason [73] gives: these suites install
-// a fake `globalThis.Deno` and replace `globalThis.fetch` wholesale, which
-// would make every suite after them in THIS process non-deterministic.
-//
-// THE FLOORS ARE AT THE CURRENT COUNTS, not token numbers — a floor of 10
-// against a suite of 56 would not notice forty assertions going missing. The
-// ratchet only tightens (the adaptertest precedent, 2026-09-18).
-// ══════════════════════════════════════════════════════════════════════════
-for (const [label, file, floor, why] of [
-  // ── N1 league creation (2026-09-30) — THE RATCHET, TIGHTENED TO THE CURRENT COUNTS. The scheduled fan-in (scores-refresh, reminders, trainer), the atomic budget reservation and
-  // the platform clamps at all five model callers, the generic-persona seam and migration 0034's static rules grew these suites; several floors had been left below their live count.
-  // N1 FIX PASS (2026-09-30, reviewer R-F* / security S-*): floors tightened again — functions.check 1119 -> 1123 (the S-5 scribe-ask rounds pin with teeth, the S-8 lead-league pin with teeth), static.check 2042 -> 2063
-  // (the marker refusal, the audit trigger, the uid key, the normalizer with a model and teeth, the n1_gate mutation pair, the harness guards), reminders 129 -> 130, scoresRefresh 161 -> 162, scribeAsk 659 -> 660,
-  // leagueCreation.twin 62 -> 69 (the lead league runs alone), leaguecreatetest 311 -> 317, authtest 2295 -> 2342.
-  // Now at the actual numbers (the ratchet only tightens): functions.check 1057 -> 1117, static.check 1947 -> 2042, reminders 110 -> 129, scribeAsk 625 -> 650, trainer 264 -> 285,
-  // scribeClassify 101 -> 119, scribeAutonomous 470 -> 487, scoresRefresh 138 -> 161, scribeLearn 178 -> 198, scribeReact 108 -> 114; and leagueCreation.twin.mjs (62) JOINS below.
-  // Floor tightened 176 -> 225 at the v0.26.0 stamp (2026-09-26) — the suite's actual count; the ratchet only tightens.
-  // UN-315 / DI-435 (2026-09-30) — floor 225 -> 315: the MLP sections (dual/alias addressing, cohorts, league-labelled titles, routing fields, golden diff, the dual-lookup loud-fail).
-  // v0.28.0 integration round 3b (R-F3, the DI-435 title seam): floor 315 -> 333 = +18, the [13b] block (per-league system titles by FLAG not name, the fail-closed matrix, the one sanitizer,
-  // chat pushes untouched, fanoutPlan, pilot and non-pilot end to end on the wire, the sender's fallback, no "IRB" in the sender). Mutation-proven (round 3b commit message).
-  // SP-53 release gate G-1 (2026-10-01, feat/sp53-release-gates): floor 333 -> 346 = +13, [MLP-12] — a vacant seat (active, user_id null) is addressed by nothing in legacy, dual and alias, a stale lookup row does not
-  // re-address it, the positive control (the same seat linked IS addressed), the record still written, the breakdown reason `not_addressed`, no account id anywhere, empty-string vacant, a row without the column
-  // unknown, a self-test aimed at a vacant seat reaches nobody, and the S-L4 restored-"(left)" fan-out fixture. Mutation-proven (see the handoff).
-  ['81b', 'supabase/tests/functions/notifyFanout.twin.mjs', 346,
-   'DI-T6.1 — the fan-out handler (raised from 161 to 176 at the v0.24.0 + native-push rebase, 2026-09-24: SCRIBE v3 HEAT-P1…P9 and the HEAT-P10 whole-payload leak guard; the floor had been left at 161 by the merge, so 14 assertions sat outside the ratchet — the reviewer note on 27d6d3e), end to end against a fake transport (raised from 59: security audit S2, 2026-09-19, added the wrong_type webhook-config-drift pinning pair 2-10/2-11; raised to 111 by the combined release\'s SECURITY GATE F1 section [9F1] — a `visible_to` row that is not the self-test shape gets zero recipients and `direct:\'refused\'`). Raised 158 -> 161 by N-4 (2026-09-23): HEAT-P7..P9 prove the STORED notifications row carries the same content-free body the push does, and that what survives in the table is a pointer to the message rather than the line'],
-  ['81c', 'supabase/tests/functions/keepalive.twin.mjs', 56,
-   'DI-T6.7 — the only class-S function in this phase, and the job_runs retention rule that rides it (floor raised from 42 by RG-203 (2026-09-22): §[7] is the full league-resolution matrix — body used, body absent + CFBP_LEAGUE_ID used, both absent ⇒ not_configured, a non-UUID secret REFUSED rather than guessed, and the bodyShape/contentType sentinels on the two pre-work envelopes; the ratchet only tightens)'],
-  // Floor tightened 977 -> 1038 at the v0.26.0 stamp (2026-09-26) — the suite's actual count; the ratchet only tightens.
-  // UN-315 (2026-09-30, Push branch) — floor 1066 -> 1103: the multi-league push rules (mode parser, one resolver, the alias never
-  // leaves, the widened sanitizer set, the dual-lookup loud-fail) plus the pre-existing growth the floor had not caught up with.
-  // v0.28.0 integration round 2, step 3: max(1063 here via N8 / DI-440, 1103 on Push's side) = 1103, plus N8's +6 on the merged tree = 1109 live.
-  // v0.28.0 integration round 3a: N1's +66 (floor 1123 on that side, +66 over main's 1057) on top of the 1109 above = 1175 live.
-  // Floor raised 1057 -> 1068 by P-1 + SB-02 (2026-09-27): S6-R13/tools pins the tool layer's standings to
-  // standingsFor(revealedView()) and loadLeagueData() to selectAllRows(); S-F5 is extended to the paged call;
-  // scribe-ask's error allow-list gains the fixed sentinel 'league_data_unreadable'.
-  // v0.28.0 integration round 3a (P-1 + SB-02 merge): the branch's +11 (its own floor 1068, +11 over 1057: S6-R13/tools, S-F5's paged call, the 'league_data_unreadable'
-  // allow-list sentinel) on top of 1175 = 1186 live.
-  // v0.28.0 integration round 3b (R-F3): +5 = the R-F3 shape pins (systemPushTitle via isPilotLeagueRow, the IRB constants referenced only there, no "IRB" in the sender and its fail-closed
-  // fallback, notify-fanout's pilot derivation and pilot-only sender fallback, reminders naming no IRB title) on top of 1186 = 1191 live; two UN-315 rules were re-derived (count unchanged).
-  // SB-04 + P-1 hardening (2026-10-01): 1191 -> 1198 = +7: the loader-fence pin (S6-R13/tools, hardening a), the four
-  // S6-R9/leagueRead producer pins (hardening c), and scribeLeagueFence.twin.mjs declared cross-cutting + spawned (two TWINS rules).
-  // SB-04 review round (2026-10-01, reviewer MC2 / security F2): 1198 -> 1199 = the S6-R13 pin on P-1's guard inside standingsFor().
-  // SP-54 option (b) (2026-10-01): 1199 -> 1201 = S6-R13/tools — loadLeagueData() reads SIX tables (`results` joins), LEAGUE_DATA_TABLES names it, and standingsFor() uses the stored rows for a FINAL week
-  // (one assertion became three: the table count, the loader's mapping, the standingsFor/revealedView source pins).
-  // SP-53 release gate G-1 (2026-10-01): 1199 -> 1204 = +5, the G-1 source-shape pins (the three selects name user_id and it goes no further, isVacantSeat defined once and first in addressMember, every call passes
-  // `vacant:`, the plan/breakdown/reach shape) and their 14-mutant teeth.
-  // v0.29.0 batch-5b SP-54 merge (2026-10-01): 1204 + SP-54's +2 = 1206, the merged tree's real count.
-  ['81d', 'supabase/tests/functions.check.mjs', 1206,
-   'raised 1057 -> 1063 by N8 / DI-440 (2026-09-29): A3 gained its ONE named exemption — the live-upset verifier must read `messages.emitted_by` as a NULL/NOT-NULL test to tell a server-authored `scribe_auto_liveUpset_…` row from a member-minted one, so the rule that said the column is named in no function code now asserts instead what it was protecting: the column appears in exactly one function (liveUpsetAlreadySpoken), exactly twice (the SELECT list and one comparison bound to a local boolean), no `return` mentions it, and it is never interpolated into a fact; plus a self-test that the exemption rejects a mutant that returns the column. Before that, raised 1053 -> 1057 by the RG-260 follow-up (reviewer/security notes, 2026-09-26): S6-R9/UA pins the producer of scores-refresh\'s new uaOverride payload key (every value is uaOverrideStatus, assigned once from espnUserAgentOverrideStatus(), vocabulary the frozen closed set {REJECTED:\'rejected\'}), and S6-R3 pins that the server builds its fetch options ONLY via scoresRefreshFetchOptions() with js/data-provider.js carrying no SERVER_FETCH_DEFAULTS copy (the dead, drifted export was deleted). raised 1051 -> 1053 by RG-260 candidate (2026-09-26, ESPN edge 403s Deno\'s default User-Agent): CFBP_ESPN_USER_AGENT joins S6-R3\'s env allow-list as the NINTH name, with a one-reader clause (scores-refresh/index.js only) and a placement clause (read after the kill switch, handed straight to scoresRefreshFetchOptions(), before the fetch). raised 1040 -> 1051 by the 2026-09-26 hardening pass: S6-R9/stage (scribe-autonomous stage is run.stage from a frozen, fully-used enum) and the MIGRATION 0030 section (one reschedule, 0020 section 3d verbatim but for the timeout, no authorization header, timeout >= SCORES_REFRESH_FETCH.timeoutMs x sport buckets + 10 000 and <= EDGE_WALL_CLOCK_BUDGET_MS). raised 1038 -> 1040 by ESPN-CLASS (DI note) (2026-09-26): S6-R9/ESPN-CLASS pins the producer of the scores-refresh fail* payload keys (every value is fails.<same key>, and fails is assigned once from espnFetchFailureCounts(fetchErrors)); RG-252 declares scribe-autonomous\'s two wrapper sentinels on the S6-R9/error list. raised 972 -> 977 by S6-R21 (coordinator finding, 2026-09-24): scribe-learn/trainer never call chat_append_system and post their changelog rows as direct `sb.from(\'messages\').upsert(…)` writes under their own serviceClient() — the server-source half of migration 0025\'s own citation, so that claim cannot drift without this rule catching it. DI-T6.14(d) — the static rules over the function sources (raised from 157 by Phase 2: `reminders`, S6-R5 (no picks/selected_team/guess), the widened S6-R3 send-secret allow-list, and the reminders payload allow-list to S6-R9; raised to 231 by the scribe-ask merge; raised to 237 by the Step 6 Phase 3 gate closure (2026-09-20), which adds S-F5 — no shipped function file selects \'*\' off `league_members` — as its own rule with two self-tests; raised to 268 by the coordinator\'s shared-foundation merge, which adds the trainer payload allow-list, widens the SEND-secret allow-list to include trainer/index.js, and registers trainer.twin.mjs; raised to 357 by the Phase 4/5 reconciliation pass, which adds scribe-classify/scribe-autonomous to the payload and SEND-secret allow-lists and folds Phase 5\'s handler discovery into the existing dynamic scan; raised to 416 by the PHASE 5 GATE CLOSURE (2026-09-20), which adds S6-R12 (the acting member is server-derived and recorded, security S-F2), S6-R13 (the evidence layer\'s blind-rule fence is applied to the DATA at one entry point, reviewer BLOCK B2), and the §STEP 6 / F5 runbook pinning block including the corrected per-dial spend figures, reviewer BLOCK B3); raised to 499 by the PHASES 3+4+5 ⊕ PHASE 6 MERGE (2026-09-20) — Phase 6 contributed S6-R9\'s ERROR clause (a per-handler error-expression allow-list) and Phases 2/3/4/5 contributed five more handlers, so the clause\'s five assertions now run against reminders/scribe-ask/trainer/scribe-classify/scribe-autonomous too. Their allow-lists were DECLARED at the merge, not the rule weakened — see ALLOWED_ERROR_EXPR\'s own merge note); raised to 634 by RG-CORS (2026-09-20), which adds S6-R15 (CORS at the serve boundary, class U only, never a wildcard) with its self-tests and the per-handler class split; before that to 582 by the COMBINED RELEASE MERGE (2026-09-20), which adds DI-206\'s `push-reach` to the payload allow-list and to the SEND-secret allow-list, and S6-R14 (every service-role messages SELECT carries .is(\'visible_to\', null), plus its no-chaining clause); raised again by the SECURITY GATE (S6-R9/error\'s third clause, which scans for the CONSTRUCTION of an error string rather than the call site); raised 677 -> 708 by RG-202 (2026-09-22), the live cron-auth defect: S6-R6 is amended from "every entry pins verify_jwt = true" to pinning the exact SET (false on exactly the four cron-invoked functions, true on every other, cross-checked against the migrations that schedule them), and S6-R18 is added — a function the gateway no longer pre-checks gates itself FIRST and never reads `Authorization` directly, with trainer\'s dual-caller split pinned by name; raised 708 -> 755 by RG-203 (2026-09-22), the live body-loss defect: S6-R19 is added (every handler resolves league_id through the ONE shared _shared/league.js resolver, which UUID-checks BOTH sources and reads the env lazily; no handler reads body.league_id itself; trainer\'s manual path is pinned as fallback-FREE), CFBP_LEAGUE_ID joins S6-R3\'s env allow-list with a one-reader clause, and the four cron-invoked payload allow-lists gain the bodyShape/contentType diagnostic sentinels; raised 755 -> 770 by RG-223 (2026-09-22): S6-R9/message is added — `apiErrorMessage` joins the four Anthropic-calling handlers\' payload allow-lists, and because it is the first key whose words are not all ours, a name-only rule cannot carry it. The new clause pins the PRODUCER (one definition, one caller, and its body still contains the exact character class, the 240 cap and all three redaction rules) and the VALUE (every `apiErrorMessage:` in the tree reads from anthropicErrorReason() or is the empty string — never a response body), with seven self-test mutants; raised 770 -> 826 by DI-253 (2026-09-23): `push-identity-token` joins CLASS_U_HANDLERS (so every class-U rule — the wrapped serve, the payload and error allow-lists, the send-secret placement — now runs against it too), ONESIGNAL_REST_API_KEY\'s S6-R3 reader set is pinned as an EXACT four (notify-fanout, reminders, push-reach and — per the REST-KEY AMENDMENT of 2026-09-23, Drew\'s live dashboard reading: Identity Verification is a toggle with no key of its own, so the identity token is HS256 over the REST key and NO ninth secret joins the env allow-list — push-identity-token, which SIGNS with it), with a js/-and-config.json absence clause carrying the residual that this key also authorises sending push to all six, `push-identity-token` joins S6-R4\'s named kill-switch exemption, and S6-R18 gains an /identity clause pinned BY NAME: the gate is first, the secret is read after it, no property of the parsed body is read anywhere in the handler, the signed subject is requireMember()\'s own answer, and there is no startRun/finishRun for a credential to land in; raised 833 -> 837 by the reviewer\'s final-gate note N1 (2026-09-23), which adds S6-R13b \u2014 the BLIND RULE over the FACT-CANDIDATE pipeline, asserted structurally here rather than as a seeded candidate in rls.test, because migration 0022\'s apply RPC copies payload.value VERBATIM and the real guarantee is one layer up: a candidate can only come from a chat message somebody flagged "remember this", rememberThisSources reads only message/feedback events, and `messages` has no selected_team or guess column \u2014 so a content filter in the SQL would be an inert guard (RG-27) at the end of a pipe that carries no pick data. The one residual, a player typing his OWN pick into chat and flagging it, is named in the block rather than closed; raised 837 -> 841 by the N1 follow-up (2026-09-23): S6-R13b gains four SELF-TESTS, because every rule in it is an ABSENCE and an absence rule passes just as happily when pointed at the wrong text \u2014 which it was. Its messages-DDL window was `indexOf(...) + 1400` against a 1707-character CREATE TABLE, so the last three columns, the primary key, the unique constraint and the foreign key all sat OUTSIDE the text being scanned: a selected_team column added at the END of the table, which is where a column actually goes, would have been invisible while the assertion stayed green. The window is now the statement\'s own terminator and one self-test proves it reaches all four; raised 841 -> 845 by DI-272 (2026-09-23): `ctxSlotsFailed` joins scribe-ask\'s S6-R9 payload allow-list. It is the count of prompt-context slots whose read FAILED on an invocation \u2014 admitted on the same terms as `toolCalls` (a number this handler computed about its own run, no table name, no row, not one character anybody else wrote), and needed because the four slots FAIL SOFT: a broken scribe_learnings read costs its block and the player still gets an answer, which from the room and from job_runs is indistinguishable from SCRIBE working perfectly. A3 forbids console. in a function file, so the run row is the only place it can be said'],
-  // ── static.check.mjs JOINS THE SPAWNED LIST (2026-09-20, DI-204).
-  //
-  // It was not here, and nothing else in the repository ran it. That is the "a suite nothing
-  // spawns is a suite nobody runs" shape this file has already closed three times (xsstest,
-  // transporttest, persisttest) — and it matters more for this one than for any of them: it is
-  // the ONLY offline guard over the migrations, and migrations are the artefacts nobody can
-  // re-test after a paste. Every SEC F1 policy scan, every restore-drift comparison and every
-  // mutation-header completeness rule was running only when somebody remembered to type it.
-  //
-  // IT READS SQL AND JS, NEVER A DATABASE — no network, no credentials, no `.env`. The floor is
-  // at the current count, per the adaptertest precedent.
-  //
-  // RELABELLED '81p' AT THE COMBINED MERGE (2026-09-20). The push-self-test branch authored
-  // this as '81k', which is `scribeAutonomous.twin.mjs`'s label on the Phase 5 side; the label
-  // is only a console prefix, but a duplicate one makes a failing line ambiguous to read.
-  // Floor tightened 1756 -> 1794 at the v0.26.0 stamp (2026-09-26) — the suite's actual count; the ratchet only tightens.
-  // Floor tightened 1794 -> 1797 (2026-09-26, 0026 live-rehearsal 0A000 fix): the three "PG-DDL 0A000" assertions — no CREATE TRIGGER may pair REFERENCING transition tables with an UPDATE OF column list (fixture, rule, negative control); the ratchet only tightens.
-  // Floor tightened 1932 -> 1947 (2026-09-30, second close-out pass: 0033-GUARD — every fixture naming a 0033-only object opens with the DO guard that raises when messages.sport_tag is absent; competition_members' key leads with league_id and a twin of ON CONFLICT proves a restore into another league inserts).
-  // Floor tightened 1917 -> 1932 (2026-09-30, 0033 close-out: RESTORE-DRIFT — every restore fixture equals the LATEST migration body, and each mutation half of a redefined function is the latest body plus only its named loosening; the five chat_append_system fixtures and the auto_go_live set were rebased onto their latest bodies).
-  // Floor tightened 1891 -> 1917 (2026-09-30, Phase 1a review fixes: PART 0 enforces P4, rollback order, sport_tag on R1's set, the proof's per-role INSERT/SELECT and PUBLIC ACL checks, affinities_ok revoke, cm_self_insert archived, import_rows competition_members, the rls.test multiSport group and its three mutation pairs — each with a mutant proven red in a scratch copy).
-  // Floor tightened 1797 -> 1891 (2026-09-29, Multi-Sport Phase 1a merged with the RG-TBD-S1 hotfix's 1825 floor: 1797 + the 0032 section's 28 + this branch's 66): 0033 joins the replay, plus its own block (redefinition-equals-latest-body diffs, the new objects' security shape, R11's grant-coverage guard, each with teeth); B-1 now proves 0033's guard is 0026's body plus exactly one line; the effective-grant counts (messages 15, league_members 17) and the 0033 grant pins are asserted.
-  // RG-TBD-S1 / R5 branch (2026-09-29) — floor 1797 -> 1825 by migration 0032 (SECURITY HOTFIX RG-TBD-S1): link_member_by_email() is pilot-league-only — 0032 joins the replay LAST, with its own section pinning the last-wins body, body == 0009 + the pilot conjunct exactly, header/ACL, the out-of-order rule for any redefinition at 0031+, and the emailLinkPilot rls.test group's shape.
-  // v0.28.0 integration round 2, step 3: max(1805 here via the N8 security note, 1845 on Push's side) = 1845, plus N8's +8 on the merged tree = 1853 live.
-  // v0.28.0 integration round 2, step 5: R5 adds its +28 (0032 joins the replay; the 0032 section) on top = 1881 live.
-  // v0.28.0 integration round 3a: N1's net +238 (0033 and 0034 join the replay, the 0034 block; its own floor 2063 also counted R5's 28, 2063 - 1825 = 238)
-  // on top of the 1881 above = 2119 live, after re-deriving the two N1 rules that Push's 0035 invalidated (position of 0034; anonymize_own_account's ledger rule).
-  // UN-389 / DI-445 (2026-09-30) — floor 1845 -> 1906: the 0035 re-derivation (anonymize_own_account's two pins re-derived into the ordered-statement pins), account_exit_leagues / archive_league_on_exit (definer, grants, return shape, refusal order, GUC reset, audit row), the mutation pair, the S36 registration and the group-order pins.
-  // UN-389 / DI-445 coordinator ruling (2026-09-30, D-6): floor 1906 -> 1910 — the pilot ALWAYS blocks, whatever its status: the blocks expression moved, a truth-table pin (with teeth) over every status/pilot/members case, the header-ruling + V16 pin, and S36.pilot-paused-blocks registered; the mutation partition now covers sixteen codes.
-  // v0.28.0 integration round 3a (acct-exit-server merge): DI-445's net +65 (its own floor 1910, +65 over Push's 1845; the S36 group's codes, the 0035 re-derivation,
-  // the account_exit_leagues / archive_league_on_exit pins, the D-6 truth table) on top of 2119 = 2184 live. N1's anonymize ledger rule was folded into DI-445's (count unchanged).
-  // v0.28.0 round 3e (2026-09-30, security review DEV hygiene): floor 2184 -> 2186 — the rls.test platform_kv raw-write INVENTORY (every direct write chain is one of six enumerated
-  // ones, the ceiling control goes through setPlatformKvForRun, the helper registers before it writes) and its mutation proof (old raw ceiling write / an extra upsert both red).
-  // v0.28.0 DEV rehearsal (2026-09-30, bugfixer): floor 2186 -> 2197 — the REHEARSAL 0930 block pins the three rls.test.mjs reds of Drew's first DEV run on the
-  // merged tree OFFLINE: literal gassert codes unique (two enumerated exclusive-branch pairs; S34.audit-trigger split into -rpc), S17 seeds the 0034 scoresRefresh
-  // switch in both fixture leagues before its baseline and restores it, S35's anonymize subject sits in a league with an active commissioner (0026 recount); 3 mutation proofs.
-  // LIVE-GUARD incident fix (2026-09-30, bugfixer): floor 2197 -> 2208 — every .sql under tests/mutations/ (67) and tests/verify/ (4) opens with the canonical
-  // DEV-only LIVE guard as its first executable statement (pilot-name + LIVE-league-id signals, exact REFUSED raise, id cross-checked against the committed session log),
-  // the strip every other rule reads through removes exactly that block, and a 9-mutant in-memory proof on blind_rule_drop.sql turns the rule red.
-  // SB-11 / migration 0036 (2026-10-01, Social Platform bugfixer; security F2): floor 2208 -> 2232 — 0036 joins the replay (super_set_platform_kv refuses the
-  // push_alias_mode_live marker `bad_key`); the SB-11 block pins the latest body + every definition at 0036+, the R13 one-line diff against 0034:316, the file shape and
-  // the rls.test S34.marker-refusal shape, each with teeth; reviewer M-1 adds the platform_kv WRITER SET over the whole replay (super_set_platform_kv the only function
-  // writer, no function write names the marker, the two seeds byte for byte, SELECT-only grants and policies; 7 mutants + a comment-only control); M-2 widens the 0035
-  // later-redefinition rule to all five 0035 functions; mutant hygiene (every mutant lands in comment-stripped code) is asserted.
-  // SP-53 (2026-10-01): floor 2208 -> 2289 on the feat/sp53-league-settings-core branch — 0037's pins (lock set, guards, canonical league-name block + 26-row boundary, effective grants,
-  // the proof block incl. security C-2's simulated-session pins, the two DEV mutation pairs, rls-shape), rolestest/leaguesettingstest-adjacent re-derivations. The SB-11 merge reconciles
-  // this floor with the other branches' raises at integration.
-  // v0.29.0 batch-3 integration (2026-10-01): SB-11 (2232) and SP-53 (2289) reconciled — floor 2314, the merged tree's real count (0036 and 0037 both in the
-  // replay, '0035', '0036', '0037' in that order; both 0035 position rules kept: SB-11's no-later-redefinition-of-any-0035-function rule and SP-53's
-  // last-definer-of-anonymize_own_account rule).
-  // SP-54 (2026-10-01): the merge of release/v0.29.0 into feat/sp54-tiebreak. Release's reconciled floor 2314 + SP-54's +25 (migration 0038's pins: the locked_alma_by_player shape, the
-  // lock_week multiset diff against 0033, the three marked regions, the file-level bans and their mutants) = 2339, set to the merged tree's real count (see the final line below).
-  // SP-54 BM/C-1 (2026-10-01): 2339 -> 2341 = the proof's lockedAffinities token is CODE-ONLY (non-vacuity proof) and LP-2 (paste only when no week is locked or live) is in the file.
-  // SP-53 release gates (2026-10-01, migration 0042: G-2 / G-5 / G-6): 2314 -> 2341 = +27 — the "0042 /" section (shape and ACLs, the three diff-pins, the placement / order / invariant pins, the bound's
-  // model, preflight, proof block, notify, header, citations, and the 32-mutant teeth), the 0042 C-2 pair, the two new DEV mutation pairs (anon_lock, leave_bound) through the SPECS machinery, and the re-derived
-  // census / last-definer / ledger-writer / SC-L6 pins. The G-5 parity pin is ENFORCED (it read PENDING).
-  // v0.29.0 batch-5b integration (2026-10-01): SB-24 (0040, +13: the "SB-24 / 0040" section) and SP-53 release gates (0042, +27) reconciled — floor 2354, the merged tree's real count (2314 + 13 + 27;
-  // MIGRATIONS reads ..., '0037', '0040', '0042' — SP-54's '0038' slots in between when it merges). The 0042 header pin now names the v0.29.0 order and the dated 0039/0041 deferral line (renumbered 0043/0044).
-  // v0.29.0 batch-5b SP-54 merge (2026-10-01): 2354 + SP-54's +27 (0038) = 2381; MIGRATIONS now reads '0037', '0038', '0040', '0042'.
-  ['81p', 'supabase/tests/static.check.mjs', 2381,
-   'raised 1797 -> 1805 by the N8 security note (2026-09-30): S5/A2/latest — the member branch of the LATEST chat_append_system definition on disk (read from the migrations directory, so it tracks 0026 today and the next redefinition the day it lands) stamps emitted_by = my_member_id(p_league), the platform branch stamps null, v_me is assigned from nothing else, the stamp is what is inserted, and emitted_by is never read off the event — with three negative self-tests; the live-upset verifier\'s server-authored-row check rests on it. Before that, raised 1719 -> 1756 by migration 0025 and the coordinator security findings (2026-09-24): 0025 joins the replay LAST (it redefines chat_append_system again, on top of 0019), with its own section pinning the two new named gates, the byte-for-byte diff against 0019 (not 0013), the untouched grants, S6-R21\'s server-source citation, the new rls.test group\'s registration/codes/both-id-shapes, and the §0025 runbook pins; the RG-41d/0011/0012 group-order strings and the 0022-0025 disk-order rule were all updated to name scribeChangelogReserved and 0025 rather than stopping at 0024; and the REV F1/S5/M/F-2 mutation-header completeness rules were extended across all seven `chat_append_system`-touching mutation fixtures (step4_messages_author_open, step5_state_check_drop/author_open/emitted_by_grant/system_fn_restore, step6_reminders_open/restore) for the two new reserved_id2/reserved_meta2 gates, four of which also had the gates ADDED to their SQL bodies so a restore or a loosening cannot silently revert 0025 the same way it could not silently revert 0019. the offline half of the migration proof — SEC F1 over every SELECT policy in all eighteen migrations (0018 included, appended LAST because it REDEFINES messages_select and the replay is last-wins), the grant/revoke replay that proves visible_to and emitted_by are in no client column list, the 0018 restore-drift comparison (the one mutation pair in this folder whose restore is a POLICY BODY rather than a grant), REV F1\'s mutation-header completeness, and RG-41c/d over rls.test.mjs. Raised 1379 -> 1402 at the combined merge (0016/0017 join the replay) and -> 1436 by S5/T5.11\'s amendment for js/platform.js (which asserts platform.js imports nothing and that backend.js already imports it) plus the SECURITY GATE\'s 0018 SEC-1/SEC-2/SEC-3 write-side rules and SEC-F2\'s report_app_version rate floor; raised 1436 -> 1470 by the STEP 6 REHEARSAL GATE (2026-09-20), which adds the plpgsql name/column AMBIGUITY class rule over migrations 0013+ (SQLSTATE 42702 — the defect that made scribe_rate_bump() unusable on a real server while three verify queries read green), its own self-test, the corrected V0014-2/V0014-4/V0014-6 pins, the chat_append_system platform rate-window rules, and the "no member-gated RPC against league 2 inside a mustSucceed" class rule over rls.test.mjs; raised 1510 -> 1572 by RG-202 (2026-09-22), which loads migration 0020 into the replay and adds the 0020 section: the four rescheduled jobs proven name-for-name against 0012/0013/0015/0017 (schedule string, path, timeout, trainer\'s Chicago-09:00 `where`, scores-refresh\'s per-league fan-out), the apply-time Vault preflight, the CRON-AUTH class rule over migrations 0020+ with its self-tests, the 0020_cron_jwt_open/_restore mutation pair, the config.toml cross-check, and the runbook pins; raised 1572 -> 1597 by RG-227 (2026-09-22): migration 0021 joins the replay and the 0021 section proves the cfbp_trainer reschedule is 0020\'s command VERBATIM with only `timeout_milliseconds` changed (25000 -> 140000), that the other three jobs are not mentioned at all, and — the point of putting it here rather than in the twin — the CROSS-FILE arithmetic, reading TRAINER_WALL_CLOCK_MS out of trainer/index.js and EDGE_WALL_CLOCK_BUDGET_MS out of _shared/anthropic.js so that raising one constant and forgetting the scheduler fails offline; raised 1597 -> 1665 by 0022 and the RETIREMENT ceremony (UN-237/238, 2026-09-23), which loads migration 0022 into the replay and adds the 0022 section: the ON CONFLICT expression compared CHARACTER-FOR-CHARACTER against the unique index in the same file (a drift there does not error, it silently turns the upsert into an append), the SELECT-narrowing rule that refuses a surviving top-level `is_member(league_id) or` branch, the INVOKER-not-DEFINER pin on both RPCs, the forced provenance AND confidence rule on every non-commissioner policy branch, the 0022_memory_select_open/_restore pair with its restore-drift POLICY-BODY comparison, the V0022-6 non-vacuity rules (a seed count, two apply calls with different EXPECTs, and a rollback), and the §0022 runbook pins; plus the §RETIREMENT block, which pins DI-T6.16\'s ORDER as POSITIONS rather than prose (verify -> rotate -> archive -> read-only, because each step is irreversible-ish and worthless if the one before it has not been done), both halves of the CFBP_JOB_SECRET rotation with the bad_job_header consequence of moving only one, the --env-file protocol with `secrets set KEY=value` forbidden by name, the trigger deletion that closes the stale-client hole, ARCHIVE-not-delete, the Sheet kept read-only as the archive because the Supabase import is a PROJECTION of it, and the honest rollback; raised 1665 -> 1717 by the SECURITY GATE\'s four findings (2026-09-23): F1\'s rules that the wager arm is on INSERT and NOT on UPDATE\'s USING (two policies eight lines apart, otherwise word for word the same, so "make them match" is the tidy and entirely wrong edit) plus the second mutation pair 0022_memory_update_wager_open/_restore whose restore-drift comparison covers BOTH clauses \u2014 the mutation differs from the correct body by ONE LINE and that same line legitimately appears in the WITH CHECK immediately below it; F3\'s rules that the INSERT policy is exercised as a BACKSTOP FOR DIRECT PostgREST writes and that its residual (the RPC\'s key/value caps have no check constraint behind them) is NAMED rather than implied; F4\'s R6b rules over the runbook, which pin that the Sheet\'s adminPasswordHash / sitePin / six pinHash cells are cleared BEFORE the Viewer flip and not after, that btoa is an ENCODING rather than a hash, and that the SUPABASE copy of adminPasswordHash must survive because it still gates the commissioner re-prompts; and F2\'s whole 0023 section \u2014 migration 0023 joins the replay LAST (it REDEFINES scribe_learnings_select, so a replay resolving it to 0002\'s body would read the narrowed scribe_memory policy next to the wide scribe_learnings one and call the pair finished), with the reader enumeration by file:line that is the one rule that would have caught this, the RG-12 answer about the empty hydrate, the scribe_canon residual left NAMED rather than swept in, the V0023-4 non-vacuous read, the 0023_learnings_open/_restore pair, and the \u00a70023 runbook pins including the 0022-then-0023 paste order; raised 1717 -> 1719 by the re-gate MUST-FIX (2026-09-23), which REWRITES the three R6b-0 rules: that step was a HARD GATE for about an hour ("stop if Supabase has no adminPasswordHash, the re-prompts need it"), and investigating the gate is what found the defect \u2014 the re-prompts compared against a field CREDENTIAL_FIELDS had correctly STRIPPED at the cutover, so the merge fell through to js/data-model.js\'s published btoa(\'admin123\'). v0.23.5 removed the re-prompts, which INVERTS the step: Supabase holding no hash is the CORRECT state. The rules now pin the new reasoning, the retained query, the expected has_hash = f, and the ABSENCE of the old STOP \u2014 a runbook that still says stop after its reason evaporated is how a ceremony gets abandoned halfway through on a Saturday night'],
-  // Floor tightened 71 -> 110 at the v0.26.0 stamp (2026-09-26) — the suite's actual count; the ratchet only tightens.
-  // UN-315 / DI-435 (2026-09-30) — floor 110 -> 179: reminder addressing, cohorts, params.sport deep links (server side only), nleague, the dual-lookup loud-fail.
-  // v0.28.0 integration round 3a: N1's fan-in (floor 130 on that side, +20 over 110) on top of Push's 179, plus the 12 N1-P* assertions that drive the fan-in and the
-  // send deadline TOGETHER with Push's addressing modes = 211 live.
-  // SP-53 release gate G-1 (2026-10-01): floor 211 -> 218 = +7, [MLP-R10] — a vacant seat is sent no reminder in legacy, dual and alias, the manual nudge skips it, the positive control, no account id anywhere, unknown.
-  ['81e', 'supabase/tests/functions/reminders.twin.mjs', 218,
-   'DI-T6.2 — reminders, end to end (raised from 62 to 71 at the v0.24.0 + native-push rebase, 2026-09-24: the DI-240 send-format assertions; the floor had been left at 62 by the merge — the reviewer note on 27d6d3e) against a fake transport: the auth/switch/secret orderings, the happy path (personalized reminders + batched locking-soon + the deterministic room post), idempotency, and the blind-rule structural scan. Raised 45 -> 48 by the STEP 6 REHEARSAL GATE (2026-09-20): 8-5/8-6/8-7 exercise the REAL room-post refusal (P0001 `system_rate`) rather than only a generic error, because that is the one that actually fired on cfbp-test; raised 55 -> 62 by RG-203 (2026-09-22): section [3b] — the scan runs from the CFBP_LEAGUE_ID secret when the pg_net body does not arrive, is still scoped to that league alone, and still refuses to guess when neither source answers'],
-  // Step 6 Phase 3 (scribeAsk, DI-T6.3) — the fourth handler, and the first
-  // class-U one: switch/auth/secret/dedup/happy-path/refusal/outage, driven
-  // against the REAL scribe-ask/index.js through the same fake transport.
-  // Floor tightened 596 -> 625 at the v0.26.0 stamp (2026-09-26) — the suite's actual count; the ratchet only tightens.
-  // Floor raised 625 -> 670 by P-1 + SB-02 (2026-09-27): §[P1] (the standings/statistics tools never grade a
-  // hidden week — OPEN and LOCKED, unit-level and on the wire) and §[SB02] (loadLeagueData reads every row or
-  // refuses, against a paging-faithful fake: Max-rows cap, count, anchor, 414 URL limit; the handler's
-  // 'league_data_unreadable' refusal before any model call).
-  // v0.28.0 integration round 3a (P-1 + SB-02 merge): the branch's +45 (its own floor 670, +45 over 625) on top of N1's 660 (whose N1-1 persona capture was re-taken, see
-  // that assertion) = 705 live.
-  // SB-04 hardening (c) (2026-10-01): 705 -> 708 = §[SB02] SB02-23/24 (the refused read's job_runs row and response carry
-  // leagueRead '<table>:<code>' and no PostgREST text) and SB02-25 (a picks read that stops advancing: 'picks:no_progress').
-  ['81f', 'supabase/tests/functions/scribeAsk.twin.mjs', 708,
-   `DI-T6.3 — scribe-ask end to end: the class-U auth gate, the ack-row reservation, budget/throttle no-ops, the happy path, a model refusal, a two-attempt outage, the blind-rule re-verification (a planted open-week pick withheld both by a direct tool call and a full two-round Anthropic exchange scanned for the secret), and (raised from 29 to 266 by the Phase 3 gate closure, 2026-09-20) B1's reachability assertion (safety+persona actually ride the request), B2's player-boundaries-by-construction section (asker-only, no tool call needed, scoped away from another player and from a low-confidence row), S-F1's length cap + generalized dangling-ack degrade, S-F2's fail-closed rate reads (including the legal-zero-budget case), S-F4's abort-on-timeout proof, and S-F5's named-columns proof; raised 266 -> 295 by RG-222 (2026-09-22, live 400): §[16] validates the REAL request body against the Messages API subset we send — system-block shape, non-empty text, cache_control placement and the 4-breakpoint ceiling, custom-vs-server tool shapes (the server-tool type string READ OUT of Code.gs's own working payload), message-block and orphan-tool_result rules, integer max_tokens, no anthropic-beta, and the thinking/output_config.effort PAIR that this defect broke — with eleven self-test mutants proving the validator can fail; and §[17] pins the diagnostic (closed-set error type + our own dotted field path in job_runs.payload); raised 295 -> 322 by RG-223/RG-224 (2026-09-22, the SECOND live 400 and the 75-second EarlyDrop beside it): §[18] pins the sanitised 'apiErrorMessage' — the live message shape round-trips losslessly, an Anthropic-key-shaped token and anything after 'Bearer ' become '[redacted]', a padded 2,000-char message is capped at 240, control characters / a newline / an em-dash / an emoji are stripped to a declared ASCII class, a 2xx writes the key at all, plus ten unit-level clauses on the sanitiser itself (idempotence, non-string input, the 31-vs-32 redaction boundary, a long field path NOT mistaken for a key, an ANSI escape, four overlong inputs); 17-4 is AMENDED there, not deleted — the error SLOT is still 100% ours, which is what security finding S3 was actually about; and §[19] pins that ZERO timers remain armed after handle() resolves on the success path, the two-call 400 path, a rejecting fetch and a fired timeout — the 'AbortSignal.timeout' that could not be cancelled is now an AbortController cleared in a finally; raised 322 -> 337 by RG-225 (2026-09-22, the live timeouts after Drew rotated the key): 14-4 is REPLACED — the old '2 x per-call timeout <= wall clock' arithmetic was the relationship that justified 12s/30s and that silently blessed retrying a timeout; the new clauses pin wall clock + one timeout <= EDGE_WALL_CLOCK_BUDGET_MS with at least 30s spare, a per-call ceiling sized for a real tool+web-search Sonnet 5 reply, and the wall clock as the binding constraint; and new section [14b] pins that a timeout is NOT an outage — both abort spellings classify as 'timeout', a socket failure stays 'network_error' with no message, the timeout message names OUR constant and not the exception's words, a timeout is NOT retried (one call) while a socket failure is (two, and it recovers), and a timed-out call is still metered; +1 (18-13b) from the mutation proof, which found that deleting the sk-ant prefix redaction left the twin green — the fixture key was long enough for the generic 32-character rule to swallow anyway, so a SHORT key is now asserted too; raised 338 -> 363 at the GATE (2026-09-22): 18-13c/18-13d make the sanitiser's ORDER real — the module claimed [18] asserted it and it did not, and inverting redaction and the character-class strip leaks the tail of a credential containing a stripped character (Bearer ab@cdefghijkl); and new section [14c] pins RG-226, that a deterministic 4xx is NOT retried — six status codes cost one Anthropic call each, 429/500/503/529 still get their retry, a 529-then-200 recovers, a 2xx with an unparseable body is retried, and the spend clause records that our own ledger meters once per INVOCATION rather than per attempt, so the wasted retry was invisible to the budget ceiling and only the policy can stop it; raised 363 -> 423 by DI-272 (2026-09-23): section [20] is THE FOUR PROMPT SLOTS THAT USED TO RENDER EMPTY. Sections [11] and [12] were green throughout the three weeks in which the Trainer ran weekly, wrote rows, and had NOTHING it produced ever reach the model — because a block that is not there looks exactly like a block with nothing to say, and no assertion in this file could tell them apart. [20] asserts every one of them ON THE WIRE: a hard line for a player named ONLY by display name in the question (20a, the defect), and one named only in the room context; an approved 0.80 learning present and an approved 0.60, a pending and a rejected one absent; canon's five payload fields read from the real jsonb shape; scribeLearningsEnabled:false as a TRUE stop that never queries either table, and a MISSING value reading as ON (CONVENTIONS #10); room context oldest-first with the trigger itself and everything after it excluded by a JS pass beside the .lt filter, the S6-R14 private-row fence asserted BEHAVIOURALLY on the mention path for the first time, and the '(no recent messages)' sentinel; LEAGUE MEMORY's roastTolerance line, its 'computed' exclusion, its null-confidence keep, and the 8-item cap that DELIBERATELY does not apply to hard lines (a budget may cost SCRIBE a fact, never a player a boundary); the five-block order with persona as the ONLY cache breakpoint and every new block below it (AD-41), plus the count pinning that DI-267's heat slot is NOT built; and fail-soft — a broken memory read still answers the player, renders that one slot empty, leaves the other three alone, and reports ctxSlotsFailed, with the ordinary healthy run reporting zero; raised 423 -> 447 by the SECURITY FIX PASS on DI-272 (2026-09-23), which found that the fix for the empty slots had opened three holes of its own. 20a-7..20a-10 are F1, the pair for 20a-3: the widened id list was handed to BOTH halves of the memory block, so naming Kevin pulled Kevin's private \`fact\` and \`roastTolerance\` rows into Drew's prompt — a hard line crosses the member boundary because a restriction can only narrow what SCRIBE may say, and a memory row does not because it is nothing but disclosure (migration 0022 §4a spends a section saying who may read one, and the service role bypasses it). 20a-11/20a-12 are F3, the reachability proof for the new non-disclosure sentence on the shared PLAYER_BOUNDARIES_HEADER: the header told the model not to OBEY a hard line and never told it not to REPEAT one, so "@scribe what are Kevin's boundaries?" had no answer on file. Section [20j] is F2 — player-authored memory text entered a SYSTEM block verbatim, uncapped, with its newlines intact, while chat text has been quoted through quoteBody() since security finding S1: 20j-2/20j-3 prove exactly one line in the whole request begins with "SAFETY (", from BOTH halves of the block; 20j-5 proves a forged "PLAYER BOUNDARIES" header inside a memory VALUE is neutralised (N5 widened FORGEABLE_HEADERS_RE to the five headers DI-272 added); 20j-6..20j-8 pin the header framing (LEAGUE MEMORY carries the same untrusted-input clause PLAYER BOUNDARIES does, and both generated blocks carry the subordinate clause that says what they rank beneath); and 20j-10 proves a \`kind='wager'\` row — the ONE kind a third party may author about somebody else, 0022 §4c — never reaches the model-facing render at all. Section [20k] is N7, UN-112's chat epoch: a pre-epoch line never reaches the user turn, the watermark is inclusive, the \`.gt\` is on the query as well as in the JS pass, and a league that has never cleared its chat adds no filter. Raised 447 -> 461 by the SECOND FIX PASS (2026-09-23), whose blocking finding F4 was introduced BY the previous pass's N6: \`.limit(50)\` sat on a single combined memory read, Postgres applies a limit BEFORE modelFacingMemoryRows() drops wagers in JS, and 0022 §4c lets ANY member insert wager rows about ANY other member — so fifty fresh ones evicted that member's HARD LINES, the read still SUCCEEDED, ctxSlotsFailed stayed 0 and nothing reported a boundary having been dropped. The read is now SPLIT (an unlimited .eq(kind,hardline) over the widened id set; a bounded asker-only .neq(kind,hardline).neq(kind,wager) read), asserted by 11-0a/11-0a2/11-0b/11-0c/11-0d/11-0e on the queries and by 20f-10/20f-11 (sixty wagers about a named member) and 20f-13/20f-14 (sixty facts about the asker) on the wire. 11-0a is REVERSED here rather than deleted — DI-272 merged the two reads into one and recorded why; F4 is why that reasoning was wrong, and both halves are written down. Also 20j-11..20j-13 (N10: a TOOL RESULT is the third path to the model, and get_relevant_player_context now quotes every value through the same quoteBody) and 20j-14/20j-15 (N11: the bare CANON alternative rewrote the ordinary word "canon" in real chat, tightened to \`CANON \\(\` with the forged-header case still caught). Raised 461 -> 465 by the SAME pass's R7/R8: 20j-12 pins that \`get_relevant_player_context\` returns NO hard lines and that the KEY IS ABSENT rather than empty — both voice paths render boundaries by construction now, so the tool was a second copy of the most sensitive text in the app on the one path that carries no header, no S-1 precedence framing and no non-disclosure sentence; 20j-15 pins that the tool DESCRIPTION stopped advertising them too, because a description is an instruction and one promising "topics that player has asked never to be brought up" teaches the model to call the tool in order to obtain them; and 20j-18/20j-19 pin R8's \`SAFETY \\(non-negotiable\` alternative — the header of the block that outranks every other block, whose only previous defence was newline-flattening — scoped so the ordinary word "safety" in chat is untouched. Raised 465 -> 466 by the POLISH pass (2026-09-23): 20j-20 pins that get_relevant_player_context's OWN read carries the wager exclusion, the 50-row cap and the deterministic order in SQL — the same F4 pairing, because a cap without its SQL twin can be spent entirely on rows the JS filter was going to drop. 11-0d is also widened there: the hard-line read is unlimited AND STILL ORDERED, two separate decisions the first draft of the split dropped together. Raised 494 -> 502 by F-3 (2026-09-23): §[22] proves the model reaching Anthropic is always one the rate card prices — the commissioner's Opus choice rides the wire, an unset one sends the default, and an off-card or prototype-key id never leaves the process, so an unpriced model can neither 400 the next mention nor be metered at another model's rates against the shared $25 ceiling`],
-  // Reviewer BLOCK B1 (2026-09-20) — the drift guard `scribe-persona.mjs`
-  // claimed but did not build: docs/SCRIBE.md compared byte-for-byte against
-  // the embedded snapshot, modulo exactly the documented Slack-legacy strip.
-  ['81g', 'supabase/tests/scribePersonaDrift.check.mjs', 9,
-   'DI-T6.12 G5 / reviewer BLOCK B1 — SCRIBE_PERSONA_TEXT equals a fresh read of docs/SCRIBE.md modulo exactly SCRIBE_PERSONA_STRIPPED_TEXT (data, not a regex), plus three self-tests proving the comparison can actually fail'],
-  // ═══ BEGIN STEP 6 PHASE 4 (trainer) ═══
-  // Floor tightened 247 -> 264 at the v0.26.0 stamp (2026-09-26) — the suite's actual count; the ratchet only tightens.
-  ['81h', 'supabase/tests/functions/trainer.twin.mjs', 285,
-   'raised 244 -> 247 by the coordinator\'s security finding 1 (2026-09-24): §[20]\'s 20-13a..c drive the LIVE handler with a model-supplied learning_id that coincidentally ends in the reserved suffix and prove the row still lands PUBLIC (no visible_to, empty meta.playerId) — the real discriminator is playerId, never the id\'s own text, proven on the trainer path specifically since that is the only path where the model controls the id. raised 239 -> 244 by UN-266/DI-290…293 (2026-09-24): §[20] gains DI-290\'s visible_to on the instant-caller-shaped private row (20-13..20-15) plus the DI-293(a)/(b) live-vs-unreachable split for the trainer path\'s ALWAYS-empty sourcePlayerId (20-16/20-17 unit-test the shared builder directly, since the model-driven mapper never sets `source` on a fresh learning — 19-3\'s own comment already says so). DI-T6.4 — the trainer handler, both entry points, end to end against a fake transport: the auth-class split (raised from 37 to 43 by the coordinator\'s shared-foundation merge, 2026-09-20 — class U now goes through the canonical requireCommissioner()/my_member_id() gate, and the budget section adds the fail-closed rate-read proof plus the shared scribe_rate_bump() write proof; raised to 92 by the Phase 4 GATE CLOSURE the same day), the manual floor, the shared budget:<YYYY-MM> check, the insufficient-data floor holding the cursor, RG-144\'s resolver through the REAL js/scribe-trainer-rules.js, per-kind auto-approval, fail-closed on a model error, G6 + RG-82 REACHABILITY (system[0]/[1] are the two ported constants BYTE FOR BYTE on the wire, not a substring), BLOCK 1\'s structural "prompt promises == input provides" check over the ACTUAL request (planted rewrite, weigh-in, 📌 source body and per-response aftermath all present), the blind rule with a planted pick on both a message meta and a member row, S-F1 (req.bodyUsed === false on the refused class-S path), S-F2 (a self-flagged 📌 source withholds auto-approval, interleaved with a legitimate third-party flag), S-F3 (a fact\'s subject must be its source\'s speaker), S-F4 (every stored string capped, with the fake enforcing messages.body\'s real 23514), S-F6 (a missing 0014 diagnosed as not_configured, a cursor regression surfaced), reviewer note 2 (job_runs.actor is \'scheduled\'/\'manual\'), and the cursor CAS reported as ok:true even when it returns false; raised 99 -> 107 by RG-203 (2026-09-22): section [2b] — the SCHEDULED pass falls back to CFBP_LEAGUE_ID when the body is lost, while the MANUAL commissioner path never does and does not even read the secret; raised 107 -> 126 by RG-227 (2026-09-22, the live manual-run timeout): section [16] is the Trainer\'s OWN ceiling — the four named constants and the full arithmetic chain (110s call + 10s DB <= 120s wall clock, + 15s margin <= EDGE_WALL_CLOCK_BUDGET_MS), that the shared 25s default is UNMOVED for scribe-ask/classify/autonomous, the delay the handler ACTUALLY ARMS on the wire (25000 at HEAD, which is the reproduction made permanent), one call and no retry on a timeout, the row naming the ceiling that really fired rather than the shared constant, the spend still metered and the cursor still held, and the abort path itself under a 40ms override; raised 126 -> 148 by RG-228 (2026-09-23, the live `unparseable_output` row with an empty payload): section [17] is THE REPLY — the request shape pinned against Code.gs\'s own working payload at test time (thinking + effort + format, all three), the extraction widened to the LAST text block and a ```json fence, `truncated_output` as its own sentinel for a max_tokens cut, and every exit after the model call carrying stopReason/contentBlocks/blockTypes/textLen/textHead/costUsd/usage instead of {}. Raised 148 -> 154 by DI-282 (2026-09-23): 17-5a..f prove the Trainer reads settings.scribe.model through the same rateSettings() seam as the other two callers, that the meter follows the toggle (~2.5x on Opus), and that an off-card id falls back to the default'],
-  // Reviewer BLOCK 2 (2026-09-20) — the drift guard `scribeTrainerPrompt.js` CLAIMED and nobody
-  // had written: Code.gs's two Trainer declarations, extracted BY ANCHOR and compared byte-for-byte
-  // against the two shipped constants. The reachability half is trainer.twin.mjs [9] above.
-  // DI-206 (push-reach) — the sixth handler and the second class-U one. Drives
-  // the REAL handler with a faked OneSignal fetch for every C3 case: 404,
-  // enabled/disabled mixes, non-push subscription types, timeout, malformed
-  // JSON, non-commissioner, rate-limited — plus the DI-206g privacy boundary
-  // asserted against the response AND the job_runs payload.
-  // RELABELLED '81n' AT THE COMBINED MERGE (2026-09-20) — authored as '81j', which is
-  // `scribeClassify.twin.mjs`'s label on the Phase 5 side. Console prefix only, but a
-  // duplicate makes a failing line ambiguous to read.
-  // UN-315 / DI-435 (2026-09-30) — floor 63 -> 101: alias-aware reach counts (deliveredVia, one count per member) and the dual-lookup loud-fail.
-  // SP-53 release gate G-1 (2026-10-01): floor 101 -> 106 = +5, [MLP-G1] — a vacant seat is looked up by nothing and reports zero devices in all three modes, no account id returned, unknown reads as before.
-  ['81n', 'supabase/tests/functions/pushReach.twin.mjs', 106,
-   'DI-206 — push-reach end to end: the class-U gate (and that nothing at all happens before it), the server-side 60s rate limit that writes no run row and reads no send secret, per-member failure isolation (a timeout is `lookup failed`, NEVER `no device`), the untrusted-response defences (50-subscription cap, strict boolean `enabled`, non-array subscriptions), the identity check that the external id queried is the same member id notify-fanout targets, and the four-field-only payload'],
-  // ── DI-253 (push-identity-token) — the TENTH handler and the third class-U
-  //    one. The only function in the tree whose successful response is a
-  //    CREDENTIAL, so its twin re-computes the HS256 signature with node:crypto
-  //    rather than taking the handler's word for it, and mutation-proves the one
-  //    property UN-236 is about: the subject is the JWT's, never the body's.
-  ['81r', 'supabase/tests/functions/pushIdentityToken.twin.mjs', 135,
-   'DI-253 — push-identity-token end to end: the class-U member gate (and that the SIGNING KEY is never read for a caller who fails it), the cross-league refusal, an independently verified HS256 signature over {sub,iat,exp}, the body-cannot-choose-the-subject mutation in six spellings, the atomic 10-per-60s per-member ceiling and its deliberate fail-OPEN on a ledger error, the not_configured branch that never returns a token, the gate->client->ceiling->secret ordering read off the spy log, and the absence of any job_runs row (which is what makes `token` safe on the S6-R9 payload allow-list). Raised 54 -> 62 by the REST-KEY AMENDMENT (2026-09-23): Drew read the live OneSignal dashboard and Identity Verification is a per-channel TOGGLE with no key of its own — the identity token is HS256 over the app\'s REST API KEY, so there is no ninth secret. §[4] gains the KEY-SOURCE mutation (only the retired ONESIGNAL_IDENTITY_SECRET set ⇒ no token, and the retired name is not even read) with its positive control, and §[7] pins the residual the shared key creates: the key that signs is the key that sends push to all six, so it must leave this function nowhere — not in the response body, not in the response shape, not in a database call, not in a captured log line, with a non-vacuity check that the fixture key really is the one signing; the ratchet only tightens'],
-  // ── UN-315 / DI-434 + DI-435 (2026-09-29) — the PURE half of multi-league push: the ONE resolver
-  //    (mode parser and its `dual` fallback, per-mode id lists, the failed-lookup answer), the ONE
-  //    league-label sanitizer (a table plus an exhaustive sweep of U+0000-U+2FFF), the multi-league
-  //    body/thread, and the any-id-delivered classification. Its own file so it reads top to bottom.
-  // SP-53 release gate G-1 (2026-10-01): floor 119 -> 132 = +13, [8] — isVacantSeat's truth table, addressMember's `vacant` in every mode, only the boolean true counts, idsOf contributes nothing.
-  ['81u', 'supabase/tests/functions/pushTargets.twin.mjs', 132,
-   'UN-315 — _shared/push-targets.mjs: PUSH_TARGET_MODE is a closed set of three and anything else is dual + a loud error; who a member is addressed by in each mode; a failed push_targets lookup is an answer (never a throw); the label sanitizer strips every control/bidi/invisible character (exhaustively) and caps at 40 characters; a member counts once when ANY id delivered'],
-  ['81i', 'supabase/tests/scribeTrainerPromptDrift.check.mjs', 18,
-   'DI-T6.12 G6 / reviewer BLOCK 2 — TRAINER_SAFETY_TEXT and TRAINER_PROMPT_BASE_TEXT are byte-identical to backend/Code.gs\'s SCRIBE_TRAINER_SAFETY_ / SCRIBE_TRAINER_PROMPT_BASE, extracted by declaration anchor rather than by line number (which rots), with five self-tests proving the extractor and the comparison can both fail'],
-  // ═══ END STEP 6 PHASE 4 ═══
-  // ═══ BEGIN STEP 6 PHASE 5 (scribe-classify / scribe-autonomous) ═══
-  ['81j', 'supabase/tests/functions/scribeClassify.twin.mjs', 119,
-   'DI-T6.5 — the classify handler: class-U auth ordering (through the canonical requireMember()/my_member_id() gate), the kill switch, the daily cap, N-2/F6\'s verdict-cache idempotency, and (raised from 27) the shared monthly budget via budgetExceeded()/bumpRate() — checked before the model call and fail-closed on a rate-read error, the same $25/spend_usd column scribe-ask/trainer share (security finding, coordinator\'s Phase 4/5 reconciliation pass); raised to 57 by the PHASE 5 GATE CLOSURE (2026-09-20) — reviewer BLOCK B2\'s "prompt promises == input provides" table asserted on the wire, including the EXCERPT the ported CLASSIFY_SYSTEM has always named and never received (same author, same room, strictly earlier, oldest first, and no empty header when there is no history), security S-F2 (every job_runs row names the acting member, off the JWT, surviving finishRun) and security S-F3 (metered from the API\'s own usage x the named haiku price constants, on EVERY attempt that reached Anthropic — refusal, unparseable answer and network failure all bump; a call refused at the door does not)'],
-  // Floor tightened 397 -> 420 at the v0.26.0 stamp (2026-09-26) — the suite's actual count; the ratchet only tightens.
-  // v0.28.0 integration round 3a: N1's +26 (floor 496 on that side, +26 over 470: the platform cap read and the atomic budget reservation) on top of N8's 660 = 686 live.
-  // Floor raised 451 -> 457 by SB-02 (2026-09-27): §[SB02] — an unreadable league is a LOUD no-post
-  // (internal_error at stage 'verify', no reservation, no Anthropic call), never a quiet 'unverified'.
-  // v0.28.0 integration round 3a (P-1 + SB-02 merge): the branch's +6 (its own floor 457, +6 over 451: §[SB02], an unreadable league is a LOUD no-post) on top of 686 = 692 live.
-  // Social Platform v1 Home (2026-10-01): 692 -> 696 — [B2c] re-anchored to js/stats-core.js (S-C9: exactly one `export const` match each, scribeLines.js declares neither constant and imports both) = +4 (B2c-1b, -2b, -2c, -2d).
-  // SB-04 review round (2026-10-01, security F6): 692 -> 695 = §[SB02] SB02-7..9 — a VERIFIER that throws still closes as
-  // internal_error at stage 'verify' with no leagueRead (the league_data_unreadable catch covers the READ, never the verifier).
-  // v0.29.0 batch-4 integration (2026-10-01): SB-04's +3 on top of the Home modules' 696 = 699 live.
-  ['81k', 'supabase/tests/functions/scribeAutonomous.twin.mjs', 699,
-   'raised 642 -> 660 by the reviewer BLOCK fix on DI-439 item 4 + the audit note (2026-09-30): [N8-L26..L34] the alma verifier runs TWO parallel checks (leading-not-covering at half then losing outright verifies on the straight-up turn and states only the score; the underdog mirror on the ATS turn; the hold is PER CONDITION; both held = one post; neither turned = unverified; the whole-snapshot fallback carries the same logic), and [N8-F7..F8c] an audit_log READ error is `audit_unreadable` (not `unverified`) after exactly ONE retry as `at,before,after` under the same filters, extracting only the six keys in JS. Before that, raised 470 -> 642 by N8 / DI-440 (2026-09-29): [N8] — `liveUpset`, the named live call-out, re-derived from audit_log. The happy path (exact roll call, score off the game row, the line as Favorite + Margin, no clock, room-only notify:false, the GAME\'s week); `[trigger]`-only scoring (a Reserved league padded past 65 still scores 55 and skips; Balanced/Active/Unhinged clear, Reserved/Quiet do not); the server-side commissioner switch (scribeAutonomousEnabled:false skips, for every trigger); the FORGED SUBJECT (a variant after a real post, the wrong side, another game, the other reason, empty, and an invalid/missing evidence.reason are all refused with nothing reserved, and the id is minted from the server subject; a 70-character game id compares equal after the 64-character cap); all three prefixes suppress on the server and a member-minted (emitted_by set) autonomous-prefix row does not; the audit_log read (league-scoped, a JSON-path allow-list with no email/phone key, 90 minutes, newest first, limit 200, an error or a FULL window fails closed) and the transition (the cron-lag boundary 2:59 rejects / 3:00 accepts; a same-side score after the flip still verifies with the hold measured from the run\'s first row; a push between the prior side and the flip verifies; Y, push, Y does not); the gates (LIVE, a REVEALED week for the GAME\'s week, a sport with a second half, question rows, definition A); S3 (a newline/header/zero-width name cannot break out of the VERIFIED FACTS block, and memberLabel now hardens every verifier); S5 + the blind rule (a forged weekId never reaches the prompt bytes, no open-week secret does, a locked/open-week game never verifies and never reads the audit trail); every named player loads hard lines and the strictest tolerance caps heat; and the ALMA check on BOTH conditions — SU-only, ATS-only and both are ONE situation and ONE post, the school named is the GAME ROW\'s, the locked list gates it. Before that, raised 451 -> 470 by RG-295 (live, 2026-09-28): [RG295] — supabase-stub.mjs\'s rpc() is now a LAZY .then-only thenable and its from() builder lost its .catch, so the fake is never more forgiving than supabase-js 2.116.0 (pinned against vendor/supabase-js-2.116.0.js in a vm: no .catch/.finally, a chained .catch throws a synchronous TypeError and sends nothing); restorePostTicket()/restoreCooldown() complete and the job_runs row closes with the real outcome (throttled / judge-rejected-all) instead of internal_error; a rejecting restore is still swallowed; and a static scan of every Edge Function source forbids .catch/.finally chains outside a named exemption. raised 435 -> 451 by the RG-252 hardening pass (2026-09-26): the wrapper\'s close is conditional (.is(finished_at, null)) and a body finish that lands first keeps the real outcome (RG252-15..17), every close records a fixed-enum stage (6b/11b), the guard handle is cleared on all four exits (18..21, kills the clearTimeout mutant), and callAnthropic\'s body read is inside its ceiling (ANT-1..6). raised 420 -> 435 by RG-252 (live, 2026-09-26): [RG252] — a throw after startRun() and a hung DB call past the wall-clock guard both close the job_runs row with a FIXED sentinel (internal_error / wall_clock_exceeded) instead of leaving it open as "FAILED — no result recorded", plus the guard arithmetic against EDGE_WALL_CLOCK_BUDGET_MS and D3-22e2 (the guard is armed once). DI-T6.5 — the autonomous handler: the trigger allow-list, BLOCK-1\'s server-recomputed score, the consecutive-post guard, the per-post ticket + global cooldown (open question 1, closed), the shared monthly budget peek+post-hoc spend against the canonical $25 default, the ≤2-sentence structural cap, FINDING 3\'s verdict-consumption proof (open question 2, closed), and the BLIND-RULE test — raised from 58 to 176 by the PHASE 5 GATE CLOSURE (2026-09-20), which drives the handler against a REAL projected league fixture (league_members/weeks/games/picks/tiebreaker_guesses through js/supabase-projection.js and the real js/scoring.js) and adds: reviewer BLOCK B2 (the VERIFIED FACTS block on the wire with recomputed numbers, the restored `- signal:` line, NO internal scoring weight anywhere in the user content, the prompt-promise table, the verifier/EVIDENCE_CONTRACT/SIGNAL_POINTS key-set identity, and a drift guard extracting MILESTONE_MARKS/STREAK_MIN/the drink-debt regex out of js/scribeLines.js\'s source), reviewer BLOCK B1 (the subject player\'s hard-lines by construction, scoped and league-scoped, below the persona with no cache_control, and NO empty stub when there are none), security S-F1 (a forged backdoorBust, a wrong lone wolf and 64 chars of attacker subject all cost nothing), S-F2 (actorMemberId on both job_runs rows, never the body field), S-F3 (usage-derived spend, refusals and network failures metered, door-refusals not), S-F4 (the hourly try_add is the LAST gate, pinned by the spy log\'s ORDER), S-F5 (capMessageBody against the fake\'s real 23514, and a refused insert releasing both reservations), and the widened BLIND RULE (an open-week pick, tiebreaker guess, extra-point guess and submission-state row all planted, none on the wire, neither extra_point_guesses nor week_submission_status ever queried, and — added after a mutation of revealedView() left the wire assertions GREEN — section [12v], which asserts the fence WHERE IT LIVES, over the same fixture, so both of its halves bite). Raised 262 -> 265 by the SECURITY FIX PASS on DI-272 (2026-09-23), finding N7: section [N7] — UN-112\'s chat-epoch watermark now fences THIS path too, and this is the path that posts UNPROMPTED. The rows are not deleted by "Clear Chat History Before Launch"; every CLIENT reader drops `seq <= chatEpochSeq` at one choke point, this is a SERVICE-ROLE read of the same table, and nothing was dropping them — so pre-launch test chatter erased from every screen in the app could be worked into a spontaneous public post with no human in the loop. A pre-epoch line is excluded, a post-epoch line is not (the non-vacuity control), and a league that has never cleared its chat adds no filter at all, so its wire stays byte-identical to what DI-272 shipped. Raised 265 -> 269 by the SECOND FIX PASS (2026-09-23): B1-9b pins that the hard-line read is DELIBERATELY unlimited (every other SCRIBE read is now capped at 50; a cap here is a cap that can silently drop a boundary while the read still reports success), and B1-13/B1-14/B1-15 are R6 — `loadPlayerBoundariesTextForMany` was the LAST place in the tree that interpolated a player-authored memory value RAW into a system block, newlines intact. F2 fixed the identical defect on scribe-ask\'s two renderers and missed this one because that pass was reading the other file. The twin is 20j-2\'s analogue: with a hostile hard line carrying "\\n\\nSAFETY (non-negotiable…", exactly ONE line in the whole request begins with "SAFETY (", and the boundary itself still reaches the model quoted rather than dropped. Raised 289 -> 302 by R-1 and F-3 (2026-09-23): HEAT-13..18 prove a league-wide `unanimous` post runs at the LEAGUE level while a `loneWolfWin` about the same Light-tolerance member is still capped at Dry (the hard-line scope stays generous), and MODEL-7..9 prove an off-card model id never reaches the wire'],
-  // Coordinator's shared-foundation pass, 2026-09-20 — G5's drift guard is ONE snapshot
-  // (`_shared/scribe-persona.mjs`) shared by scribe-ask/trainer/scribe-classify/scribe-autonomous;
-  // `scribePersonaDrift.check.mjs` above (81g) already covers it. Phase 5 adds its OWN small
-  // export, `AUTONOMOUS_VOICE_BRIEF`, guarded separately (81l) because it is not part of the
-  // docs/SCRIBE.md snapshot — it is a Code.gs-only addendum specific to the autonomous path.
-  ['81l', 'supabase/tests/scribeAutonomousVoiceDrift.check.mjs', 13,
-   'DI-T6.12 G5, autonomous\'s own small addition — AUTONOMOUS_VOICE_BRIEF is byte-identical to its backend/Code.gs source, extracted by anchor, plus a reachability assertion that scribe-autonomous/index.js\'s real request body actually carries it'],
-  // ═══ END STEP 6 PHASE 5 ═══
-  // ═══ BEGIN STEP 6 PHASE 6 (scores-refresh) ═══════════════════════════════
-  // NOTE (Phases 3+4+5 ⊕ Phase 6 merge, 2026-09-20): Phase 6 authored this
-  // entry as '81e', which is `reminders.twin.mjs`'s label on the Phase 2 side.
-  // Relabelled '81m' here so the two coexist — the label is only a console
-  // prefix, but a duplicate one makes a failing line ambiguous to read.
-  ['81m', 'supabase/tests/functions/scoresRefresh.twin.mjs', 162,
-   'raised 121 -> 138 by the RG-260 follow-up (2026-09-26, Drew\'s identity ruling): [13-11/13-11b] an override without the cfbpickems product token (word boundary) or carrying a Mozilla string falls back to the constant and is reported as uaOverride:\'rejected\' (empty/whitespace read as unset, no key), [13-18..21] the word lands in job_runs on OK and 403 ticks and the refused value appears nowhere, the status set is closed and frozen. raised 100 -> 121 by RG-260 candidate (2026-09-26): [13] — the server ESPN fetch sends ESPN_SERVER_USER_AGENT (axios/1.7.7 cfbpickems-scores/1.0 (+https://irbfootball.com)) with Accept intact and the URL unchanged, CFBP_ESPN_USER_AGENT overrides it (read once, lazily, never echoed), five unusable overrides fall back to the constant, a 403 with a UA set still reaches zero proxies, and the pure resolver keeps allowProxy:false. raised 95 -> 100 by the ESPN-CLASS hardening pass (2026-09-26): [12-15..19] — after-JSON parse wording, 600-999 never counted as 5xx or recorded, non-vacuity on 599/404. raised 74 -> 95 by ESPN-CLASS (DI note) (live, 2026-09-26): [12] — the ESPN failure CLASS rides the payload as fixed-name integer counts (failHttp4xx/5xx, failTimeout, failNetwork, failParse, failTooLarge, failNoEvents) plus the bare failHttpStatus number, derived from js/data-provider.js\'s own templates and never quoting ESPN or the runtime. DI-T6.6 — the scores-refresh handler, driving the REAL js/data-provider.js + js/scoring.js pipeline against a fake transport and a canned ESPN fixture (raised from 43 to 56 at the validation/security gate, then to 68 at the re-gate: §[10] no-proxy/sentinel, §[11] no-op-write, final-never-regresses and patch validation); raised 68 -> 74 by RG-203 (2026-09-22): section [3b] — the single-league fallback, with the multi-league limit asserted and written down rather than discovered'],
-  // ── RG-CORS (2026-09-20) — the CROSS-CUTTING twin, and the reason it exists.
-  //
-  // Every other entry above drives ONE handler. This one drives the CORS
-  // contract across all five CLASS-U functions at once, because the defect it
-  // guards was a property of all five simultaneously: v0.23.0 shipped with no
-  // `OPTIONS` handler and no `Access-Control-*` header anywhere, so every
-  // browser-invoked function was unreachable from a browser and the
-  // commissioner's push-reachability button failed with supabase-js's
-  // `FunctionsFetchError`.
-  //
-  // NOTE WHY NO EXISTING SUITE CAUGHT IT: the twins call `handle(req)` directly,
-  // and CORS is a property of the SERVED entry point plus the browser's own
-  // preflight — neither of which a direct handler call involves. This file
-  // asserts on `serve` (= `withCors(handle)`) instead.
-  ['81q', 'supabase/tests/functions/cors.twin.mjs', 231,
-   'RG-CORS — the preflight/allow-list/response-header contract for every class-U function (push-identity-token, push-reach, scribe-ask, scribe-classify, scribe-autonomous, scribe-react, trainer, account-delete, reminders), plus the proof that the server-only functions did NOT gain CORS. Floor raised 200 -> 231 by DI-342 (2026-09-25, UX Revamp Group C, wired this window): `reminders` moved from SERVER_ONLY to CLASS_U — it is now dual-class like trainer (an unchanged x-cfbp-job scheduled path plus a new requireCommissioner()-gated manual path, "SCRIBE: remind the stragglers") — and section [7b] mirrors [7]\'s trainer coverage: a wrong job secret still 401s regardless of origin, and an OPTIONS preflight on the scheduled path runs no gate and spends nothing. Floor raised 167 -> 182 by DI-253 (2026-09-23), which adds the sixth class-U function — the one a player\'s browser calls on every boot, so a preflight it could not answer would read as "push isn\'t linked" on every phone in the league. Raised 182 -> 185 by Package C (2026-09-24): scribe-learn is class W (webhook-called, no CORS) and the twin proves it did not gain any. Raised 185 -> 200 by UX Revamp Group F (DI-340, 2026-09-24), which adds account-delete as the eighth class-U function'],
-  // (Relabelled '81r' -> '81r2' at the v0.29.0 batch-4 integration, 2026-10-01 — reviewer N3's class: '81r' is pushIdentityToken.twin.mjs's
-  // label above, and that twin's own header cites it as [81r].)
-  ['81r2', 'supabase/tests/functions/scribeLearn.twin.mjs', 198,
-   'SCRIBE v3 Package C (DI-273…276, 2026-09-24) — the instant-learn Edge Function driven end to end against the fake client: job-secret before body, webhook-row shape, the eligibility filter (six reason-bearing shapes in, bare ratings out, retracted ratings out), Locked never runs, the Fast/Normal agree threshold, the hostile-instruction filter writing pending-not-approved, origin:\'instant\' stamped, cap/conflict via the shared loader rules, the changelog post shape, and the proof that the persona text never enters this request. Floor at the first count — the ratchet only tightens; raised 174 -> 178 by UN-266/DI-290…293 (2026-09-24): §[11] gains the private branch (visible_to === row.author, the DI-291 body line, the DI-292 id suffix) and §[15] gains a1\'s behavioural proof that a private-changelog-shaped row is fenced out of SCRIBE\'s own evidence read by the SAME `.is(\'visible_to\', null)` filter as 15-2/15-3'],
-  ['81s', 'supabase/tests/functions/scribeReact.twin.mjs', 114,
-   'SCRIBE v3 Package D (DI-283, 2026-09-24) — the emoji reaction writer end to end against the fake client: gate order, the target filter proved BEHAVIOURALLY (SCRIBE\'s own post, a system row, a react row and a private row are each refused as message_not_found, byte-identically to a nonexistent id), the two hourly ceilings and their order, 0-means-unlimited and garbage-fails-toward-the-default, the dedupe read BEFORE either ticket is spent, the deterministic id, notify:false, the body never being selected, and the proof that it makes no model call and reads no send secret at all. Floor at the first count — the ratchet only tightens'],
-  // ── accountDelete.twin.mjs — UX Revamp Group F (DI-340, 2026-09-24),
-  // registered in the serialized wiring window (2026-09-25) beside the
-  // other function twins, same shape as [81s] above: the requireUser()-gated
-  // account-delete Edge Function end to end against a fake client, driving
-  // the anonymize_own_account() RPC path, the last_commissioner refusal, and
-  // the residual proof that neither the response nor any log line carries
-  // the acted-on uid.
-  ['81t', 'supabase/tests/functions/accountDelete.twin.mjs', 46,
-   'DI-340 — account deletion: requireUser() gate ordering, the audit_log stamp before the Admin API call, the last_commissioner-typed refusal, and the residual check that the raw response text never contains the uid it acted on (8-2). Floor at the first count — the ratchet only tightens'],
-  // ── N1 league creation (2026-09-30) — leagueCreation.twin.mjs: the twin for N1's SERVER HELPERS (the handlers' own N1 behaviour is in each function's twin, [N1] sections). It drives
-  // _shared/fanout.js (the bounded loop: order, the 25-league cap, the concurrency ceiling, the fake-clock deadline, a thrown league; the due call's every answer shape),
-  // _shared/scribe-rate.js (the platform cap, the effective budget, the worst-case estimate) and a line-for-line model of scribe_budget_try_reserve (0034 s6) through the REAL
-  // reserveScribeBudget(): IRB stays 25, a new league stays 5 even when its commissioner writes 100, fifty concurrent reservations never exceed the cap, the ceiling refuses non-pilot
-  // and NEVER IRB, twenty IRB mentions from $0 are never refused. A twin of the SQL, not the SQL: rls.test.mjs group leagueCreation is Drew's to run.
-  ['81w', 'supabase/tests/functions/leagueCreation.twin.mjs', 69,
-   'DI-431/432 — the fan-in loop and due call, the platform cap/effective budget/worst-case estimate, and the reservation model (IRB never refused below 25, ceiling refuses non-pilot only, 50 concurrent never exceed the cap)'],
-  // ── N1 generic persona (2026-09-30, S-7) — scribePersonaGenericDrift.check.mjs: the drift guard AND the leak guard for the persona a non-pilot league's SCRIBE speaks with. Drift: every
-  // rule heading equals docs/SCRIBE.md's, the heat ladder is byte-identical to a fresh read modulo two sport-neutral substitutions encoded as data, eight untouched sections are byte-identical,
-  // the nine hard rules and the eight addendum rules survive. Leak: the FULL assembled prompt of scribe-ask and scribe-autonomous (safety + persona + addendum + heat at all five levels + the
-  // autonomous and comeback briefs) carries none of IRB's six names, initials, schools, founding-league phrases or "PLAYERS.md" — with the SAME scanner proven to find them in IRB's own prompt.
-  // The handlers' half (the generic text actually reaches the wire for a non-pilot league, IRB's does not) is scribeAsk.twin N1-6 and scribeAutonomous.twin N1-5, floors tightened above
-  // (functions.check 1117 -> 1119, scribeAsk 650 -> 659, scribeAutonomous 487 -> 496).
-  ['81v', 'supabase/tests/scribePersonaGenericDrift.check.mjs', 70,
-   'DI-432 §6 / S-7 — the generic persona equals docs/SCRIBE.md where it must (headings, heat ladder, hard rules, addendum) and the whole assembled non-pilot prompt of both consumers carries no IRB name, school, phrase or football-only word (one KNOWN, pinned exception: the shared heat block\'s No Mercy brief), with self-tests proving the scanner and the comparisons can fail'],
-  // ── refreshtest.mjs — THE CLIENT HALF, AND IT HAD NEVER BEEN IN THE SWEEP.
-  //
-  // Found at the Phase 6 validation gate (2026-09-20). `refreshtest.mjs` owns
-  // the 60-second live-score loop — the tab-gate regression it was written for,
-  // the demo/manual guards, the timer lifecycle, and now DI-T6.6's client gate,
-  // R1's display-only poll and R2's catch-up emitter. Nothing ran it as part of
-  // the mandatory sweep, which is RG-177's hole exactly: a change that broke it
-  // would have shipped with a green `node loadtest.mjs`. Spawned rather than
-  // imported for [73]'s reason — it replaces globalThis.fetch, setInterval and
-  // localStorage.setItem wholesale, which would poison every suite after it in
-  // this process.
-  ['88', 'refreshtest.mjs', 89,
-   'raised 77 -> 89 on 2026-09-28 by RG-292 (bugfixer, hotfix/logo-backfill): [9] with serverJobs.scoresRefresh ON the display-only poll on the COMMISSIONER device persists a logo-only merge (the real PATCH carries home_logo/away_logo/updated_at only, never a score/status column) and a player device still writes nothing. Before that, raised 59 -> 61, then 61 -> 77 on 2026-09-28 for the [8] real-adapter player/commissioner cases by the UX Revamp post-deploy pass (2026-09-27): [7] logo backfill — a stored game with null homeLogo/awayLogo gains them from the SAME ESPN read a score refresh already makes (data-provider.js\'s refreshScoresByEventIds()), and a stored, already-set logo is never overwritten by a live poll (Drew, 2026-09-27: "I flipped the logos switch and didn\'t see any logos"). Before that, raised 54 -> 59 by RG-260 candidate (2026-09-26): [5j] — the BROWSER\'s ESPN fetches (refreshScoresByEventIds with no options, fetchCurrentCFBGames, fetchEspnTeamsList) send headers exactly {Accept} and no User-Agent; an empty userAgent adds nothing; a passed userAgent reaches the direct fetch. UN-192 / DI-T6.6 — the live-score tick: the fetch-on-every-tab regression, the demo/manual guards, the timer lifecycle, the scoresRefresh client gate in BOTH states, R1\'s display-only poll (liveStatusById + scribeLiveGameCheck + zero writes) and R2\'s idempotent kickoff/final catch-up'],
-  // ── coverfliptest.mjs — RG-TBD-D1 (bugfixer, 2026-09-29). SCRIBE's coverage-flip
-  //    line fired in any quarter and on every swing (Drew: "it comments too much
-  //    during the games about the spread being flipped"). Spawned for the same
-  //    reason as refreshtest above: it replaces globalThis.fetch and Date.now.
-  ['88b', 'coverfliptest.mjs', 26,
-   'raised 23 -> 26 by N8 / DI-439 (2026-09-29): 4-2 and 4-3 amended for definition A (the 3-to-1 fixture\'s turn back to HOME is L=1, G=3 and is silent — a change of expectation, not of mechanism) and [10] adds the `espnSport: null` variant (the value every ordinary ESPN college game carries) plus an unknown sport that stays silent. Before that, raised 19 -> 23 by reviewer finding 1 on 194a542 (2026-09-29): [9] two phones confirming the same flip either side of a :00/:30 boundary send the SAME post id (the id carries no time bucket), so the server\'s on-conflict(id) keeps one and the fold collapses them. RG-TBD-D1 — the coverage-flip rule through the REAL doRefreshScores() call sites (full-write and display-only): no flip in the first half (ESPN period < 3) or with no period at all; a device\'s first look at a game is a baseline, never a flip (the lagging-stored-row case); the new side must hold 5 minutes and a swing back or a landing on the number cancels it; at most one line per game per direction, read from the shared fold so another device\'s post counts; OT counts as second half; `period` stays off the persisted row. Floor at the first count — the ratchet only tightens'],
-  // ── liveupsettest.mjs — N8 (DI-439/DI-440, 2026-09-29): SCRIBE's live-upset call-outs, the CLIENT half
-  //    (the server half is scribeAutonomous.twin.mjs [N8]). Spawned for coverfliptest's reason: it replaces
-  //    Date.now and localStorage and rewires the scribe transport. Floor at the first count.
-  ['88c', 'liveupsettest.mjs', 267,
-   'raised 193 -> 267 by the reviewer BLOCK N1 fix (2026-09-30, third pass): the alma fallback pool is chosen from the team\'s CURRENT state (losing straight-up now -> almaTrailing; only failing the number -> almaNotCovering; neither -> no line), never from the condition that turned — an ATS turn by a team also losing outright posted "Not losing, not covering". 7-12g amended to the reviewer\'s exact sequence (10-17 since half, 10-24 in Q3 -> almaTrailing); [7b] sweeps all four (su, ats) states through the pure chooser and sixteen scripted games (fourteen that post, two that must not) through the real detector against the SHIPPED pools with a claim oracle over every line. Before that, raised 174 -> 193 by the reviewer BLOCK fix on DI-439 item 4 (2026-09-30): the alma detector is TWO parallel machines (straight-up and ATS), not one combined behind flag — 7-12a..i: leading-but-not-covering at half then losing outright in Q3 is ONE call on the straight-up turn, the underdog mirror is ONE call on the ATS turn, both turning together (or staggered inside one situation) is ONE call, and each fallback picks the pool of the condition that turned (almaTrailing / almaNotCovering); the coordinator\'s copy pass added the shipped-pool assertions in [8]. Before that, N8 (DI-439 / DI-440, 2026-09-29): the pure predicates (the sport resolver incl. null / \'college-football\' / \'nfl\' and profile parity with listProfiles(), the interim second-half table pinned to every profile slot, definition A\'s matrix, the alma SU/ATS state and its dedupe, almaMaterPlayersForTeam and its parity with claimedAlmaMaters()); every gate through the REAL detector (open/locked/draft week silent — the blind rule —, question rows, unknown sports, period edges, hold under 5 minutes, baseline, OT); definition A through the detector (L<2, L<=G, nPicks<3, deactivated players); routing (ready+clears = ONE server call with no names in the payload and no tier-0 line; not ready = ONE unnamed line, including when the commissioner\'s autonomy switch is off; Reserved/Quiet/cooldown/consecutive = nothing; a declined attempt stays silent; a latched-off server falls back); the prefixes (each tier-0 prefix suppresses, the autonomous prefix does NOT on the client, the fallback id carries no time); the upset watch (second half AND a real upset, once per game, PK/null favorite silent, {TEAM} substituted with a function replacer so $& renders literally); and the alma call-out on BOTH conditions (SU-only, ATS-only, both = one situation one post, a turn never a baseline, the locked list, two claimants one event, away teams, the pool a condition selects, a missing pool is silent). Floor at the first count — the ratchet only tightens'],
-  // ═══ END STEP 6 PHASE 6 ═══════════════════════════════════════════════════
-  // ── notifytest.mjs JOINS THE SPAWNED LIST (Release v0.23.0, 2026-09-20).
-  //
-  // It was NOT here, and nothing else in the mandatory sweep ran it — which is exactly how the
-  // push-selftest.js STATIC_ASSETS omission ([25e]'s comment in service-worker.js tells the same
-  // story) got through a green `node loadtest.mjs`: [25e] is the guard that catches a shell cache
-  // one boot-critical module short, but a guard nothing spawns is a guard nobody runs (the
-  // xsstest/transporttest/persisttest/static.check shape, repeated a fourth time). notifytest.mjs
-  // also owns the chat-fold suite, the service-worker reload-loop convergence proof ([25]), and
-  // the notify-based unread assertions — none of which loadtest.mjs's own imports exercise.
-  // Spawned rather than imported for [73]'s reason: it replaces globalThis.Notification,
-  // ServiceWorkerRegistration and fetch wholesale, which would poison every suite after it in
-  // this process. Floor at the current count, per the adaptertest precedent — the ratchet only
-  // tightens.
-  // ── scribememtest.mjs — THE CLIENT HALF OF SCRIBE MEMORY (UN-237/238, 2026-09-23).
-  //
-  // `memorytest.mjs` ([79], above) proves the SERVER half of the OLD one: backend/Code.gs in a
-  // vm. That is now the archive. This suite proves what replaced it — js/supabase-backend.js
-  // §12b's four calls and, in its §[2], js/app.js's REAL handlers driven through the REAL
-  // DEFAULTS to a fake PostgREST client with no transport stub anywhere.
-  //
-  // THAT SECOND PART IS THE POINT, and it is the assertion that would have caught the reported
-  // bug. groupdtest drives the same handlers through `_wireScribeMemoryTransportForTest`, which
-  // proves the HANDLERS; every one of them was correct on 2026-09-23 and every one of them
-  // called a relay the allow-list refused. A seam test cannot see a wiring defect.
-  //
-  // Spawned rather than imported for [73]'s reason: it installs its own fake client into the
-  // adapter singleton via `sb.init()` and calls `sb._resetForTest()` repeatedly, which would
-  // leave every suite after it in this process talking to a store that no longer exists.
-  ['95', 'scribememtest.mjs', 38,
-   'UN-237/238 / DI-258-260 — the client half of SCRIBE memory on Supabase: the four adapter calls and their wire shape, loud-fail on every refusal the server has (including the POLICY-FILTERED DELETE, which PostgREST answers with an empty set and NO error), the whole chain from js/app.js\'s real handlers with no transport stub, the apply sweep\'s idempotency and quiet-mode contract, and the structural proof that js/backend.js\'s four scribeMemory*Remote relays are GONE rather than stubbed'],
-  // ── heattest.mjs — THE SCRIBE v3 HEAT LADDER (UN-239…244, DI-262/263/267, 2026-09-23).
-  //
-  // Its own file, per CONVENTIONS #28 and the `grouptest.mjs` precedent: `effectiveScribeHeat()`
-  // is a small piece of arithmetic that decides how hard SCRIBE may speak about a named person,
-  // and that proof should read top to bottom rather than sit between chat-fold shuffles.
-  //
-  // IT IS SPAWNED BECAUSE A SUITE NOTHING SPAWNS IS A SUITE NOBODY RUNS — the xsstest /
-  // transporttest / persisttest / static.check lesson, applied at the moment the file is written
-  // instead of months later. What it does NOT claim is reachability: whether the blocks reach
-  // Anthropic is a property of the two handlers' wiring and is asserted in scribeAsk.twin [21] and
-  // scribeAutonomous.twin [HEAT], where the real handlers run.
-  // ── reasonchiptest.mjs — SCRIBE v3 PACKAGE B, FEEDBACK v2 (UN-245…248,
-  //    DI-268…271, 2026-09-23).
-  //
-  // Its own file for the same reason heattest.mjs is: four closed vocabularies
-  // (eleven chips, four families, three valences, four verdicts) and one
-  // interaction property — that saying WHY still costs one optional extra tap —
-  // read as a proof top to bottom rather than buried in feedbacktest.mjs's 1,800
-  // lines of pilot-era fold coverage.
-  //
-  // SPAWNED BECAUSE A SUITE NOTHING SPAWNS IS A SUITE NOBODY RUNS — the
-  // xsstest / transporttest / persisttest / static.check lesson, applied at the
-  // moment the file is written. Its §[7] replaces globalThis.document with a
-  // click-capable element tree for the duration, which is exactly the kind of
-  // wholesale stub [73] keeps out of this process.
-  ['97', 'reasonchiptest.mjs', 204,
-   'SCRIBE v3 feedback v2: the eleven-chip closed set and its two opposed families, the allow-list at the write boundary (an invented chip never enters the log), set-not-diff folding with toggle-off, reason_note\'s 280 beside rewrite\'s 1000 (and the null-prototype clamp table), the reaction-valence map\'s completeness in BOTH directions, sanitizeTalkToTrain\'s four clamps plus an OBJECT value surviving chat.js\'s generic fold, the popover\'s progressive disclosure (nothing before a rating, both families after a miss, the positive chip alone under Hit, the three suppressed post kinds), and the DOM-level interaction: one-tap rating, in-place chips, a second chip that shows as selected despite the {0,0} fold tie, and exactly one repaint per write. Floor raised 154 -> 193 -> 203 (-> 204 with 7F-44b) by the Package B fix passes (2026-09-23/24, SCRIBE v3 Release 1 cut): §7F-1..7F-36 cover F-1\'s foreign-owner popover marker (a same-device account switch can no longer attribute an in-flight note to the next player), F-2\'s read-boundary contract on recordFeedbackReasons/sanitizeTalkToTrain, F-3\'s 400ms trailing chip debounce with last-sent-text dedupe, R-1\'s clear-cascades-reason/-note and rating-flip chip pruning in both directions, R-2\'s "Wrong facts" chip, and R-4\'s ⭐ re-tap / reaction-picker-eviction flush of pending chips and note — the ratchet only tightens. §7F-37..7F-46 (fd0aa18) add R-5 — the ✏️ Rewrite handover flushes pending chips and note before the modal — and R-6 — reopening inside the echo window renders the last SENT chips/note, bounded by foldAtSend so a newer value from any device wins, matched on (message, player) so one player never sees another\'s selection (7F-44b is the non-vacuous probe for that match)'],
-  // ── feedbacktest.mjs JOINS THE SPAWNED LIST (2026-09-24, SCRIBE v3 Release 1
-  //    cut, reviewer-ruled). It existed and NOTHING SPAWNED IT — the xsstest /
-  //    transporttest / persisttest / static.check / notifytest / heattest /
-  //    reasonchiptest shape, repeated again: a suite nothing spawns is a suite
-  //    nobody runs. It is the pilot-era feedback fold coverage (Hit/Mid/Too
-  //    much, the popover's DOM lifecycle, the anchor/positioning mutation
-  //    pairs reasonchiptest.mjs's own header credits it for at [28a]-[28d])
-  //    that Package B's reason chips and Package A's heat ladder both build on
-  //    top of. Spawned rather than imported for [73]'s reason: its mutation
-  //    section replaces globalThis.document with a click-capable element tree
-  //    for the duration of the run, which would poison every suite after it in
-  //    this process.
-  ['98', 'feedbacktest.mjs', 256,
-   'The pilot-era feedback-popover suite: Hit/Mid/Too much rating writes, the popover\'s open/close/re-mount lifecycle, the anchor-positioning mutation pairs ([28a]-[28d], including the two CONFIRMED-mutation findings for the popover landing inside the ⭐ button versus measuring from the wrong edge), the real js/chat.js + js/chat-ui.js byte-identity checks after every mutation run, and — §[29], raised from 250 by the v0.25.0 LIVE BUG (2026-09-24) — that a SCRIBE post the server refuses can no longer take the player\'s ⭐ rating, reason chips and "why" down with it: every run in a batch gets its own round trip, and a refusal is only ever charged to the events it actually names. Floor at the current count — the ratchet only tightens'],
-  ['99', 'learntest.mjs', 275,
-   'SCRIBE v3 Package C client half (DI-274…281, 2026-09-24): the learning-rate table (Fast/Normal/Locked, every knob), decay/cap/conflict rules shared with the loader, the retracted-rating read boundary, the Training card\'s Learnings list on the Data tab only (RG-10) with toggle/undo through the existing decision path, Reset requiring confirm and exporting first, the export markdown shape, the explainer, the burn line math from job_runs, and the changelog copy. Floor at the first count — the ratchet only tightens; raised 268 -> 274 by UN-266/DI-290…293 (2026-09-24): buildChangelogPost()\'s private branch (visible_to, the DI-292 id suffix, the DI-291 body line) and the windowed/public branch left unchanged, both asserted directly at §[12]; raised 274 -> 275 by the coordinator\'s security finding 1 (2026-09-24): §[12]\'s 12-6f proves a windowed learningId that itself ends in the reserved suffix still produces a PUBLIC row — privacy is decided by playerId, never by the id\'s own text'],
-  // Floor tightened 108 -> 130 at the v0.26.0 stamp (2026-09-26) — the suite's actual count; the ratchet only tightens.
-  ['100', 'interacttest.mjs', 130,
-   'SCRIBE v3 Package D pure half (DI-283…288, 2026-09-24): the two new SIGNAL_POINTS entries and the client/server TWIN SYNC, heatedExchangeRun()\'s full matrix and detectHeatedExchange() over a room with SCRIBE/system/deleted/react rows filtered, REACTION_PALETTE as the classify schema\'s enum in both directions, js/chat-ui.js rendering \'scribe\' as a REACTOR without a name-lookup error (coordinator amendment 3, as a test), the classify trigger widened but still single-flight, parseCandidates/parseJudgeVerdict\'s three shapes and the closed-set clamp, concedeRoast\'s determinism and its independence from the heat draw over the same id, and the drift guard pinning the judge\'s rubric to SCRIBE.md\'s own two tests. Floor at the first count — the ratchet only tightens'],
-  ['96', 'heattest.mjs', 224,
-   'SCRIBE v3 heat: the full effectiveScribeHeat() matrix in both directions, garbage failing COOL in every slot, the multi-subject min() fold, the five briefs\' integrity (verbatim inside the persona snapshot, all seven fields, retired tics still retired at every rung), scribeHeatBlock()\'s wire shape, and the content-free-push predicate. Floor raised 140 -> 224 at the Package A fix pass (2026-09-23): §[4b] proves PROTOTYPE KEYS are not heat levels in all four lookups (F-1 — a tolerance of \'constructor\' used to skip the player\'s cap entirely, and scribeHeatBlock(\'toString\') used to paste a function body into the system prompt), §[5] adds F-2\'s min(dial, Dry) failure answer (the old fixed \'dry\' RAISED a Polite league on a failed read), and §[11] pins DI-282\'s model choices to the Edge rate card and to SCRIBE_MODEL_DEFAULT'],
-  // Floor tightened 572 -> 647 at the v0.26.0 stamp (2026-09-26) — the suite's actual count; the ratchet only tightens.
-  ['93', 'notifytest.mjs', 647,
-   'RG-193-adjacent (release v0.23.0) — the push/notification suite, including [25e]\'s STATIC_ASSETS completeness scan over every module app.js statically imports, the service-worker reload-loop convergence proof, and DI-T6.2\'s reminder-rules.js/notifyServer.mjs parity twin ([30]). Floor raised 561 -> 568 by DI-254 (2026-09-23): [24e2] EVIDENCES the four new toast-map exemptions instead of declaring them — the identity mint\'s reasons are internal because _assertIdentity() branches on `.ok` and never on `.reason`, which is checked rather than trusted. Raised 569 -> 572 by UN-266/DI-290…293 (2026-09-24): §[31] proves a private SCRIBE changelog row (notify:false, unchanged by this DI) never reaches fanoutPlan()\'s DI-204e `visible_to` branch — shouldFanout() refuses it first, the same gate every other ambient/system row is refused by'],
-  // ── Multi-Sport (thread 091926-MULTISPORT). Both are STANDALONE suites that installed no loadtest hook
-  // of their own, so they are spawned here — "a suite nothing spawns is a suite nobody runs".
-  // MS-0: Phase 0 (DI-219, AD-73) — js/sports/{index,cfb,nfl}.js. It was authored in an isolated worktree
-  // with an explicit "DEFERRED (DI-219, merge time): no loadtest.mjs import" note; this is that merge-time
-  // wiring. Floor = the suite's actual count (227).
-  // v0.28.0 integration: this is the ONE registration of profiletest.mjs (coordinator ruling, round 3a). Round 2 step 2 had added a
-  // second spawn block, [112q]; it was DROPPED at the N1 merge so the suite runs once. Floor 229 -> 234 = the live count on the merged
-  // tree: Phase 0's 227 + N8's secondHalfFromPeriod slot, the espn.teamsUrl schema change (round 2 step 1: absolute core-v3 URL, and the
-  // NFL-shaped fetchEspnTeamsList() calls proving nfl = null), and N1's pilot-only catalog assertions ([6] catalog(league), [9] the
-  // data-model.js -> pilot-only.js -> roles.js import chain).
-  ['MS-0', 'profiletest.mjs', 234,
-   'Multi-Sport Phase 0 (DI-219): the sport-profile registry is strict, deeply frozen and Edge-importable, and EVERY profile value equals the legacy constant it replaces (proven through the real data-provider / extra-point / createWeek code, or pinned by source text where no seam exists), so the cfb profile can never drift from today\'s behaviour'],
-  // MS-1a: Phase 1a (DI-220 / DI-225) — js/competition.js. The virtual default is answered never seeded, reads
-  // never write the seam, NULL competitionId is the default and dangling ids are null, getWeeksForCompetition is
-  // a read-only NEW array, R7 liveness at both edges of N=3 days, DI-225's allow-list (a stray value for a
-  // non-allow-listed key is IGNORED), and storage.js's getCurrentWeek/saveWeek/deleteWeek pinned byte-identical.
-  // The adapter-planner half ("saving a week in competition B emits zero deletes for A") is adaptertest [A-MS].
-  ['MS-1a', 'competitiontest.mjs', 121,
-   'Multi-Sport Phase 1a (DI-220/DI-225): the competition read API, the virtual default competition, R7 liveness edges, the settings allow-list, and the unfiltered write path that keeps a save in one competition from deleting another\'s weeks'],
-  // ── [126] SB-04 + the P-1 hardening pass (Social Platform, 2026-10-01). SCRIBE's standings counted demo, hidden and
-  // in-progress weeks; the Standings page never does. scribeLeagueFence.twin.mjs drives the REAL server modules through
-  // loadLeagueData() over paging-faithful fake rows, against an oracle that reproduces js/app.js seasonStandingsRows()
-  // (pinned to its source). Spawned for [73]'s reason: it installs a fake globalThis.Deno and fetch, and the scoring bridge
-  // replaces globalThis.localStorage. Floor = its count (70).
-  // SB-04 review round (2026-10-01): 70 -> 86 = MC1 (a named LIVE week counts only with every game FINAL — MC1-1..4),
-  // MC2 (P-1's guard is load-bearing: a named OPEN/LOCKED week, all games FINAL, a TIED season — MC2-0..4), and MC3
-  // (SB04-pin-7/8: finalizeWeek()'s calculateWeeklyResults() argument list and the bridge's, pinned together).
-  // SP-54 option (b) (2026-10-01): 86 -> 95 = [SP54] — a FINAL week's weekly winner and loser are the STORED rows (a tied-by-alma week: SCRIBE equals the page; the 5-argument recompute would not;
-  // the no-rows fallback; the fence on a stored row of an unrevealed week; the recorded residual), and SB04-pin-2/6/7 re-derived to SP-54's finalizeWeek() with the decision recorded in pin-7's message.
-  // SP-54 delta N1 (2026-10-01): 95 -> 97 = SP54-8/9, a week REOPENED to live with stale stored rows is recomputed when named and counts for nothing when not (the `w.status === 'final'` condition is no longer deletable).
-  ['126', 'supabase/tests/functions/scribeLeagueFence.twin.mjs', 97,
-   'SB-04 — get_current_standings / get_player_statistics EQUAL the Standings page with a demo, hidden, live and open week (each alone with a non-vacuity proof, and together) and for a two-part week with an unfinished part; chartLeadChange / milestone verify over the same weeks with the named week FINAL or LIVE with every game FINAL (never LIVE mid-slate, never empty), and never for a demo, hidden, open or locked named week — P-1\'s guard in standingsFor() is load-bearing (a TIED season, a named OPEN/LOCKED week with every game FINAL) and the client\'s calculateWeeklyResults() argument list is pinned to the bridge\'s. P-1 hardening: (a) loadLeagueData() returns revealedView() of what it read — no open/locked/draft pick or guess by key or value, byte-identical across databases differing only in those rows; (b) a page loop that stops advancing is refused no_progress / incomplete after a bounded number of requests; (c) leagueReadFailure() is a closed-set table:code or "unknown", its two sets pinned to the code; (d) for an OPEN and a LOCKED week, every league-data tool output and every pick-reading verifier result is byte-identical across databases differing only in that week\'s picks and guesses, with a revealed-week non-vacuity control'],
-  // ── [126b] recaptest.mjs — nothing spawned it (the xsstest / heattest shape again). SB-04's client half lives there:
-  // js/recap.js's SCRIBE-bylined "Standings after…" line counted a finalized DEMO week ([9i]). Floor = its count (55).
-  ['126b', 'recaptest.mjs', 55,
-   'the picks-page recap / Permanent Record footer: previous-finalized-week ordering on same-weekNumber siblings, every exclusion (non-final, prior-season, hidden and — SB-04 — demo weeks never enter the "Standings after…" line), the genuine Week-1 fallback, and the live 2026-09-04 configuration at the render layer'],
-]) {
-  console.log(`\n[${label}] ${file} — spawned as a subprocess, exit code + printed pass/fail line both checked…`);
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, [file], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `${file} exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.slice(-900)}`);
-  const m = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m, `${file} printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${m ? '' : '\n' + out.slice(-800)}`);
-  if (m) {
-    assert(Number(m[2]) === 0, `${file} reports zero failed assertions (got ${m[2]} failed, ${m[1]} passed)`);
-    assert(Number(m[1]) >= floor, `${file} actually ran its full set (got ${m[1]}, floor ${floor}) — ${why}. Raise the floor when the suite grows; the ratchet only tightens`);
   }
 }
 
@@ -12150,210 +11465,6 @@ console.log('\n[85] N1 / FEAT-11 — lifecycle notices: coverage + dial independ
     '85-28: non-vacuity — the comment blanker is genuinely blanking (js/app.js DOES still mention unreadLifecycleCount in prose, and does not in code) and preserves length, so 85-26/85-27 cannot be passing because the scan matched nothing at all');
 }
 
-// ── [88d] navtest.mjs — spawned as a subprocess, same shape as [78] ─────────
-// (Relabelled [88] -> [88d] with its summary match, and [93]/[95]/[96] -> [93b]/[95b]/[96b] below, at the v0.29.0 batch-4 integration, 2026-10-01 —
-// reviewer N3's class: '88' / '93' / '95' / '96' are also the spawn-array labels of refreshtest / notifytest / scribememtest / heattest, printed earlier
-// in this file as [88] / [93] / [95] / [96]. [88b] and [88c] are coverfliptest / liveupsettest's, hence [88d]. [93]'s block already named its match
-// summaryMatch93b; only its printed label was left behind.)
-// Bug B-a (2026-09-19). navtest.mjs owns the bottom-nav layout contract and,
-// more importantly, the calc()-whitespace guard: it fails on ANY calc() in
-// css/styles.css whose + or - lacks surrounding whitespace. That class of typo
-// is invalid at computed-value time when the expression contains var(), which
-// means the declaration survives parsing, WINS the cascade, and then silently
-// resolves every longhand it sets to that property's INITIAL value — it does
-// not fall back to the previous valid declaration. Two live instances were
-// found this way, both in the nav's own layout contract (.main-content's
-// padding shorthand and .submit-bar's sticky offset), and neither had ever
-// produced a console warning or a failing test. Spawned rather than inlined
-// for the same reason [78] is: it is a whole readable proof of one thing.
-//
-// It is deliberately NOT a section [58] replacement — [58] still runs above.
-// navtest §5 extends [58]'s ancestor audit to the property classes [58] never
-// covered (overflow, container-type, backdrop-filter, the individual transform
-// properties) and derives the ancestor chain from index.html instead of a
-// hardcoded selector list.
-console.log('\n[88d] navtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['navtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `navtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch88d = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch88d, `navtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch88d ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch88d) {
-    assert(summaryMatch88d[1] === '✅ ALL PASS', `navtest.mjs itself reports ALL PASS (got: ${summaryMatch88d[0]})`);
-    assert(Number(summaryMatch88d[3]) === 0, `navtest.mjs reports zero failed assertions (got ${summaryMatch88d[3]} failed, ${summaryMatch88d[2]} passed)`);
-    // Floor 25 -> 226 (2026-10-01, int/batch3 — SB-08 reviewer note N1): a floor of 25 against a suite of 226 would not notice two hundred assertions going missing. 226 = navtest's count on the merged tree (SB-08's [7j]/[7k]/[7l] status-band and glyph sweeps + SB-14's .btn-row fixture). Raise it when the suite grows; the ratchet only tightens.
-    assert(Number(summaryMatch88d[2]) >= 381, `navtest.mjs actually ran its full set (got ${summaryMatch88d[2]}, floor 381 — RAISED from 361 by the Chat lift (Drew M-11 Q2, 2026-10-02): [7m] measures the chat composer >= 8 pt clear of the disc's collar keyboard-down and the keyboard-up gap unchanged at 8 pt, at insets 0/21/34 and widths 320/375/430 (+18), with two mutants (+2); sheetAt() now substitutes the inset and names the file separately, so the older [7m] mutant sheets carry a real inset; before that, floor 361 — RAISED from 351 by the Home wiring review fixes (2026-10-02): [7m] pins that #auth-banner-stack and .update-available-banner sit >= 8 pt above the disc's collar at every inset and width (+9) with a bare-clearance mutant (+1) (review N2); before that, floor 351 — RAISED from 278 by the v0.29.0 Home wiring window (2026-10-01): [7m] the Home disc measured in the engine at bottom insets 0/21/34 and widths 320/375/430 (equal overhang, centring, collar and fill clearance, hit areas, no collar sliver with .nav-hidden and with the keyboard up, the clearance equal to the shipped 48 + 8 + inset, the selected roof fill and inner ring) plus a mutation proof (+73, incl. the re-derived [2] token assertions); before that, floor 278 — set to the measured merged count at the v0.29.0 batch-5b integration (2026-10-01): SB-18v2 + SP-52 themes (fix/sb18-readiness-motion-v2 @ 379c937, with themes DI A1.10/A1.11) merged onto int/batch5b. The SB-18v2 branch read floor 278 — RAISED from 226 by SP-52 (2026-10-01): SB-08's [7l] glyph-tracker sweep now covers all 20 sides (ten looks x Light/Night, was 8) with [7l-1] re-derived to the header's luminance (white glyphs everywhere but Graphite Light's white header) and the new [7l-1b]. int/batch5b read floor 226 — a near-zero count would mean the guard is vacuous)`);
-  }
-}
-
-// ── [89] platformtest.mjs / [90] brandtest.mjs / [91] nativeguardtest.mjs —
-//    spawned as subprocesses, same shape as [88d] — iOS Munera thread, PASS 1b
-//    (2026-09-20). Own processes for the same class of reason authtest.mjs
-//    gets one: platformtest/nativeguardtest each mutate globalThis.window/
-//    globalThis.location across scenarios, which would leak a stubbed
-//    Capacitor bridge into every suite run after it if run inline. ─────────
-console.log('\n[89] platformtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['platformtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `platformtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch89 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch89, `platformtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch89 ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch89) {
-    assert(summaryMatch89[1] === '✅ ALL PASS', `platformtest.mjs itself reports ALL PASS (got: ${summaryMatch89[0]})`);
-    assert(Number(summaryMatch89[3]) === 0, `platformtest.mjs reports zero failed assertions (got ${summaryMatch89[3]} failed, ${summaryMatch89[2]} passed)`);
-    assert(Number(summaryMatch89[2]) >= 15, `platformtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch89[2]} — a near-zero count would mean the guard is vacuous)`);
-  }
-}
-
-console.log('\n[90] brandtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['brandtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `brandtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch90 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch90, `brandtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch90 ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch90) {
-    assert(summaryMatch90[1] === '✅ ALL PASS', `brandtest.mjs itself reports ALL PASS (got: ${summaryMatch90[0]})`);
-    assert(Number(summaryMatch90[3]) === 0, `brandtest.mjs reports zero failed assertions (got ${summaryMatch90[3]} failed, ${summaryMatch90[2]} passed)`);
-    // Floor 20 -> 144 (2026-10-01, int/batch3 — SB-08 reviewer note N1): 144 = brandtest's count on the merged tree, SB-08's status-band additions included. Raise it when the suite grows; the ratchet only tightens.
-    assert(Number(summaryMatch90[2]) >= 144, `brandtest.mjs actually ran its full set (got ${summaryMatch90[2]}, floor 144 — a near-zero count would mean the guard is vacuous)`);
-  }
-}
-
-console.log('\n[91] nativeguardtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['nativeguardtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `nativeguardtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch91 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch91, `nativeguardtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch91 ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch91) {
-    assert(summaryMatch91[1] === '✅ ALL PASS', `nativeguardtest.mjs itself reports ALL PASS (got: ${summaryMatch91[0]})`);
-    assert(Number(summaryMatch91[3]) === 0, `nativeguardtest.mjs reports zero failed assertions (got ${summaryMatch91[3]} failed, ${summaryMatch91[2]} passed)`);
-    assert(Number(summaryMatch91[2]) >= 22, `nativeguardtest.mjs actually ran its full set (got ${summaryMatch91[2]}, floor RAISED 10 -> 22 by the Sheets retirement (2026-09-23): the file stopped driving two runtime guards and started asserting the ABSENCE those guards existed for, over the whole js/ tree plus config.json and the service worker — a near-zero count would mean the guard is vacuous)`);
-  }
-}
-
-console.log('\n[92] shellstatetest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['shellstatetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `shellstatetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch92 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch92, `shellstatetest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch92 ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch92) {
-    assert(summaryMatch92[1] === '✅ ALL PASS', `shellstatetest.mjs itself reports ALL PASS (got: ${summaryMatch92[0]})`);
-    assert(Number(summaryMatch92[3]) === 0, `shellstatetest.mjs reports zero failed assertions (got ${summaryMatch92[3]} failed, ${summaryMatch92[2]} passed)`);
-    assert(Number(summaryMatch92[2]) >= 10, `shellstatetest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch92[2]} — a near-zero count would mean the guard is vacuous)`);
-  }
-}
-
-console.log('\n[93b] authnativetest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['authnativetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `authnativetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch93b = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch93b, `authnativetest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch93b ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch93b) {
-    assert(summaryMatch93b[1] === '✅ ALL PASS', `authnativetest.mjs itself reports ALL PASS (got: ${summaryMatch93b[0]})`);
-    assert(Number(summaryMatch93b[3]) === 0, `authnativetest.mjs reports zero failed assertions (got ${summaryMatch93b[3]} failed, ${summaryMatch93b[2]} passed)`);
-    assert(Number(summaryMatch93b[2]) >= 168, `authnativetest.mjs actually ran its full set (got ${summaryMatch93b[2]}, floor 168 — raised from 73 after the 3c fix window (B1, 2026-09-25) added [15k]/[15l]/[15m]/[15n], proving the signedIn gate survives a re-fired SIGNED_IN/TOKEN_REFRESHED carrying a still-pending recovery session, on top of reviewer F2-F6's earlier sections; the ratchet only tightens)`);
-  }
-}
-// ── [94] unreadtest.mjs — RG-196, the chat read cursor across a sign-out ────
-//
-// Own process for the reason every suite in this list has one: it drives
-// js/auth.js's REAL signOut() against js/chat.js's REAL cursor, and both want a
-// store nothing else has written to. Spawned here because a suite nothing
-// spawns is a suite nobody runs (the xsstest finding, §[73h]).
-console.log('\n[94] unreadtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['unreadtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `unreadtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m94 = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m94, `unreadtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m94 ? '' : '\n' + out.slice(-800)}`);
-  if (m94) {
-    assert(Number(m94[2]) === 0, `unreadtest.mjs reports zero failed assertions (got ${m94[2]} failed, ${m94[1]} passed)`);
-    assert(Number(m94[1]) >= 88, `unreadtest.mjs actually ran its full set (got ${m94[1]}, floor 88 — RAISED to 88 from 68 on 2026-09-24 (teaser retired, Drew 2026-09-24 Option A) by the new §[16], which pins the one in-app signal the ruling KEPT: an incoming message still increments the chat pill's badge, entering the room still clears it, and neither step floats anything over the page or makes a sound -- asserted on a device with push OFF and sound ON, the exact configuration that used to chirp. §[13]'s teaser leg was rewritten in place to assert the export is absent (same count). Floor was 68, raised from 49 by v0.23.3's branch reconciliation §[13] (2026-09-21): the UI reads every unread count through ONE door that carries the {known,count} flag, proven structurally AND by driving the four real surfaces; before that from 29 by the RG-196 gate pass: SECURITY B-1 (§[10]), REVIEWER F6 (§[11]) and the identity-unknown contract (§[12]); the ratchet only tightens)`);
-  }
-}
-
-// ── [95b] authstoragenativetest.mjs — DI-247/DI-250, Keychain-backed session storage ────
-console.log('\n[95b] authstoragenativetest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['authstoragenativetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `authstoragenativetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch95b = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch95b, `authstoragenativetest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch95b ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch95b) {
-    assert(summaryMatch95b[1] === '✅ ALL PASS', `authstoragenativetest.mjs itself reports ALL PASS (got: ${summaryMatch95b[0]})`);
-    assert(Number(summaryMatch95b[3]) === 0, `authstoragenativetest.mjs reports zero failed assertions (got ${summaryMatch95b[3]} failed, ${summaryMatch95b[2]} passed)`);
-    assert(Number(summaryMatch95b[2]) >= 229, `authstoragenativetest.mjs actually ran its full set, including the DI-250 and round-2 S1/S2/S3 mutation proofs (got ${summaryMatch95b[2]}, floor 229, tightened from 99 at the v0.26.0 stamp 2026-09-26 — raised from 97 by the 2026-09-23 v0.23.5 reconciliation reapply: [3f] hasPersistedSupabaseSession() driven directly against the native marker, and [16d] split in two to match RG-194's shared notice helper)`);
-  }
-  // Hygiene: this suite's mutation section writes two throwaway
-  // js/__mutation_scratch_*.js siblings and deletes them in a `finally` —
-  // confirm none survived a spawned run (a leaked scratch file is exactly
-  // the kind of thing that could otherwise get accidentally committed).
-  const { existsSync } = await import('node:fs');
-  const leaked = ['__mutation_scratch_auth_storage_native.js', '__mutation_scratch_auth.js']
-    .filter(f => existsSync(fileURLToPath(new URL(`./js/${f}`, import.meta.url))));
-  assert(leaked.length === 0, `authstoragenativetest.mjs's mutation scratch files were cleaned up (found leaked: ${JSON.stringify(leaked)})`);
-}
-
-// ── [96b] pushnativetest.mjs — DI-217/239/240/241/243, native push ─────────────
-console.log('\n[96b] pushnativetest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['pushnativetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `pushnativetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch96b = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch96b, `pushnativetest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch96b ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch96b) {
-    assert(summaryMatch96b[1] === '✅ ALL PASS', `pushnativetest.mjs itself reports ALL PASS (got: ${summaryMatch96b[0]})`);
-    assert(Number(summaryMatch96b[3]) === 0, `pushnativetest.mjs reports zero failed assertions (got ${summaryMatch96b[3]} failed, ${summaryMatch96b[2]} passed)`);
-    assert(Number(summaryMatch96b[2]) >= 139, `pushnativetest.mjs actually ran its full set (floor 139 — RAISED 96 -> 139 by UN-315 / DI-436 (2026-09-30): the native identity flow, [17]; earlier note: raised from 88 by RG-243's [13f]-[13m] (2026-09-24: the security gate on f2c3297 noted that the subscription repair re-armed at the session chokepoint is the only one of the four re-arms NOT wrapped in an isNativeShell()/isNativeOrigin() gate — its inertness inside the shell is TRANSITIVE, through ensureOneSignalInit() returning 'unsupported-browser' (DI-210e), and \`maybeAutoOptInPush\` appeared nowhere in this file. Eight assertions: the re-arm sits below the native identity call rather than between the two [13e] pins adjacent, every web-SDK call inside the repair sits after the init gate, the repair imports push-native.js not at all, and then the transitive guarantee EXERCISED — push-onesignal.js imported fresh under a native window.Capacitor answers the inert shape having created no script element, appended no node and made no fetch, with no window.OneSignal global left behind, plus the non-vacuity run with no bridge that takes a different path entirely). Before that raised from 65 by security gate items N-4 (persisted identity flag survives process death, mutation-proved) and reviewer Finding 2 (a failed initNativePush() must not stay memoized, mutation-proved)) (got ${summaryMatch96b[2]} — a near-zero count would mean the guard is vacuous)`);
-  }
-  // Hygiene: [14]'s mutation section writes one throwaway
-  // push-native.pre-mutation.*.js scratch sibling and deletes it in a
-  // `finally` — confirm none survived a spawned run.
-  const { existsSync, readdirSync } = await import('node:fs');
-  const tmpDir = process.env.TMPDIR || '/tmp';
-  const leaked96b = existsSync(tmpDir) ? readdirSync(tmpDir).filter(f => /^push-native\.pre-mutation\./.test(f)) : [];
-  assert(leaked96b.length === 0, `pushnativetest.mjs's mutation scratch file was cleaned up (found leaked: ${JSON.stringify(leaked96b)})`);
-}
-
 // ══════════════════════════════════════════════════════════════════════════
 // UX REVAMP WIRING PASS 1 (2026-09-25) — ten client-side suites built by the
 // concurrent groups (A1/A2/B/D/E) join the mandatory sweep, same shape as
@@ -12364,802 +11475,6 @@ console.log('\n[96b] pushnativetest.mjs — spawned as a subprocess, exit code +
 // for `mutation`/`scratch` in each — none matched), so none needs [96b]'s
 // leaked-scratch-file check.
 // ══════════════════════════════════════════════════════════════════════════
-
-// ── [101] navgesturestest.mjs — DI-322…327, group A2 (native feel) ─────────
-console.log('\n[101] navgesturestest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['navgesturestest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `navgesturestest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m101 = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m101, `navgesturestest.mjs printed its own pass/fail summary line (fixture check)${m101 ? '' : '\n' + out.slice(-800)}`);
-  if (m101) {
-    assert(Number(m101[2]) === 0, `navgesturestest.mjs reports zero failed assertions (got ${m101[2]} failed, ${m101[1]} passed)`);
-    assert(Number(m101[1]) >= 489, `navgesturestest.mjs actually ran its full set (got ${m101[1]}, floor 489 — RAISED from 487 by the Chat lift (Drew M-11 Q2, 2026-10-02): 12c-gap re-derived to --chat-nav-gap:calc(8px + var(--nav-disc-reach)) with a bare-8px mutant (+1) and 12c-gap-kb (the keyboard-up override, with its mutant) (+1); before that, floor 487 — RAISED from 481 by the v0.29.0 Home wiring window (2026-10-01): 12a-5..12g re-derived for the disc tokens (+6: 12a-6, 12a-7, 12a-7b, 12a-8, 12a-8b numeric clearance proof, 12g-2b); before that, floor 481 — set to the measured merged count at the v0.29.0 batch-5b integration (2026-10-01): SB-18v2 + SP-52 themes (fix/sb18-readiness-motion-v2 @ 379c937, with themes DI A1.10/A1.11) merged onto int/batch5b. The SB-18v2 branch read floor 452 — RAISED from 442 by SP-52 THEMES (2026-10-01): [12i-4/12i-5] the Dark glass resolved through the real cascade for every look under both triggers, plus the per-look alphas (Paper Dark .92, Ink Light .88) and Graphite Dark's own; the tab bar's solid base/border/fallback/dot re-derived onto --chrome-tab-*; earlier: … (the shared earlier history continues in int/batch5b's text below). int/batch5b read floor 479 — RAISED from 442 by SP-57 (2026-10-01: [14] the third claim owner — constants, the deferral door, releaseTouchAndFlush's load-bearing owner guard, the pull-to-refresh 'claimed' event and binder, the bottom-bounce claim check, the layout bar's gesture suspension); floor 442 — RAISED from 434 by the v0.28.0 integration round 3a (2026-09-30): N1 league creation's additions (floor 380 on that side, +9 over 371: [8g] the error and warning haptic kinds, [10e] gesturesSuspended() for #league-create-sheet-wrap, [11n-real-7..10] the New League sheet's own dismiss predicate and the re-derived wizard-opener pin); before that, floor 434 — RAISED from 432 by the v0.27.4 integration merge 3/6 (2026-09-30): Batch A's 432 and the Chat build's DI-442 assertions ([13c-jump], [13c-gap]; floor 374 on that side, floor 371 on main) both run on the merged tree; before that, floor 432 — RAISED from 419 by the reviewer's c7f8bee safety net ([5r] visibility/pagehide recovery runs parked repaints and resets the offset; a stale claim's flush waits for the new touch to end); floor 419 RAISED from 401 by the reviewer's RG-TBD-A1 notes ([5q] velocity commit — a fast short flick commits, heading back cancels, distance decides at rest — and no Picks/Dashboard repaint under an active week swipe, flushed on release); floor 401 RAISED from 371 by bug batch A, thread 091926-MULTISPORT (2026-09-29: RG-TBD-A1 [5k-c0/5k-e2-pre/5k-e4] nothing commits while the finger is down, release decides, [5k-e1/e5..e7] the drag tracks the finger with Reduce Motion ON and OFF and only the release differs (cross-fade / immediate settle vs. slide / spring), [5o-m0..m4] the Reduce Motion cross-fade; RG-TBD-A2 [5p] the one-owner-per-touch claim, week swipe vs. reorder vs. drawer); earlier: floor 371 — RAISED from 363 by feat/gestures-v0272 round 3 (merged into release/v0.27.2 2026-09-29 over feat/control-center-v0272's 302 = 301 + [10d] #leagues-home-overlay in gesturesSuspended()) (Opus, 2026-09-29: [5o-p..r] N-a the incoming week starts and ends flush against the clone at a live drag offset, [5o-s/t] N-b the clone is inert and carries scrollLeft; [5j] extracts picksShowingWeek() with the Picks getter); earlier: floor 363 — RAISED from 301 by feat/gestures-v0272 round 2 (2026-09-28: reviewer BLOCKs B1/B2 [5n] _isDrawerYieldTarget(), B3 [5m-n..q] web drawer-swipe parity, B5 [5o] the rebuilt commitSlide() simultaneous-slide clone layer plus [5k-c/h/j/k] rewritten for its one-transition shape, N2 [5j-h] the Dashboard swipe null-normalization); earlier: floor 301 — RAISED from 245 on the v0.27.1 merged tree 2026-09-28 (chat-sync [4h]/[4i]/[6c]/[6h] + RG-289 [4j]); earlier: floor 245 — RAISED from 199 by DI-409 (UN-364, 2026-09-28) week-swipe drag-follow + slide hand-off: section [5k] (30 assertions, round 1) plus reviewer round 2's fix set B1/B2/C1/C2 (16 more assertions: 5k-d rewritten for B2's on-release-not-mid-drag spring, 5k-h/5k-i/5k-j new for C1/C2/B1); was 199 — merged chat [12] + CSS [13] sections 2026-09-27; was 157 — RAISED from 153 by the RG-275 (renumbered from RG-265 after the Social Platform collision) reviewer note 2026-09-27 ([12d] the ↓ latest button and bindBottomAnchor() share BOTTOM_ANCHOR_PX); earlier: floor 153 — RAISED from 130 by the v0.27.x chat-composer bugfix 2026-09-27 ([12] the unitless --nav-height:0 static guard, bindBottomAnchor() through the real bindKeyboardAvoid(), renderChatPage() wiring); earlier: floor 130 — RAISED from 121 by the v0.27.0 bugfix pass 2026-09-27 ([5j] one week-swipe direction on Picks and Dashboard) — RAISED from 108 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 108 — RAISED from 90 at Step 2(b) (2026-09-26): section [11], bindSwipeToDismiss()/_resolveDismissSettle() — the League Page overlay's native swipe-back and the week wizard sheet's drag-to-dismiss, a shared primitive built to close out that deferral (real gesture, not the aspirational "free from the chat sheet's CSS" comment it replaced). Prior floor 90 — wiring pass 3c (2026-09-25): touched-screen-audit finding [10], gesturesSuspended() suspending for #league-page-overlay/#week-wizard-sheet-wrap. Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [102] leagueshometest.mjs — DI-312…316, group D (leagues home) ─────────
-console.log('\n[102] leagueshometest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['leagueshometest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `leagueshometest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m102 = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m102, `leagueshometest.mjs printed its own pass/fail summary line (fixture check)${m102 ? '' : '\n' + out.slice(-800)}`);
-  if (m102) {
-    assert(Number(m102[2]) === 0, `leagueshometest.mjs reports zero failed assertions (got ${m102[2]} failed, ${m102[1]} passed)`);
-    assert(Number(m102[1]) >= 115, `leagueshometest.mjs actually ran its full set (got ${m102[1]}, floor 115 — RAISED from 107 by SP-53's UI wiring (2026-10-01): the League Settings row, last in the body, for every member, escaped in its aria-label; before that, floor 107 — RAISED from 103 by round 3 (Opus, feat/control-center-v0272, 2026-09-29): round-2 additions confirmed on this run; before that, floor 103 — Leagues Home render functions (league card, sport card, coming-soon stub, league standings view) plus the XSS sweep requiring an injected escHtml at every render function). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [103] iconstest.mjs — DI-285…288, group E (brand/icons) ────────────────
-console.log('\n[103] iconstest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['iconstest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `iconstest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m103 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m103, `iconstest.mjs printed its own pass/fail summary line (fixture check)${m103 ? '' : '\n' + out.slice(-800)}`);
-  if (m103) {
-    assert(m103[1] === '✅ ALL PASS', `iconstest.mjs itself reports ALL PASS (got: ${m103[0]})`);
-    assert(Number(m103[3]) === 0, `iconstest.mjs reports zero failed assertions (got ${m103[3]} failed, ${m103[2]} passed)`);
-    assert(Number(m103[2]) >= 529, `iconstest.mjs actually ran its full set (got ${m103[2]}, floor 529 — RAISED from 503 by the v0.29.0 Home wiring window (2026-10-01): ICONS gains home and menu (40 -> 42), [1b18..22], and the per-icon family loops scan them (+26 measured on the merged tree); before that, floor 503 — set to the measured merged count at the v0.29.0 batch-5b integration (2026-10-01): Breathing Room spacing sweep (feat/spacing-sweep @ 7077da8, AD-103) merged onto int/batch5b. The sweep branch read floor 467 — RAISED from 462 by the Breathing Room sweep (2026-10-01): [9a]-[9e], the Edit My Picks control uses icon('pencil') (the glyph already existed, so [1b6]'s 37 entries are unchanged), its #edit-picks-btn svg host rule, and no emoji label survives; earlier: floor 462 — … (the shared earlier history continues in int/batch5b's text below). int/batch5b read floor 498 — set to the measured merged count at the v0.29.0 batch-5b integration (2026-10-01): SB-18v2 + SP-52 themes (fix/sb18-readiness-motion-v2 @ 379c937, with themes DI A1.10/A1.11) merged onto int/batch5b. The SB-18v2 branch read floor 452 — RAISED from 429 by SP-52 THEMES (2026-10-01): the two glyphs of the quick Light/Dark toggle (sun, moon — [1b6] 34 -> 36, [1b12] presence, [1b13] their drawn shape) and the per-glyph family scans over them; earlier: floor 429 — … (the shared earlier history continues in int/batch5b's text below). int/batch5b read floor 475 — RAISED from 462 by the v0.29.0 batch-5a integration (2026-10-01): SP-57 section drag (feat/sp57-section-drag-wiring @ 56347a0) merged onto the batch-4 count — the 35th icon, grip — its count pin, shape and aria-hidden assertions plus the per-icon loop; [1b6] now pins 38 entries and SP-57's presence check is [1b15] (its branch label [1b12] is the Home set's) — 462 + 13 = 475 measured on the merged tree (on its own branch: floor 442, RAISED from 429). Floor 462 was RAISED from 429 by the v0.29.0 batch-4 integration (2026-10-01): the Home renderer's three eyebrow glyphs (flame, rankUp, chatBubble — [1b6] now pins 37 entries, [1b12] their presence) = 462 measured on the merged tree. Floor 429 was RAISED from 352 by the v0.28.0 integration round 3a (2026-09-30): N1 league creation's +77 (floor 411 on that side: the seven New League glyphs [1b6/1b11] and the icon-host scan now reading js/league-create.js) on top of the release branch's 352; before that, floor 352 — RAISED from 334 by DI-443 (UN-386, 2026-09-29: [1k] the alma-mater glyph is the games crossed swords — one constant, two keys, every render path, the two icon-only badges' aria-labels, the 16px badge, three mutation proofs); earlier: floor 326, tightened from 315 by the v0.27.0 bugfix pass 2026-09-27 (the munera glyph) — tightened from 286 at the v0.26.0 stamp 2026-09-26 — RAISED from 104 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 104 — the twelve-glyph D-1 Munera icon family (chevrons, sportFootball, calendarWeek, playersGroup, rulebook, scribeSpark, cloudData, shieldAdmin, settings, almaMater, plus the two nav glyphs already shipped) and the banned-emoji scanner over a dirty fixture. Note: scanSourceForBannedEmoji() is NOT yet run against js/app.js itself this pass — see the suite's own header — a follow-up pass must wire that scan against the real file once E's chrome-emoji-removal items land). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [104] brandtokentest.mjs — DI-285…288, group E (brand/icons) ───────────
-console.log('\n[104] brandtokentest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['brandtokentest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `brandtokentest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m104 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m104, `brandtokentest.mjs printed its own pass/fail summary line (fixture check)${m104 ? '' : '\n' + out.slice(-800)}`);
-  if (m104) {
-    assert(m104[1] === '✅ ALL PASS', `brandtokentest.mjs itself reports ALL PASS (got: ${m104[0]})`);
-    assert(Number(m104[3]) === 0, `brandtokentest.mjs reports zero failed assertions (got ${m104[3]} failed, ${m104[2]} passed)`);
-    assert(Number(m104[2]) >= 122, `brandtokentest.mjs actually ran its full set (got ${m104[2]}, floor 122 — RAISED from 109 by SP-52 THEMES (2026-10-01): the night-mode extractors re-derived onto the enumerated Block A / B-munera (per block, both triggers: [2c-a2]), and [2c-d] OVERTURNED by Drew's school-Dark amendment — every school is IN Block A's list and has its own B-school pair (3 assertions x 6 schools), none in Paper or Graphite; earlier: floor 109 — RAISED from a stale 56 by the coordinator's CSS pass (2026-09-27): the floor had gone out of sync with the suite's own growth from earlier passes (DI-360/DI-362's dark-mode/palette sections, [2c]/[3]/[4]/[5]) well before this pass touched it; this pass's own contribution is section [2d], six new by-hand WCAG assertions for .header-sync-icon's colours against var(--maroon) — the one icon in the app painted directly on the header bar rather than a --bg-card surface, which contrastscan.mjs structurally cannot check (no resolvable background: on that rule). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [104b] schoolthemetest.mjs — SB-10 / RG-273 (2026-10-01): school themes
-// rendered Munera crimson accent text because `--maroon-text*` were var()
-// aliases on :root (substituted on <html>, inherited by <body> as Munera's
-// colour). This suite resolves <html>/<body class="theme-*"> through the real
-// cascade (var() substituted on the DECLARING element, the step the flat
-// merge-then-resolve scanners above skip), proves its resolver on synthetic
-// sheets first, and asserts each school's Light --maroon-text* (DI-451 Table
-// 4L, amended for AA 2026-10-01), no stale :root alias on any theme x scheme,
-// and AA on every Light surface. Superseded by DI-456's themetest when it lands.
-console.log('\n[104b] schoolthemetest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['schoolthemetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `schoolthemetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m104b = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m104b, `schoolthemetest.mjs printed its own pass/fail summary line (fixture check)${m104b ? '' : '\n' + out.slice(-800)}`);
-  if (m104b) {
-    assert(m104b[1] === '✅ ALL PASS' && Number(m104b[3]) === 0, `schoolthemetest.mjs reports ALL PASS with zero failed assertions (got: ${m104b[0]})`);
-    assert(Number(m104b[2]) >= 297, `schoolthemetest.mjs actually ran its full set (got ${m104b[2]}, floor 297 (+1 SP-52 THEMES (2026-10-01): [F1] re-derived to the school entries of THEMES + [F1b] the four non-school looks), earlier floor 296, 2026-10-01 — SB-10 / RG-273: [R] resolver self-test, [F] fixtures, [1] six schools x three Light contexts, [2] Munera unchanged, [3] no stale :root alias across 8 themes x 6 schemes, [4] explicit school declarations, [5] AA on all seven Light surfaces with an EMPTY advisory list). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [105] rolestest.mjs — DI-317/318/344/345, group B + T-35 (roles) ───────
-// NOTE (wiring window, 2026-09-25): this suite's file is concurrently owned
-// by two other threads this pass (group B's roles/panels work, group G's
-// T-35 super-admin work) — its count has moved twice already just DURING
-// this wiring pass (292 -> 315 observed). The floor below is re-confirmed
-// against a live run immediately before this file is handed off; if it has
-// moved again by the time this lands, re-run and raise, never lower.
-console.log('\n[105] rolestest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['rolestest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `rolestest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m105 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m105, `rolestest.mjs printed its own pass/fail summary line (fixture check)${m105 ? '' : '\n' + out.slice(-800)}`);
-  if (m105) {
-    assert(m105[1] === '✅ ALL PASS', `rolestest.mjs itself reports ALL PASS (got: ${m105[0]})`);
-    assert(Number(m105[3]) === 0, `rolestest.mjs reports zero failed assertions (got ${m105[3]} failed, ${m105[2]} passed)`);
-    // Floor tightened 363 -> 383 (2026-09-26): the 0026 0A000 fix inverted the B-4 trigger pin (+3 net) and paused_league_rpc_verify.sql joined the R3 verify-script lint with R3(d) (+11).
-    // Floor tightened 383 -> 413 (2026-09-26, verify-script rehearsal audit): R3(e) fixture-vs-schema + single-run-shape lint over all four verify/ files with nine teeth (+28), R3(f) probe pins (+2).
-    // Floor tightened 431 -> 434 (2026-09-30, UN-389 / DI-445): R-c re-derived to scan EVERY `update public.league_members set` list in the re-created 0035 body (two lists, exactly one with `active = false`, neither assigning role/phone_verified/created_at) and both refusals ordered before the escape GUCs.
-    // Floor 434 -> 438 (2026-09-30, LIVE-GUARD incident fix): R3(e) requires the LIVE guard as each verify file's first statement, ahead of begin; (+1 fixture check, +3 teeth).
-    // Floor 438 -> 451 (2026-10-01, SP-53 on feat/sp53-league-settings-core): R-c/0037, the SET-list scan re-pointed to the LATEST admin_set_member_role body (comments stripped first) (+13).
-    // Floor 438 -> 448 (2026-10-01, int/pins-and-sb14): the F13 / DI-344 call-site pins became position-independent (file + enclosing function + text, no line numbers) — F13-each/-order/-shift/-move/-auth-each and DI-344-each/-order/-shift/-move/-auth-each (+10).
-    // Floor 448 -> 465 (2026-10-01, int/batch3 — reviewer R-C1/R-C2, security S-C1/S-C2/S-O1): hardened topLevelOwner() + owner canaries (indented closer, indented-`} from` import), the union scan (raw-when-not-comment-led OR comment-stripped) with four comment-shape canaries, recursive js/ readdir (js/sports/*.js) in both scans, one-column-0-opener checks for every pinned function (app.js + auth.js) with decoy canaries, and preamble counts for renderAdminPage()'s two fetch gates (19 / 18) with dead-`if` canaries (+17).
-    // R-C2 (2026-10-01): the message below said "floor 413" for several ratchets after the check moved on; it now prints the one number the check uses.
-    // Floor 465 -> 478 (2026-10-01, v0.29.0 batch-3 integration): SP-53's +13 and int/batch3's 465 combined; 478 is the merged tree's real count.
-    // Floor 478 -> 481 (2026-10-01, v0.29.0 batch-4 integration): security F2 — section 8 (N6, get_member_contacts) recurses into js/sports/ like sections 5 and 11
-    // (+2: its enumeration fixture check and the recursion canary), and reviewer N1 — topLevelOwner() reads a closer split across two lines (+1: owner-canary (split import)).
-    // Floor 481 -> 490 (2026-10-01, SP-53 release gates): R-c/0042 — the two re-created armers (leave_league + the G-6 bound, anonymize_own_account + the G-2 lock) are scanned on their LATEST bodies (+9), and the R-c census
-    // grows by exactly those two entries.
-    const floor105 = 490;
-    assert(Number(m105[2]) >= floor105, `rolestest.mjs actually ran its full set (got ${m105[2]}, floor ${floor105}; ratchet history in the comments above. Original note, wiring-pass-1 close: this file is concurrently owned by two other threads this same window (group B roles/panels, group G T-35), so its count moved several times DURING this pass alone (292 -> 315 -> 319 -> 332 -> 363 observed); re-run and raise, never lower, if it has moved again by the time this lands. js/auth.js's own contribution this window: _recomputeSynthesizedSession() gained the real isPlatformAdmin/isSuperAdmin derivation (fed by the new _refreshPlatformAdminFlags(), alongside every membership read), exposed via getIsPlatformAdmin()/getIsSuperAdmin() — deliberately NOT the literal 'isPlatformAdmin'/'isSuperAdmin' identifiers, so js/auth.js still correctly reads ZERO real hits on DI-317 §2b.11's allow-list fence (getSession() stays the exact three-key shape authtest.mjs [2] pins). js/app.js's buildControlCenterCtx() is the one enumerated call site this wiring pass adds, re-synced to its final line numbers (ENUMERATED_CALL_SITES/ENUMERATED_SUPER_CALL_SITES at app.js:3152/3153) after upstream edits shifted the file. CARD_OPERABILITY's 22 rows including scribe-model (commissioner-scoped per reviewer round 2), isLeaguePaused, ENUMERATED_CALL_SITES' whole-tree allow-list scan, and T-35's Section 10-20 SQL-draft proofs). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [106] weekwizardtest.mjs — DI-C1, group C (comm ops, Set Up Week) ──────
-console.log('\n[106] weekwizardtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['weekwizardtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `weekwizardtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m106 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m106, `weekwizardtest.mjs printed its own pass/fail summary line (fixture check)${m106 ? '' : '\n' + out.slice(-800)}`);
-  if (m106) {
-    assert(m106[1] === '✅ ALL PASS', `weekwizardtest.mjs itself reports ALL PASS (got: ${m106[0]})`);
-    assert(Number(m106[3]) === 0, `weekwizardtest.mjs reports zero failed assertions (got ${m106[3]} failed, ${m106[2]} passed)`);
-    assert(Number(m106[2]) >= 287, `weekwizardtest.mjs actually ran its full set (got ${m106[2]}, floor 287 (SP-54, 2026-10-01: RAISED from 280 — the guided finalize step's notice now comes from the one composer; the earlier history follows) — RAISED from 274 by the DI-404 coordinator override (2026-09-30): dueForScheduledOpen() now holds a due draft with no valid blurb (blank/short/legacy held, written releases it, demo exempt, both facts returned, not-yet-due checks nothing); before that floor 274 — RAISED from 216 by DI-404 (UN-388, 2026-09-29): [18] blurbCheck boundaries (empty/spaces/9 vs 10/collapse/emoji), who is gated (draft only; demo and open/locked/live/final exempt; every sport), Open now + Schedule Open refuse with blurb_required and change nothing, Keep as draft exempt, a blank scheduled draft is still due, gatingChecklist untouched; before that floor 64 — createWeekWizard()'s dep bag contract, cadence/cooldown copy including FETCH_PARTIAL and OPEN_SUCCESS exact-text pins). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [107] controlcentertest.mjs — DI-301…306, group A1 (nav shell drawer) ──
-console.log('\n[107] controlcentertest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['controlcentertest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `controlcentertest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m107 = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m107, `controlcentertest.mjs printed its own pass/fail summary line (fixture check)${m107 ? '' : '\n' + out.slice(-800)}`);
-  if (m107) {
-    assert(Number(m107[2]) === 0, `controlcentertest.mjs reports zero failed assertions (got ${m107[2]} failed, ${m107[1]} passed)`);
-    assert(Number(m107[1]) >= 268, `controlcentertest.mjs actually ran its full set (got ${m107[1]}, floor 268 — set to the measured merged count at the v0.29.0 batch-5b integration (2026-10-01): SB-18v2 + SP-52 themes (fix/sb18-readiness-motion-v2 @ 379c937, with themes DI A1.10/A1.11) merged onto int/batch5b. The SB-18v2 branch read floor 260 — RAISED from 257 by A1.9 review round (2026-10-01): [Q6] pins the 44pt minimum on .cc-quick-seg and .cc-quick-return (reviewer mutation R15 had survived) +3; earlier: floor 257 — RAISED from 218 by SP-52 THEMES (2026-10-01): [12]/15g re-derived (the Appearance row is live and byte-identical under all ten themes; the retired caption appears in none of 30 renderings), [P] the grouped Theme picker (three optgroups, order, escaping, independence) and [Q] the quick Light/Dark toggle (the model, markup, signed-out, in-place patch with a haptic spy, the focus hand-off, keyboard, phone-initiated update); earlier: … (the shared earlier history continues in int/batch5b's text below). int/batch5b read floor 226 — RAISED from 218 by SP-53's UI wiring (2026-10-01, merged over release/v0.29.0): [18] the League group (one row, gated like the Profile rows, absent not disabled, closes the drawer before the callback) = +8, the real merged count (218 + 8; merge review BLOCK #1 corrected an earlier +17 that was counted from a stale floor of 195 instead of release's real 218); before that, floor 218 — RAISED from 195 by SB-15 (2026-10-01): [17] a drawer drag whose touch end never arrives (✕/scrim/app close end it, the next one-finger touch cancels it, a second finger does not, the drawer claims the touch only for a drag that can move it, releaseTouchAndFlush keeps DI-476's name and its owner guard (17j), Picks/Dashboard repaints park under it and run on release or after the next touch, the background safety net) on top of the 206 the suite already ran; earlier: floor 195 — RAISED from 165 by round 3 (Opus, feat/control-center-v0272, 2026-09-29): round-2 additions confirmed on this run; merged 2026-09-29 over feat/gestures-v0272's 174 (= 165 + round 2 [10c4] drawer refuses a .chat-msg target, [10c5/c6/c7] text-field/scroller refusal, [10a/10a2] web-binds-too) — the merged tree carries both sets; before that, floor 165 — RAISED from 153 by v0.27.1 round 2 (2026-09-28: [14] scrim fades with the panel on close, drag-start keeps the settled progress); earlier: floor 153 — RAISED from 131 by the v0.27.1 hotfix (RG-278, 2026-09-28: [13] a tap open/close SETTLES --cc-drag-progress 1/0); earlier: floor 131 — RAISED from 117 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 117 — fix round 1, 2026-09-25: the stable-root/attribute-only update() API, the real-enough hand-rolled DOM in §11, onAfterPaint requiredness, and the [data-action="coming-soon"] delegated-handler creation this same wiring window relies on). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [108] adminpaneltest.mjs — DI-320, group B (admin panel) ───────────────
-// Same concurrent-ownership note as [105] above — this file is group B's.
-console.log('\n[108] adminpaneltest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['adminpaneltest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `adminpaneltest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m108 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m108, `adminpaneltest.mjs printed its own pass/fail summary line (fixture check)${m108 ? '' : '\n' + out.slice(-800)}`);
-  if (m108) {
-    assert(m108[1] === '✅ ALL PASS', `adminpaneltest.mjs itself reports ALL PASS (got: ${m108[0]})`);
-    assert(Number(m108[3]) === 0, `adminpaneltest.mjs reports zero failed assertions (got ${m108[3]} failed, ${m108[2]} passed)`);
-    assert(Number(m108[2]) >= 296, `adminpaneltest.mjs actually ran its full set (got ${m108[2]}, floor 296 — RAISED from 289 by SP-53's UI wiring (2026-10-01): the (left)/(removed) label and the Linked line keyed on userId AND linkedAt; before that, floor 264, tightened from 245 at the v0.26.0 stamp 2026-09-26 — UX Revamp wiring pass 2 (2026-09-25) raised it from 244: DI-345's Super Admin section is now REAL (League Status/Platform Settings/Platform Admins-seed cards), not the old "coming in DI-344" placeholder). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [109] authpasswordtest.mjs — DI-332…340, group F (accounts) ───────────
-console.log('\n[109] authpasswordtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['authpasswordtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `authpasswordtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m109 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m109, `authpasswordtest.mjs printed its own pass/fail summary line (fixture check)${m109 ? '' : '\n' + out.slice(-800)}`);
-  if (m109) {
-    assert(m109[1] === '✅ ALL PASS', `authpasswordtest.mjs itself reports ALL PASS (got: ${m109[0]})`);
-    assert(Number(m109[3]) === 0, `authpasswordtest.mjs reports zero failed assertions (got ${m109[3]} failed, ${m109[2]} passed)`);
-    assert(Number(m109[2]) >= 97, `authpasswordtest.mjs actually ran its full set (got ${m109[2]}, floor 97 — RAISED from 91 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 91 — 3c fix window (B1, 2026-09-25) added the isRecoverySession()-gated membership-refresh proof and updatePasswordForRecovery()'s explicit re-sync assertion on top of security round 2's token-hash recovery/gate-retention, nonce-required reauthentication and double-focus guards). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [110] deeplinktest.mjs — RG-245 (B-04, deep-link replay) ───────────────
-console.log('\n[110] deeplinktest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['deeplinktest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `deeplinktest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m110 = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m110, `deeplinktest.mjs printed its own pass/fail summary line (fixture check)${m110 ? '' : '\n' + out.slice(-800)}`);
-  if (m110) {
-    assert(Number(m110[2]) === 0, `deeplinktest.mjs reports zero failed assertions (got ${m110[2]} failed, ${m110[1]} passed)`);
-    assert(Number(m110[1]) >= 88, `deeplinktest.mjs actually ran its full set (got ${m110[1]}, floor 88 — RAISED 50 -> 88 by UN-315 / DI-436 (2026-09-30): routeToLeague, the banked league deep link and the switch-cover fade (sport routing is NOT covered: it stays an open seam until CORE DI-221/224); earlier note: floor 50, 10/10 mutants caught — RG-245: a single-slot withheld-destination buffer stamped with the receiving account, replayed on the two un-withhold transitions, routed via routeNotificationTap() with the sender's nested params flattened). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [111] eptest.mjs — spawned 2026-09-26 (full-app review, Step 6): this suite
-// existed and passed standalone but NOTHING ran it, so a regression in it was
-// invisible to the one command every batch runs. ──────────────────────────
-console.log('\n[111] eptest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['eptest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `eptest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m111 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m111, `eptest.mjs printed its own pass/fail summary line (fixture check)${m111 ? '' : '\n' + out.slice(-800)}`);
-  if (m111) {
-    assert(m111[1] === '✅ ALL PASS' && Number(m111[3]) === 0, `eptest.mjs reports ALL PASS with zero failed assertions (got: ${m111[0]})`);
-    assert(Number(m111[2]) >= 117, `eptest.mjs actually ran its full set (got ${m111[2]}, floor 117 (SP-54, 2026-10-01: RAISED from 107 — eptest [1]/[8] re-derived to the amended AD-33 wording; the earlier history follows), 2026-09-26 — FEAT-9 / UN-176 Extra Point standings tally, never affects rank). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112] lifecycletest.mjs — spawned 2026-09-26 (full-app review, Step 6): this suite
-// existed and passed standalone but NOTHING ran it, so a regression in it was
-// invisible to the one command every batch runs. ──────────────────────────
-console.log('\n[112] lifecycletest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['lifecycletest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `lifecycletest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m112 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112, `lifecycletest.mjs printed its own pass/fail summary line (fixture check)${m112 ? '' : '\n' + out.slice(-800)}`);
-  if (m112) {
-    assert(m112[1] === '✅ ALL PASS' && Number(m112[3]) === 0, `lifecycletest.mjs reports ALL PASS with zero failed assertions (got: ${m112[0]})`);
-    assert(Number(m112[2]) >= 64, `lifecycletest.mjs actually ran its full set (got ${m112[2]}, floor 64, 2026-09-26 — N1 / FEAT-11 / UN-204 lifecycle notices in chat). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// RG-253 and the ESPN-CLASS DI note (live, game day 2026-09-26) — the Background-jobs card's copy: a keepalive whose
-// NULL-league rows this card can never read is no longer called dead, and a failed scores-refresh
-// row says WHICH ESPN failure it was. Standalone so the copy decisions read start to finish.
-console.log('\n[112b] bgjobscardtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['bgjobscardtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `bgjobscardtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m112b = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112b, `bgjobscardtest.mjs printed its own pass/fail summary line (fixture check)${m112b ? '' : '\n' + out.slice(-800)}`);
-  if (m112b) {
-    assert(m112b[1] === '✅ ALL PASS' && Number(m112b[3]) === 0, `bgjobscardtest.mjs reports ALL PASS with zero failed assertions (got: ${m112b[0]})`);
-    assert(Number(m112b[2]) >= 29, `bgjobscardtest.mjs actually ran its full set (got ${m112b[2]}, floor 29 (25 -> 29 by [4b], an OK row with a failed bucket renders the class in words), 2026-09-26 — RG-253 and the ESPN-CLASS DI note). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [113] gaterebrandtest.mjs — UN-312 / DI-437 + DI-438 (the Munera login rebrand,
-// 2026-09-29): the sign-in gate's markup and state on web AND native, the native-only
-// haptic, the gate's CSS scan (scope, tokens, the single 0px radius, tap sizes, motion),
-// contrast recomputed from the token hexes, and the pins that prove the recovery-session
-// predicates and the hold markup did not move. Standalone so the gate's proof reads start
-// to finish (brandtest.mjs was amended in the same edit for the pins the redesign retired). ─
-console.log('\n[113] gaterebrandtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['gaterebrandtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `gaterebrandtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m113 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m113, `gaterebrandtest.mjs printed its own pass/fail summary line (fixture check)${m113 ? '' : '\n' + out.slice(-800)}`);
-  if (m113) {
-    assert(m113[1] === '✅ ALL PASS' && Number(m113[3]) === 0, `gaterebrandtest.mjs reports ALL PASS with zero failed assertions (got: ${m113[0]})`);
-    assert(Number(m113[2]) >= 167, `gaterebrandtest.mjs actually ran its full set (got ${m113[2]}, floor 167, 2026-09-29 — UN-312 / DI-437 + DI-438). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112c] contrastscan.mjs — Reviewer BLOCK on d74286b (2026-09-27, item 5):
-// a Node-side rendered-contrast approximation for body.theme-neutral light
-// vs. dark, run TWICE — once against the live css/styles.css (must be
-// green) and once against a read-only `git show d74286b:...` copy of the
-// pre-fix commit (must reproduce the seven-class regression, i.e. also
-// "pass" its OWN mutation-proof assertions that the RED was found). ───────
-console.log('\n[112c] contrastscan.mjs (live mode) — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['contrastscan.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `contrastscan.mjs (live) exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m112c = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112c, `contrastscan.mjs (live) printed its own pass/fail summary line (fixture check)${m112c ? '' : '\n' + out.slice(-1200)}`);
-  if (m112c) {
-    assert(m112c[1] === '✅ ALL PASS' && Number(m112c[3]) === 0, `contrastscan.mjs (live) reports ALL PASS with zero failed assertions (got: ${m112c[0]})`);
-    assert(Number(m112c[2]) >= 39, `contrastscan.mjs (live) actually ran its full set (got ${m112c[2]}, floor 39 — RAISED from 25 by SP-52 THEMES (2026-10-01) (DI-456): the token maps come from themeresolve.mjs's real cascade, and [2a] scans EACH of the ten looks on both sides (3,070 rule-checks) with 'no look is worse than Munera' plus a named non-text artifact list; [3a] re-derived (one reviewed --maroon exception left; the three gold-filled sites read --on-gold); the allow-list lost .dc-chip-blind .dc-chip-init (fixed) and gained four reviewed entries; earlier: floor 25 — RAISED from 22 by the reviewer BLOCK round 2 (2026-09-27): the [pill-material-mutation] RED-before/GREEN-after proof for .bottom-nav's @supports-gated backdrop-filter material (the "@supports blind spot" — @supports blocks are now extracted into the scan instead of discarded, and a translucent rgba() background can resolve via a named-allowlist compositing fix, scoped to .bottom-nav only after a broader attempt produced 12 false catches on unrelated card-scoped rgba tints); earlier: floor 22 — RAISED from 20 by the eed1d62 follow-up (2026-09-27): the .bottom-nav/.toast/.modal/.submit-bar hardcoded-#fff fix and the corrected 3-item allow-list; earlier: floor 20 — the seven named pale-tint classes, the reviewed dark-only-regression allow-list, and the item-1 token-retarget completeness audit). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-console.log('\n[112c-prefix] contrastscan.mjs --prefix-proof — MUST reproduce the reviewer\'s own pre-fix finding on d74286b…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['contrastscan.mjs', '--prefix-proof'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `contrastscan.mjs --prefix-proof exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''}) — a non-zero exit here means the MUTATION PROOF ITSELF is broken (the scanner failed to reproduce the known-bad commit's regression), not that the live file is broken`);
-  const m112cp = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112cp, `contrastscan.mjs --prefix-proof printed its own pass/fail summary line (fixture check)${m112cp ? '' : '\n' + out.slice(-1200)}`);
-  if (m112cp) {
-    assert(m112cp[1] === '✅ ALL PASS' && Number(m112cp[3]) === 0,
-      `contrastscan.mjs --prefix-proof correctly reproduces the seven-class dark-mode regression on d74286b, isolated to dark mode only (got: ${m112cp[0]}) — this is the mutation proof for item 2's fix: if a future edit ever regresses the pale-tint dark remap, THIS assertion (re-run manually against the live file's own git history) is how you'd know the scanner can still catch it`);
-    assert(Number(m112cp[2]) >= 15, `contrastscan.mjs --prefix-proof actually ran its full set (got ${m112cp[2]}, floor 15, RAISED from 9 by the eed1d62 follow-up's four extra named surfaces (.bottom-nav/.toast/.modal/.submit-bar) — the at-rule/comment stripping-order fix also let the scanner see .submit-bar for the first time, which was previously silently swallowed, not merely unasserted)`);
-  }
-}
-
-// ── [112c-dash] dashcontrasttest.mjs — SB-06 DASHBOARD-DARK-CONTRAST + SB-07
-// LOGO-GRAY-BACKGROUND (Social Platform thread, bugfixer, 2026-09-30). Every
-// dashboard game-row text role (compact + matrix) against WCAG AA in every
-// shipped theme incl. BOTH Munera night-mode triggers, with translucent tints,
-// opacity and @keyframes extremes composited; no fill/plate/halo on any team
-// logo; every inline colour in the dashboard renderers covered; and an
-// in-memory mutation proof ([4]) that re-proves on every run that the guard
-// sees each exact defect. contrastscan.mjs [112c] could not: it skips rgba()
-// backgrounds and cannot see an inline style in js/app.js. Labelled
-// [112c-dash] (not the next free letter) and placed beside its contrastscan
-// siblings on purpose: release v0.28.0 already spends [112n]…[112q], so a
-// letter here would collide at merge.
-console.log('\n[112c-dash] dashcontrasttest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['dashcontrasttest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `dashcontrasttest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m112cd = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112cd, `dashcontrasttest.mjs printed its own pass/fail summary line (fixture check)${m112cd ? '' : '\n' + out.slice(-1200)}`);
-  if (m112cd) {
-    assert(m112cd[1] === '✅ ALL PASS' && Number(m112cd[3]) === 0, `dashcontrasttest.mjs reports ALL PASS with zero failed assertions (got: ${m112cd[0]})`);
-    assert(Number(m112cd[2]) >= 295, `dashcontrasttest.mjs actually ran its full set (got ${m112cd[2]}, floor 295 — RAISED from 294 by A1.9 review round (2026-10-01): the three SP52_ADVISORIES 'still fires' assertions are gone (the advisories were CLOSED at the value level and the machinery deleted) and the KNOWN_DEBT ratchet now has four entries (the two 3.74 originals plus Paper Light's two own named 3.35 ones); the suite's measured count is 295; earlier: floor 294 — RAISED from 101 by SP-52 THEMES (2026-10-01): the maps now come from themeresolve.mjs's real cascade — 31 maps (1 bare :root + 10 looks Light + 10 Dark x 2 triggers = the TWENTY sides) instead of 13; six KNOWN_DEBT rows DELETED (Light muted raised to AA); three named SP52_ADVISORIES ratcheted; earlier: floor 101 — set 2026-09-30 at its first run: [0] 5 fixtures; [1] 67 = 1 resolve + 10 theme maps + 2 night-mode-never-worse + 18 debt rows x 2 (ratchet, shrink) + 2 dark maps x 9 SB-06 roles; [2] 13 = 3 + 10 theme maps; [3] 2; [4] 7 mutations x 2). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112c-logo] logovarianttest.mjs — SB-07 dark-surface logo variant, the
-// AD-94 exception Drew approved on 2026-09-30 (SP-52 Q5): darkLogoUrl()
-// (data-provider.js) and the SB-07 block at the end of app.js. Also guards the
-// extension seam DI-455 (SP-52) builds its reconcile on ([6]).
-console.log('\n[112c-logo] logovarianttest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['logovarianttest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `logovarianttest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m112cl = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112cl, `logovarianttest.mjs printed its own pass/fail summary line (fixture check)${m112cl ? '' : '\n' + out.slice(-1200)}`);
-  if (m112cl) {
-    assert(m112cl[1] === '✅ ALL PASS' && Number(m112cl[3]) === 0, `logovarianttest.mjs reports ALL PASS with zero failed assertions (got: ${m112cl[0]})`);
-    assert(Number(m112cl[2]) >= 185, `logovarianttest.mjs actually ran its full set (got ${m112cl[2]}, floor 185 — RAISED from 101 by SP-52 THEMES (2026-10-01) (DI-455, release condition R1): the surface -> file map across 31 theme maps (Paper Dark keeps the stored file), the session set of known-missing dark files, and [7] the real reconcileLogoVariants — preload-before-swap, stale-target guard, no retry storm, inert with zero logos, the fail-safe surface parser (oklch/color/lab/color-mix), the re-validated stored default, and the twenty-side map; earlier: floor 101 — RAISED from 47 by the B2 finish (2026-09-30): [0] 4, [1] 13 URL cases, [2] 6 surface reads, [3] 15 through the real listeners, [4] 10 theme maps, [4b] 10 theme maps x 2 + 2 sensitivity, [5] 1 + 4 classes x 4, [6] 14 seam). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112c-pick] pickcontrasttest.mjs — SB-17 PICKS-LIVE-CONTRAST (Social
-// Platform thread, bugfixer, 2026-10-01). The Picks page's live pick-state
-// text (.badge-live-covering/-trailing, .pick-btn.live-covering/-trailing)
-// against WCAG AA in all 10 theme maps incl. BOTH night triggers, on element
-// chains derived from the real renderGameCard() markup; light mode pinned
-// byte-identical; live kept distinct from final; deny-by-default on any
-// literal live pick-state text colour; in-memory mutation proof [4].
-// dashcontrasttest [112c-dash] models the dashboard + chat header only, and
-// contrastscan [112c] skips rgba() tints, so neither could see it.
-console.log('\n[112c-pick] pickcontrasttest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['pickcontrasttest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `pickcontrasttest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m112ck = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112ck, `pickcontrasttest.mjs printed its own pass/fail summary line (fixture check)${m112ck ? '' : '\n' + out.slice(-1200)}`);
-  if (m112ck) {
-    assert(m112ck[1] === '✅ ALL PASS' && Number(m112ck[3]) === 0, `pickcontrasttest.mjs reports ALL PASS with zero failed assertions (got: ${m112ck[0]})`);
-    assert(Number(m112ck[2]) >= 262, `pickcontrasttest.mjs actually ran its full set (got ${m112ck[2]}, floor 262 — RAISED from 111 by SP-52 THEMES (2026-10-01) (A1.7): the same roles over the 31 resolver-derived maps (the twenty sides), the Paper scope's LIGHT pair and Paper Dark's light-pair read pinned, the 'school writers' scan over Dark selectors, and 4-6 re-derived for DI-448's lifted inset (#D88383 now fails the badge too); earlier: floor 111 — set 2026-10-01 at its first green run: [0] 10 fixtures; [1] 61 = 1 resolve + 10 theme maps x 6 roles; [2] 19 = 8 light-identical + 10 live-vs-final + 1 tint/motion; [3] 5; [4] 8 mutations x 2 (target found, goes RED)). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112c-ready] readinessmotiontest.mjs — SB-18 + SB-21 (Social Platform thread,
-// bugfixer, 2026-10-01; built ON SP-52 THEMES per its reviewer's ruling D7). Through
-// SP-52's 20-sided resolver (themeresolve.mjs) on the real renderers' markup:
-// (a) the commissioner readiness chips (.game-readiness-warn / -incomplete) and
-// (c) Chat's "NEW" unread divider (.chat-new-divider) against WCAG AA in all 40
-// contexts (10 looks x Light/Dark x System/pinned), Light byte-identical,
-// deny-by-default on literal colours, DI-448 R1/R4/R6 and A1.8's per-look rule;
-// (b) every live indicator (.badge-live at five sites, .badge-live-*, .pick-btn.live-*,
-// the Picks "🔴 LIVE" line, Chat's three LIVE dots) loops with motion allowed and is
-// animation:none at full opacity under prefers-reduced-motion on all 20 sides, plus a
-// stylesheet-wide net (KNOWN_MOTION_DEBT closed; MOTION_EXEMPT = the rotation-only
-// .spinner). In-memory mutation proofs [5] and [7].
-console.log('\n[112c-ready] readinessmotiontest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['readinessmotiontest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `readinessmotiontest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m112cr = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112cr, `readinessmotiontest.mjs printed its own pass/fail summary line (fixture check)${m112cr ? '' : '\n' + out.slice(-1200)}`);
-  if (m112cr) {
-    assert(m112cr[1] === '✅ ALL PASS' && Number(m112cr[3]) === 0, `readinessmotiontest.mjs reports ALL PASS with zero failed assertions (got: ${m112cr[0]})`);
-    assert(Number(m112cr[2]) >= 233, `readinessmotiontest.mjs actually ran its full set (got ${m112cr[2]}, floor 233 — RAISED from 225 by themes DI A1.10 (2026-10-01): [0] 17 (+0-10b, FINAL renders the static line); [4] 47 (+the FINAL card role); [5] 36 (+5-19 FINAL mutant and its target check); [6] 56 (+6-5, Paper Dark's divider on a light paper .chat-surface); [7] 17 (7-1/7-5 re-derived; 7-7a/7-7/7-7b/7-8 the forward root+scope-value proof). Earlier: floor 225 — set 2026-10-01 at its first green run on SP-52: [0] 16 fixtures; [1] 41 = 1 resolve + 40 contexts; [2] 12 = 10 light-identical + tint/border + warn-vs-incomplete; [3] 7; [4] 45 = 21 roles x (loops with motion + none under reduce) + net + debt closed + exemption; [5] 34 = 18 mutation proofs + 16 target-found checks; [6] 55 = 1 resolve + 40 contexts + 10 light-identical + 4 token/literal checks; [7] 15 = 8 mutation proofs + 7 target-found checks — the SB-18 rebuild replaced the unmerged first version's floor of 110). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112d] headermetatest.mjs — spawned 2026-09-28. Until now this suite was
-// NOT spawned by loadtest (only named in comments), which is how it sat at
-// 46/1 on release/v0.27.0 without any sweep going red. Its summary line is the
-// bare "N passed, M failed" (no ALL PASS prefix), so the regex is its own.
-// Insert immediately after the [112c-prefix] block, before "BEGIN STEP 6 PHASE 5".
-console.log('\n[112d] headermetatest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['headermetatest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `headermetatest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m112d = out.match(/^(\d+) passed, (\d+) failed$/m);
-  assert(!!m112d, `headermetatest.mjs printed its own pass/fail summary line (fixture check)${m112d ? '' : '\n' + out.slice(-800)}`);
-  if (m112d) {
-    assert(Number(m112d[2]) === 0, `headermetatest.mjs reports zero failed assertions (got ${m112d[2]} failed, ${m112d[1]} passed)`);
-    assert(Number(m112d[1]) >= 208, `headermetatest.mjs actually ran its full set (got ${m112d[1]}, floor 208 — RAISED from 189 by SP-56 (2026-09-30, feat/sp56-standings-fit: [compact-a..l] formatWeekLabelParts compact:true — same month, two months, across a year, one date, start==end, no dates, demo, unparseable, name untouched, precedence over collapseYear, and every non-compact caller byte-identical); earlier: floor 189 — RAISED from 183 by DI-444 (UN-387, 2026-09-29: [n12-sync-a..d] the pull-to-sync path runs the SAME forceRefresh() the retired button ran, bound to the loud-fail banner, plus two mutation proofs); earlier: floor 183 — RAISED from 172 by round 3 (Opus, feat/control-center-v0272, 2026-09-29): [pill-2d..2i] R1 — with ONE membership the pill sheet's "Join a League" row reaches a join form (sheet closes, invitation-code field + bound Join button, auto-focus), plus the round-2 destination (renderLeagueFlowScreen) driven as a mutant and shown to FAIL the same predicate; before that, floor 170 — RAISED from 145 by DI-417 (2026-09-28, both rounds). Round 1 added [pill-sport]/[pill-sport-mut] (full -> code -> league-only -> hidden degradation + 2 mutation proofs), bringing the real count to 162, but the floor was not raised at the time — a gap round 2 also closes. Round 2 (reviewer round 2, BLOCK 1/2): [pill-sport] rewritten to round-trip every week fixture through the REAL toRows.cfbp_weeks/fromRows.cfbp_weeks (week.sport never survives the live projection round trip — createWeek() never sets it), driving the membership sportDefault fallback the fix added across [pill-sport-0..10] (no-current-week case, neither-resolves case, week-sport-wins-over-membership priority case); new [pill-sport-nav] section (structural + behavioral) proves navigateTo() re-fits the pill exactly on leaving chat, correcting stale un-degraded content the display:none header could not lay out — real count 170. Before 145, RAISED from 138 by DI-398/DI-399 round 3 (2026-09-28, reviewer round 3): [sync-4e] drives runManualSync()'s REAL default hydrateIsApplicable predicate (not an injected stand-in) to prove the getActiveLeagueId() clause (finding 2); [sync-3a..c] prove showSyncFailureBanner() (note 3) structurally and behaviorally suppresses the redundant banner when #supabase-offline-banner is already up. Before that, RAISED from 95 by DI-398/DI-399 round 2 (2026-09-28, reviewer round 2): [sync] re-derived for #sync-badge role="button"/aria-label/aria-disabled/focus-visible/.sync-withheld, real click+keydown wiring, the new runManualSync()/makeChatManualSync() DI-seam behavioral tests (ACTIVE-STALE/OFFLINE-READONLY reject, deferred-identity stays quiet, Chat's composed refreshFn reaches the chat transport while Picks/Dashboard's does not), and the RG-281 caller-side unbind-before-rebind structural wiring check. Before that, raised 87 -> 95 by the v0.27.1 hotfix, 2026-09-28: [css5] league pill centred between two spacers + [hdr-d] re-derived; earlier raised 78 -> 87, reviewer BLOCK round 2 pins). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112e] shellrendertest.mjs — v0.27.1 hotfix (2026-09-28). ENGINE-MEASURED
-// app shell: RG-278 (the control-center drawer is on screen, above the scrim,
-// after a real tap on the trigger — motion and reduced motion — and fully off
-// screen after ✕) and the DI-393 amendment (league pill centred ±1 px, strict
-// truncation order at 375/390/393/430, mutant without the leading spacer
-// goes red). Needs a Chromium-family browser — a missing one is a FAILURE,
-// same rule as navtest.mjs [7] (SHELLTEST_ENGINE / NAVTEST_ENGINE override).
-console.log('\n[112e] shellrendertest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['shellrendertest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `shellrendertest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.split('\n').filter(l => l.includes('❌')).slice(0, 12).join('\n')}`);
-  const m112e = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112e, `shellrendertest.mjs printed its own pass/fail summary line (fixture check)${m112e ? '' : '\n' + out.slice(-800)}`);
-  if (m112e) {
-    assert(Number(m112e[3]) === 0, `shellrendertest.mjs reports zero failed assertions (got ${m112e[3]} failed, ${m112e[2]} passed)`);
-    assert(Number(m112e[2]) >= 301, `shellrendertest.mjs actually ran its full set (got ${m112e[2]}, floor 301 — RAISED from 291 by the v0.27.4 integration merge 1/6 (2026-09-30: Batch B RG-304's no-section-gap assertions and RG-305's catalog follow-ups, confirmed on the merged tree); before that, floor 291 — RAISED from 290 by round 3 (Opus, feat/control-center-v0272, 2026-09-29): [D] D-5 minor (b) — CROSS-CONTAINER: the Profile account rows' box starts/ends where the Profile form column (Save button, Display name field) does; before that, floor 284, offline/network-blocked count — RAISED from 249 by DI-417 (2026-09-28). The real offline count reached 260 before this DI (v0.27.1 round 2's [B] centring/truncation assertions) without the floor being raised to match — a gap this round also closes. DI-417 round 1 extended [B]'s BUILD_AND_MEASURE with sport-degradation simulation (full/code/league-only, badge/sync-never-move, monotonicity across 6 widths) bringing the offline count to 284; round 2 (reviewer round 2, finding 3) re-pointed the sport case at the REAL league name ("IRB Pick’Ems", not the "IRB Pool" stand-in) and re-derived its thresholds — net offline count unchanged at 284 (a webfonts-only re-derivation; run SHELLTEST_WEBFONTS=1 separately to see the stricter 291). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112f] chatscrolltest.mjs — v0.27.1 hotfix, RG-279 (2026-09-28): a reader
-// who scrolled up in Chat keeps their place across every repaint (inbound
-// events, transport flips, data repaints) and across keyboard resizes; a
-// reader at the latest, a send, a tab re-entry, "↓ latest" and a filter
-// change still land on the newest message. Real renderChatPage() /
-// handleChatEvent() / doSend() / bindBottomAnchor() on drafttest.mjs's
-// honest innerHTML model plus a browser-semantics scroll model.
-console.log('\n[112f] chatscrolltest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['chatscrolltest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `chatscrolltest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m112f = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112f, `chatscrolltest.mjs printed its own pass/fail summary line (fixture check)${m112f ? '' : '\n' + out.slice(-800)}`);
-  if (m112f) {
-    assert(Number(m112f[3]) === 0, `chatscrolltest.mjs reports zero failed assertions (got ${m112f[3]} failed, ${m112f[2]} passed)`);
-    assert(Number(m112f[2]) >= 87, `chatscrolltest.mjs actually ran its full set (got ${m112f[2]}, floor 87 — RAISED from 81 by the v0.27.4 integration merge 1/6 (2026-09-30: Batch B RG-306's reply-swipe additions, confirmed on the merged tree); before that, floor 81 — RAISED from 74 by feat/gestures-v0272 round 3 (Opus, 2026-09-29: [7m-7] the clip is never set on a system row (reviewer round-3 note 1), [7m] N4 the reply glyph placed from the bubble's own rect on received and own rows, once per gesture, plus the reply-drag x-clip); earlier: floor 74 — RAISED from 39 by feat/gestures-v0272 (2026-09-28: [9] DI-427 reply-swipe drag-follow/spring-back/N1's arm-then-commit-on-release, [10] reviewer round 2 B1 — the REAL bindControlCenterEdgeSwipe() + bindMessageSwipe() on one fake window, renumbered from a collision with the pre-existing [7] RG-280/[8] load-older sections); earlier: floor 39 — RAISED from 27 by v0.27.1 round 2: [7] RG-280 game-thread sheet, [8] load older keeps the reader's place). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112g] wizardsheettest.mjs — v0.27.1 (2026-09-28): the FIRST suite that boots the
-// real index.html + js/app.js in headless Chrome (local PIN mode on its own
-// 127.0.0.1 server answering /config.json with {}, every other host blocked,
-// dotfiles + /supabase/ refused, timezone pinned to America/Chicago over CDP).
-// Guards RG-282 (sheet scroll lock), RG-283 (modal above the sheet), RG-284
-// (wizard game edits saved), RG-286/287 (datetime-local UTC↔local shift in the
-// game editor and Auto-Open At), RG-288 (toasts above sheets). Testing Protocol:
-// every datetime-local round trip is tested under a non-UTC timezone.
-console.log('\n[112g] wizardsheettest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['wizardsheettest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `wizardsheettest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m112g = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112g, `wizardsheettest.mjs printed its own pass/fail summary line (fixture check)${m112g ? '' : '\n' + out.slice(-800)}`);
-  if (m112g) {
-    assert(Number(m112g[3]) === 0, `wizardsheettest.mjs reports zero failed assertions (got ${m112g[3]} failed, ${m112g[2]} passed)`);
-    assert(Number(m112g[2]) >= 68, `wizardsheettest.mjs actually ran its full set (got ${m112g[2]}, floor 68 — set 2026-09-28 at its first green merged run: [A] scroll lock, [B] stacking + toasts, [C] save + timezone, [D] Auto-Open At). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112h] chatpagetest.mjs — v0.27.1 RG-289 (2026-09-28): the Chat page is
-// static — root locked to the visible screen on body[data-tab="chat"], root
-// bounce off, only #chat-scroll scrolls and bounces; the window bottom-bounce
-// binder is gated off Chat and the pull-up moves no page element. Full-app
-// headless-Chrome suite (same boot recipe as wizardsheettest).
-console.log('\n[112h] chatpagetest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['chatpagetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `chatpagetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m112h = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112h, `chatpagetest.mjs printed its own pass/fail summary line (fixture check)${m112h ? '' : '\n' + out.slice(-800)}`);
-  if (m112h) {
-    assert(Number(m112h[3]) === 0, `chatpagetest.mjs reports zero failed assertions (got ${m112h[3]} failed, ${m112h[2]} passed)`);
-    assert(Number(m112h[2]) >= 369, `chatpagetest.mjs actually ran its full set (got ${m112h[2]}, floor 369 — RAISED from 250 by SP-52 THEMES (2026-10-01): [M13] is now thirty palettes (ten themes x System / pinned Light / pinned Dark) under both OS emulations, web and native (120 rows, was 36), and [M13b] is 440 measurements (ten themes x four OS x pinned combinations x the eleven controls; was 55) — the real-engine proof that every one of the twenty sides is legible, run in headless Chrome, with the harness waiting out the DI-452 cross-fade (body.scheme-swap settles at 300ms); earlier: floor 250 — RAISED from 244 by RG-309 (2026-09-29: [M13b] the eleven controls the sibling-bug sweep fixed, rendered in the engine on their real surfaces across five OS-scheme x palette combinations, 55 measurements, all >= 4.5:1); earlier: floor 244 — RAISED from 230 by DI-444 (UN-387, 2026-09-29: [N12] no chat header refresh button under touch emulation or the native shell, present with its handler on a desktop fine pointer, the predicate re-read every render, the sheet's button untouched, and a real pull-up still refreshing with the loud-fail outcome matching the button's); earlier: floor 230 — RAISED from 204 by DI-442 (UN-385, 2026-09-29: [M1] the composer as the bottom section of ONE .chat-surface, 8px lift off the tab bar and off the keyboard, safe-area case, the textarea surviving inbound/send repaints through the extra ancestor, ↓ latest 8px clear of the composer in both keyboard states, signed-out prompt, sheet composer unchanged); earlier: floor 204 — RAISED from 167 by RG-TBD-M13 (2026-09-29: [M13] the chat box's typed text, placeholder and caret >= WCAG contrast in every theme x OS scheme x web/native, 36 matrix rows + the sheet composer); earlier: floor 167 — set at the release/v0.27.2 merge 2026-09-29 = 151 (raised 53 -> 62 RG-291, 104 RG-296 [G], 151 RG-297 [H] on 2026-09-28/29) + 16 from feat/gestures-v0272 round 3 [N4] (engine-measured reply glyph on received and own rows, the reply-drag x-clip, commit on release) — set 2026-09-28 at its first green merged run). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112h-cc] ccscrolltest.mjs — SB-05 CC-SCROLL-THROUGH (2026-09-30, Munera iOS): the
-// page under the control-center drawer is static from drag start until the drawer is
-// fully closed — root locked while #control-center is data-open/data-dragging, the
-// drawer's own list contains its overscroll, and the T-29 bottom bounce yields to a
-// horizontal drag. Full-app headless-Chrome suite (same boot recipe as [112g]/[112h]).
-console.log('\n[112h-cc] ccscrolltest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['ccscrolltest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `ccscrolltest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.split('\n').filter(l => l.includes('❌')).slice(0, 12).join('\n')}`);
-  const m112hcc = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112hcc, `ccscrolltest.mjs printed its own pass/fail summary line (fixture check)${m112hcc ? '' : '\n' + out.slice(-800)}`);
-  if (m112hcc) {
-    assert(Number(m112hcc[3]) === 0, `ccscrolltest.mjs reports zero failed assertions (got ${m112hcc[3]} failed, ${m112hcc[2]} passed)`);
-    assert(Number(m112hcc[2]) >= 73, `ccscrolltest.mjs actually ran its full set (got ${m112hcc[2]}, floor 73 — RAISED from 60 by SB-15 (2026-10-01): [F] +13 — the app's own Picks repaint mid-drawer-drag is parked and the release reaches the drawer; a drawer stranded by a raw repaint is recovered by ✕, the scrim, or the next touch in the left quarter (incl. at progress 0), and the page scrolls and bounces again; earlier: floor 60 — RAISED from 53 by SB-05 M1 (reviewer, 2026-10-01): +7 computed-style assertions that html AND body carry overscroll-behavior none while the drawer is open/dragging and auto once closed (1-3b, A-1b, B-1b, B-4b-3, B-5b, D-1b, D-3b); floor 53 was set 2026-09-30 at its first green run on fix/sb05-cc-scroll: [A] open, [B] drag open/close (incl. B-4b out-and-back at progress 0) + closing slide + JS bounce, [C] position/no-shift/release, [D] reduced motion, [E] ≥700px web). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112i] gradetest.mjs — wired 2026-09-28 (v0.27.1): it drives showGameModal()
-// through a fake DOM and now carries DI-415's field-lock cases (§7); it was
-// never spawned before (the "named-only suite" learning, TP 191).
-console.log('\n[112i] gradetest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['gradetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `gradetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m112i = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112i, `gradetest.mjs printed its own pass/fail summary line (fixture check)${m112i ? '' : '\n' + out.slice(-800)}`);
-  if (m112i) {
-    assert(Number(m112i[3]) === 0, `gradetest.mjs reports zero failed assertions (got ${m112i[3]} failed, ${m112i[2]} passed)`);
-    assert(Number(m112i[2]) >= 96, `gradetest.mjs actually ran its full set (got ${m112i[2]}, floor 96 — batch-5b integration 2026-10-01 — set to the measured merged count (SB-24's data-proof and classifier assertions); earlier: floor 66 — set 2026-09-28 at its first spawned run). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112j] matrixheadertest.mjs — wired 2026-09-28 (v0.27.2): DI-428(c) matrix game-header logos, ENGINE-MEASURED at 375/390/1024/1280 (headless Chrome, same spawn shape as shellrendertest [112e]).
-console.log('\n[112j] matrixheadertest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['matrixheadertest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `matrixheadertest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m, `matrixheadertest.mjs printed its own pass/fail summary line (fixture check)${m ? '' : '\n' + out.slice(-800)}`);
-  if (m) {
-    assert(Number(m[2]) === 0, `matrixheadertest.mjs reports zero failed assertions (got ${m[2]} failed, ${m[1]} passed)`);
-    assert(Number(m[1]) >= 48, `matrixheadertest.mjs actually ran its full set (got ${m[1]}, floor 48 — set 2026-09-28 at its first spawned run). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112k] layouttest.mjs — wired 2026-09-28 (v0.27.2): the Picks/Dashboard layout suite (real renders via navigateTo) — it carried DI-331/DI-428(a)/DI-426 coverage without ever being spawned (the "named-only suite" learning, TP 191).
-console.log('\n[112k] layouttest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['layouttest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `layouttest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m, `layouttest.mjs printed its own pass/fail summary line (fixture check)${m ? '' : '\n' + out.slice(-800)}`);
-  if (m) {
-    assert(Number(m[2]) === 0, `layouttest.mjs reports zero failed assertions (got ${m[2]} failed, ${m[1]} passed)`);
-    assert(Number(m[1]) >= 461, `layouttest.mjs actually ran its full set (got ${m[1]}, floor 461 — +1 SP57-c7a (release-notes exemption bounded, 2026-10-02); before that, floor 460 — the v0.29.0 batch-5b SP-54 merge (2026-10-01): 442 + SP-54's [SP54-L] pins; before that, floor 442 — set to the measured merged count at the v0.29.0 batch-5b integration (2026-10-01): Breathing Room spacing sweep (feat/spacing-sweep @ 7077da8, AD-103) merged onto int/batch5b. The sweep branch read floor 371 — RAISED from 368 by the Breathing Room sweep (2026-10-01, feat/spacing-sweep: SF12 reads the shared .btn-row primitive and gains f2/g2 — no .ml-sm left on any obligation button, the .stand-act-row .ml-sm rule is deleted, .stand-act-row declares no flex of its own; the SF8 golden literals lost the ' ml-sm' token and nothing else); earlier: … (the shared earlier history continues in int/batch5b's text below). int/batch5b read floor 440 — RAISED from 437 at the v0.29.0 batch-5b integration (2026-10-01): themes DI A1.11 re-derived SP57-e9 from one count check into four (a fixture check that the scan finds Block A, Paper Dark's page block and Graphite Dark under both triggers; every Dark --shadow-btn block also declares SP-57's --shadow-lift; the light :root default unchanged; never in the paper scope) = +3, measured 440 on the merged tree (SP-52's own layouttest re-derivations add none); floor 437 was RAISED from 434 by the SP-57 reviewer BLOCK B1 fix (2026-10-01: SP57-e10a the grip is out of flow, e10b the tiebreaker label keeps the grip's slot clear, e10c the density toggle's buttons hide with their toggle); floor 434 — RAISED from 433 by the SP-57 stale-alias fix (2026-10-01: SP57-e9c, and e9b now pins --shadow-lift as a LITERAL with no var(), DI-448 R1 / RG-273); floor 433 — RAISED from 368 by SP-57 (2026-10-01: [A4k]-[A4n] focus survives the repaint, the hidden path re-pointed pins A4a/A5d-g/A7d-e/A8/A10 and [SP57-a..e]: the drop's pure rule with a 400-case property, composeSections' gates, the ten markers, the retired button, the lifecycle source pins, the CSS contract); floor 368 — RAISED from 241 by SP-56 (2026-09-30, feat/sp56-standings-fit: [SF1]–[SF12] — the Standings fit proxy, the payment-action matrix, both tallies, the blind rule, every state-table row, the two-line week cell, XSS, the instant-scroll/haptic tap handler, Undo-is-Comm-only, Breathing Room, and the 50-cell obligationActionsHTML golden); earlier: floor 241 — RAISED from 234 by feat/gestures-v0272 round 3 (Opus, 2026-09-29: [A11n..r] B4 residual — after the draft fallback the REAL bindWeekSwipe drag on Picks reaches the previous week, via the shared picksShowingWeek() resolver); earlier: floor 234 — RAISED from 219 by feat/gestures-v0272 round 2 (2026-09-28: [A11g..j] the B4 commissioner-draft round trip, [A11k..m] a player's showInHistory:false week — both rewritten from the old A11g/h, which only tested the unreachable direction)); earlier: floor 219 — set 2026-09-28 at its first spawned run. Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112l] almatest.mjs — wired 2026-09-29 (v0.27.2 test-plumbing hotfix, TP 191 "a suite
-// named only in comments is not run"): alma-mater derivation, the ⭐ flag, the settings
-// bounded-size allow-list (RG-55) and RG-290's Profile-save ripple. It sat red, unread,
-// on two stale assertions from 781047b onward because nothing spawned it.
-console.log('\n[112l] almatest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['almatest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `almatest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  // Summary line: '✅ ALL PASS — N passed, M failed' when green, '❌ N passed, M failed' when red (no 'FAILURES —').
-  const m112l = out.match(/(?:✅ ALL PASS — |❌ )(\d+) passed, (\d+) failed/);
-  assert(!!m112l, `almatest.mjs printed its own pass/fail summary line (fixture check)${m112l ? '' : '\n' + out.slice(-800)}`);
-  if (m112l) {
-    assert(Number(m112l[2]) === 0, `almatest.mjs reports zero failed assertions (got ${m112l[2]} failed, ${m112l[1]} passed)`);
-    assert(Number(m112l[1]) >= 347, `almatest.mjs actually ran its full set (got ${m112l[1]}, floor 347 (SP-54, 2026-10-01: RAISED from 312 — [13d]/[6b] the alma snapshot builder and the lock-path stamp; the earlier history follows) — RAISED from 287 by the v0.27.4 integration merge 1/6 (2026-09-30: Batch B RG-305's full-ESPN-school-list pickers, confirmed on the merged tree); before that, floor 287 — RAISED from 271 by round 3 (Opus, feat/control-center-v0272, 2026-09-29): [21] R2 — the reviewer's exact sequence (fetch in flight, player changes the Profile select, fetch lands): the pick survives, options grow in place on the SAME node, None survives, an untouched select lands on the stored claim; minor (a) a failed fetch is not retried on later repaints; source scan that the landing never repaints Profile wholesale; before that, floor 271 — set 2026-09-29 at its first spawned run, after the stale [7] data-comm-tab expectation (settings -> rules, DI-319 amendment 3) and the [16] allow-list gap (reminderCadence/reminderCooldownHours, 916bdb7) were repaired). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112m] slatetest.mjs — wired 2026-09-29 (v0.27.2 test-plumbing hotfix, TP 191): the
-// slate-builder suite (DI-7 national-TV / tight-matchup chips and badges, add-to-slate
-// payloads, CSV). Three stale 📺 assertions sat red, unread, because nothing spawned it.
-console.log('\n[112m] slatetest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['slatetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `slatetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  // Summary line: '✅ ALL PASS — N passed, M failed' when green, '❌ N passed, M failed' when red (no 'FAILURES —').
-  const m112m = out.match(/(?:✅ ALL PASS — |❌ )(\d+) passed, (\d+) failed/);
-  assert(!!m112m, `slatetest.mjs printed its own pass/fail summary line (fixture check)${m112m ? '' : '\n' + out.slice(-800)}`);
-  if (m112m) {
-    assert(Number(m112m[2]) === 0, `slatetest.mjs reports zero failed assertions (got ${m112m[2]} failed, ${m112m[1]} passed)`);
-    assert(Number(m112m[1]) >= 146, `slatetest.mjs actually ran its full set (got ${m112m[1]}, floor 146 — set 2026-09-29 at its first spawned run, after the three stale 📺 expectations were re-derived to icon('tv') (D-1 icon migration) with a non-vacuity check on the glyph). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112n] controlcolortest.mjs — RG-309 (2026-09-29): the SIBLING-BUG SWEEP behind RG-TBD-M13. Every stylesheet
-// rule that gives an interactive control a background must leave it an explicit text colour (the UA's fieldtext/buttontext
-// follow the used color-scheme, so under OS dark they are WHITE on the light palettes). Static, mutation-proven, with the
-// tokens' contrast checked across all nine palettes; the real-engine render of the fixed controls is chatpagetest [M13b].
-console.log('\n[112n] controlcolortest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['controlcolortest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `controlcolortest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m112n = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112n, `controlcolortest.mjs printed its own pass/fail summary line (fixture check)${m112n ? '' : '\n' + out.slice(-800)}`);
-  if (m112n) {
-    assert(Number(m112n[3]) === 0, `controlcolortest.mjs reports zero failed assertions (got ${m112n[3]} failed, ${m112n[2]} passed)`);
-    assert(Number(m112n[2]) >= 25, `controlcolortest.mjs actually ran its full set (got ${m112n[2]}, floor 25 — RAISED from 21 by the v0.28.0 integration round 2 step 3 (2026-09-30): the Push branch's .league-switch-leaving ghost needed an allowlist entry (its [2c] reason check), and [3i]/[3j]/[3k] prove that entry goes stale if the ghost becomes a button or takes pointer events; before that, floor 21 — set 2026-09-29 at its first spawned run: [1] fixture, [2] the sweep + allowlist integrity, [3] the mutation proofs, [4] contrast across 9 palettes). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112o] weekswipetest.mjs — bug batch A, thread 091926-MULTISPORT (2026-09-29).
-// ENGINE-MEASURED (headless Chrome, the wizardsheettest boot recipe: real
-// index.html + app.js, local mode, real CDP touches through the real
-// navigateTo() binders). Guards RG-TBD-A1 (the week follows the finger for
-// the whole drag and slides on release — v0.27.2 swapped the week at the 40 px
-// crossing, under the finger), RG-TBD-A2 (a compact-Dashboard reorder drag
-// never becomes a week swipe or a drawer open; a locked week swipe never
-// becomes a reorder — Testing Protocol 168's real-app.js-path test for both
-// binders) and RG-TBD-A3 (the week title centred on its card with two, one,
-// or no arrows, and in the native shell). Serialise on a shared Mac:
-// `lockf /tmp/cfbp-loadtest.lock node loadtest.mjs`.
-console.log('\n[112o] weekswipetest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['weekswipetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `weekswipetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m112o = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m112o, `weekswipetest.mjs printed its own pass/fail summary line (fixture check)${m112o ? '' : '\n' + out.slice(-800)}`);
-  if (m112o) {
-    assert(Number(m112o[3]) === 0, `weekswipetest.mjs reports zero failed assertions (got ${m112o[3]} failed, ${m112o[2]} passed)`);
-    assert(Number(m112o[2]) >= 92, `weekswipetest.mjs actually ran its full set (got ${m112o[2]}, floor 92 — RAISED from 88 by the c7f8bee safety net [A-30..33] (hidden → visible mid-drag recovers; a stale claim never repaints under a new finger); floor 88 RAISED from 81 by the reviewer's notes: [A-24/25] velocity commit in the engine, [A-26..29] a live repaint mid-drag is parked and runs on release (no stranded offset), [E-4] the reorder long-press fires the app's haptic on native; floor 81 RAISED from 76 by RG-TBD-A4's native half ([E] the JS bottom rubber band runs on web only; the native shell leaves it to the WKWebView bounce); floor 76 set 2026-09-29 at its first green run: [A] follow-the-finger + slide on release + spring-back + edge + Picks + vertical + Reduce Motion (tracks the finger, cross-fades on commit, settles on cancel), [B] reorder vs. week swipe vs. drawer, [C] centred week title, [D] RG-TBD-A4 no web-layer suppression of vertical overscroll on five tabs). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112p] logotoggletest.mjs — wired 2026-09-29 (RG-TBD-N15, live v0.27.2: "i toggle off the
-// logos but theyre still there on the dashboard"). Every logo render path honors the toggle in
-// both states, and the REAL drawer toggle repaints the page under the drawer (Dashboard Standard
-// + Compact, Picks draft + submitted) in both directions; [4] the same class for the time-zone,
-// display-name and initials handlers.
-console.log('\n[112p] logotoggletest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['logotoggletest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `logotoggletest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.slice(-900)}`);
-  const m112p = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m112p, `logotoggletest.mjs printed its own pass/fail summary line (fixture check)${m112p ? '' : '\n' + out.slice(-800)}`);
-  if (m112p) {
-    assert(Number(m112p[2]) === 0, `logotoggletest.mjs reports zero failed assertions (got ${m112p[2]} failed, ${m112p[1]} passed)`);
-    assert(Number(m112p[1]) >= 73, `logotoggletest.mjs actually ran its full set (got ${m112p[1]}, floor 73 — RAISED from 71 by SP-52 (2026-10-01): [3-1] re-derived with one named validation exception (DI-455 A1.2) + [3-1a], [3-1b]; earlier: floor 71 — RAISED from 45 by the RG-TBD-N15 sweep (2026-09-29: [4] onSetTimeZone/onSaveDisplayName/onSaveInitials repaint the page under the drawer; theme/color scheme proved CSS-only); earlier: floor 45 — set 2026-09-29 at its first spawned run). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [112c-statusbar] statusbartest.mjs — SB-08 (2026-09-30, Drew's iPhone: "a row of color … underneath the floating island"). The status-bar
-// glyph tracker (js/status-bar.js): the glyph style follows the surface under the glyphs by luminance — the header from --chrome-bg (never
-// --maroon), the page from --bg, an opaque overlay from its own colour — one bridge call per flip, inert on the web. The engine half (the band's
-// paint and the glyph contrast sweep over every look) is navtest [7j]/[7k]/[7l], spawned at [88d].
-console.log('\n[112c-statusbar] statusbartest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['statusbartest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `statusbartest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.slice(-900)}`);
-  const mSb = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!mSb, `statusbartest.mjs printed its own pass/fail summary line (fixture check)${mSb ? '' : '\n' + out.slice(-800)}`);
-  if (mSb) {
-    assert(Number(mSb[2]) === 0, `statusbartest.mjs reports zero failed assertions (got ${mSb[2]} failed, ${mSb[1]} passed)`);
-    assert(Number(mSb[1]) >= 70, `statusbartest.mjs actually ran its full set (got ${mSb[1]}, floor 70 — RAISED from 69 by SP-52 (2026-10-01) to the suite's actual 70 (it was one under); [5j]/[5k] re-derived (the :where(body) var(--maroon) alias is replaced by the per-look --chrome-bg token, A1.1), same count; set 2026-09-30 at its first spawned run). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [124] tiebreaktest.mjs — SP-54 (DI-465 to DI-470, 2026-10-01): the weekly tie-break's math proofs, a SEPARATE file beside this one (CONVENTIONS #28, the grouptest.mjs precedent).
-// T20 is the GOLDEN of today's two-argument signatures (captured before scoring.js was edited); T1-T19 the vectors under ten input orders; T22/T23/T31 the forward-only guard, the
-// snapshot reader and the kickoff rule; T24/T25 one answer on every path and the persistence round trip; T26-T29 captions, notices and the season sort; T-K7 the structural pins.
-console.log('\n[124] tiebreaktest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['tiebreaktest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `tiebreaktest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.slice(-900)}`);
-  const m124 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m124, `tiebreaktest.mjs printed its own pass/fail summary line (fixture check)${m124 ? '' : '\n' + out.slice(-800)}`);
-  if (m124) {
-    assert(m124[1] === '✅ ALL PASS', `tiebreaktest.mjs itself reports ALL PASS (got: ${m124[0]})`);
-    assert(Number(m124[3]) === 0, `tiebreaktest.mjs reports zero failed assertions (got ${m124[3]} failed, ${m124[2]} passed)`);
-    assert(Number(m124[2]) >= 407, `tiebreaktest.mjs actually ran its full set (got ${m124[2]}, floor 407 (v0.29.0 release review N1, 2026-10-02: RAISED from 406 — T24 (group) pins the split-week email's tie reason); earlier: floor 406 (SP-54 second review, 2026-10-01: RAISED from 396 — [T-G]'s state classifier is tested on synthetic files clause by clause (K8), the effective date has a lower bound, an unparseable value is refused); earlier: floor 396 (SP-54 delta-BLOCK fixes B1-B3, 2026-10-01: RAISED from 392 — [T-G] is built from a provisional template and asserts the shipped file is PROVISIONAL or STAMPED, plus the value check; every fixture date is an offset from the two release constants); earlier: floor 392 (SP-54 MC-1 + release-gate plumbing, 2026-10-01: RAISED from 374 — T24's History proof drives the real weeklyHistoryOutcome(), T27c's shared card, and [T-G] the deploy.sh stop run as a dry run); earlier: — SP-54, 2026-10-01, the real count at the first stamp; the ratchet only tightens)`);
-  }
-}
-
-// ── [124b] ranktest.mjs — SP-54 BM-1 (security, 2026-10-01): SC-K7's PERMANENCE. ranktest.mjs holds the season-comparator tripwires and their canaries ([5], E1-E5: an `.ep` read, a
-// `tieContexts` mention off the allowlist, a `drawKey` call, a reformatted allowlisted line) and the N-1 proof ([11]) — and nothing ran it: it was red on base ([9]'s stale
-// data-comm-tab assertion, re-derived to the admin panel's data-admin-tab shell) and unspawned, so the AD-33 guard could rot unseen. Spawned like [124]; the floor is its real count.
-console.log('\n[124b] ranktest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['ranktest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `ranktest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.slice(-900)}`);
-  const m124b = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m124b, `ranktest.mjs printed its own pass/fail summary line (fixture check)${m124b ? '' : '\n' + out.slice(-800)}`);
-  if (m124b) {
-    assert(m124b[1] === '✅ ALL PASS', `ranktest.mjs itself reports ALL PASS (got: ${m124b[0]})`);
-    assert(Number(m124b[3]) === 0, `ranktest.mjs reports zero failed assertions (got ${m124b[3]} failed, ${m124b[2]} passed)`);
-    assert(Number(m124b[2]) >= 137, `ranktest.mjs actually ran its full set (got ${m124b[2]}, floor 137 — SP-54 delta C2, 2026-10-01: RAISED from 131 by [11](d2), a real save-tb-btn click in a shared league; earlier: floor 131 — SP-54 BM-1, 2026-10-01, the real count at its first spawned run, after [9]'s stale wrapper assertion was re-derived and [11] (N-1) added; the ratchet only tightens)`);
-  }
-}
 
 // ═══ BEGIN STEP 6 PHASE 5 (scribe-classify / scribe-autonomous) ═══
 // (Relabelled [89] -> [89b], ids 89-N -> 89b-N and the block's locals with them, at the v0.29.0 batch-4 integration, 2026-10-01 — reviewer N3:
@@ -13194,8 +11509,9 @@ console.log('\n[89b] js/scribe-scoring.js — the extraction is byte-faithful to
     `89b-2: every signal the ARCHIVED Code.gs knows carries the SAME value in js/scribe-scoring.js (drifted: ${JSON.stringify(drift89b)}, shared: ${shared89b.length})`);
   // N8 (2026-09-29) — `liveUpset` joins Package D's two: a live-upset call-out has no archive equivalent
   // either (Code.gs never had the trigger), and it is named here so a FOURTH unexplained key still fails.
-  assert(JSON.stringify(added89b) === JSON.stringify(['heatedExchange', 'liveUpset', 'roastOfScribe']),
-    `89b-2b: the only signals the client knows and the archive does not are Package D's two and N8's liveUpset (got ${JSON.stringify(added89b)})`);
+  // D1 Lane C (DI-652/653, 2026-10-08) — the scan's three triggers join them (the archive never had a scan); a SEVENTH unexplained key still fails.
+  assert(JSON.stringify(added89b) === JSON.stringify(['heatedExchange', 'historyCallback', 'liveUpset', 'nonParticipationChat', 'nonParticipationPicks', 'roastOfScribe']),
+    `89b-2b: the only signals the client knows and the archive does not are Package D's two, N8's liveUpset and the D1 scan's three (got ${JSON.stringify(added89b)})`);
   const scribeLines89b = mods['scribeLines'];
   assert(JSON.stringify(scribeLines89b.SIGNAL_POINTS) === JSON.stringify(scribeScoring89b.SIGNAL_POINTS),
     '89b-3: …and identical to js/scribeLines.js\'s own copy — three sources, one table');
@@ -13255,550 +11571,6 @@ console.log('\n[89b] js/scribe-scoring.js — the extraction is byte-faithful to
   const deploySh = await readFile(new URL('../deploy.sh', import.meta.url), 'utf8');
   assert(!/munera-ios|@capacitor/.test(deploySh),
     'RG-TBD-P1: deploy.sh names neither the iOS shell nor @capacitor anywhere — not even in a comment (the text that turned boundarytest red at e776455)');
-}
-
-// ── N1 league creation (2026-09-30) — the two new standalone suites ─────────────────────────────────────────────
-// leaguecreatetest.mjs: DI-430/433's pure half (copy, invite codes, the step machine, `cfbp_pending_join` incl. the REAL first-sign-in sweep, the twin with migration 0034,
-// the gate's default-CLOSED cache, gate-closed golden markup, source tripwires, CSS). pilotonlytest.mjs: DI-432 §7's registry and its tripwires.
-// (The app-level wiring of the same DIs is authtest.mjs [80], counted in [73b]'s floor above.)
-for (const [label, file, floor, why] of [
-  ['[114]', 'leaguecreatetest.mjs', 318, 'the New League flow: copy verbatim, codes, state machine, picker, renderers + escHtml, twin with 0034, the gate default, golden stub, League Page empty state, pending join, the real reconcile sweep, share, tripwires, CSS, storage inventory, the pilot-only registry'],
-  // v0.28.0 integration round 3b: floor 145 -> 146 = the live count on the merged tree (the acct-exit-client builder measured 146 against this floor of 145).
-  // v0.28.0 integration round 3b (R-F3): 146 -> 147, [4e] (behaviour: pilot by the flag, non-pilot its own name, unknown "Your league"); [4c]/[4d] were re-derived to pin the CLOSED seam.
-  ['[115]', 'pilotonlytest.mjs', 155,'the pilot-only registry: well-formed and closed, every registered client site contains its gate, every gate names a registered key (both directions, string-literal keys only), the server half is registered against real files, a non-pilot render carries none of the pilot league\'s content'],
-]) {
-  console.log(`\n${label} ${file} — spawned as a subprocess, exit code + printed pass/fail line both checked…`);
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, [file], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `${file} exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m, `${file} printed its own pass/fail summary line (fixture check)${m ? '' : '\n' + out.slice(-800)}`);
-  if (m) {
-    assert(Number(m[2]) === 0, `${file} reports zero failed assertions (got ${m[2]} failed, ${m[1]} passed)`);
-    assert(Number(m[1]) >= floor, `${file} actually ran its full set (got ${m[1]}, floor ${floor} — new with N1 league creation, 2026-09-30: ${why}). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── UN-389 / DI-446 (2026-09-30) — the Delete Account sheet's pure half ─────────────────────────────────────────────────────────────────────────────────
-// accountexittest.mjs: the copy, the state machine, the row kinds, the delete-enablement truth table, the server-wins rule, every renderer (escaped, refusing to run without
-// escHtml), the shared action-sheet builder, discardSheetHTML's byte identity against the N1 golden, the error classifier, the source tripwires, the CSS. (The app-level wiring of
-// the same DI — the real handlers against the fake client, in the order the final tap runs them — is authtest.mjs [57i], counted in [73b]'s floor above.)
-{
-  console.log('\n[116] accountexittest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['accountexittest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `accountexittest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m, `accountexittest.mjs printed its own pass/fail summary line (fixture check)${m ? '' : '\n' + out.slice(-800)}`);
-  if (m) {
-    assert(Number(m[2]) === 0, `accountexittest.mjs reports zero failed assertions (got ${m[2]} failed, ${m[1]} passed)`);
-    assert(Number(m[1]) >= 209, `accountexittest.mjs actually ran its full set (got ${m[1]}, floor 209 — batch-5b integration 2026-10-01 — set to the measured merged count; earlier: floor 208 — new with UN-389 / DI-446, 2026-09-30: copy verbatim, the preflight gate, row kinds, server truth wins, the delete-enablement truth table, escaped renderers, the shared action sheet + the discardSheetHTML golden, the error classifier, source tripwires, CSS). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [117] privacytest.mjs — the published privacy page IS the approved RD-01 v3.0.0 text (release v0.29.0, 2026-10-02; first pinned to v2.0.0-draft.3 in round 3b step 5, 2026-09-30) ────
-// Drew approved RD-01 v3.0.0 ("privacy policy approved", 2026-10-01; the version that adds ESPN News); privacy.html's body is that text, word for word, in the page's existing structure,
-// with the head untouched and ONE allowed difference: the body's `[publication date]` placeholder becomes the deploy date D (here 2026-10-02).
-// privacytest.mjs compares the page's visible text to a byte-identical golden of the approved document (sha256 5857e9cf…ff91, under supabase/tests/fixtures, which deploy.sh excludes)
-// and proves its own teeth with in-memory mutations (incl. the placeholder left in, a wrong date and "Headlines are never relayed." dropped); the file-level mutation proof is in the commit message that re-pinned it.
-{
-  console.log('\n[117] privacytest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['privacytest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `privacytest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m, `privacytest.mjs printed its own pass/fail summary line (fixture check)${m ? '' : '\n' + out.slice(-800)}`);
-  if (m) {
-    assert(Number(m[2]) === 0, `privacytest.mjs reports zero failed assertions (got ${m[2]} failed, ${m[1]} passed)`);
-    assert(Number(m[1]) >= 33, `privacytest.mjs actually ran its full set (got ${m[1]}, floor 33 — RAISED from 24 at the v3.0.0 re-pin (2026-10-02, same count under TZ=UTC and TZ=America/Los_Angeles): the placeholder-once / publishable-body / News-sentences assertions in [1] and the placeholder-left-in, wrong-date, page-placeholder and two dropped-promise mutations in [4]. Earlier, set 2026-09-30 at its first spawned run: [1] the golden is the approved document byte for byte, [2] the page's visible text equals the approved text and the head is untouched, [3] the Markdown maps onto the page's existing structure, [4] six in-memory mutations/controls prove the comparison can fail). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [118] btnspacingtest.mjs — SB-14 (Social Platform thread, 2026-09-30) ──────────────────────────────────────────────────────────────────────────────
-// Drew: "the edit my picks and view dashboard button at the bottom of the picks page are touching … they should be centered". The submitted-picks pair sat
-// inline in a text-align:center card, spaced by a margin on ONE button, so every iPhone width wrapped them with a 0 px gap and Edit drifted 4 px left.
-// The fix makes them one `.btn-row` group (container gap, centered, no per-button margin) — the "Breathing Room" rule in docs/# iOS App Polish & Design
-// Philosophy.md. This suite pins the structure, the CSS primitive, a layout MODEL (emitted markup + resolved cascade, not a live engine) at 375/390/430
-// wide x 1/1.35/2x text in OPEN and LOCKED states, and that model's calibration against the pre-fix Chrome measurement — only a device confirms the
-// final pixels. (navtest.mjs §7's submitted-view fixture carries the same .btn-row markup.)
-{
-  console.log('\n[118] btnspacingtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['btnspacingtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `btnspacingtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.slice(-900)}`);
-  const m = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m, `btnspacingtest.mjs printed its own pass/fail summary line (fixture check)${m ? '' : '\n' + out.slice(-800)}`);
-  if (m) {
-    assert(Number(m[2]) === 0, `btnspacingtest.mjs reports zero failed assertions (got ${m[2]} failed, ${m[1]} passed)`);
-    assert(Number(m[1]) >= 42, `btnspacingtest.mjs actually ran its full set (got ${m[1]}, floor 42 — set 2026-09-30 at its first spawned run, SB-14: [1] fixture integrity, [2] one .btn-row group with no per-button margin, [3] the CSS primitive, [4] the layout model, OPEN + LOCKED at 375/390/430 wide x 1/1.35/2x text, [5] model calibration against the pre-fix Chrome measurement). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [119] csvinjecttest.mjs — SB-13: no CSV export can carry a spreadsheet formula (security PF-2 + round-2 conditions, 2026-10-01) ────────────────────────
-// (Relabelled [118] -> [119] at the v0.29.0 batch-3 integration, 2026-10-01: [118] is SB-14's btnspacingtest, merged first.)
-// csvCell() guards every field start a comma-locale OR a `;`-locale spreadsheet sees (cell start, and every `;` / CR / LF / CRLF inside a value).
-// Own process: it drives bindCommEventListeners() and the real export buttons against a DOM stub and replaces globalThis.Blob to capture the bytes.
-{
-  console.log('\n[119] csvinjecttest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['csvinjecttest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `csvinjecttest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const summaryMatch119 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!summaryMatch119, `csvinjecttest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${summaryMatch119 ? '' : '\n' + out.slice(-800)}`);
-  if (summaryMatch119) {
-    assert(summaryMatch119[1] === '✅ ALL PASS', `csvinjecttest.mjs itself reports ALL PASS (got: ${summaryMatch119[0]})`);
-    assert(Number(summaryMatch119[3]) === 0, `csvinjecttest.mjs reports zero failed assertions (got ${summaryMatch119[3]} failed, ${summaryMatch119[2]} passed)`);
-    assert(Number(summaryMatch119[2]) >= 269, `csvinjecttest.mjs actually ran its full set (got ${summaryMatch119[2]}, floor 269 — RAISED from 264 by the SB-13 round 3 mutation pass (2026-10-01): five cases pin that non-ASCII whitespace (U+FEFF, NBSP, ideographic space) is crossed after a separator and at the lead, after a run narrowed to ASCII survived; floor 264 was RAISED from 217 by SB-13 round 3 (2026-10-01, security F1/F2):[8] a 100k LF / CRLF / CR / TAB cell each serializes in < 50 ms (the round-2 lookahead was quadratic on CR/LF runs), TAB is a separator ([1]/[1b] cases, benign TAB values in [3]) and [7] also runs a TAB-splitting reader over every export and both bundles; floor 217 was set 2026-10-01 at its first spawned run (SB-13 round 2):[1] every dangerous lead incl. leading space / quote / zero-width / fullwidth / LF and the non-number types (reviewer N1), [1b] every \`;\` / CR / LF / CRLF field start, [2] real numbers untouched, [3] benign values byte-identical + the pinned feedback-bullet cost, [4]-[5] every bound export and both bundles end to end, [6] structural (one Blob site, every downloadFile( accounted for, toCsv -> csvCell), [7] a \`;\`-locale reader over every export and both bundles). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [120] statstest.mjs — Social Platform v1 Home, DI-360 + DI-361 (js/stats-core.js, js/stats.js) ────────────────
-// Own process: its mutation section loads in-memory source copies as data: URLs (never the files), the same dirty-state reason [67]/[80] give. Shape of [68]/[73], NOT [73d].
-{
-  console.log('\n[120] statstest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['statstest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `statstest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m120 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m120, `statstest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m120 ? '' : '\n' + out.slice(-800)}`);
-  assert(!/ERR_MODULE_NOT_FOUND/.test(out), 'statstest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)');
-  if (m120) {
-    assert(m120[1] === '✅ ALL PASS', `statstest.mjs itself reports ALL PASS (got: ${m120[0]})`);
-    assert(Number(m120[3]) === 0, `statstest.mjs reports zero failed assertions (got ${m120[3]} failed, ${m120[2]} passed)`);
-    assert(Number(m120[2]) >= 169, `statstest.mjs actually ran its full set (got ${m120[2]}, floor 169 — RAISED from 167 at the v0.29.0 batch-3 integration (2026-10-01): M16 re-derived after SB-12 (dcc81c6) made getAlmaMaterMatch() itself safe for an inherited-property school — M16 now removes BOTH layers (stats.js's try/catch and data-model.js's ownGet()), with a fixture check that both SB-12 anchors applied, and 7-16b proves SB-12's layer holds alone (+2). Floor 167 was set 2026-10-01: the byte-identical SCRIBE extraction (a golden captured from the pre-extraction detector + 800 fuzz fixtures + 803 streak (fixture, week) pairs), SD-11 streak/upset vectors, the hand-derived two-week league, raw-vs-weighted, parity with calculateSeasonStandings, the S-C2 restriction proven load-bearing, N3 (UNANIMOUS_VISIBLE_STATUSES drops 'locked'), streakChange, the alma-mater helpers (incl. a school named "constructor"), and 18 mutation proofs). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [121] feedcardstest.mjs — Social Platform v1 Home, DI-362 / DI-363 / DI-373 (js/feed-cards.js, js/feed-caption-lines.js) ────────────────
-// The blind-rule acceptance gate for the Home feed: every card type x OPEN/LOCKED/LIVE/FINAL with positive controls, DI-373's Fixtures A/B/C/D, the C1 view re-application
-// (each layer alone holds; the named S-C2 mutation disables both), S-C5 id order, S-C10, the 13 directive examples, the injected escaper, the S-C12 caption maps, and ~50 mutation proofs.
-{
-  console.log('\n[121] feedcardstest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['feedcardstest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `feedcardstest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m121 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m121, `feedcardstest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m121 ? '' : '\n' + out.slice(-800)}`);
-  assert(!/ERR_MODULE_NOT_FOUND/.test(out), 'feedcardstest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)');
-  if (m121) {
-    assert(m121[1] === '✅ ALL PASS', `feedcardstest.mjs itself reports ALL PASS (got: ${m121[0]})`);
-    assert(Number(m121[3]) === 0, `feedcardstest.mjs reports zero failed assertions (got ${m121[3]} failed, ${m121[2]} passed)`);
-    assert(Number(m121[2]) >= 408, `feedcardstest.mjs actually ran its full set (got ${m121[2]}, floor 408 — RAISED from 392 on 2026-10-01 for SB-22: year.ago's denominator is the week's real 2025 slate size or none (7-12 YA1-YA4 on the real SEASON_2025, 7-13 YF1-YF6 on a fixture dataset with 8- and 12-game weeks, and mutants 11-30..35: the hard-coded 10, every week assumed 10, the conflict and top-score guards). Floor 392 was set 2026-10-01 (was 315 at its first cut, 2026-09-30): the security C1/C3/C4 and reviewer follow-ups — the view re-applied in deriveCards, the literal DI-373 Fixture C, the player.week alma fact, deep-frozen exports, the per-item chip allow-list, streak parity with SCRIBE over 80 seeded leagues, real-shaped private rows, and the caption-helper scan). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [122] leaguesettingstest.mjs — SP-53 League Settings' pure half (2026-10-01) ──────────────────────────────────────────────────────────────
-// (Relabelled [118] -> [122] at the v0.29.0 batch-3 integration, 2026-10-01: [118] is SB-14's btnspacingtest, [119] SB-13's csvinjecttest, [120]/[121] the Home
-// modules' statstest/feedcardstest.)
-// leaguesettingstest.mjs: the copy (DI-458..462, SC-L3/L9/L15, Q-W (a)), the error classifier, rename / leave / accepting against a fake client (the SEQUENCE of calls is the thing under test:
-// rpc -> dropMirror -> refresh), the outcome mappers swept, the Q-W predicate mirrored against the server's own text, the "(left)" derivation, the rename rules, the source tripwires, and
-// reviewer D3's identity pin between this module's archive sentence and account-exit.js's. Not covered: the page, the sheets, gestures, haptics, scroll, VoiceOver (UI wiring is a later pass).
-{
-  console.log('\n[122] leaguesettingstest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['leaguesettingstest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `leaguesettingstest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m, `leaguesettingstest.mjs printed its own pass/fail summary line (fixture check)${m ? '' : '\n' + out.slice(-800)}`);
-  if (m) {
-    assert(Number(m[2]) === 0, `leaguesettingstest.mjs reports zero failed assertions (got ${m[2]} failed, ${m[1]} passed)`);
-    assert(Number(m[1]) >= 176, `leaguesettingstest.mjs actually ran its full set (got ${m[1]}, floor 176 — RAISED from 170 for SP-53 release gate G-6 (2026-10-01): the bound parsed out of 0042's SQL and the client constant compared, the 140-case (status x lock x kickoff) server-model equality, the 17-row boundary table, the anchor (greatest, NULL-skipping), firstKickoffByWeek (min, poison-proof) and the games-derived weeks, and the purity pin. Floor 170 was set — new with SP-53, 2026-10-01: the copy verbatim, the leave sheet and footer, plain-text strings, every mapper x outcome, the error classifier, leaveLeague's call sequence, an expired session through the injected predicate, rename, the accepting switch, the Q-W mirror incl. its boundary, the (left) derivation, the rename rules, the source tripwires, the exports, and reviewer D3's archive-sentence identity pin with its teeth; the ratchet only tightens)`);
-  }
-}
-
-// ── [123] sectiondragtest.mjs — SP-57 (2026-10-01): the long-press SECTION DRAG, DI-475 / 476 / 385 / 386 ──────────────────────────────────────────────────────────
-// Two halves in one file. [1]-[9]: the engine (js/section-drag.js) headless — every decision is a pure function (the press gate, the eligibility predicate, the drop-target math,
-// the auto-scroll ramp, the focus rule), driven through a fake DOM + fake clock over the REAL nav-gestures claim model. [E]: the REAL app (index.html, styles.css, app.js booted in
-// headless Chromium as weekswipetest does) with REAL CDP touches — AT1-AT21's engine-measured half. This label is [123], not the engine's planned [112q]: [112q] is taken on release.
-// A missing browser is a FAILURE here, never a skip (same rule as weekswipetest). Serialise on a shared Mac: `lockf /tmp/cfbp-loadtest.lock node loadtest.mjs`.
-{
-  console.log('\n[123] sectiondragtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  // The engine-measured half boots a real browser and holds real touches for real milliseconds: ~200 s on a quiet Mac, so it gets twice the usual spawn budget (its own watchdog kills the browser at 500 s).
-  const result = spawnSync(process.execPath, ['sectiondragtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS * 2 });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `sectiondragtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.slice(-900)}`);
-  const m = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m, `sectiondragtest.mjs printed its own pass/fail summary line (fixture check)${m ? '' : '\n' + out.slice(-800)}`);
-  if (m) {
-    assert(Number(m[2]) === 0, `sectiondragtest.mjs reports zero failed assertions (got ${m[2]} failed, ${m[1]} passed)`);
-    assert(Number(m[1]) >= 736, `sectiondragtest.mjs actually ran its full set (got ${m[1]}, floor 736 — RAISED from 677 by the SP-57 reviewer BLOCK B1 fix (2026-10-01): [E4b] AT11 at 375/390/414/430/440 on both pages, web AND native shell, with a long tiebreaker question, plus N1 (a hold released in place announces nothing new); floor 677 — RAISED from 411 by the SP-57 wiring step (2026-10-01): the engine's own 411 plus [6h]/[8h]/[8i]/[8j] (the non-sticky header, the safe-area inset, the iOS 15 scroll fallback, the live region before its first announcement) and the whole [E] half — the REAL app in headless Chromium with real touches, AT1-AT21). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [125] themetest.mjs — SP-52 THEMES (Social Platform thread, feature-builder, 2026-10-01; DI-456). Four Munera looks (Munera, Paper, Ink, Graphite) and six school
-// themes, each with a Light and a Dark side = TWENTY sides, proved through the REAL cascade (themeresolve.mjs: specificity, order, the media trigger, var() substituted
-// on the declaring element — the SB-10 shape). [T1] the resolver on a synthetic sheet; [T2] every contract token on all 20 sides under both triggers; [T3] conformance to DI
-// Tables 1-4 (themetables.mjs) incl. every "—"; [T4] the contrast matrix + a ratcheted advisory list; [T5] disjoint writers / the A-list / the A&M trap; [T6] both triggers
-// byte-identical; [T7] no :root alias of an overridden token (the SB-10 guard, with a negative control); [T8] the chrome-literal scan; [T9] the on-accent/on-gold sweeps;
-// [T10] the Paper scope; [T11] RENDER FIXTURES — the real renderers, every text element, all 20 sides; [T12] the first-paint blocks executed in a sandbox; [T13] THEMES keys
-// = CSS blocks = the inline OK list; [T14] the fade is colour-only with a Reduce Motion twin; [T15] Graphite keeps "live" meaning live. Labelled [125]/[125b] (assigned by
-// the coordinator): [125b] re-runs it under America/Los_Angeles, the second owed TZ run, in the same harness.
-console.log('\n[125] themetest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['themetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `themetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m125 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m125, `themetest.mjs printed its own pass/fail summary line (fixture check)${m125 ? '' : '\n' + out.slice(-1200)}`);
-  if (m125) {
-    assert(m125[1] === '✅ ALL PASS' && Number(m125[3]) === 0, `themetest.mjs reports ALL PASS with zero failed assertions (got: ${m125[0]})`);
-    assert(Number(m125[2]) >= 334, `themetest.mjs actually ran its full set (got ${m125[2]}, floor 334 — RAISED from 314 by A1.9 review round (2026-10-01): the seven named-advisory 'still fires' assertions that A1.9 CLOSED are gone ([T4] two entries, [T11] five), and [T17] adds 27 pins (F1 on every Dark side under both triggers, F3a-F3e measured on every surface, the closed advisories cannot return, the restored 3.74 floors, the unmodified SB-06 guard); earlier: floor 314 — set 2026-10-01 (first green run 306, +2 for the independent Paper-root guard and its fixture-presence check, +6 for [T16] DI-454: the status-bar glyph style per look and per surface through js/status-bar.js's own maths, Graphite Light alone taking dark glyphs, T6a, and the band staying the page-coloured soft edge): [T1] 14 resolver self-tests, [T2] 42 (20 sides x 2 triggers + the two Paper scopes), [T3] 80+ conformance rows (every side x trigger, the "—" cells, the school facts, the Paper scope column), [T4] 40 sides-of-contrast + the readout + 3 named advisories, [T5] 29, [T6] 5, [T7] 4, [T8] 7, [T9] 25, [T10] 7, [T11] the render fixtures over 20 sides x 19 fixtures + 10 named advisories + the Paper Dark drawer, [T12] 10, [T13] 7, [T14] 4, [T15] 28). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-console.log('\n[125b] themetest.mjs under TZ=America/Los_Angeles — nothing in the theme proofs may depend on the machine\'s zone…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['themetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS, env: { ...process.env, TZ: 'America/Los_Angeles' } });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `themetest.mjs (TZ=America/Los_Angeles) exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m125b = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m125b && m125b[1] === '✅ ALL PASS' && Number(m125b[3]) === 0 && Number(m125b[2]) >= 334, `themetest.mjs (TZ=America/Los_Angeles) reports ALL PASS with the same floor (got: ${m125b ? m125b[0] : 'no summary line'})`);
-}
-
-// ── [127] leaguesettingsuitest.mjs — SP-53 League Settings' UI half (2026-10-01) ─────────────────────────────────────────────────────────────
-// leaguesettingsuitest.mjs: the rendered half (js/league-settings-view.js) across the DI §1 master state matrix, escaping and the number rule, its source tripwires, the control-center League group /
-// League Page row / admin and roster labels / Waive (pure), then THE WIRING driven through the real app.js and auth.js against a REAL element tree (minidom.mjs) and a fake Supabase client — the page and
-// both entries, the name card (in-place patching, every outcome), the switch (no optimistic flip), back / discard / swipe, Leave for a player / co-commissioner / sole commissioner (hand-off) / league of
-// one (archive consent), Q-W's one predicate, the landings, the teardown — the Comm Panel (roster labels, disabled codes, Waive / Undo, the Invite line), the obligationActionsHTML byte golden and the source
-// pins. Not covered: layout (leaguesettingsrendertest.mjs [127b] measures it in real Chromium), press feedback, motion, haptic FEEL, swipe physics, the keyboard, VoiceOver — device checks.
-{
-  console.log('\n[127] leaguesettingsuitest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['leaguesettingsuitest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `leaguesettingsuitest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m = out.match(/(\d+) passed, (\d+) failed/);
-  assert(!!m, `leaguesettingsuitest.mjs printed its own pass/fail summary line (fixture check)${m ? '' : '\n' + out.slice(-800)}`);
-  if (m) {
-    assert(Number(m[2]) === 0, `leaguesettingsuitest.mjs reports zero failed assertions (got ${m[2]} failed, ${m[1]} passed)`);
-    assert(Number(m[1]) >= 367, `leaguesettingsuitest.mjs actually ran its full set (got ${m[1]}, floor 367 — RAISED from 362 by the batch-5b MC-1 fix (2026-10-01): [3t-2] and three wired [4e-1] cases for the G-6 bound through the games pass-through; earlier: floor 362 — raised from 351 by the security fix (C-U1, 2026-10-01): [4i-1..11], a membership refresh that answers null ("could not ask") is unconfirmed / done_refresh_failed for rename, leave and the switch's refreshed flag, with online controls, the page copy and a source pin; before that, floor 351 — raised from 326 by the merge-review fix (2026-10-01, BLOCK #1): the Weekly History "(left)" caption and wait line [5s-0..10], the linked-removed roster caption [5b2..5b5], the Back-then-failure toasts [4b2-1..4], the League-group structure [1c2..1c4] and the CSS pins [6zh..6zj]; before that, floor 326 — raised from 324 by the release/v0.29.0 merge (2026-10-01): [5b-fixture] and [6t0] are the two fixture checks the merge added (SP-56 split obligationActionsHTML into three functions; SP-56's own block now follows the .ls-* block in styles.css); before that, floor 324 — raised from 322 by the mutation proofs (the waive role check and the own-picks lookup each survived the suite until [3q2] and [4e-3b] were added); new with SP-53's UI wiring, 2026-10-01; the ratchet only tightens)`);
-  }
-}
-
-// ── [127b] leaguesettingsrendertest.mjs — SP-53 League Settings MEASURED in a real engine (2026-10-01) ─────────────────────────────────────────────
-// Headless Chromium over the DevTools protocol (the shellrendertest.mjs mechanism), the REAL css/styles.css and the REAL league-settings-view.js: layout at 375 / 390 / 430 / 768 (no overflow with an 80-character
-// hostile name, rows >= 48 pt, 24 / 8 / 16 pt rhythm, tap targets >= 44), no layout jump across every name-card state, the F7 action layer never carried off by a scrolled page (with a control that must fail),
-// z-order by hit-test, the hand-off sheet on an SE-sized phone and at 768, a real mouse-down compressing a row to 97% (and a dimmed row not moving), the motion tokens and Reduce Motion, the drawer row, and mutation
-// canaries for the measurement itself. Needs a Chromium-family browser: a missing one is a FAILURE (LSTEST_ENGINE / SHELLTEST_ENGINE / NAVTEST_ENGINE override). Chromium is not WKWebView: device checks stay Drew's.
-console.log('\n[127b] leaguesettingsrendertest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['leaguesettingsrendertest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `leaguesettingsrendertest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.split('\n').filter(l => l.includes('❌')).slice(0, 12).join('\n')}`);
-  const m127b = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m127b, `leaguesettingsrendertest.mjs printed its own pass/fail summary line (fixture check)${m127b ? '' : '\n' + out.slice(-800)}`);
-  if (m127b) {
-    assert(Number(m127b[3]) === 0, `leaguesettingsrendertest.mjs reports zero failed assertions (got ${m127b[3]} failed, ${m127b[2]} passed)`);
-    assert(Number(m127b[2]) >= 301, `leaguesettingsrendertest.mjs actually ran its full set (got ${m127b[2]}, floor 301 — raised from 217 by the merge-review fix (2026-10-01, BLOCK #1): the League-group 16 pt / name-block 8 pt / Leave-footer 8 pt measurements at four widths for five cases, the title gap, the two spacing canaries and [I] the Standings caption (with its canary); before that, floor 217 — new with SP-53's UI wiring, 2026-10-01; the ratchet only tightens)`);
-  }
-}
-
-// ── [128] hometest.mjs — Social Platform v1 Home, DI-364 / 366 / 367 / 368 / 371 / 372 / 373 / 374 (js/home.js, the Home renderer) ────────────────
-// The Home renderer's proof: the Now card state machine (one row of DI-364 each, S-C3's anonymous-viewer fixture), the snapshot (S-C2 revealed view, S-C10 flags, counts-only submissions, S-C11
-// league stamping), the chat-candidate source (private / deleted / wager rows, SCRIBE through the blind-gated path only — security C2), mergeFeed (order, week grouping, news density / freshness /
-// states, determinism), every state (skeleton, empty, calm error card, content withheld), escaping at the sink (a tagging escaper), pull-to-refresh's two independent failure paths, the S-C7 re-checks
-// after every await, the interactions (delegated, allow-listed), the [BLIND-RULE] page-level matrix with positive controls, the CSS block, and 51 in-memory MUTATION proofs (the file is never touched).
-// Own process: its mutation section loads in-memory source copies as data: URLs, the same dirty-state reason [67]/[80]/[120]/[121] give.
-{
-  console.log('\n[128] hometest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['hometest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `hometest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m128 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m128, `hometest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m128 ? '' : '\n' + out.slice(-800)}`);
-  assert(!/ERR_MODULE_NOT_FOUND/.test(out), 'hometest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)');
-  if (m128) {
-    assert(m128[1] === '✅ ALL PASS', `hometest.mjs itself reports ALL PASS (got: ${m128[0]})`);
-    assert(Number(m128[3]) === 0, `hometest.mjs reports zero failed assertions (got ${m128[3]} failed, ${m128[2]} passed)`);
-    assert(Number(m128[2]) >= 323, `hometest.mjs actually ran its full set (got ${m128[2]}, floor 323 — RAISED from 318 at the v0.29.0 batch-4 integration (2026-10-01): the security note on chatCandidates' provenance switch — C11e (a MISSING \`supabase\` is supabase mode) and C11f (a non-boolean one is too), and mutants 12-53/54/55 (the false default, the \`=== true\` read, and the exact pre-fix code each go RED). Floor 318 was set 2026-10-01 at its first spawned run (264), raised to 270 for the Reduce Motion pins [11-22a..e] and the no-recap pin [1-17b], to 299 for the security conditions (B1 attribute-quote pins, B2 fail-closed gate, B3 role at dispatch, S1 conjunctive SCRIBE week gate, S2 revealed-view-only final headline, W1 row-own league stamp), and to 318 for the reviewer's merge conditions (Breathing Room text groups, no skeleton layout shift, no end marker after an error, refresh() as the news leg only, data-comm-target, 28-day between-seasons) — 51 mutation proofs in all: the static contract (imports, no writes, no canViewOtherPicks, markup assembled only by joinHtml / glyphSpan, iOS 15, no literals), required dependencies, the Now card's nine states + the commissioner nudge, the snapshot, the chat-candidate source, mergeFeed, rendering / escaping / skeleton / error / withheld, async + pull-to-refresh, interactions, the [BLIND-RULE] page matrix, the CSS block, and 51 mutation proofs). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [129] standingscopetest.mjs — SB-19 STANDINGS WEEK SCOPE (Social Platform
-// thread, bugfixer, 2026-10-01; found by the SB-04 reviewer). The Season
-// Standings CSV (driven through the REAL Admin → Data button handler) and the
-// commissioner email digest's season block count exactly the weeks the
-// Standings page does — no demo week, no hidden week, no result for a deleted
-// week — via the one predicate isWeekShownInStandings(); seasonStandingsRows()
-// pinned byte-identical to the pre-fix code on a 30-shape week matrix; the
-// digest's season block IS seasonStandingsRows() — grouping-aware like the page
-// (SB-19b, 2026-10-01, Drew: "agree with weekly email"; it was pinned
-// grouping-unaware under UN-118/UN-125's held ruling until then), and on a
-// split week its weekly winner/loser lines are Weekly History's own
-// (weeklyHistoryResult(), [4c]); a
-// deny-by-default tripwire on any new inline `showInHistory !== false` rule.
-// Own process, [73]'s reason: it replaces globalThis.Blob/URL and the DOM stub.
-console.log('\n[129] standingscopetest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['standingscopetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `standingscopetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.slice(-1200)}`);
-  const m129 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m129, `standingscopetest.mjs printed its own pass/fail summary line (fixture check)${m129 ? '' : '\n' + out.slice(-800)}`);
-  if (m129) {
-    assert(m129[1] === '✅ ALL PASS' && Number(m129[3]) === 0, `standingscopetest.mjs reports ALL PASS with zero failed assertions (got: ${m129[0]})`);
-    assert(Number(m129[2]) >= 86, `standingscopetest.mjs actually ran its full set (got ${m129[2]}, floor 86 — RAISED from 78 on 2026-10-02 for the v0.29.0 release review's N2: [4c](iv) +6 — a final single-part week whose stored winner or loser has left is named as Weekly History names it, "(left)" included; an unfinalized or hidden week keeps its computed lines; earlier: floor 78 — RAISED from 71 on 2026-10-01 for the bundle review's N1/N2: [4c] +3 single-part pins (a final single-part week keeps its own winner/loser lines with no group label and its own 🏆/💀; an open one prints no "In progress") — the \`members.length >= 1\` mutant used to survive every suite — and +4 for the group label History shows, on both lines, final and in progress. Floor 71 was RAISED from 57 on 2026-10-01 for the SB-19b follow-up: [4c] +14 — on a split week the digest's weekly winner/loser lines are Weekly History's (the real renderLeaderboard() row): every part final → the pooled winner/loser named once, from both parts' digests; a part unfinished → "In progress" where History says it; no per-part 🏆/💀 in the picks table; the digest calls weeklyHistoryResult(). Floor 57 was RAISED from 49 on 2026-10-01 for SB-19b: [4b] re-derived from 2 grouping-unaware pins to 10 grouping-aware ones (a fully final 2-part week is ONE weekly W/L, hand-derived; a part still unfinished is none yet; both equal the Standings page). Floor 49 was set 2026-10-01 at its first green run: [0] 7 fixture checks; [1] 9 positive controls; [2] 6 byte-identical pins; [3] 4 CSV; [4] 4 digest; [4b] 2; [5] 17 predicate truth table + deny-by-default tripwire + 4 canaries + usage checks). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [130] chatscopetest.mjs — SB-20 (2026-10-01): the chat store belongs to ONE (account, league) ──────────────────────────────────────
-// Own process for [73]'s reason: it drives js/app.js's real doSwitchActiveLeague() and identity chokepoint, js/auth.js's real signOut()/SIGNED_IN, and a
-// LIVE chat subscription against a fake two-league messages table (per-league seqs, RLS on visible_to, Realtime channels) — DOM, localStorage and the
-// transport context all replaced for the whole run. Shape of [68]/[73].
-{
-  console.log('\n[130] chatscopetest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['chatscopetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `chatscopetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m130 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m130, `chatscopetest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m130 ? '' : '\n' + out.slice(-800)}`);
-  assert(!/ERR_MODULE_NOT_FOUND/.test(out), 'chatscopetest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)');
-  if (m130) {
-    assert(m130[1] === '✅ ALL PASS', `chatscopetest.mjs itself reports ALL PASS (got: ${m130[0]})`);
-    assert(Number(m130[3]) === 0, `chatscopetest.mjs reports zero failed assertions (got ${m130[3]} failed, ${m130[2]} passed)`);
-    assert(Number(m130[2]) >= 254, `chatscopetest.mjs actually ran its full set (got ${m130[2]}, floor 254 — RAISED from 235 by the v0.29.0 Home wiring window (2026-10-01): [24] chatBoundToLeague (DI-372 amendment A1): the store-backed predicate through the real store and transport, a league switch, an account change, plus a nine-row truth table with five mutants (+19); before that, floor 235 — set 2026-10-01 at C-U3 (232 -> 235 at the reviewer's conditions: C1 [23](h) a resolved re-read while the store is already at no league is a no-op — 'kept', generation unchanged, a RAM-only row survives; C2 [23](c) the rejoin's fresh read is issued by the transport's own boot rung, never a test-driven refresh; 175 -> 232:[23] leaving a league empties the chat store in EVERY landing — none / one / two-or-more remain — and the rest of the class: a commissioner removal re-read in the same three landings, a rejoin that brings nothing back from memory or disk before a held fresh read lands, an account change with the pointer null (Sign Out / expiry then B / B straight in), the "not resolved yet" boundary (null pointer with no list, a failed read, a list that still has the league — all KEPT), a refused-sweep reload whose resolved list ends the league without moving the identity key, and this device's own unsent work kept as on a league-only move); then SB-20 (141 -> 175 at security C-A + the reviewer's §[18] BLOCK, incl. [18]'s hygiene pin that no coalesced flush survives _resetForTest(): [22] the @scribe mention never asks or posts for an asker who left — the P5 matrix (fail/success x same/other league x epoch/no-epoch), a same-account league switch, an ask in flight across the handover, the reset rejecting waiters as scopeMoved, two positive controls; [21] widened to every effect on its own path (success AND catch), settleAppend in the write set, fireScribeMention() covered, the rescope-settles-waiters pin; [18] counts only its own appends; 99 -> 141 at review BLOCK #1 + security PASS WITH CONDITIONS: B1 the importer verifier hashes rowToMessageEvent() [19]; N1/F2 no-marker replay refused on a Supabase device in the real early-boot window, signOut() keeps the marker over an incomplete sweep, security P2 [14]; F1 an in-flight append is never put back across an account handover, P1/P1c + the league-only control [18]; security P3 the real involuntary SIGNED_OUT x five arrival shapes [13]; the mark-read switch-window sibling [20]; the await/scopeGen class rule as a static check [21]; the visible_to census with security's canaries [11]; 85 -> 99 earlier that day: [17] pins the Home security reviewer's contract — camelCase leagueId on the folded item, the row's OWN league_id (never the requested/active league, at fold or read time), the store emptied not merely filtered — and [8] pins league_id surviving rowToMessage -> fold -> getMessages; 82 -> 85 earlier that day: mutation M6 showed the deliberate-Sign-Out reset was masked by the read filter, so [13] now asserts the emptied cursor and that the same account signing back in gets nothing left over): an in-page league switch (smaller and bigger new league, the events cache, the new room's first drain classified as history), an in-page Sign Out -> a different account in another league and in the same league (private rows), late poll, Realtime and "Load earlier" frames (the last independent of the transport's epoch), leagueId on every folded row, the read-side league filter, isPrivateRow() and its visible_to writer allow-list, no reset on the ordinary boot / token refresh / same-league paths, Sign Out vs expiry, the cold-boot handover from the device cache, and this device's own unsent / failed work across a reset. Raise the floor when the suite grows; the ratchet only tightens)`);
-  }
-}
-
-// ── [131] overlayscrolltest.mjs — SB-16 OVERLAY SCROLL-THROUGH (Social Platform
-// thread, bugfixer, 2026-10-01). SB-05's page lock ([112h-cc]) for the four other
-// surfaces that sit on top of the page: every .modal-overlay, the game-chat sheet
-// (#chat-sheet-wrap), the League Page and Your Leagues. Keyed on their presence
-// (html:has()), with SB-05's overflow + html/body overscroll pair; each surface's
-// own scroller contains its overscroll and still scrolls; the locks never fight
-// (Chat, drawer, League Page, two at once) and every html:has() lock in
-// styles.css sets the same two values. Full-app headless-Chrome suite (the
-// [112h-cc] boot recipe).
-console.log('\n[131] overlayscrolltest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-{
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['overlayscrolltest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `overlayscrolltest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.split('\n').filter(l => l.includes('❌')).slice(0, 12).join('\n')}`);
-  const m131 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m131, `overlayscrolltest.mjs printed its own pass/fail summary line (fixture check)${m131 ? '' : '\n' + out.slice(-800)}`);
-  if (m131) {
-    assert(m131[1] === '✅ ALL PASS' && Number(m131[3]) === 0, `overlayscrolltest.mjs reports ALL PASS with zero failed assertions (got: ${m131[0]})`);
-    assert(Number(m131[2]) >= 85, `overlayscrolltest.mjs actually ran its full set (got ${m131[2]}, floor 85 — set 2026-10-01 at its first green run (RED before the fix: 47 passed, 38 failed): [0] 9 engine/server checks; [1] 6 fixtures; [M]/[C]/[L]/[H] 13 each — fixture, root lock, M1 bounce pair, two swipes, a wheel, own-scroller containment, own content overflows + scrolls, past-the-end both ways, close (exact position, lock lifted, page free); [G] 7 — the locks do not fight; [G-css] 11 — every html:has() lock sets only overflow:hidden / overscroll-behavior:none, the four new pairs, the five pre-existing locks, a canary). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [133] newstest.mjs — Social Platform News, option A (ESPN headlines only): js/newsRules.js / newsCard.js / newsRank.js / newsTransport.js / newsFeed.js / newsSettings.js, the News edits to control-center.js,
-//    storage.js (news prefs), platform.js (openExternalUrl) and data-model.js (newsEnabled) — DI-375…384 and the SC-N rules that apply to an ESPN-only client transport ────────────────
-// The news proof: parseArticleUrl's S-C1 vectors (the backslash proof case, userinfo, ports, lookalike hosts, the serialized href that is the ONLY thing ever opened), the card's single quote-complete escaper and
-// the Home security W9 contract (no href, no data-home-action / data-tab / data-comm-target / data-haptic, https ESPN-CDN pictures only), the [BET-KEEP] guards (betting headlines are KEPT: Drew reversed SD-6 on
-// 2026-10-01 and the betting filter was removed), ranking accuracy (exact short names, union resolution, sport gating) and the blind rule (ownPickTeamNames fail-closed, S-C2), normalization (S-C5), identity (S-C9, the real epoch and league
-// primitives), zero network when off (S-C8), the kill switch's three layers, the untrusted-on-read preferences (S-C7), the News pane in the control-center drawer, the UN-341 import allow-list, and 60 in-memory
-// MUTATION proofs (one per `await mutant(` call site in newstest.mjs [10]; the files are never touched; re-counted 2026-10-01, the earlier "58" was stale). Own process: its mutation section loads in-memory source copies as data: URLs, the same dirty-state reason [67]/[80]/[120]/[121]/[128] give.
-{
-  console.log('\n[133] newstest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['newstest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `newstest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m133 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m133, `newstest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m133 ? '' : '\n' + out.slice(-800)}`);
-  assert(!/ERR_MODULE_NOT_FOUND/.test(out), 'newstest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)');
-  if (m133) {
-    assert(m133[1] === '✅ ALL PASS', `newstest.mjs itself reports ALL PASS (got: ${m133[0]})`);
-    assert(Number(m133[3]) === 0, `newstest.mjs reports zero failed assertions (got ${m133[3]} failed, ${m133[2]} passed)`);
-    assert(Number(m133[2]) >= 582, `newstest.mjs actually ran its full set (got ${m133[2]}, floor 582 — RAISED from 581 by the v0.29.0 Home wiring window (2026-10-01): 2-8b: the [BET-KEEP] scan now reaches newsCard.js (renderNewsCard) and home.js (the news splice) (+1); before that, floor 581 — LOWERED from 619 on 2026-10-01 by Drew's own ruling ("ok to remove betting filter" / "I want betting news"): the scored betting filter was removed WITH ITS FEATURE, so its 38 vector / B-check / X6 / F6 assertions and 11 betting mutants went with it, replaced by the [BET-KEEP] guards (2-7, 2-8, 5-13, 5-14, 8-17, X5, F6, B11, mutants M71 and M72) that keep betting headlines in; 619 was RAISED from 618 by review round 2 (R2: the non-pilot remove path, check P6 plus mutant M70); 618 was RAISED from 574 by the reviewer / security fix round (2026-10-01): F1 the picker keeps the full list and its caption after a chip add or remove, F2 "Your pick" renders (pick before slate, end to end), F3 the retuned betting filter, F5 focus restore and the no-sports line, C3 hostname characters, C4 the streaming byte cap, with 7 more mutants; before that new with Social Platform News option A, 2026-10-01 (floor 536 at the first commit; +38 for the coordinator-approved http->https upgrade of ESPN article hosts: the helper's refusals, the kept NHL-style links, the validator unchanged, four mutants): static contract and allow-lists, the betting filter, the card / URL / tap contract, ranking, the transport, the kill switch, preferences, the adapter, the settings pane, the CSS block (tokens only, neutral card, 8-pt grid, press, Reduce Motion, 44 pt), and 58 mutation proofs)`);
-  }
-}
-
-// ── [133b] newshometest.mjs — Social Platform News, option A — the HOME-LEVEL proof (Home security W9): the real createHome + the real news adapter / card / tap ────────────────────────────────────
-// A hostile headline plus a fake <button data-home-action="build-slate"> yields no raw element and no onAction (and a mutant card that DOES emit it turns the proof red), news OFF means the slot does not
-// exist and nothing was requested, empty vs error vs Retry, resetNews() (the prefs-changed hook) takes an OFF slot to ON and abandons a load in flight, a tap resolves by id against the current items.
-// Own process, same reason as [133].
-{
-  console.log('\n[133b] newshometest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['newshometest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `newshometest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m133b = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m133b, `newshometest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m133b ? '' : '\n' + out.slice(-800)}`);
-  assert(!/ERR_MODULE_NOT_FOUND/.test(out), 'newshometest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)');
-  if (m133b) {
-    assert(m133b[1] === '✅ ALL PASS', `newshometest.mjs itself reports ALL PASS (got: ${m133b[0]})`);
-    assert(Number(m133b[3]) === 0, `newshometest.mjs reports zero failed assertions (got ${m133b[3]} failed, ${m133b[2]} passed)`);
-    assert(Number(m133b[2]) >= 66, `newshometest.mjs actually ran its full set (got ${m133b[2]}, floor 66 — RAISED from 54 by the v0.29.0 Home wiring window (2026-10-01): [7] A's late answer must not reset a slot already committed for the current viewer, with a mutant (+5), 6-4b/6-5's second defence (+1), and [8] [BET-KEEP] through the REAL Home renderer with a card-level and a Home-level mutant (+6); before that, floor 54 — RAISED from 49 by review round 2 (R3: A's late quiet answer must not reset B's committed slot, 5 assertions with a Home mutant); 49 was RAISED from 31 by security C1 (a committed news answer is tied to the identity it was committed under, with a Home mutant) and reviewer F5 (the no-sports empty line through Home's newsEmptyCopy dep); new with Social Platform News option A, 2026-10-01)`);
-  }
-}
-
-// ── [134] spacingtest.mjs — the app-wide Breathing Room sweep (Social Platform thread, 2026-10-01, Drew: "all recommended", AD-103) ───────────────────────
-// Drew has asked several times that buttons and lines never touch. This is the engine-measured follow-through on SB-14: a real Chromium lays out the REAL css/styles.css against the
-// markup the app's own renderers emit and measures distances — card padding 16 at every phone width, the obligation groups (8 pt gap, 16 pt from the text, no margins, 0 pt before),
-// the chat settings panel (swatch gap, rows vs dividers, the reserved alma caption, "My SCRIBE File" at 2x text), the centred Submit Feedback group, the release-notes dividers, and the
-// pencil glyph — each in light and dark where it applies, with in-suite anti-vacuity mutants (the OLD sheet / OLD markup must turn each detector red). Needs a Chromium-family browser;
-// a missing one is a FAILURE, never a skip (SPACINGTEST_ENGINE / NAVTEST_ENGINE override the search, same rule as navtest [7]).
-{
-  console.log('\n[134] spacingtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['spacingtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `spacingtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.slice(-900)}`);
-  const m134 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m134, `spacingtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m134 ? '' : '\n' + out.slice(-800)}`);
-  if (m134) {
-    assert(m134[1] === '✅ ALL PASS', `spacingtest.mjs itself reports ALL PASS (got: ${m134[0]})`);
-    assert(Number(m134[3]) === 0, `spacingtest.mjs reports zero failed assertions (got ${m134[3]} failed, ${m134[2]} passed)`);
-    assert(Number(m134[2]) >= 278, `spacingtest.mjs actually ran its full set (got ${m134[2]}, floor 278 — RAISED from 272 by the v0.29.0 Home wiring window (2026-10-01): the News feed's article card ('card news-card', padding 0/0/0/0 because the picture is full-bleed) is pinned by exact class list, and [2i] x5 (its .news-card__body keeps >= 16 pt on every side, light 320/375/430/600 + dark 375) + [2j] (anti-vacuity: .news-card__body{padding:8px 12px} reads 8/12/8/12) are the +6, measured 278; before that, floor 272 — RAISED from 264 at the v0.29.0 batch-5b integration (2026-10-01): the coordinator's ruling pins SP-53's grouped-list cards ('card ls-card', 'card ls-card ls-facts') at 0/0/0/0 by EXACT class list with a dead-exemption guard (+1), and [2g] holds every .ls-row inside an .ls-card to >= 16 pt left/right at 320/375/430/600 light + 375 dark with its fixture (+6) and the [2h] anti-vacuity mutant (+1); the reviewer nit took [3c] to >= 15.5 (sub-pixel tolerance, no count change); floor 264 was RAISED from 154 by the reviewer BLOCK #1 fix (2026-10-01): [3c]/[3d] re-measured against the text's real line boxes at 320/375 x 1x/2x, the min-width:0 and text-yields mutants, [2d] every card class the app renders, [3i]-[3l] tap floor + filter tabs, [5f]-[5h] the live-region status line, [9] the Notifications priming card; earlier: floor 154 — set 2026-10-01 at its first spawned run: [1] fixture integrity, [2] card padding, [3] obligation groups, [4] chat settings, [5] Submit Feedback, [6] release notes, [7] Edit My Picks, [8] source guards, plus the anti-vacuity mutants. Raise the floor when the suite grows; the ratchet only tightens)`);
-  }
-}
-
-// ── [135] homenavtest.mjs — the Home wiring window (v0.29.0, 2026-10-01): the five-tab nav with the centre Home disc (Treatment E, 56 pt), Home as the default landing, and the wiring that
-//    hands js/home.js its REAL gates (DESIGN_NEEDS_HOME Amendment 3 + 3.1, DI-370/372 incl. inline amendment A1, HOME_WIRING_CHECKLIST_100126 items 1-18, security W1-W9) ──────────
-// [1] the static markup and the ship-together rule (currentTab is 'home' iff the Home button + the active #page-home exist: a mutant per half), the cold-boot skeleton equal to what home.js paints;
-// [2] the CSS contract with a mutant per clause (the hide distances carry the disc reach, the clearance carries NO disc term, the floor, the disc never offset, no overflow:hidden on the pill);
-// [3] the disc rules' token discipline; [4] the wiring by SOURCE: every gate passed BY REFERENCE (a stub or wrapper mutant for each: W2/W3/W5), lazy construction, the dispatcher, the four repaint sites, the
-// refresh leg, the identity reset, W6, W7; [5] the wiring RUN: the real app.js against a real element tree built from the real index.html (minidom): navigateTo, the tab-change selection haptic, the container
-// re-created after a teardown, the paused banner surviving a Home repaint, go-tab / build-slate, the refresh leg, the native restore round trip, the menu trigger. Real LAYOUT is navtest [7m]; contrast is themetest [T4];
-// S-C7's cold-boot proof is boottest [HOME]. Own process: it imports the real app.js against its own DOM, the same dirty-state reason [67]/[80]/[120]/[121]/[128]/[133] give.
-{
-  console.log('\n[135] homenavtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['homenavtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `homenavtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.slice(-900)}`);
-  const m135 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m135, `homenavtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m135 ? '' : '\n' + out.slice(-800)}`);
-  assert(!/ERR_MODULE_NOT_FOUND/.test(out), 'homenavtest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)');
-  if (m135) {
-    assert(m135[1] === '✅ ALL PASS', `homenavtest.mjs itself reports ALL PASS (got: ${m135[0]})`);
-    assert(Number(m135[3]) === 0, `homenavtest.mjs reports zero failed assertions (got ${m135[3]} failed, ${m135[2]} passed)`);
-    assert(Number(m135[2]) >= 115, `homenavtest.mjs actually ran its full set (got ${m135[2]}, floor 115 — RAISED from 113 by the Chat lift (Drew M-11 Q2, 2026-10-02): [2] gains the chatLift and chatKeyboardGap clauses with a mutant each (+2); before that, floor 113 — RAISED from 108 by the Home wiring review fixes (2026-10-02): 6-9b is now a real assertion (it was `|| true`, N1) that also proves the feed is sensitive to the tie context, 6-9c a feed-cards mutant on the rank cards, the banner-nudge clause + two mutants in [2], and 4-5b/4-5c pin that _repaintForSupabaseData navigates to state.currentTab; before that, floor 108 — set 2026-10-01 at its first green run on both time zones (108 = 97 + [6], the SP-54 item-21 parity section's 11: a two-part group whose pooled tie the weekly tie-break decides, Home's memberSeasonStats equal to seasonStandingsRows() for every player, the fixture proven SENSITIVE (no context answers differently), the revealed-group restriction, the one shared builder, and the feed-level pass-through proven with a spy map and a feed-cards mutant; the first run caught that feed-cards' snapshot normalization would have DROPPED the context): [1]–[5] as follows ( [1] the static markup, the ship-together rule with four mutants and the skeleton equality; [2] the CSS contract (1 + 11 mutants); [3] token discipline; [4] the wiring by source (pins plus nine reference/stub mutants, W2/W3/W5/W6/W7); [5] the wiring run (navigateTo, the selection haptic, teardown re-creation, the banner, go-tab, build-slate, the refresh leg, the native restore, the menu trigger). The runtime half was mutation-proven in scratch on app.js (seven mutants: no tab haptic, no Home refresh leg, no root re-creation, no banner after a Home paint, build-slate without the role re-check, a haptic on every tap, go-tab ignoring commTab), each restored and cmp-verified)) — a FLOOR rather than a count, because the ratchet only tightens and a suite that shrank is a guard somebody removed`);
-  }
-}
-
-// ── [136] weekpagertest.mjs — SB-23, the week swipe as an iOS pager (Social Platform, 2026-10-01) ──────────────────────────────────────────────
-// Drew: "when swiping between weeks in dashboard/picks it looks jumpy because you can still scroll vertically … You can also see the current week
-// sliding out but can't see the new week sliding in". ENGINE-measured in real Chromium with real CDP touches through the real app: the axis lock
-// (a recognised horizontal swipe never scrolls the page; touch-action:pan-y + the SB-05-style document lock), the incoming week painted beside the
-// outgoing one and moving with the finger, landing where it was shown (Dashboard same offset, Picks at its top, no glide), cancel, vertical-first,
-// one render per direction, Reduce Motion, drawer + pull-to-refresh unchanged, a live repaint parked mid-drag, the blind rule (preview markup ===
-// landed markup for an OPEN week), a focused field, inner scroller offsets, an inert preview. Own process: it drives its own Chrome.
-{
-  console.log('\n[136] weekpagertest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['weekpagertest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `weekpagertest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
-  const m136 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m136, `weekpagertest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m136 ? '' : '\n' + out.slice(-800)}`);
-  if (m136) {
-    assert(m136[1] === '✅ ALL PASS', `weekpagertest.mjs itself reports ALL PASS (got: ${m136[0]})`);
-    assert(Number(m136[3]) === 0, `weekpagertest.mjs reports zero failed assertions (got ${m136[3]} failed, ${m136[2]} passed)`);
-    assert(Number(m136[2]) >= 96, `weekpagertest.mjs actually ran its full set (got ${m136[2]}, floor 96 — RAISED from 91 by the SB-23 reviewer's FL1 note (2026-10-01, APPROVE WITH NOTES): [S] — after a COMMITTED swipe to a week with a different section set the engine holds the LANDED week's list and a real hold lifts a section with the edit bar mounted (mutant FL1, the preview guard never reset in its finally block → S-1/S-2 red; FL1 survived the 91). Floor 91 was RAISED from 69 by the reviewer's conditions on SB-23 (2026-10-01, after SP-57 merged first): [P] N6 — the Picks and Dashboard › arrows land at the top in one step; [Q] N1 — with behavior:'instant' rejected (iOS 15) the swipe and the arrows still land at the top and nothing throws; [N] C1 — a cancelled swipe toward a week with a different section set leaves the live page wired to its OWN section-drag options and a real hold-and-drop still lifts and lands; [R] N3 — the document scroll never moves, measured AT the mid-render layout read of the standard matrix with a SHORT neighbour, a render that scrolls the window is put back, and the page element's classes come back; [O] N4 — preview === landed for an OPEN week the viewer submitted (masked cells) and for a LOCKED week. Floor 69 was set 2026-10-01 at its first spawned run: [A] axis lock on Dashboard and Picks, [B] incoming week beside the outgoing one / moves with the finger / lands where shown / painted once and present once in the DOM (B-8b/B-11b, added for the one mutant that survived the first kit: the outgoing layer carrying a clipped copy of it) / no vertical glide, [C] cancel, [D] vertical-first, [E] the document lock and its recovery paths, [F] one render per direction, [G] Reduce Motion, [H] drawer + pull-to-refresh, [I] a live repaint mid-drag, [J] blind rule, [K] focused field, [L] inner scroller offsets, [M] inert preview). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [138] pickheadertest.mjs — SB-25 (Social Platform thread, 2026-10-01): the Picks game-card header ─────────────────────────────────────────────────
-// Found by the Breathing Room spacing-sweep reviewer, predates the sweep. The header was one single-line flex row (space-between, no wrap, no gap)
-// holding two single-line groups. So at 375pt/1.35x (alma + lock + result) and at 320pt/1x the groups touched at 0pt, pill labels broke onto two
-// lines, and the row overflowed into .game-card{overflow:hidden}, which clipped the result badge. ENGINE-MEASURED in a real Chromium (missing
-// browser = FAILURE): real renderGameCard() markup, real styles.css, 20 cards (alma x lock x every result/live state, draft open/locked, stress
-// chips, Time TBD; TV proven absent), at 320/375/430 x 1/1.35/2x x light/dark x release/sweep (the sweep's .gap-sm 8 + phone .card 16 overlaid).
-// P1 no clip, P2 groups >= 16 apart side by side AND stacked (review BLOCK #1 B1: the stack keeps its gap), P3 in-group >= 8, P4 no broken label,
-// P5 empty group takes no space, P6 wrapped lines anchored, P7 44pt buttons, P8 header items and pick buttons >= 16 from the card's inner edge
-// (B1/B2: header gap 16, header 8px 16px, body 16). Then the two reported cases by name, fourteen in-memory mutants (M10 = the exact pre-fix code,
-// M3a = the pre-review 8pt stack, M11-M13 = the 14px padding, caught on the right element), and source guards.
-{
-  console.log('\n[138] pickheadertest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['pickheadertest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `pickheadertest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.split('\n').filter(l => l.includes('❌')).slice(0, 12).join('\n')}`);
-  const m138 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m138, `pickheadertest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m138 ? '' : '\n' + out.slice(-800)}`);
-  if (m138) {
-    assert(m138[1] === '✅ ALL PASS', `pickheadertest.mjs itself reports ALL PASS (got: ${m138[0]})`);
-    assert(Number(m138[3]) === 0, `pickheadertest.mjs reports zero failed assertions (got ${m138[3]} failed, ${m138[2]} passed)`);
-    assert(Number(m138[2]) >= 325, `pickheadertest.mjs actually ran its full set (got ${m138[2]}, floor 325 — RAISED from 284 by the review BLOCK #1 fix (2026-10-01, B1 stack gap 16 + B2 card-edge 16): [0] engine 2, [1] fixture integrity 7, [2] 36 configurations x P1-P8 = 288, [3] the reported cases 6, [4] fourteen mutants, [5] source guards 8. Floor 284 was set 2026-10-01 at its first green run (P1-P7, ten mutants, seven guards). A PICKHEADERTEST_WEBFONTS=1 run adds one Oswald-loaded assertion. Raise the floor when the suite grows; the ratchet only tightens`);
-  }
-}
-
-// ── [139] whatsnewtest.mjs — the v0.29.0 release notes, pinned against the REAL constant (release cut, 2026-10-02) ────────────────────────────────────
-// loadtest [82] only proves a shipped entry carries no placeholder and agrees with APP_VERSION. This suite pins what the entry SAYS: the stamps agree, every line the cut
-// brief named is present, the privacy line (regulatory R-C14, RD-01 v3.0.0) is exact, once and not the first item, nothing unshipped is announced, no internal ID leaks,
-// the Weekly Ties line names the steps in the REAL Rules copy's order, v0.28.0's two web-overpromising lines read as iPhone-app items, both renderers show it escaped,
-// and eleven in-memory mutants each go red.
-{
-  console.log('\n[139] whatsnewtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['whatsnewtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
-  const out = (result.stdout || '') + (result.stderr || '');
-  assert(result.status === 0, `whatsnewtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.split('\n').filter(l => l.includes('❌')).slice(0, 12).join('\n')}`);
-  const m139 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
-  assert(!!m139, `whatsnewtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m139 ? '' : '\n' + out.slice(-800)}`);
-  if (m139) {
-    assert(m139[1] === '✅ ALL PASS', `whatsnewtest.mjs itself reports ALL PASS (got: ${m139[0]})`);
-    assert(Number(m139[3]) === 0, `whatsnewtest.mjs reports zero failed assertions (got ${m139[3]} failed, ${m139[2]} passed)`);
-    assert(Number(m139[2]) >= 38, `whatsnewtest.mjs actually ran its full set (got ${m139[2]}, floor 38 — set 2026-10-02 at its first green run, identical under TZ=UTC and TZ=America/Los_Angeles: [1] stamps 6, [2] the entry as shipped 2, [3] the privacy line 5, [4] coupling to the Rules copy / nav / privacy link 5, [5] v0.28.0 rewording 3, [6] both renderers 5, [7] twelve teeth). Raise the floor when the suite grows; the ratchet only tightens`);
-  }
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────

@@ -1,0 +1,13 @@
+{
+  "id": "logotoggletest",
+  "script": "logotoggletest.mjs",
+  "label": "112p",
+  "summary": "loose",
+  "floor": 73,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 200,
+  "note": "RAISED from 71 by SP-52 (2026-10-01): [3-1] re-derived with one named validation exception (DI-455 A1.2) + [3-1a], [3-1b]; earlier: floor 71 — RAISED from 45 by the RG-TBD-N15 sweep (2026-09-29: [4] onSetTimeZone/onSaveDisplayName/onSaveInitials repaint the page under the …"
+}

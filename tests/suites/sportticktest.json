@@ -1,0 +1,10 @@
+{
+  "id": "sportticktest",
+  "script": "sportticktest.mjs",
+  "summary": "strict",
+  "floor": 22,
+  "tags": ["quick"],
+  "deps": ["js/app.js", "js/competition.js", "js/storage.js"],
+  "expectedMs": 600,
+  "note": "D1 / DI-535 #1: tick isolation - the lock leg and the scores round run per sport's current week, a throw in one sport never stops the other (mutation-proven: remove the per-week try/catch and [3a] goes red)."
+}

@@ -44,6 +44,16 @@
  *       written; a known-missing dark file is never asked for twice; and the
  *       surface -> file map holds on all TWENTY sides (Paper Dark is a LIGHT-surface
  *       look and keeps the stored file on its paper cards).
+ *   [8] FB-021 (bugfixer, 2026-10-07) — the Home Live Peek: the real Home wiring
+ *       on a minidom tree from the real index.html; a loaded `.dc-chip-logo`
+ *       is shown, a broken one falls back to the chip's team label, and a
+ *       re-created #home-root is still heard.
+ *   [9] FB-024 (bugfixer, 2026-10-07) — a repaint shows a logo whose exact file
+ *       already loaded on this page at once (no blank, no fade), for all four
+ *       logo classes on every bound page; a never-loaded file (a league
+ *       switch) is never another game's and still waits for its own load; a
+ *       failed file is forgotten. [9b] the dark-surface rule still picks the
+ *       file; [9c] the `.logo-instant` CSS.
  *
  * Run: node logovarianttest.mjs
  */
@@ -191,7 +201,7 @@ for (const cls of ['dc-chip-logo', 'pick-btn-logo', 'matrix-hdr-logo', 'slate-ro
   handlers.load.fn({ target: again });
   assert(again._src === NCAA && again.classList.added.includes('is-loaded') && again.dataset.logoVariant === 'default',
     '3-9b: a later first-load on a DARK surface keeps the stored default (no second request for the known-missing dark file)');
-  V.failedDarkLogoUrls.clear();   // isolate the sections below: each starts with an empty session set
+  V.failedDarkLogoUrls.clear(); V.failedLogoUrls.clear();   // isolate the sections below: each starts with an empty session set
 }
 {
   const img = fakeImg('dc-chip-logo', NCAA, lightCard());
@@ -323,7 +333,7 @@ console.log('\n[5] every logo the binder may swap is hidden until .is-loaded, on
 // this seam alone, without copying B2's logic: the class list, the selector,
 // the pure decision, the URL for a variant, and the one writer.
 console.log('\n[6] the DI-455 extension seam: class list, selector, pure decision, URL-for-variant, one writer');
-V.failedDarkLogoUrls.clear();
+V.failedDarkLogoUrls.clear(); V.failedLogoUrls.clear();
 {
   const appSrc6 = await readFile(path.join(root, 'js', 'app.js'), 'utf8');
   const b0 = appSrc6.indexOf('function bindLogoImageEvents(');
@@ -396,7 +406,7 @@ V.failedDarkLogoUrls.clear();
 // ── [7] DI-455 — the real reconcile ─────────────────────────────────────────
 console.log('\n[7] DI-455 — reconcileLogoVariants(): re-pick on a surface change, preload before swap, fail-safe parser, re-validated default, known-missing set');
 {
-  V.failedDarkLogoUrls.clear();
+  V.failedDarkLogoUrls.clear(); V.failedLogoUrls.clear();
   const DARK = dp.darkLogoUrl(NCAA);
   // a fake Image: the app assigns onload/onerror, then src; the test fires them
   const made = [];
@@ -439,7 +449,7 @@ console.log('\n[7] DI-455 — reconcileLogoVariants(): re-pick on a surface chan
   assert(img._src === NCAA && img.dataset.logoVariant === 'default', '7-4: if the surface flips back before the preload finishes, the stale target is NOT committed');
 
   // 7-5  a failed DARK preload: the visible logo stays exactly as it is, the URL is remembered, and there is no retry storm
-  V.failedDarkLogoUrls.clear();
+  V.failedDarkLogoUrls.clear(); V.failedLogoUrls.clear();
   surface._bg = 'rgb(255, 255, 255)';
   const imgE = mkImg(NCAA);
   V.swapLogoForDarkSurface(imgE);
@@ -455,7 +465,7 @@ console.log('\n[7] DI-455 — reconcileLogoVariants(): re-pick on a surface chan
   assert(V.reconcileLogoVariants({ querySelectorAll: () => [] }) === 0 && V.reconcileLogoVariants({}) === 0 && V.reconcileLogoVariants(null) === 0,
     '7-6: zero logos (the Team-logos switch is off by default) costs one empty query; a root with no querySelectorAll is a clean no-op');
   // 7-7  a non-ESPN URL never reconciles
-  V.failedDarkLogoUrls.clear(); surface._bg = 'rgb(31, 27, 23)'; made.length = 0;
+  V.failedDarkLogoUrls.clear(); V.failedLogoUrls.clear(); surface._bg = 'rgb(31, 27, 23)'; made.length = 0;
   const foreign = mkImg('https://cdn.example.com/logo.png'); foreign.dataset.logoVariant = 'default';
   assert(V.reconcileLogoVariants(rootOf(foreign)) === 0 && made.length === 0, '7-7: a non-ESPN URL on a dark surface starts no preload (there is no dark file for it)');
 
@@ -501,6 +511,306 @@ console.log('\n[7] DI-455 — reconcileLogoVariants(): re-pick on a surface chan
     assert(bad.length === 0, `7-10: the surface -> file map holds on all 20 sides: dark card/game-card surfaces get the 500-dark file; every Light side AND Paper Dark's paper cards keep the stored file${bad.length ? ' — ' + bad.join('; ') : ''}`);
   }
   globalThis.Image = PrevImage;
+}
+
+// ── [8] FB-021 — the Home Live Peek's logos (bugfixer, 2026-10-07) ──────────
+// Drew, v0.29.0: "logos arent popping up in home live dashboard peak".
+// ROOT CAUSE: every team-logo <img> is opacity:0 until bindLogoImageEvents()'s
+// capture-phase 'load' listener adds `.is-loaded` ([5]). That listener was
+// bound on #page-picks, #page-dashboard and #page-commissioner, never on
+// #page-home. The Live Peek is renderDashboardCompact() injected into Home's
+// Now card, so its `.dc-chip-logo` loaded and stayed invisible, and a broken
+// one never reached the `.logo-broken` text fallback either.
+// This drives the REAL Home wiring (ensureHomeRoot -> js/home.js -> the compact
+// dashboard) on a minidom tree built from the real index.html. minidom has no
+// capture phase: a 'load' dispatched with bubbles:true reaches the ancestors'
+// listeners, which is what the browser's capture phase does for this
+// non-bubbling event. Whether a real WebKit paints the image is a DEVICE check.
+// D1 Lane B (Game Day, 2026-10-08) — THE LIVE PEEK IS RETIRED (DI-582 → DI-603: Home's Now card is the Game Day card, which paints no team logo). What FB-021 and FB-024 protect is the SHARED
+// binder — a logo painted from Home must be heard by it (shown on load, its team label on error, still heard after its root is re-created, never blanked by a repaint) — and the one place Home now paints
+// team logos is the GAME VIEW (the pushed screen a Game Day row opens: two team lockups, `.matrix-hdr-logo` in `.matrix-hdr-logo-box`, mounted in #pushed-root whose onMount binds the same binder).
+// So the fixture below opens the Game view of the seeded live game from Home's own action (`open-game`) instead of reading a chip from the Live Peek; the assertions are the same ones, retargeted
+// (two lockups instead of one pick chip; `.matrix-hdr-logo-box.logo-broken` instead of `.dc-chip-pick.logo-broken`; the abbreviation beside the logo is the label it falls back to).
+console.log('\n[8] FB-021 — the Game view (Home\'s one team-logo surface): a loaded logo is shown, a broken one falls back to the team label');
+const { MiniDocument, MiniElement } = await import('./minidom.mjs');
+const ps = await import('./js/pushed-screen.js');
+const storage = await import('./js/storage.js');
+const INDEX_HTML = await readFile(path.join(root, 'index.html'), 'utf8');
+const bodyHtmlOf = (html) => html.slice(html.indexOf('<body'), html.indexOf('</body>')).replace(/<script[\s\S]*?<\/script>/g, '').replace(/^<body[^>]*>/, '');
+const freshDoc = () => { const doc = new MiniDocument(); doc.body.innerHTML = bodyHtmlOf(INDEX_HTML); return doc; };
+if (typeof MiniElement.prototype.insertAdjacentHTML !== 'function') {
+  // the paused-league banner prepends with it (homenavtest supplies the same one method; minidom.mjs is not edited)
+  MiniElement.prototype.insertAdjacentHTML = function (pos, html) {
+    const t = this.ownerDocument.createElement('div'); t.innerHTML = html;
+    const kids = [...t._children]; t._children = [];
+    if (pos === 'afterbegin') { for (const k of kids.reverse()) { k.parentNode = this; this._children.unshift(k); } }
+    else { for (const k of kids) { k.parentNode = this; this._children.push(k); } }
+  };
+}
+const STUB_DOC = globalThis.document;
+const quietLogs = async (fn) => { const w = console.warn, i = console.info, e = console.error; console.warn = console.info = console.error = () => {}; try { return await fn(); } finally { console.warn = w; console.info = i; console.error = e; } };
+const KICKED = new Date(Date.now() - 3600e3).toISOString();
+const LEAGUES = {
+  A: { home: 'Texas A&M', away: 'Texas', homeLogo: 'https://a.espncdn.com/i/teamlogos/ncaa/500/245.png', awayLogo: 'https://a.espncdn.com/i/teamlogos/ncaa/500/251.png' },
+  B: { home: 'Oklahoma', away: 'Arkansas', homeLogo: 'https://a.espncdn.com/i/teamlogos/ncaa/500/201.png', awayLogo: 'https://a.espncdn.com/i/teamlogos/ncaa/500/8.png' },
+};
+/** One live week, one live game, the viewer's own pick on the home side, Team logos ON (they are off by default, storage.js getLogoView()). */
+let curLeague = 'A';
+const seedPeek = (league = 'A', { homeScore = 14, logoView = true } = {}) => {
+  const L = LEAGUES[league];
+  curLeague = league;
+  store.clear();
+  storage.savePlayer({ playerId: 'lp_me', displayName: 'Peek Viewer', active: true, preferences: { logoView } });
+  storage.saveWeek({ weekId: `lp_w_${league}`, weekNumber: 1, season: 2026, name: 'Week 1', status: 'live', dataSourceMode: 'live' });
+  storage.saveGame({ gameId: `lp_g_${league}`, weekId: `lp_w_${league}`, homeTeam: L.home, awayTeam: L.away, homeLogo: L.homeLogo, awayLogo: L.awayLogo,
+    status: 'live', homeScore, awayScore: 7, spread: -3, lockedSpread: -3, favorite: L.home, multiplier: 1, kickoff: KICKED, isManual: false });
+  storage.saveAllPicks([{ weekId: `lp_w_${league}`, gameId: `lp_g_${league}`, playerId: 'lp_me', selectedTeam: L.home }]);
+  storage.setSession('lp_me', false, true);
+};
+const settleTicks = async (n = 8) => { for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0)); };
+/** A Home paint, then a settle: the first paint of a fresh page also starts the news slot's fetch (network is off here), whose answer repaints Home once more. */
+const openGameView = () => { try { ps.closeAllScreens('test'); } catch { /* none open */ } app.state.currentTab = 'home'; app._renderHomePageForTest(); app._onHomeActionForTest('open-game', { gameId: `lp_g_${curLeague}` }); };
+const paintHome = () => quietLogs(async () => { openGameView(); await settleTicks(); });
+/** A repaint with NO macrotask after it: only the microtasks a real MutationObserver delivery would get before the next frame. */
+const paintHomeNow = () => { const w = console.warn, i = console.info, e = console.error; console.warn = console.info = console.error = () => {}; try { openGameView(); } finally { console.warn = w; console.info = i; console.error = e; } };
+const peekLogos = () => [...globalThis.document.querySelectorAll('#pushed-root img.matrix-hdr-logo')];
+const fire = (img, type) => img.dispatchEvent({ type, bubbles: true });
+const newHomeDoc = () => { try { ps.closeAllScreens('test'); } catch { /* none open */ } globalThis.document = freshDoc(); app._resetHomeWiringForTest(); };
+{
+  newHomeDoc(); seedPeek('A');
+  await paintHome();
+  const imgs = peekLogos();
+  assert(imgs.length === 2 && imgs.map((i) => i.getAttribute('src')).sort().join() === [LEAGUES.A.homeLogo, LEAGUES.A.awayLogo].sort().join() && imgs.every((i) => !i.classList.contains('is-loaded')),
+    `8-0: (fixture) the Game view Home opens paints both teams' lockups with their logos, hidden until they load (got ${imgs.length} logo(s))`);
+  imgs.forEach((i) => fire(i, 'load'));
+  assert(imgs.length === 2 && imgs.every((i) => i.classList.contains('is-loaded')),
+    '8-1: THE BUG — a Game-view logo\'s own load adds .is-loaded, so the logo is SHOWN (before the fix nothing bound on a root Home paints into, and it sat at opacity:0 forever)');
+
+  // a broken logo -> the chip's own team label, the same text the chip shows with Team logos off
+  newHomeDoc(); seedPeek('A', { logoView: false }); await paintHome();
+  const lockupText = (root) => [...(root ? root.querySelectorAll('.tl-abbr') : [])].map((n) => n.textContent.trim()).join('/');
+  const offText = lockupText(globalThis.document.querySelector('#pushed-root'));
+  newHomeDoc(); seedPeek('A'); await paintHome();
+  const broken = peekLogos()[0];
+  if (broken) fire(broken, 'error');
+  const chip = broken?.closest('.matrix-hdr-logo-box');
+  assert(!!chip && chip.classList.contains('logo-broken') && lockupText(globalThis.document.querySelector('#pushed-root')) === offText && offText.length > 0,
+    `8-2: a logo that fails to load turns its box to .logo-broken, and the lockup falls back to exactly the label it shows without logos ("${offText}"), never a broken-image box`);
+  const cssNoComments = cssSrc.replace(/\/\*[\s\S]*?\*\//g, '');
+  assert(/\.dc-chip-pick\.logo-broken \.dc-chip-logo\{display:none\}/.test(cssNoComments) && /\.dc-chip-pick\.logo-broken \.dc-chip-pick-fallback\{display:inline\}/.test(cssNoComments)
+      && /\.dc-chip-logo\{width:14px;height:14px;/.test(cssNoComments),
+    '8-3: …and the CSS that makes that swap is in place: the fixed 14px box (no layout shift), the broken image hidden, the label shown');
+
+  // the hold teardown / a league-flow screen re-creates #home-root: the next paint's logos are still heard (the listener is on the SECTION, which survives)
+  ps.closeAllScreens('test');
+  assert(!globalThis.document.getElementById('pushed-root') || peekLogos().length === 0, '8-4a: (fixture) closing the screen removes the logos with their root');
+  await paintHome();
+  const again = peekLogos()[0];
+  if (again) fire(again, 'load');
+  assert(!!again && again.classList.contains('is-loaded'), '8-4: after the screen root is torn down and re-created, the new Game-view logo is still shown on its load (every new root binds the one binder)');
+}
+
+// ── [9] FB-024 — a repaint keeps already-loaded logos on screen (bugfixer, 2026-10-07) ──
+// Drew, v0.29.0: "When I refresh, the logos all blank out for a fraction of a
+// second and it looks glitchy". ROOT CAUSE: every repaint (pull-to-refresh, the
+// sync tap, every score tick) rebuilds the markup with innerHTML (js/home.js
+// paint(); renderDashboard(); the Picks renders), so every logo is a NEW <img>
+// that starts at opacity:0 and waits for its own 'load' before fading back in
+// over 150 ms — even when the browser already holds the file. On a dark surface
+// it also waits for the 500-dark swap. Nothing remembered that the file had
+// already been shown. The fix belongs to the ONE shared binder (all four logo
+// classes, every bound page): a logo whose exact file has already loaded on this
+// page is shown at once on a repaint, with no fade; any other logo keeps the
+// cached -> load -> fade path. A MutationObserver stands in for the browser's here
+// (minidom has none): the innerHTML setter queues a childList record in a
+// microtask, the delivery timing a real MutationObserver has (before the next frame).
+console.log('\n[9] FB-024 — a repaint shows a logo the page has already loaded at once (no blank, no fade); anything else still waits for its own load');
+{
+  const observers = [];
+  const PrevMO = globalThis.MutationObserver;
+  globalThis.MutationObserver = class FakeMutationObserver {
+    constructor(cb) { this.cb = cb; this.targets = []; }
+    observe(target, opts) { this.targets.push({ target, opts: opts || {} }); if (!observers.includes(this)) observers.push(this); }
+    disconnect() { this.targets = []; const i = observers.indexOf(this); if (i >= 0) observers.splice(i, 1); }
+    takeRecords() { return []; }
+  };
+  const ihDesc = Object.getOwnPropertyDescriptor(MiniElement.prototype, 'innerHTML');
+  Object.defineProperty(MiniElement.prototype, 'innerHTML', {
+    configurable: true, get: ihDesc.get,
+    set(html) {
+      const removedNodes = [...this._children];
+      ihDesc.set.call(this, html);
+      const addedNodes = [...this._children];
+      for (const o of observers) for (const { target, opts } of o.targets) {
+        if (opts.childList && (target === this || (opts.subtree && target.contains(this)))) {
+          const rec = { type: 'childList', target: this, addedNodes, removedNodes };
+          queueMicrotask(() => o.cb([rec], o));
+        }
+      }
+    },
+  });
+  // D1 Lane B: the Game view's level arrives by appendChild / insertAdjacentHTML (the pushed-screen shell), not by an innerHTML setter; a real MutationObserver sees all three, so the stand-in must too.
+  const apDesc = Object.getOwnPropertyDescriptor(MiniElement.prototype, 'appendChild'), iahDesc = Object.getOwnPropertyDescriptor(MiniElement.prototype, 'insertAdjacentHTML');
+  const notifyAdded = (target, addedNodes) => { for (const o of observers) for (const { target: t, opts } of o.targets) if (opts.childList && (t === target || (opts.subtree && t.contains(target)))) { const rec = { type: 'childList', target, addedNodes, removedNodes: [] }; queueMicrotask(() => o.cb([rec], o)); } };
+  Object.defineProperty(MiniElement.prototype, 'appendChild', { configurable: true, writable: true, value: function appendChild(c) { const r = apDesc.value.call(this, c); notifyAdded(this, [c]); return r; } });
+  Object.defineProperty(MiniElement.prototype, 'insertAdjacentHTML', { configurable: true, writable: true, value: function insertAdjacentHTML(pos, html) { const before = new Set(this._children); const r = iahDesc.value.call(this, pos, html); notifyAdded(this, this._children.filter((n) => !before.has(n))); return r; } });
+  const microtasks = async () => { for (let i = 0; i < 4; i++) await Promise.resolve(); };
+  const loaded = V.loadedLogoUrls;
+  assert(loaded instanceof Set && typeof V.primeLoadedLogo === 'function',
+    '9-0: (fixture) js/app.js exposes the loaded-logo set and the primer through the _logoVariantForTest seam');
+  loaded?.clear?.(); V.failedDarkLogoUrls.clear(); V.failedLogoUrls.clear();
+
+  // the first paint: nothing loaded yet -> the normal path (hidden, then its own load shows it)
+  newHomeDoc(); seedPeek('A', { homeScore: 14 });
+  await paintHome(); await microtasks();
+  const first = peekLogos().find((i) => i.getAttribute('src') === LEAGUES.A.homeLogo);
+  assert(!!first && !first.classList.contains('is-loaded'), '9-1: (fixture) the FIRST paint of a logo this page has never loaded still waits for its load (cached -> load -> fade)');
+  if (first) fire(first, 'load');
+  assert(!!loaded && loaded.has(LEAGUES.A.homeLogo), '9-2: …and its successful load is remembered (the URL only; nothing else is kept)');
+
+  // a score tick / pull-to-refresh: the markup changes, Home replaces it, the logo is a NEW <img>
+  seedPeek('A', { homeScore: 21 });
+  paintHomeNow();
+  const second = peekLogos().find((i) => i.getAttribute('src') === LEAGUES.A.homeLogo);
+  assert(!!second && second !== first && second.getAttribute('src') === LEAGUES.A.homeLogo,
+    '9-3: (fixture) the repaint really rebuilt the chip: a different <img> element, the same file');
+  await microtasks();
+  assert(!!second && second.classList.contains('is-loaded') && second.classList.contains('logo-instant'),
+    '9-4: THE BUG — after the repaint the already-loaded logo is visible at once (.is-loaded + .logo-instant), with NO load event and NO fade: it never blanks');
+  if (second) fire(second, 'load');
+  assert(!!second && second.classList.contains('is-loaded') && second.getAttribute('src') === LEAGUES.A.homeLogo && second.dataset.logoVariant === 'default',
+    '9-5: the browser\'s own later load of that <img> changes nothing (no swap, no second state)');
+
+  // a league switch: league B's game in the same spot. Its logo must never be league A's, and it is not shown before its OWN file loads
+  seedPeek('B', { homeScore: 3 });
+  await paintHome(); await microtasks();
+  const other = peekLogos().find((i) => i.getAttribute('src') === LEAGUES.B.homeLogo) || peekLogos()[0];
+  const allSrc = [...globalThis.document.querySelectorAll('#page-home img'), ...globalThis.document.querySelectorAll('#pushed-root img')].map((i) => i.getAttribute('src'));
+  assert(!!other && other.getAttribute('src') === LEAGUES.B.homeLogo && !allSrc.includes(LEAGUES.A.homeLogo) && !allSrc.includes(LEAGUES.A.awayLogo) && !other.classList.contains('is-loaded'),
+    '9-6: after a league switch the chip carries ITS OWN team\'s file, nothing on Home still shows the previous game\'s logo, and a file this page has not loaded is not shown before it loads');
+  if (other) fire(other, 'load');
+  assert(!!other && other.classList.contains('is-loaded') && !other.classList.contains('logo-instant'),
+    '9-7: …and that new logo then fades in on its own load, the normal progressive path (only already-loaded files skip the fade)');
+
+  // a remembered file that now fails: the text fallback still applies, and the file is forgotten so the next repaint waits for it
+  seedPeek('A', { homeScore: 28 });
+  paintHomeNow(); await microtasks();
+  const flaky = peekLogos().find((i) => i.getAttribute('src') === LEAGUES.A.homeLogo);
+  assert(!!flaky && flaky.classList.contains('is-loaded'), '9-8: (fixture) back on league A, the remembered logo is shown at once');
+  if (flaky) fire(flaky, 'error');
+  assert(!!flaky && flaky.closest('.matrix-hdr-logo-box')?.classList.contains('logo-broken') && !loaded.has(LEAGUES.A.homeLogo),
+    '9-9: a remembered logo that errors still falls back to the team label (.logo-broken), and its file is forgotten');
+  seedPeek('A', { homeScore: 35 });
+  await paintHome(); await microtasks();
+  const retry = peekLogos().find((i) => i.getAttribute('src') === LEAGUES.A.homeLogo);
+  // D1 Lane B: the Game view's lockups follow the batch-L rule (logofailtest [4]): a file that FAILED is never asked for again this session, so its lockup paints no <img> at all (the abbreviation beside it is the label) —
+  // either way the next repaint must not show that file as loaded.
+  assert(!retry || !retry.classList.contains('is-loaded'), '9-10: …so the next repaint never shows that file as loaded (the Game view paints no <img> for a file that already failed, instead of an image that may be broken)');
+
+  // every logo class, on a bound page that is not Home: Picks, Dashboard (chip + matrix) and the Commissioner slate share the one binder
+  globalThis.document = freshDoc();
+  loaded?.clear?.();
+  const U = 'https://a.espncdn.com/i/teamlogos/ncaa/500/2633.png';
+  const markup = () => `<span class="pick-btn-logo-wrap"><span class="pick-btn-logo-box"><img class="pick-btn-logo" src="${U}" alt=""></span><span class="pick-btn-logo-name">Tennessee</span></span>`
+    + `<span class="dc-chip-pick"><img class="dc-chip-logo" src="${U}" alt="Tennessee"><span class="dc-chip-pick-fallback">TENN</span></span>`
+    + `<span class="matrix-hdr-logo-box"><img class="matrix-hdr-logo" src="${U}" alt=""></span>`
+    + `<img class="slate-row-logo" src="${U}" alt="">`
+    + `<img class="player-avatar" src="${U}" alt="">`;
+  const dash = globalThis.document.getElementById('page-dashboard');
+  bind(dash);
+  dash.innerHTML = markup(); await microtasks();
+  const firstSet = [...dash.querySelectorAll('img')];
+  assert(firstSet.slice(0, 4).every((i) => !i.classList.contains('is-loaded')), '9-11: (fixture) a bound page\'s first paint of never-loaded logos waits for their loads');
+  firstSet.slice(0, 4).forEach((i) => fire(i, 'load'));
+  dash.innerHTML = markup(); await microtasks();
+  const again = [...dash.querySelectorAll('img')];
+  for (const [n, cls] of [[0, 'pick-btn-logo'], [1, 'dc-chip-logo'], [2, 'matrix-hdr-logo'], [3, 'slate-row-logo']]) {
+    assert(again[n] !== firstSet[n] && again[n].classList.contains(cls) && again[n].classList.contains('is-loaded') && again[n].classList.contains('logo-instant'),
+      `9-12 ${cls}: a repaint of that page shows the already-loaded logo at once (one shared mechanism for all four logo classes)`);
+  }
+  assert(!again[4].classList.contains('is-loaded') && !again[4].classList.contains('logo-instant') && again[4].dataset.logoVariant === undefined,
+    '9-13: an <img> that is not a team logo is never touched, even with a remembered URL');
+
+  // a page painted BEFORE its first bind (renderDashboard() binds after it paints): the bind itself shows the remembered logos
+  const comm = globalThis.document.getElementById('page-commissioner');
+  comm.innerHTML = `<img class="slate-row-logo" src="${U}" alt="">`;
+  bind(comm);
+  assert(comm.querySelector('img.slate-row-logo')?.classList.contains('is-loaded'), '9-14: a page whose first paint came before its first bind gets the same treatment the moment it is bound');
+
+  globalThis.MutationObserver = PrevMO;
+  Object.defineProperty(MiniElement.prototype, 'innerHTML', ihDesc);
+  Object.defineProperty(MiniElement.prototype, 'appendChild', apDesc);
+  Object.defineProperty(MiniElement.prototype, 'insertAdjacentHTML', iahDesc);
+  globalThis.document = STUB_DOC;
+}
+
+// ── [9b] FB-024 on a DARK surface: never a flash of the wrong file ──────────
+// The 500-dark rule (SB-07, [3]) still decides the file. A repaint may skip the
+// fade ONLY with the exact file that belongs on the surface under the logo and
+// that has already loaded. A default that loaded on a light card is NOT shown on
+// a dark one (it would flash before the swap); that logo takes the normal path.
+console.log('\n[9b] FB-024 on a dark surface — the primer only ever shows the file that belongs on that surface');
+{
+  const loaded = V.loadedLogoUrls;
+  const prime = V.primeLoadedLogo;
+  if (loaded instanceof Set && typeof prime === 'function') {
+    loaded.clear(); V.failedDarkLogoUrls.clear(); V.failedLogoUrls.clear();
+    const DARK = dp.darkLogoUrl(NCAA);
+    const mk = (src, parent, cls = 'dc-chip-logo') => {
+      const classes = new Set([cls]);
+      return { parentElement: parent, dataset: {}, _src: src, writes: 0,
+        classList: { contains: (c) => classes.has(c), add: (c) => classes.add(c), has: (c) => classes.has(c) },
+        getAttribute(n) { return n === 'src' ? this._src : null; }, setAttribute(n, v) { if (n === 'src') { this._src = v; this.writes++; } } };
+    };
+    loaded.add(NCAA);
+    const onDark = mk(NCAA, darkCard());
+    assert(prime(onDark) === false && !onDark.classList.has('is-loaded') && onDark._src === NCAA && onDark.dataset.logoVariant === undefined,
+      '9b-1: only the DEFAULT file has loaded (on a light card) -> a logo on a DARK surface is NOT shown at once: the default would flash before the 500-dark swap, so it takes the normal path');
+    loaded.add(DARK);
+    const onDark2 = mk(NCAA, darkCard());
+    assert(prime(onDark2) === true && onDark2._src === DARK && onDark2.dataset.logoVariant === 'dark' && onDark2.dataset.logoDefault === NCAA && onDark2.classList.has('is-loaded') && onDark2.classList.has('logo-instant'),
+      '9b-2: once the 500-dark file has loaded, a repaint on a dark surface shows THAT file at once (src, variant and stored default all recorded exactly as the load-time swap records them)');
+    loaded.clear(); loaded.add(DARK);
+    const onLight = mk(NCAA, lightCard());
+    assert(prime(onLight) === false && !onLight.classList.has('is-loaded') && onLight._src === NCAA,
+      '9b-3: only the dark file has loaded -> a logo on a LIGHT surface is not shown at once (the white mark would vanish there)');
+    loaded.add(NCAA); V.failedDarkLogoUrls.add(DARK);
+    const knownMissing = mk(NCAA, darkCard());
+    assert(prime(knownMissing) === true && knownMissing._src === NCAA && knownMissing.dataset.logoVariant === 'default',
+      '9b-4: a dark file known to be missing this session is never asked for: the logo shows the stored default at once, exactly as the load-time path would end up');
+    V.failedDarkLogoUrls.clear(); V.failedLogoUrls.clear();
+    const done = mk(NCAA, lightCard()); done.classList.add('is-loaded');
+    const evaluated = mk(NCAA, lightCard()); evaluated.dataset.logoVariant = 'default';
+    const planted = mk('http://evil.example.com/x.png', lightCard()); loaded.add('http://evil.example.com/x.png');
+    assert(prime(done) === false && done.writes === 0 && prime(evaluated) === false && !evaluated.classList.has('is-loaded') && prime(planted) === false && !planted.classList.has('is-loaded'),
+      '9b-5: the primer leaves alone a logo that is already shown, one the load path has already evaluated, and a non-https URL (logoOk() gate)');
+    // the REAL load/error arms ([3]'s capture listeners): what gets remembered is the file that LOADED, never the one a swap is about to request
+    loaded.clear(); V.failedDarkLogoUrls.clear(); V.failedLogoUrls.clear();
+    const swapping = fakeImg('dc-chip-logo', NCAA, darkCard());
+    handlers.load.fn({ target: swapping });
+    assert(swapping._src === DARK && loaded.has(NCAA) && !loaded.has(DARK),
+      '9b-6: the default loads on a dark surface and is swapped: the default is remembered, the 500-dark file is NOT (it has not loaded yet — it might not exist)');
+    handlers.load.fn({ target: swapping });
+    assert(loaded.has(DARK), '9b-7: …the dark file is remembered only on its OWN load');
+    const missing = fakeImg('dc-chip-logo', NCAA, darkCard());
+    handlers.load.fn({ target: missing });            // default loads, swap to dark
+    loaded.add(DARK);                                 // (as if an earlier page load had it)
+    handlers.error.fn({ target: missing });           // the dark file errors
+    assert(!loaded.has(DARK) && missing._src === NCAA, '9b-8: a file that errors is forgotten at once (and the dark-file revert still runs)');
+    loaded.clear(); V.failedDarkLogoUrls.clear(); V.failedLogoUrls.clear();
+  } else {
+    assert(false, '9b-0: the primer and the loaded-logo set exist on the _logoVariantForTest seam');
+  }
+}
+
+// ── [9c] FB-024 — the CSS half: an instant logo has no fade; the fade path is unchanged ──
+console.log('\n[9c] FB-024 — the CSS: `.logo-instant` drops the fade for all four logo classes; the hidden-until-loaded rule is unchanged');
+{
+  const css9 = cssSrc.replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const cls of ['pick-btn-logo', 'dc-chip-logo', 'matrix-hdr-logo', 'slate-row-logo']) {
+    const hit = [...css9.matchAll(/([^{}]+)\{([^{}]*)\}/g)].some((m) => m[1].split(',').some((s) => s.trim() === `.${cls}.logo-instant`) && /(^|;)\s*transition\s*:\s*none\s*(;|$)/.test(m[2]));
+    assert(hit, `9c-1 ${cls}: .${cls}.logo-instant{transition:none} — a logo shown at once on a repaint does not fade (and is still opacity:1 via .is-loaded)`);
+  }
 }
 
 console.log(`\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed`);

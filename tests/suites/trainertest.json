@@ -1,0 +1,13 @@
+{
+  "id": "trainertest",
+  "script": "trainertest.mjs",
+  "label": "68",
+  "summary": "strict",
+  "floor": 317,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 500,
+  "note": "tightened from 293 at the v0.26.0 stamp 2026-09-26) — includes [28]'s byte-parity proof that js/scribe-trainer-rules.js's buildTrainerInputText matches scribeTrainerBuildInputText_ exactly. Raise the floor when the suite grows; the ratchet only tightens"
+}

@@ -1,0 +1,17 @@
+{
+  "id": "sportgeometrytest",
+  "script": "sportgeometrytest.mjs",
+  "summary": "strict",
+  "floor": 95,
+  "tags": [
+    "browser",
+    "slow"
+  ],
+  "deps": [
+    "js/app.js",
+    "css/styles.css",
+    "index.html"
+  ],
+  "expectedMs": 36000,
+  "note": "D1 third pass item 2 (P-8, D-66; registered 2026-10-08): the multisport surfaces in a real Chromium running the real app (switcher + due dot, All sports with its gate and tags, Home sport chip + chevron, the header pill and its dot, the league overview, the Comm lens and its separate-lens caption, the Comm All sports card, Add a sport) at 375/390 pt and 1x/1.35x text: 44 pt targets, Breathing Room, centring, no overflow, the switcher never wraps and the pill rows do, every painted colour follows the tokens; real taps through the app's dispatcher; [9] is the encoded anti-vacuity kit (11 override-sheet mutants, each must go RED)."
+}

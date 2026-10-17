@@ -403,8 +403,13 @@ console.log('\n[8] The Supabase-era triggers funnel into renderChatPage() [struc
   const appSrc = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
   const uiSrc = await readFile(new URL('./js/chat-ui.js', import.meta.url), 'utf8');
 
-  assert(/onRealtimeEvent:\s*\(\)\s*=>\s*\{\s*_repaintForSupabaseData\('realtime'\)/.test(appSrc),
-    'the adapter\'s Realtime events repaint through _repaintForSupabaseData() [structural]');
+  // D1 DI-527 #4 (2026-10-08): the callback now receives the event and skips the repaint ONLY for a row about the other sport's week (realtimeEventForOtherSport); every other event still repaints
+  // through _repaintForSupabaseData('realtime'). The pin follows: the call must be there, behind exactly that one condition.
+  // RE-DERIVED 2026-10-08 (merge, coordinator): OLD pin - `if (!realtimeEventForOtherSport(...)) _repaintForSupabaseData('realtime')` - meant an other-sport row skipped the WHOLE repaint, including the
+  // header, the pill and switcher dots, maybeNoticeUnfrozenSpreads and flushPendingDeepLink. NEW: EVERY Realtime event goes through _repaintForSupabaseData('realtime', { skipTab }), and the other-sport
+  // gate decides only `skipTab` (below, the body shows what skipTab skips and what it must not).
+  assert(/onRealtimeEvent:\s*\(table, payload\)\s*=>\s*\{\s*const otherSport = realtimeEventForOtherSport\(table, payload\);\s*_repaintForSupabaseData\('realtime', \{ skipTab: otherSport \}\)/.test(appSrc),
+    'the adapter\'s Realtime events ALWAYS repaint through _repaintForSupabaseData(); a row about the other sport\'s week sets skipTab (the tab rebuild alone) [structural]');
   // RG-200 (2026-09-21) — SLICED, NOT PROXIMITY-MATCHED. This was
   // `/function _repaintForSupabaseData\([\s\S]{0,400}?navigateTo\(state\.currentTab/`,
   // and the 400-character window was measuring the length of the function's
@@ -416,11 +421,21 @@ console.log('\n[8] The Supabase-era triggers funnel into renderChatPage() [struc
   // broken by a comment again. Strictly stronger: the old regex would also have
   // matched a `navigateTo` that had drifted into a neighbouring function within
   // 400 characters; this one cannot.
-  const repaintBody8 = appSrc.slice(appSrc.indexOf('function _repaintForSupabaseData(reason) {'),
+  const repaintBody8 = appSrc.slice(appSrc.indexOf('function _repaintForSupabaseData(reason, { skipTab = false } = {}) {'),   // re-pinned 2026-10-08: the signature gained { skipTab }
     appSrc.indexOf('function _resetSupabaseDataForTest'));
   assert(repaintBody8.length > 0, '_repaintForSupabaseData() body located [structural]');
   assert(/navigateTo\(state\.currentTab/.test(repaintBody8),
     '_repaintForSupabaseData() repaints via navigateTo() [structural]');
+  // ADDED 2026-10-08 (merge): the skipTab branch skips ONLY navigateTo. Everything else the function does still runs for an other-sport row: the chrome refresh instead of the tab, then
+  // maybeNoticeUnfrozenSpreads() and flushPendingDeepLink() unconditionally (both after the branch, outside it).
+  const skipAt = repaintBody8.indexOf('if (skipTab) {');
+  const afterBranch = skipAt < 0 ? '' : repaintBody8.slice(repaintBody8.indexOf('maybeNoticeUnfrozenSpreads();', skipAt) - 20);
+  assert(skipAt > 0 && /if \(skipTab\) \{\s*try \{ refreshSportChrome\(\); \}[\s\S]*?\} else \{\s*try \{ navigateTo\(state\.currentTab \|\| 'dashboard'\); \}/.test(repaintBody8)
+    && /try \{ maybeNoticeUnfrozenSpreads\(\); \}/.test(afterBranch) && /try \{ flushPendingDeepLink\(reason\); \}/.test(afterBranch),
+    '_repaintForSupabaseData(): skipTab swaps navigateTo() for refreshSportChrome() and NOTHING ELSE - maybeNoticeUnfrozenSpreads() and flushPendingDeepLink() run after the branch either way [structural]');
+  const chromeBody = appSrc.slice(appSrc.indexOf('function refreshSportChrome() {'), appSrc.indexOf('/** Paint the switcher into a freshly painted sport page.'));
+  assert(/refreshHeader\(\)/.test(chromeBody) && /renderLeaguePill\(\)/.test(chromeBody) && /paintSportSwitcher\(/.test(chromeBody) && !/navigateTo\(|render(Picks|Dashboard|Leaderboard)Page\(|repaintSportTab\(/.test(chromeBody),
+    'refreshSportChrome() refreshes the header, the pill and the switcher dots and rebuilds no tab body [structural]');
   // UPDATED AGAIN — DI-397 (UN-357, 2026-09-27) retires the `settings:
   // renderSettingsPage` entry DI-308 had added after `chat: renderChatPage`;
   // `chat` is the LAST entry in the map again (no trailing comma before the
@@ -429,7 +444,7 @@ console.log('\n[8] The Supabase-era triggers funnel into renderChatPage() [struc
   // that leaves `chat` non-last (comma present) still matches too.
   assert(/chat:\s*renderChatPage\s*,?[\s\S]{0,80}\}\)\[tab\]/.test(appSrc),
     'navigateTo(\'chat\') dispatches to renderChatPage() — so every repaint above rebuilds the composer [structural]');
-  assert(/afterSupabaseHydrate[\s\S]{0,2000}?_repaintForSupabaseData\(reason\)/.test(appSrc),
+  assert(/afterSupabaseHydrate[\s\S]{0,3500}?_repaintForSupabaseData\(reason\)/.test(appSrc),   // 2000 -> 3500, D1 (2026-10-07): the PF-1 comments between the two grew the gap; the pin is still "the rehydrate lands on the same repaint"
     'the rehydrate tick lands on the same repaint [structural]');
   const refreshAuthUIFn = (appSrc.match(/export function refreshAuthUI\(event, payload\) \{[\s\S]*?\n\}/) || [''])[0];
   assert(refreshAuthUIFn.length > 0, 'refreshAuthUI() body located [structural]');

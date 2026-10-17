@@ -1,0 +1,12 @@
+{
+  "id": "leaguesettingsrendertest",
+  "script": "leaguesettingsrendertest.mjs",
+  "label": "127b",
+  "summary": "strict-noverdict",
+  "floor": 301,
+  "tags": [
+    "browser"
+  ],
+  "expectedMs": 5000,
+  "note": "raised from 217 by the merge-review fix (2026-10-01, BLOCK #1): the League-group 16 pt / name-block 8 pt / Leave-footer 8 pt measurements at four widths for five cases, the title gap, the two spacing canaries and [I] the Standings caption (with its canary); before that, floor …"
+}

@@ -1,0 +1,19 @@
+{
+  "id": "joinnudgebrowsertest",
+  "script": "joinnudgebrowsertest.mjs",
+  "summary": "strict",
+  "floor": 65,
+  "tags": [
+    "browser",
+    "slow"
+  ],
+  "deps": [
+    "js/app.js",
+    "css/styles.css",
+    "index.html",
+    "js/sw-register.js",
+    "icons/icon-192.png"
+  ],
+  "expectedMs": 60000,
+  "note": "D1 DESIGN_D1_E (2026-10-15, Drew D-88; P-8): the join nudge and the red Game Day card's Join NFL picks in a REAL Chromium running the real app on a CFB + NFL league, the viewer a CFB-only member: Variant A (a button) and Variant B (text only) at 375 pt, default and 1.35x text, Light and Dark - exactly one nudge right after the newest NFL card, 16 pt padding, the 8 pt text stack, 16 pt to a 44 pt centred button, the chip leading, WCAG AA words, no overflow; not the commissioner's gold or a due badge, the neutral button, centred at 700 pt, pressed (:active) at about 97%; every painted colour follows the tokens; REAL TAPS through the real dispatcher (the button opens the overview at the NFL card and writes NOTHING, a forged sport is dropped, a touch while the sheet is mid-arrival works, Join joins, the nudge and the red card's button end with no reload); the W-85 scene's size budget (<= 33%) with the clause folding at the largest text; [7] is the encoded anti-vacuity kit (16 mutant override sheets)."
+}

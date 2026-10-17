@@ -1,0 +1,13 @@
+{
+  "id": "chatscrolltest",
+  "script": "chatscrolltest.mjs",
+  "label": "112f",
+  "summary": "strict-noverdict",
+  "floor": 87,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 400,
+  "note": "RAISED from 81 by the v0.27.4 integration merge 1/6 (2026-09-30: Batch B RG-306's reply-swipe additions, confirmed on the merged tree); before that, floor 81 — RAISED from 74 by feat/gestures-v0272 round 3 (Opus, 2026-09-29: [7m-7] the clip is never set on a system row (reviewer …"
+}

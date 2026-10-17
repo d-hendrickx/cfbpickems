@@ -43,6 +43,8 @@
 import {
   createPlayer, createWeek, createGame, createPick,
 } from './data-model.js';
+// D1 (DI-553 / DI-530) — the closed set `messages.sport_tag` is CHECKed to (0033 §6): a pure leaf with no imports of its own.
+import { validSportTag } from './sport-tag.js';
 
 // ─── timestamp + canonicalization primitives ──────────────────────────────
 
@@ -722,6 +724,21 @@ const COMPETITION_COLS = [
   { legacy: 'updatedAt', column: 'updated_at', type: 'ts' },
 ];
 
+// competition_members — D1 (v0.30.0) DI-531, migration 0033 §5 (security A3 + C1). One row per (competition, league member): the member has entered an opt-in sport.
+//   • `id` is a GENERATED column (`competition_id || ':' || league_member_id`, 0033) — the planner's row identity and the realtime/delete key. It is carried on the projected row so
+//     the diff can match rows, and the adapter strips it from an INSERT (route `generatedCols`): Postgres refuses a value for a GENERATED ALWAYS column.
+//   • `joined_at` is SERVER-OWNED (C1). The projection maps it (a restore/import must carry each entry's original join time, and playersForCompetition() reads it back for the
+//     joined-before-lock rule), but the ADAPTER never sends it from a client: the route's `serverOwnedCols` strips it from every insert, so the column default stamps `now()` and
+//     (0044) a BEFORE INSERT trigger forces it — a client can never back-date its own entry past a lock. The service-role importer is the one writer that keeps its value.
+//   • The legacy object's member reference is `memberId` (the same word every other legacy object uses); the column is `league_member_id`.
+const COMPETITION_MEMBER_COLS = [
+  { legacy: 'id', column: 'id' },
+  { legacy: 'competitionId', column: 'competition_id' },
+  { legacy: 'memberId', column: 'league_member_id' },
+  { legacy: 'enrolledBy', column: 'enrolled_by' },
+  { legacy: 'joinedAt', column: 'joined_at', type: 'ts' },
+];
+
 // picks — js/data-model.js createPick() (~line 855).
 const PICK_COLS = [
   { legacy: 'pickId', column: 'id' },
@@ -776,6 +793,9 @@ const OBLIGATION_COLS = [
   { legacy: 'voidReason', column: 'void_reason' },
   { legacy: 'mergedInto', column: 'merged_into' },
   { legacy: 'mergedFrom', column: 'merged_from' },
+  // R-19 (0046) — the denial reason, a typed column (null or 1-200 printable characters). It used to ride in
+  // `extra`, which no player may write; 0046 backfills the old values into this column. Absent = no reason.
+  { legacy: 'deniedReason', column: 'denied_reason' },
 ];
 
 // feedback — the entry built by submitFeedback() in js/app.js, appended
@@ -897,6 +917,8 @@ export const KEY_TABLES = {
   cfbp_game_requests: { tables: ['game_requests'], kind: 'rows' },
   // Multi-Sport DI-220 (AD-74) — migration 0033.
   cfbp_competitions: { tables: ['competitions'], kind: 'rows' },
+  // D1 DI-531 (v0.30.0) — who plays each opt-in sport (migration 0033 §5).
+  cfbp_competition_members: { tables: ['competition_members'], kind: 'rows' },
   // Not a `cfbp_*` storage key — history-2025.js's exported constant. Kept in
   // this same dictionary (synthetic key) so the importer has one dispatch
   // table instead of two (DI-183g).
@@ -1190,15 +1212,91 @@ function contactEntryFor(ctx, memberId) {
 }
 // obligations
 {
-  const r = rowsKind('obligations', OBLIGATION_COLS, { defaults: _DEFAULT_OBLIGATION });
+  const r = rowsKind('obligations', OBLIGATION_COLS, {
+    defaults: _DEFAULT_OBLIGATION,
+    // FB-026 — A TYPED COLUMN IS NEVER SHADOWED BY ITS OWN NAME IN `extra`.
+    //
+    // `rowFromLegacy` never puts a modeled field in `extra`, so for every row this module writes the spread in
+    // `legacyFromRow` only restores unmodeled fields. `finalize_week` (0026_b_roles_pilot.sql:2255-2264) is a
+    // second writer with its own projection: its `extra` is the payload minus nine typed keys, so createdAt,
+    // paidAt, voided, voidedAt, voidReason, mergedInto and mergedFrom ALSO land there, as copies of real columns.
+    // Spread last, those copies won: createdAt read back as the client's instant instead of the server's (the
+    // diff then sent `created_at` and obligations_guard refused it — Drew's banner), and a row later marked paid
+    // or voided read back as its stale shadow (paidAt null, voided false), which the next save would have
+    // written back. The column is what the server holds, so the column wins. A field the record marks absent
+    // stays absent (legacyFromRow already deleted it), so a row this module wrote round-trips exactly as before.
+    //
+    // R-19 (0046) — `deniedReason` IS A COLUMN NOW (`denied_reason`), and this same rule covers its old home: a
+    // `deniedReason` still sitting in `extra` (a row an old client wrote before 0046's backfill reached it) is a
+    // shadow of the column, so the column wins. Its ABSENCE is restored here, explicitly: a null column reads back
+    // as NO key (most obligations never had one), and `quietAbsentFields` keeps rowFromLegacy from recording it in
+    // `extra.__absent` — otherwise every existing row would differ from the server's copy and the first save after
+    // the deploy would patch `extra` on all of them.
+    quietAbsentFields: ['deniedReason'],
+    restoreRow(obj, row) {
+      const extra = row && row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra) ? row.extra : null;
+      if (extra) {
+        const absent = new Set(Array.isArray(extra.__absent) ? extra.__absent : []);
+        for (const c of OBLIGATION_COLS) {
+          if (!Object.prototype.hasOwnProperty.call(extra, c.legacy) || absent.has(c.legacy)) continue;
+          obj[c.legacy] = convertIn(row[c.column], c.type);
+        }
+      }
+      if (obj.deniedReason == null) delete obj.deniedReason;
+      return obj;
+    },
+  });
   toRows.cfbp_obligations = r.toRows;
   fromRows.cfbp_obligations = r.fromRows;
 }
+
+/**
+ * FB-026 — the legacy field names a server-side writer may have copied into a row's `extra` although each is a
+ * real column of that table (see the obligations restoreRow above). Keyed by storage key; only obligations has a
+ * writer that does it (finalize_week).
+ */
+const EXTRA_SHADOW_FIELDS = Object.freeze({
+  cfbp_obligations: Object.freeze(OBLIGATION_COLS.map((c) => c.legacy)),
+});
+
+/**
+ * FB-026 — a server row's `extra` as THIS module would have written it: the shadow copies of typed columns
+ * removed. The adapter's row diff compares a projected row's `extra` (which never holds them) against this, so a
+ * row finalize_week wrote does not look changed on every save. Returns the same object when there is nothing to
+ * remove; never mutates its argument.
+ */
+export function unshadowedExtra(key, extra) {
+  const names = EXTRA_SHADOW_FIELDS[key];
+  if (!names || !extra || typeof extra !== 'object' || Array.isArray(extra)) return extra;
+  let copy = null;
+  for (const n of names) {
+    if (!Object.prototype.hasOwnProperty.call(extra, n)) continue;
+    if (!copy) copy = { ...extra };
+    delete copy[n];
+  }
+  return copy || extra;
+}
 // competitions — Multi-Sport DI-220. `defaults: {}` on purpose (see COMPETITION_COLS).
 {
-  const r = rowsKind('competitions', COMPETITION_COLS, { defaults: {} });
+  // D1 (batch T finding, DI-531's data path): `competitions` has NO `extra` column (0033), but rowFromLegacy() puts one on every projected row — a commissioner's competition write
+  // (Add a sport) would have sent a column the table does not have. Dropped here, after the typed columns are built; an unmodelled legacy field is simply not stored.
+  const r = rowsKind('competitions', COMPETITION_COLS, { defaults: {}, decorateRow: (row) => { delete row.extra; return row; } });
   toRows.cfbp_competitions = r.toRows;
   fromRows.cfbp_competitions = r.fromRows;
+}
+// competition_members — D1 DI-531. `defaults: {}` (an absent field projects to null; the adapter's NOT NULL rule then omits it). `decorateRow` derives the generated `id` from the two
+// real key columns (a legacy entry built by addCompetitionMember() carries it already; this makes a hand-built one safe) and drops `extra` (the table has none, 0033 §5).
+{
+  const r = rowsKind('competition_members', COMPETITION_MEMBER_COLS, {
+    defaults: {},
+    decorateRow: (row) => {
+      if (row.competition_id != null && row.league_member_id != null) row.id = `${row.competition_id}:${row.league_member_id}`;
+      delete row.extra;          // rowFromLegacy() adds one to every rows-kind row, and PostgREST refuses a column the table does not have
+      return row;
+    },
+  });
+  toRows.cfbp_competition_members = r.toRows;
+  fromRows.cfbp_competition_members = r.fromRows;
 }
 // nicknames / lock_overrides / rejected_suggestions / active_week /
 // fetch_proof / feedback_excluded_ids — all plain league_kv passthroughs.
@@ -1453,6 +1551,8 @@ export function messageToRow(ev, ctx) {
     author_member_id: memberIdOrNull(author, memberIds),
     author_kind: memberAuthorKind(author, memberIds),
     game_tag: ev.gameTag || '',
+    // D1 (DI-553 / DI-530) — the sport the row belongs to: one of the closed codes or ''. Always PRESENT (every row of a bulk insert carries the same keys; the column's default is '').
+    sport_tag: validSportTag(ev.sportTag),
     body: ev.body || '',
     target_id: ev.targetId || '',
     reply_to: ev.replyTo || '',
@@ -1472,6 +1572,7 @@ export function messageToRow(ev, ctx) {
  *  downstream could tell one league's row from another's — and `seq` is
  *  per-league, so the seq alone never could either. '' when absent. */
 export function rowToMessage(row) {
+  const sportTag = validSportTag(row.sport_tag);   // D1 (DI-553 / security A4) — from the COLUMN only (never meta, never a camelCase twin), and only if it is a closed code
   return {
     leagueId: row.league_id ? String(row.league_id) : '',
     seq: Number(row.seq),
@@ -1480,11 +1581,18 @@ export function rowToMessage(row) {
     type: row.type,
     author: row.author,
     gameTag: row.game_tag || '',
+    // The key exists ONLY for a tagged row: an untagged row (every row of a one-sport league, and every plain Locker Room message) is byte-identical to what this map returned before the
+    // column was read, which keeps the importer's export-shaped hash (rowToMessageEvent) and every cached event equal to the Sheet-era shape.
+    ...(sportTag ? { sportTag } : {}),
     body: row.body || '',
     targetId: row.target_id || '',
     replyTo: row.reply_to || '',
     notify: !!row.notify,
     meta: row.meta && typeof row.meta === 'object' ? row.meta : null,
+    // D1 (W-54 / DI-680, migration 0045) — the server-set `relayed` column, TOP-LEVEL and only when the row carries a real boolean: true = a member's
+    // session relayed it through chat_append_system, false = the server (or the importer, or a player's own row) wrote it. Never read from `meta`
+    // (member-writable) and never defaulted: an absent column leaves the key absent, and every reader's `relayed === false` then fails CLOSED.
+    ...(typeof row.relayed === 'boolean' ? { relayed: row.relayed } : {}),
   };
 }
 
@@ -1496,7 +1604,9 @@ export function rowToMessage(row) {
  *  `leagueId` for the chat fold, which needs it. Pure; no new column mapping —
  *  the one map stays rowToMessage(). */
 export function rowToMessageEvent(row) {
-  const { leagueId, ...event } = rowToMessage(row);
+  // D1 (0045): `relayed` is stripped for the same reason `leagueId` is: the Sheet export's events never carried it (it is derived from
+  // emitted_by, which the export does not have), so hashing it in would report a false mismatch on every import.
+  const { leagueId, relayed, ...event } = rowToMessage(row);
   return event;
 }
 

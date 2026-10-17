@@ -58,7 +58,14 @@ export const SIGNAL_POINTS = Object.freeze({
   //    threshold. `interacttest.mjs` pins this table equal to js/scribeLines.js's.
   liveUpset: 55,
   chartLeadChange: 45,
+  // ── D1 Lane C (DI-654, Drew's D-46, SCRIBE.md v3.2 §4) — NON-PARTICIPATION IS A TRIGGER. 45 clears Balanced, Active and Unhinged alone and not Reserved
+  //    (65) or Quiet (85), so at Reserved only the deadline step ever speaks about absence. Both are SCAN-ONLY (SCAN_ONLY_TRIGGERS below): a phone never raises
+  //    them and `scribe-autonomous` refuses them, which is what lets the scan count a lock's occasions without a race (DI-653).
+  nonParticipationPicks: 45,
+  nonParticipationChat: 45,
   milestone: 40,
+  // ── D1 Lane C (DI-654) — the history callback: 35 clears Active and Unhinged alone and Balanced only with another signal in the same window.
+  historyCallback: 35,
   streak: 35,
   loneWolfWin: 30,
   unanimous: 25,
@@ -73,6 +80,14 @@ export const SIGNAL_POINTS = Object.freeze({
   verbosity: 10,
   claim: 0,
 });
+
+/**
+ * D1 Lane C (DI-653, C3) — THE TRIGGERS ONLY THE SERVER SCAN RAISES. `scribe-autonomous` (class U, a member's JWT) refuses each of these by name before any
+ * service-role work: the two non-participation signals are scan-only by DI-653 ("a phone never raises them"), and the history callback has no client detector at
+ * all, so a member's request has nothing legitimate to ask for there either (a builder's tightening, recorded in the hand-off). `supabase/functions/scribe-scan`
+ * is their only caller.
+ */
+export const SCAN_ONLY_TRIGGERS = Object.freeze(['nonParticipationPicks', 'nonParticipationChat', 'historyCallback']);
 
 /** Code.gs `SCRIBE_MAX_DISTINCT_SIGNALS_` (:6221). */
 export const MAX_DISTINCT_SIGNALS = 8;

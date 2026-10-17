@@ -1,0 +1,13 @@
+{
+  "id": "pickheadertest",
+  "script": "pickheadertest.mjs",
+  "label": "138",
+  "summary": "strict",
+  "floor": 325,
+  "tags": [
+    "browser",
+    "tz"
+  ],
+  "expectedMs": 3400,
+  "note": "RAISED from 284 by the review BLOCK #1 fix (2026-10-01, B1 stack gap 16 + B2 card-edge 16): [0] engine 2, [1] fixture integrity 7, [2] 36 configurations x P1-P8 = 288, [3] the reported cases 6, [4] fourteen mutants, [5] source guards 8. Floor 284 was set 2026-10-01 at its first \u2026"
+}

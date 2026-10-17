@@ -1,0 +1,12 @@
+{
+  "id": "scribeClassify.twin",
+  "script": "supabase/tests/functions/scribeClassify.twin.mjs",
+  "label": "81j",
+  "summary": "loose",
+  "floor": 140,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 200,
+  "note": "DI-T6.5 — the classify handler: class-U auth ordering (through the canonical requireMember()/my_member_id() gate), the kill switch, the daily cap, N-2/F6's verdict-cache idempotency, and (raised from 27) the shared monthly budget via budgetExceeded()/bumpRate() — checked before …"
+}

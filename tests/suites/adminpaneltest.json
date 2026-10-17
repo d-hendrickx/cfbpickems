@@ -1,0 +1,13 @@
+{
+  "id": "adminpaneltest",
+  "script": "adminpaneltest.mjs",
+  "label": "108",
+  "summary": "strict",
+  "floor": 307,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 100,
+  "note": "RAISED from 289 by SP-53's UI wiring (2026-10-01): the (left)/(removed) label and the Linked line keyed on userId AND linkedAt; before that, floor 264, tightened from 245 at the v0.26.0 stamp 2026-09-26 — UX Revamp wiring pass 2 (2026-09-25) raised it from 244: DI-345's Super …"
+}

@@ -1,0 +1,12 @@
+{
+  "id": "interacttest",
+  "script": "interacttest.mjs",
+  "label": "100",
+  "summary": "loose",
+  "floor": 130,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "SCRIBE v3 Package D pure half (DI-283…288, 2026-09-24): the two new SIGNAL_POINTS entries and the client/server TWIN SYNC, heatedExchangeRun()'s full matrix and detectHeatedExchange() over a room with SCRIBE/system/deleted/react rows filtered, REACTION_PALETTE as the classify …"
+}

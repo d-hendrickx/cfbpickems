@@ -1,0 +1,12 @@
+{
+  "id": "scribePersonaDrift.check",
+  "script": "supabase/tests/scribePersonaDrift.check.mjs",
+  "label": "81g",
+  "summary": "loose",
+  "floor": 9,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "DI-T6.12 G5 / reviewer BLOCK B1 — SCRIBE_PERSONA_TEXT equals a fresh read of docs/SCRIBE.md modulo exactly SCRIBE_PERSONA_STRIPPED_TEXT (data, not a regex), plus three self-tests proving the comparison can actually fail"
+}

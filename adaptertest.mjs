@@ -149,6 +149,8 @@ const said = (re) => _captured.some((l) => re.test(l));
 const sb = await import('./js/supabase-backend.js');
 const proj = await import('./js/supabase-projection.js');
 const transport = await import('./js/chatTransport.js');
+// 0046 — the 2K25 ledger's parties, for the fake settle_2025_obligation (static.check pins 0046's SQL list equal to this).
+const h2025 = await import('./js/history-2025.js');
 
 // ══════════════════════════════════════════════════════════════════════════
 // THE MOCK — a PostgREST-shaped store with RLS-like filtering (§9.1)
@@ -157,6 +159,9 @@ const transport = await import('./js/chatTransport.js');
 const LEAGUE_A = 'L-aaaa';
 const LEAGUE_B = 'L-bbbb';
 const NOW = Date.UTC(2026, 8, 20, 18, 0, 0);           // fixed instant; TZ-independent by construction
+/** FB-026 — how much later the SERVER'S `now()` is than the client's `createdAt` when finalize_week inserts an
+ *  obligation (the debounce plus the round trip). Any non-zero value reproduces the live disagreement. */
+const FINALIZE_SERVER_LAG_MS = 1234;
 
 /** `0002_rls.sql:165-193` — the verbs a policy exists for. A verb absent here
  *  is `permission denied for table X` (42501), which is what PostgREST returns
@@ -184,6 +189,7 @@ const GRANTS = {
   scribe_reports: ['select'],
   season_archives: ['select'],
   competitions: ['select', 'insert', 'update'],       // 0033 — no delete: competitions are archived, never deleted
+  competition_members: ['select', 'insert', 'delete'], // 0033 §5 — inserted or deleted, NEVER updated (D1 DI-531)
 };
 
 /** `league_members`' SELECT grant is a COLUMN LIST after 0007, and PostgREST
@@ -234,6 +240,11 @@ function makeStore() {
     extra_point_guesses: [
       row({ league_id: LEAGUE_A, id: 'ep_w1__p2', week_id: 'w1', member_id: 'p2', guess: 37, updated_at: new Date(NOW).toISOString() }),
     ],
+    // 0046 — the fake settle_2025_obligation reads `pilot` and `status` (league_active) off this, as 0046 PART D does.
+    leagues: [
+      { id: LEAGUE_A, pilot: true, status: 'active' },
+      { id: LEAGUE_B, pilot: false, status: 'active' },
+    ],
     league_kv: [
       row({ league_id: LEAGUE_A, key: 'settings', value: { chatEnabled: true, commissionerEmail: 'drew@example.com', autoRefreshInterval: 60 } }),
       row({ league_id: LEAGUE_A, key: 'nicknames', value: { p2: 'The Colonel' } }),
@@ -279,6 +290,8 @@ function makeStore() {
     // Multi-Sport 0033 — the backfill's ONE default competition per league. Starts empty here so the
     // pre-existing sections read exactly what they always read; competitiontest.mjs seeds its own.
     competitions: [],
+    // D1 DI-531 — migration 0033 §5: who plays each opt-in sport. Empty here; [A-CM] seeds its own.
+    competition_members: [],
   };
   return s;
 }
@@ -444,6 +457,15 @@ function makeClient(st, session, opts = {}) {
       insert: (r) => isCommissioner(r.league_id),
       update: (r) => isCommissioner(r.league_id),
     },
+    // D1 DI-531 — 0033 §5. cm_select (a member reads), cm_self_insert (my OWN row, enrolled_by 'self', an opt_in competition that is not archived), cm_commissioner_all (any row).
+    // cm_self_delete is modelled as "my own self-enrolled row" (its before-the-first-lock condition is the week/game clock, which this fake does not need: the adapter never plans a self-delete).
+    competition_members: {
+      select: (r) => isMember(r.league_id),
+      insert: (r) => isCommissioner(r.league_id)
+        || (r.enrolled_by === 'self' && r.league_member_id === myMemberId(r.league_id)
+          && st.competitions.some((c) => c.league_id === r.league_id && c.id === r.competition_id && c.enrollment === 'opt_in' && !c.archived_at)),
+      delete: (r) => isCommissioner(r.league_id) || (r.enrolled_by === 'self' && r.league_member_id === myMemberId(r.league_id)),
+    },
   };
 
   /** The guard triggers of `0002_rls.sql:365-706`, as BEFORE-UPDATE rules that
@@ -481,6 +503,42 @@ function makeClient(st, session, opts = {}) {
       for (const c of ['amount_or_prize', 'needs_review', 'review_note', 'voided', 'voided_at', 'void_reason', 'merged_into', 'merged_from', 'extra']) {
         if (c in patch && JSON.stringify(patch[c]) !== JSON.stringify(oldRow[c])) return 'obligations: only status/paid_at may be self-edited';
       }
+      // R-19 — TEACH THE FAKE THE REST OF THE GUARD (0002_rls.sql:537-552). The fake stopped at the column list, so any
+      // status/paid_at patch from a player passed here, legal or not. The real guard also holds a player to the
+      // non-admin rows of obligationNextStatus() (payer unpaid→pending; recipient unpaid→paid, pending→paid,
+      // pending→unpaid) and requires paid_at set exactly when the row is paid.
+      const me = myMemberId(oldRow.league_id);
+      const next = { ...oldRow, ...patch };
+      const payer = me === oldRow.payer_member_id, recipient = me === oldRow.recipient_member_id;
+      const legal = (payer && oldRow.status === 'unpaid' && next.status === 'pending')
+        || (recipient && oldRow.status === 'unpaid' && next.status === 'paid')
+        || (recipient && oldRow.status === 'pending' && next.status === 'paid')
+        || (recipient && oldRow.status === 'pending' && next.status === 'unpaid');
+      if (next.status !== oldRow.status && !legal) return 'obligations: illegal status transition for this role';
+      // 0046 — TEACH THE FAKE THE THREE ADDED BLOCKS (0046_r19_obligation_settle.sql PART C), which MUTATE the row the
+      // way the real BEFORE trigger mutates NEW: the update loop hands this guard a COPY of the payload, so what the
+      // client SENT (CLIENT._calls.updates) stays what it sent.
+      //   (a) security F2 — paid_at and denied_reason move only in an UPDATE that also moves the status;
+      //   (b) only the recipient gives a reason, and only in pending→unpaid; every other player move clears it;
+      //   (c) security F2 — a player's move to paid is dated with the SERVER's clock.
+      const same = (a, b) => (a ?? null) === (b ?? null);
+      if (next.status === oldRow.status) {
+        if (!same(next.paid_at, oldRow.paid_at)) return 'obligations: paid_at may change only with a status change';
+        if (!same(next.denied_reason, oldRow.denied_reason)) return 'obligations: denied_reason may change only with a status change';
+      }
+      if (next.status !== oldRow.status && !(oldRow.status === 'pending' && next.status === 'unpaid')) {
+        if (next.denied_reason != null && !same(next.denied_reason, oldRow.denied_reason)) {
+          return 'obligations: only the recipient may give a reason, and only when denying';
+        }
+        patch.denied_reason = null;
+        next.denied_reason = null;
+      }
+      if (next.status === 'paid' && next.status !== oldRow.status) {
+        patch.paid_at = new Date(now()).toISOString();
+        next.paid_at = patch.paid_at;
+      }
+      if (next.status === 'paid' && next.paid_at == null) return 'obligations: paid_at required when moving to paid';
+      if (next.status !== 'paid' && next.paid_at != null) return 'obligations: paid_at must be null off paid';
       return null;
     },
     feedback(oldRow, patch) {
@@ -735,6 +793,14 @@ function makeClient(st, session, opts = {}) {
 
     if (b._op === 'insert') {
       calls.inserts.push({ table, rows: b._payload });
+      // D1 DI-531 — competition_members.id is GENERATED ALWAYS (0033 §5): a value for it is refused BEFORE any policy runs (Postgres 428C9), and the stored row computes it. joined_at takes
+      // its column default (the server's now()) when the request names none.
+      if (table === 'competition_members') {
+        for (const r of b._payload) {
+          if ('id' in r) return { data: null, status: 400, error: { code: '428C9', message: 'cannot insert a non-DEFAULT value into column "id"', details: 'Column "id" is a generated column.' } };
+        }
+        b._payload = b._payload.map((r) => ({ ...r, id: `${r.competition_id}:${r.league_member_id}`, joined_at: r.joined_at ?? new Date(NOW).toISOString() }));
+      }
       for (const r of b._payload) {
         if (!pol(r)) return refuse(`new row violates row-level security policy for table "${table}"`);
       }
@@ -764,8 +830,29 @@ function makeClient(st, session, opts = {}) {
       const out = [];
       for (const r of hits) {
         const g = GUARDS[table];
-        if (g) { const msg = g(r, b._payload, flags); if (msg) return refuse(msg); }
-        Object.assign(r, b._payload);
+        // A COPY: a BEFORE trigger may rewrite NEW (0046's obligations_guard does), and what the client SENT stays in
+        // calls.updates unchanged. Guards that do not mutate behave exactly as before.
+        const applied = { ...b._payload };
+        if (g) { const msg = g(r, applied, flags); if (msg) return refuse(msg); }
+        // 0046 PART A — the CHECK obligations_denied_reason_shape (null, or 1-200 characters, not blank, none of the
+        // refused class), raised as Postgres raises a CHECK violation: 23514, the whole statement refused.
+        if (table === 'obligations' && 'denied_reason' in applied && applied.denied_reason != null) {
+          const v = applied.denied_reason;
+          const ok = typeof v === 'string' && [...v].length >= 1 && [...v].length <= 200 && v.replace(/^ +| +$/g, '') !== ''
+            && !/[\u0001-\u001F\u007F-\u009F\u061C\u200B-\u200F\u2028-\u202E\u2060-\u206F\uFEFF]/.test(v);
+          if (!ok) return { data: null, error: { code: '23514', message: 'new row for relation "obligations" violates check constraint "obligations_denied_reason_shape"' } };
+        }
+        Object.assign(r, applied);
+        // FB-005 — TEACH THE FAKE: scribe_guard's MIRROR-SYNC (0024_scribe_learn.sql:162, :171, :182). The real
+        // BEFORE UPDATE trigger rewrites the payload's copy of the flip column (and of `origin`) from the column
+        // on every update, and the payload is what `fromRows` hands the client — so an approval reads back as
+        // approved after a refresh ONLY because of this. The fake never did it, so a refresh read a stale copy.
+        if (table === 'scribe_learnings' || table === 'scribe_canon') {
+          const p = { ...(r.payload || {}) };
+          if (table === 'scribe_learnings') p.status = r.status; else p.approvalStatus = r.approval_status;
+          if ('origin' in r) p.origin = r.origin ?? null;
+          r.payload = p;
+        }
         if (!pol(r)) return refuse(`new row violates row-level security policy for table "${table}"`);
         out.push(r);
       }
@@ -781,6 +868,39 @@ function makeClient(st, session, opts = {}) {
   }
 
   const RPC = {
+    // 0046 PART D — TEACH THE FAKE settle_2025_obligation, rule for rule: the caller's own ACTIVE seat (my_member_id), the
+    // PILOT league only, not paused, one of the fifteen 2K25 rows, the caller party to it, one of the four non-admin moves
+    // (obligationNextStatus), then ONE key of settings.ob2025 (absent = unpaid; legacy `true` = paid). Returns the row.
+    settle_2025_obligation({ p_league, p_obligation, p_action }) {
+      const raise = (code, message) => ({ data: null, error: { code, message } });
+      if (!session.authenticated) return raise('28000', 'not_authenticated');
+      const me = myMemberId(p_league);
+      if (!me) return raise('42501', 'not_member');
+      const lg = (st.leagues || []).find((l) => l.id === p_league);
+      if (!lg || !lg.pilot) return raise('42501', 'not_pilot');
+      if (lg.status !== 'active') return raise('42501', 'league_paused');
+      if (!['mark', 'confirm', 'deny'].includes(p_action)) return raise('22023', 'bad_action');
+      const ob = h2025.season2025Obligations().find((r) => r.obligationId === p_obligation);
+      if (!ob) return raise('22023', 'not_found');
+      if (me !== ob.payerPlayerId && me !== ob.recipientPlayerId) return raise('42501', 'not_party');
+      let kv = st.league_kv.find((r) => r.league_id === p_league && r.key === 'settings');
+      const value = kv && kv.value && typeof kv.value === 'object' ? kv.value : {};
+      const map = value.ob2025 && typeof value.ob2025 === 'object' && !Array.isArray(value.ob2025) ? { ...value.ob2025 } : {};
+      const raw = map[p_obligation];
+      const cur = raw === true ? 'paid' : (raw === 'pending' || raw === 'paid') ? raw : 'unpaid';
+      const next = (p_action === 'mark' && cur === 'unpaid' && me === ob.payerPlayerId) ? 'pending'
+        : (p_action === 'mark' && cur === 'unpaid' && me === ob.recipientPlayerId) ? 'paid'
+        : (p_action === 'confirm' && cur === 'pending' && me === ob.recipientPlayerId) ? 'paid'
+        : (p_action === 'deny' && cur === 'pending' && me === ob.recipientPlayerId) ? 'unpaid' : null;
+      if (!next) return raise('42501', 'illegal_transition');
+      if (next === 'unpaid') delete map[p_obligation]; else map[p_obligation] = next;
+      const newValue = { ...value, ob2025: map };
+      if (!kv) { kv = row({ league_id: p_league, key: 'settings', value: newValue }); st.league_kv.push(kv); }
+      else kv.value = newValue;
+      kv.updated_at = new Date(now()).toISOString();
+      kv.updated_by = session.userId;
+      return { data: { obligationId: p_obligation, status: next, row: { ...kv } }, error: null };
+    },
     get_member_contacts({ p_league }) {
       if (!session.authenticated) return refuse('permission denied for function get_member_contacts');
       if (isCommissioner(p_league)) {
@@ -883,9 +1003,23 @@ function makeClient(st, session, opts = {}) {
         st.results.push(row({ league_id: p_league, id: r.resultId || `wr_${p_week}_${r.playerId}`, week_id: p_week, member_id: r.playerId, display_name: r.displayName || '', correct_picks: r.correctPicks || 0, incorrect_picks: r.incorrectPicks || 0, correct_count: r.correctCount || 0, incorrect_count: r.incorrectCount || 0, no_decisions: r.noDecisions || 0, pending: r.pending || 0, tiebreaker_guess: r.tiebreakerGuess ?? null, tiebreaker_delta: r.tiebreakerDelta ?? null, rank: r.rank || 0, is_winner: !!r.isWinner, is_loser: !!r.isLoser, won_by_tiebreaker: !!r.wonByTiebreaker }));
       }
       let obCount = 0;
+      // FB-026 — TEACH THE FAKE: THE REAL OBLIGATIONS INSERT (0026_b_roles_pilot.sql:2255-2264, the live body).
+      // The fake used to write a row that looked exactly like the client's projection, so the defect could not
+      // exist here. The real statement does two things the client's `toRows` does not:
+      //   • it names no `created_at`, so the column DEFAULT (`now()`, 0001_schema.sql:315) stamps the SERVER'S
+      //     clock — always later than the client's `createdAt` (the 800 ms debounce plus the round trip);
+      //   • its `extra` is the payload minus NINE typed keys, so the seven other typed fields the client sends
+      //     (createdAt, paidAt, voided, voidedAt, voidReason, mergedInto, mergedFrom) land in `extra` too, as
+      //     SHADOWS of real columns. The columns themselves take their DEFAULTS.
+      // Both are modelled exactly. `FINALIZE_SERVER_LAG_MS` is the stand-in for "the server's clock at insert".
+      const FINALIZE_TYPED = ['obligationId', 'type', 'weekId', 'payerPlayerId', 'recipientPlayerId', 'amountOrPrize', 'status', 'needsReview', 'reviewNote'];
       for (const o of p_obligations || []) {
         if (st.obligations.some((x) => x.league_id === p_league && x.id === o.obligationId)) continue;
-        st.obligations.push(row({ league_id: p_league, id: o.obligationId, type: o.type || 'weekly', week_id: p_week, payer_member_id: o.payerPlayerId, recipient_member_id: o.recipientPlayerId, amount_or_prize: o.amountOrPrize || '', status: o.status || 'unpaid', needs_review: !!o.needsReview, review_note: o.reviewNote ?? null }));
+        const extra = { ...o };
+        for (const k of FINALIZE_TYPED) delete extra[k];
+        st.obligations.push({ league_id: p_league, id: o.obligationId, type: o.type || 'weekly', week_id: p_week, payer_member_id: o.payerPlayerId, recipient_member_id: o.recipientPlayerId, amount_or_prize: o.amountOrPrize || '', status: o.status || 'unpaid', needs_review: !!o.needsReview, review_note: o.reviewNote ?? null,
+          created_at: new Date(now() + FINALIZE_SERVER_LAG_MS).toISOString(), paid_at: null, voided: false, voided_at: null, void_reason: null, merged_into: null, merged_from: [],
+          extra });
         obCount++;
       }
       w.status = 'final';
@@ -980,13 +1114,15 @@ function makeFakeTimers() {
 function initAdapter({ who = 'commissioner', leagueId = LEAGUE_A, rpcOverride = null, emptySelects = null,
   failTables = null, timers = null, refreshSession = null, random = null,
   maxRows = undefined, dropCount = false, ignoreGt = false,
-  maxUrl = undefined, beforeSelect = null, capFor = null, inflateCount = null, gatewayHtml = null } = {}) {
+  maxUrl = undefined, beforeSelect = null, capFor = null, inflateCount = null, gatewayHtml = null, server = null } = {}) {
   sb._resetForTest();
   store.clear();
   statuses.length = 0;
   bannerSeen.length = 0;
   detailSeen.length = 0;
-  ST = makeStore();
+  // 0046 — `server`: the SAME server, signed into by a different session (the stale-reason test walks commissioner -> payer ->
+  // commissioner over one set of rows). Every other caller gets a fresh store, exactly as before.
+  ST = server || makeStore();
   const session = SESSIONS[who];
   CLIENT = makeClient(ST, session, { rpcOverride, emptySelects, failTables, maxRows, dropCount, ignoreGt, maxUrl, beforeSelect, capFor, inflateCount, gatewayHtml });
   ACCOUNT = session.userId || '';
@@ -1355,6 +1491,41 @@ await section('\n[A5b] RG-251 — a status diff that SKIPS a leg is refused, and
     `[A5b] re-saving LOCKED and a re-hydrate (Retry) sends lock_week from the real base, and the confirmed status advances (server ${ST.weeks.find((w) => w.id === 'w1').status}, confirmed ${sb.getConfirmedWeekStatus('w1')})`);
   captureConsole(() => sb._resetForTest());
   assert(sb.getConfirmedWeekStatus('w1') === null, '[A5b] with no hydrated mirror it is null, never a stale guess');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-N1] SECURITY N-1 (0045 delta) — getConfirmedMemberRole(): the role the SERVER served, for the hydrated league\'s ACTIVE members only…', async () => {
+  // The chat relay (js/notifications.js, via app.js's setMemberRoleSource) grants a COMMISSIONER_ANNOUNCEMENT its never-silenceable push only
+  // when this answers 'commissioner' for the row's league and author. Every other answer is null, and the relay fails CLOSED on it.
+  assert(typeof sb.getConfirmedMemberRole === 'function', '[A-N1] the adapter exports getConfirmedMemberRole()');
+  if (typeof sb.getConfirmedMemberRole !== 'function') return;
+  captureConsole(() => sb._resetForTest());
+  assert(sb.getConfirmedMemberRole(LEAGUE_A, 'p1') === null, '[A-N1] with no hydrated mirror it is null (the relay fails closed until a hydrate lands)');
+  await hydrated();
+  assert(sb.getConfirmedMemberRole(LEAGUE_A, 'p1') === 'commissioner' && sb.getConfirmedMemberRole(LEAGUE_A, 'p2') === 'player',
+    `[A-N1] after a hydrate it reports the base row's role: p1 commissioner, p2 player (got ${sb.getConfirmedMemberRole(LEAGUE_A, 'p1')}, ${sb.getConfirmedMemberRole(LEAGUE_A, 'p2')})`);
+  assert(sb.getConfirmedMemberRole(LEAGUE_B, 'q1') === null && sb.getConfirmedMemberRole(LEAGUE_A, 'q1') === null,
+    '[A-N1] another league is null (this mirror holds league A only, so B\'s commissioner is not vouched for), and so is a member id A does not have');
+  // reviewer gap (38f65a98): the LEAGUE check on its own — p1 IS a commissioner in this mirror's base rows, asked about under league B's id
+  assert(sb.getConfirmedMemberRole(LEAGUE_B, 'p1') === null && sb.getConfirmedMemberRole('L-zzzz', 'p1') === null,
+    '[A-N1] a member id this mirror holds, asked under ANOTHER league\'s id, is null: the role is vouched for only in the league the base rows came from');
+  assert(sb.getConfirmedMemberRole('', 'p1') === null && sb.getConfirmedMemberRole(LEAGUE_A, '') === null && sb.getConfirmedMemberRole(null, 'p1') === null
+    && sb.getConfirmedMemberRole(LEAGUE_A, 'scribe') === null,
+    '[A-N1] an empty or missing league or author is null, and so is SCRIBE (not a member)');
+  // the attacker's shape on THIS device: the mirror (member-writable, and the thing a forged client would edit) says p2 is a commissioner
+  captureConsole(() => sb.set('cfbp_players', sb.get('cfbp_players').map((pl) => (pl.playerId === 'p2' ? { ...pl, role: 'commissioner', isAdmin: true } : pl))));
+  assert(sb.getConfirmedMemberRole(LEAGUE_A, 'p2') === 'player',
+    '[A-N1] a mirror edit that claims p2 is a commissioner changes nothing: the answer is the SERVER\'s base row, never the mirror');
+  // a deactivated commissioner (public.is_commissioner()'s `m.active` conjunct)
+  captureConsole(() => sb._resetForTest());
+  initAdapter();
+  // p3 (not this session's seat) is made a commissioner and deactivated, server-side
+  Object.assign(ST.league_members.find((m) => m.league_id === LEAGUE_A && m.id === 'p3'), { role: 'commissioner', active: false });
+  await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  assert(sb.getState() === 'ACTIVE' && sb.getConfirmedMemberRole(LEAGUE_A, 'p3') === null && sb.getConfirmedMemberRole(LEAGUE_A, 'p1') === 'commissioner',
+    `[A-N1] a DEACTIVATED commissioner is null (fails closed), as is_commissioner() would answer, over a hydrate that LANDED (p1 still reads commissioner; state ${sb.getState()})`);
+  captureConsole(() => sb._resetForTest());
+  assert(sb.getConfirmedMemberRole(LEAGUE_A, 'p1') === null, '[A-N1] and after a reset it is null again, never a stale answer');
 });
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1910,6 +2081,7 @@ await section('\n[A-MS] Multi-Sport 0033 — the adapter reads/writes competitio
   const irow = ins[0].rows[0];
   assert(irow.sport === 'nhl' && irow.id === '33333333-3333-4333-8333-333333333333' && irow.league_id === LEAGUE_A,
     '[A-MS] …carrying id, sport and the active league');
+  assert(!('extra' in irow), `[A-MS] …and NO \`extra\` field: the competitions table has no such column (batch T finding, D1 DI-531) — ${JSON.stringify(Object.keys(irow))}`);
   assert(!('kind' in irow) && !('enrollment' in irow) && !('is_default' in irow) && !('settings' in irow) && !('created_at' in irow) && !('updated_at' in irow),
     `[A-MS] …and OMITTING every NOT NULL column it has no value for, so the DEFAULTS apply (kind/enrollment/is_default/settings never invented) — ${JSON.stringify(Object.keys(irow))}`);
   await captureConsoleAsync(() => sb.flush());
@@ -1967,6 +2139,123 @@ await section('\n[A-MS] Multi-Sport 0033 — the adapter reads/writes competitio
   sb.set('cfbp_games', g2);
   const gp = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_games');
   assert(gp.length === 1 && gp[0].changed.parent_game_id === null, '[A-MS] clearing parentGameId is a real patch (a NULLABLE column still takes a null)');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// D1 (v0.30.0) DI-531, migration 0033 §5 — competition_members THROUGH THE REAL PLANNER: who plays each opt-in sport. The fake models the table exactly as 0033 declares it (grants:
+// select/insert/delete and NO update; id GENERATED ALWAYS; joined_at defaulted by the server; cm_self_insert / cm_commissioner_all), so what this section proves is the ADAPTER's
+// behaviour against it: the read, the Join insert that carries no id and no joined_at, the ownership rule, and that no PATCH is ever planned.
+await section('\n[A-CM] D1 DI-531 — competition_members: read, a member\'s own Join (no id, no joined_at on the wire), ownership, never a PATCH…', async () => {
+  const COMP_D = '11111111-1111-4111-8111-111111111111';
+  const COMP_N = '22222222-2222-4222-8222-222222222222';
+  const COMP_A = '44444444-4444-4444-8444-444444444444';   // an enrollment:'all' competition
+  const seed = (who = 'player') => {
+    initAdapter({ who });
+    ST.competitions.push(
+      row({ league_id: LEAGUE_A, id: COMP_D, sport: 'cfb', kind: 'season', enrollment: 'all', is_default: true, settings: {}, season_label: null, parent_competition_id: null, archived_at: null, active_week_id: null, created_at: new Date(NOW).toISOString(), updated_at: new Date(NOW).toISOString() }),
+      row({ league_id: LEAGUE_A, id: COMP_N, sport: 'nfl', kind: 'season', enrollment: 'opt_in', is_default: false, settings: {}, season_label: '2026', parent_competition_id: null, archived_at: null, active_week_id: null, created_at: new Date(NOW).toISOString(), updated_at: new Date(NOW).toISOString() }),
+      row({ league_id: LEAGUE_A, id: COMP_A, sport: 'nhl', kind: 'season', enrollment: 'all', is_default: false, settings: {}, season_label: null, parent_competition_id: null, archived_at: null, active_week_id: null, created_at: new Date(NOW).toISOString(), updated_at: new Date(NOW).toISOString() }),
+    );
+    // Two entrants on the server already: p1 (self) and p4 (enrolled by the commissioner), with a server-stamped joined_at.
+    ST.competition_members.push(
+      { league_id: LEAGUE_A, competition_id: COMP_N, league_member_id: 'p1', enrolled_by: 'self', joined_at: '2026-10-01T12:00:00.000Z', id: `${COMP_N}:p1` },
+      { league_id: LEAGUE_A, competition_id: COMP_N, league_member_id: 'p4', enrolled_by: 'commissioner', joined_at: '2026-10-02T12:00:00.000Z', id: `${COMP_N}:p4` },
+    );
+  };
+  const hydrateNow = () => captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+
+  // (1) READ — the table is hydrated into a camelCase key; the lists, route and projection all know it.
+  seed('player'); await hydrateNow();
+  assert(sb._readTablesForTest().includes('competition_members'), '[A-CM] hydrate() reads the `competition_members` table');
+  const r = sb._routesForTest().cfbp_competition_members;
+  assert(r && r.table === 'competition_members' && r.comm === 'rows' && r.player === 'rows' && r.ownRowsOnly === true && r.noPatch === true
+    && JSON.stringify(r.generatedCols) === '["id"]' && JSON.stringify(r.serverOwnedCols) === '["joined_at"]' && r.memberIdCol === 'league_member_id',
+    `[A-CM] ROUTES.cfbp_competition_members: rows for both roles, own rows only for a player, no PATCH, the generated id stripped at the wire, joined_at server-owned (${JSON.stringify(r)})`);
+  const cm = sb.get('cfbp_competition_members');
+  assert(Array.isArray(cm) && cm.length === 2, `[A-CM] the mirror holds both entries (${cm && cm.length})`);
+  const e1 = cm.find((x) => x.memberId === 'p1');
+  assert(e1 && e1.competitionId === COMP_N && e1.enrolledBy === 'self' && e1.joinedAt === '2026-10-01T12:00:00.000Z' && e1.id === `${COMP_N}:p1`,
+    `[A-CM] an entry projects to {id, competitionId, memberId, enrolledBy, joinedAt} (${JSON.stringify(e1)})`);
+  assert(cm.every((x) => !('extra' in x) && !('league_id' in x) && !('league_member_id' in x)), '[A-CM] …with no `extra` and no raw column names on the object');
+  assert(sb.getState() === 'ACTIVE', `[A-CM] the hydrate with the new table in the read list is ACTIVE, not HELD (${sb.getState()})`);
+
+  // (2) ZERO SPURIOUS DIFF — re-saving the key unchanged plans nothing (joined_at is not projected, so a server-stamped time never reads as a change).
+  sb.set('cfbp_competition_members', sb.get('cfbp_competition_members').map((x) => ({ ...x })));
+  const idle = captureConsole(() => sb.planFlush()).plan;
+  assert(idle.length === 0, `[A-CM] re-saving the entries unchanged plans ZERO operations (got ${JSON.stringify(idle.map((o) => `${o.key}:${o.op}:${o.rowId}`))})`);
+
+  // (3) A MEMBER'S OWN JOIN — one INSERT; the planned row carries id (the planner's identity) but NOT joined_at; the WIRE carries neither.
+  seed('player'); await hydrateNow();   // p2 (Kevin) is the player session
+  const joined = [...sb.get('cfbp_competition_members'), { id: `${COMP_N}:p2`, competitionId: COMP_N, memberId: 'p2', enrolledBy: 'self', joinedAt: '2000-01-01T00:00:00.000Z' }];
+  sb.set('cfbp_competition_members', joined);
+  const plan = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_competition_members');
+  assert(plan.length === 1 && plan[0].op === 'insert' && plan[0].rows.length === 1, `[A-CM] a Join plans exactly ONE insert (${JSON.stringify(plan.map((o) => o.op))})`);
+  const prow = plan[0].rows[0];
+  assert(prow.competition_id === COMP_N && prow.league_member_id === 'p2' && prow.enrolled_by === 'self' && prow.league_id === LEAGUE_A && prow.id === `${COMP_N}:p2`,
+    `[A-CM] …for this member, this competition, enrolled_by 'self' (${JSON.stringify(prow)})`);
+  assert(!('joined_at' in prow), '[A-CM] …and the planned row has NO joined_at even though the local entry carried a back-dated one (C1: the client never writes it)');
+  assert(!('extra' in prow), '[A-CM] …and no `extra` (the table has no such column)');
+  await captureConsoleAsync(() => sb.flush());
+  const sent = CLIENT._calls.inserts.filter((i) => i.table === 'competition_members');
+  assert(sent.length === 1 && sent[0].rows.length === 1 && !('id' in sent[0].rows[0]) && !('joined_at' in sent[0].rows[0]),
+    `[A-CM] …and what reached the wire has NEITHER id (GENERATED ALWAYS) NOR joined_at (${JSON.stringify(sent.map((i) => i.rows.map((x) => Object.keys(x))))})`);
+  const stored = ST.competition_members.find((x) => x.league_member_id === 'p2');
+  assert(stored && stored.id === `${COMP_N}:p2` && stored.joined_at === new Date(NOW).toISOString(),
+    `[A-CM] …the server computed the id and stamped joined_at itself, not the client's 2000-01-01 (${JSON.stringify(stored)})`);
+  assert(sb.getState() === 'ACTIVE' && sb._dirtyKeysForTest().length === 0, '[A-CM] …the key ends clean, no refusal, no banner');
+  // a second save of the same state plans nothing (the fold advanced the base by the RETURNED row, which carries the id)
+  sb.set('cfbp_competition_members', sb.get('cfbp_competition_members').map((x) => ({ ...x })));
+  assert(captureConsole(() => sb.planFlush()).plan.length === 0, '[A-CM] …and a re-save after the Join plans nothing (no 23505 on the next flush)');
+
+  // (4) OWNERSHIP — a player's insert of ANOTHER member's row is dropped from the plan (said, never sent); the commissioner's is not.
+  seed('player'); await hydrateNow();
+  sb.set('cfbp_competition_members', [...sb.get('cfbp_competition_members'), { id: `${COMP_N}:p5`, competitionId: COMP_N, memberId: 'p5', enrolledBy: 'self' }]);
+  const dropped = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_competition_members');
+  assert(dropped.length === 0 && said(/not this caller's to make/), `[A-CM] a player's Join for ANOTHER member is dropped from the plan and the console says so (${dropped.length} ops)`);
+  seed('commissioner'); await hydrateNow();
+  sb.set('cfbp_competition_members', [...sb.get('cfbp_competition_members'), { id: `${COMP_N}:p5`, competitionId: COMP_N, memberId: 'p5', enrolledBy: 'commissioner' }]);
+  const cplan = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_competition_members');
+  assert(cplan.length === 1 && cplan[0].op === 'insert' && cplan[0].rows[0].league_member_id === 'p5' && cplan[0].rows[0].enrolled_by === 'commissioner', '[A-CM] the commissioner may add any member (enrolled_by commissioner)');
+  await captureConsoleAsync(() => sb.flush());
+  assert(ST.competition_members.some((x) => x.league_member_id === 'p5' && x.enrolled_by === 'commissioner'), '[A-CM] …and it lands (cm_commissioner_all modelled)');
+
+  // (5) THE POLICY BOUNDARY, in the fake as in 0033: a member cannot enroll in an enrollment:'all' competition, and cannot write another member's row even when the planner is bypassed.
+  seed('player'); await hydrateNow();
+  const direct = await CLIENT.from('competition_members').insert([{ league_id: LEAGUE_A, competition_id: COMP_A, league_member_id: 'p2', enrolled_by: 'self' }]).select('*');
+  assert(direct.error && direct.error.code === '42501', '[A-CM] cm_self_insert refuses an enrollment:\'all\' competition (a direct request, bypassing the adapter)');
+  const forged = await CLIENT.from('competition_members').insert([{ league_id: LEAGUE_A, competition_id: COMP_N, league_member_id: 'p6', enrolled_by: 'self' }]).select('*');
+  assert(forged.error && forged.error.code === '42501', '[A-CM] …and refuses a row for another member');
+  const withId = await CLIENT.from('competition_members').insert([{ league_id: LEAGUE_A, competition_id: COMP_N, league_member_id: 'p2', enrolled_by: 'self', id: 'x' }]).select('*');
+  assert(withId.error && withId.error.code === '428C9', '[A-CM] …and Postgres refuses a client-supplied value for the GENERATED id (the reason the wire strip exists)');
+  const upd = await CLIENT.from('competition_members').update({ enrolled_by: 'commissioner' }).eq('league_id', LEAGUE_A).eq('id', `${COMP_N}:p1`).select('*');
+  assert(upd.error && upd.error.code === '42501', '[A-CM] …and there is no UPDATE grant at all');
+
+  // (6) NEVER A PATCH — a local entry that disagrees with the server's row plans no operation (and says so).
+  seed('commissioner'); await hydrateNow();
+  sb.set('cfbp_competition_members', sb.get('cfbp_competition_members').map((x) => (x.memberId === 'p1' ? { ...x, enrolledBy: 'commissioner' } : { ...x })));
+  const noPatch = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_competition_members');
+  assert(noPatch.length === 0 && said(/no UPDATE path/), `[A-CM] a changed enrolledBy plans NO patch (the table has no UPDATE grant) and the console says why (${noPatch.length} ops)`);
+
+  // (7) A DELETE (the commissioner removing an entry) is keyed by the generated id.
+  seed('commissioner'); await hydrateNow();
+  sb.set('cfbp_competition_members', sb.get('cfbp_competition_members').filter((x) => x.memberId !== 'p4'));
+  const del = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_competition_members');
+  assert(del.length === 1 && del[0].op === 'delete' && del[0].rowId === `${COMP_N}:p4`, `[A-CM] removing an entry plans one DELETE keyed by the generated id (${JSON.stringify(del.map((o) => `${o.op}:${o.rowId}`))})`);
+  await captureConsoleAsync(() => sb.flush());
+  assert(!ST.competition_members.some((x) => x.league_member_id === 'p4'), '[A-CM] …and it lands');
+
+  // (7b) THE PROJECTION KEEPS joined_at (a restore must carry each entry's original join time, C1b); only the client's INSERT withholds it.
+  {
+    const pr = proj.toRows.cfbp_competition_members([{ id: `${COMP_N}:p1`, competitionId: COMP_N, memberId: 'p1', enrolledBy: 'self', joinedAt: '2026-10-01T12:00:00.000Z' }], { leagueId: LEAGUE_A }).competition_members[0];
+    assert(pr.joined_at === '2026-10-01T12:00:00.000Z' && !('extra' in pr), `[A-CM] toRows keeps joined_at (the importer needs it) and drops extra (${JSON.stringify(Object.keys(pr))})`);
+  }
+
+  // (8) THE SOURCE PINS — the strip is at the wire and ONLY the wire (the planned row keeps its id for the fold), and the insert is still { defaultToNull:false } (A-NN2's rule).
+  const code = readFileSync(join(__dirname, 'js', 'supabase-backend.js'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  assert(/generatedCols/.test(code) && /client\.from\(op\.table\)\.insert\(wireRows,\s*\{\s*defaultToNull:\s*false\s*\}\)/.test(code),
+    '[A-CM] source pin: _executeOp inserts the generatedCols-stripped rows with { defaultToNull:false }');
+  const diffBody = (code.match(/function _diffRows\([\s\S]*?\n\}\n/) || [''])[0];
+  assert(diffBody.length > 200 && !/generatedCols/.test(diffBody), '[A-CM] source pin: the planner (_diffRows) does NOT strip the generated column — the planned row keeps the id the base fold and the already-saved narrowing key by');
 });
 
 await section('\n[A-ADD] Add Player is absent in Supabase mode (INSERT into league_members is forbidden by schema — reviewer F1, 2026-09-19)…', async () => {
@@ -3043,6 +3332,158 @@ await section('\n[§4.3] cfbp_week_progress — the derived key the client canno
   assert(k > 0 && sb.getState() === 'ACTIVE', 'a refused week_submission_status does NOT fail the hydrate (counts are informational)');
   assert(JSON.stringify(sb.get('cfbp_week_progress').weeks) === '{}', 'the progress key\u2019s `weeks` map is simply empty (and `at` still says when that was answered)');
   assert(said(/week_submission_status\(w1\) refused/), 'and the refusal is logged by week');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// UN-412 / DI-502e (2026-10-01, "Who's in"). refreshWeekProgress() is the adapter's SECOND caller of week_submission_status: the same RPC, the
+// same derived never-persisted key, re-asked between hydrates so the strip is not frozen at the last hydrate. Every case below is a way it could
+// state a count it has no right to state, or lose one it should keep.
+await section('\n[A-PROG] refreshWeekProgress() — the progress answer re-asked between hydrates…', async () => {
+  const progKey = () => sb.get('cfbp_week_progress');
+  const rpcCalls = () => CLIENT._calls.rpc.filter((c) => c.name === 'week_submission_status');
+  const newPick = (id, member, week = 'w1', game = 'g1') => row({ league_id: LEAGUE_A, id, week_id: week, game_id: game, member_id: member, selected_team: 'Kansas', selected_at: new Date(NOW).toISOString(), updated_at: new Date(NOW).toISOString(), locked: false, result: 'pending' });
+
+  // ── the happy path: someone submitted since the hydrate, and nothing else moves ──
+  await hydrated({ who: 'player' });
+  const hydrateSeq = sb._hydrateSeqForTest();
+  const tagAt = sb._mirrorTagForTest().at;
+  const before = progKey();
+  assert(before.weeks.w1.p3.pickCount === 0 && before.weeks.w1.p2.pickCount === 2, 'fixture: after the hydrate Koby (p3) has no picks and Kevin (p2) has two');
+  ST.picks.push(newPick('pk_prog_1', 'p3', 'w1', 'g1'), newPick('pk_prog_2', 'p3', 'w1', 'g2'));
+  const selectsBefore = CLIENT._calls.selects.length;
+  const rpcBefore = rpcCalls().length;
+  const r = await captureConsoleAsync(() => sb.refreshWeekProgress());
+  const after = progKey();
+  assert(r.ok === true && JSON.stringify(r.refreshed) === '["w1"]' && r.failed.length === 0, 'a refresh answers { ok:true, refreshed:["w1"] } — the one open week');
+  assert(after.weeks.w1.p3.pickCount === 2, 'Koby\'s new full slate is in the answer (2 picks)');
+  assert(after.weeks.w1.p2.pickCount === 2 && after.weeks.w1.p1.pickCount === 1, 'and the other members\' counts are what the RPC said');
+  assert(!('w2' in after.weeks), 'a LIVE week is never asked for (its rows are public; the client counts them itself)');
+  assert(Date.parse(after.at) >= Date.parse(before.at), 'the `at` stamp moves forward (the strip can say "as of")');
+  assert(rpcCalls().length === rpcBefore + 1 && rpcCalls()[rpcCalls().length - 1].args.p_league === LEAGUE_A && rpcCalls()[rpcCalls().length - 1].args.p_week === 'w1',
+    'exactly ONE week_submission_status call, for the open week, under the active league');
+  assert(CLIENT._calls.selects.length === selectsBefore, 'NO table select was issued — a refresh is one RPC and never a re-read of the league');
+  assert(sb._hydrateSeqForTest() === hydrateSeq && sb._mirrorTagForTest().at === tagAt, 'and it is not a hydrate: the hydrate sequence and the mirror tag are untouched');
+  assert(JSON.stringify([...Object.keys(after.weeks.w1.p3)].sort()) === '["hasExtraPoint","hasTiebreaker","lastUpdated","pickCount"]', 'each entry has exactly the four derived fields and no pick content');
+  assert(sb.getState() === 'ACTIVE', 'the adapter stays ACTIVE');
+
+  // ── never persisted, never dirty, still unwritable ──
+  assert(sb._dirtyKeysForTest().length === 0, 'the derived key is NEVER dirty after a refresh (nothing is queued to push)');
+  assert(!String(localStorage.getItem(sb._snapshotKeyForTest()) || '').includes('cfbp_week_progress'), 'and it is never persisted to the device snapshot (a stale copy would say "nobody has submitted")');
+  assert(thrown(() => sb.set('cfbp_week_progress', {})).code === 'derived_key', 'save() on it is still refused');
+
+  // ── the weekIds argument narrows the ask ──
+  const rpc1 = rpcCalls().length;
+  const rLive = await captureConsoleAsync(() => sb.refreshWeekProgress({ weekIds: ['w2'] }));
+  assert(rpcCalls().length === rpc1 && rLive.refreshed.length === 0, 'weekIds:["w2"] (a live week) asks NOTHING');
+  const rOne = await captureConsoleAsync(() => sb.refreshWeekProgress({ weekIds: ['w1'] }));
+  assert(rpcCalls().length === rpc1 + 1 && rOne.refreshed.join() === 'w1', 'weekIds:["w1"] asks for exactly that week');
+
+  // ── single flight ──
+  const rpc2 = rpcCalls().length;
+  const pA = sb.refreshWeekProgress(); const pB = sb.refreshWeekProgress();
+  const [ra, rb] = await captureConsoleAsync(() => Promise.all([pA, pB]));
+  assert(rpcCalls().length === rpc2 + 1 && ra === rb, 'two calls at once share ONE flight (one RPC, the same result object)');
+  const rNext = await captureConsoleAsync(() => sb.refreshWeekProgress());
+  assert(rpcCalls().length === rpc2 + 2 && rNext.ok === true, 'and the flight latch clears: the next call asks again');
+
+  // ── public weeks are pruned from the map ──
+  captureConsole(() => sb._seedMirrorForTest('cfbp_week_progress', { at: new Date().toISOString(), weeks: { w1: { p1: { pickCount: 1 } }, w2: { p1: { pickCount: 9 } } } }));
+  await captureConsoleAsync(() => sb.refreshWeekProgress());
+  assert(!('w2' in progKey().weeks), 'a week that has gone live is pruned from the derived map on the next refresh');
+
+  // ── not ACTIVE: a device that has stopped asking does not get to state a count ──
+  for (const st of ['ACTIVE-STALE', 'OFFLINE-READONLY', 'HELD', 'IDLE']) {
+    captureConsole(() => sb._setStateForTest(st, 'adaptertest'));
+    const rpcN = rpcCalls().length;
+    const keyBefore = JSON.stringify(progKey());
+    const rr = await sb.refreshWeekProgress();
+    assert(rr.ok === false && rr.reason === 'not-active' && rpcCalls().length === rpcN && JSON.stringify(progKey()) === keyBefore, `state ${st}: refused ("not-active"), no RPC issued, the key untouched`);
+  }
+  captureConsole(() => sb._setStateForTest('ACTIVE', 'adaptertest'));
+
+  // ── a FAILED read keeps the previous answer, and does not claim to be fresh ──
+  let calls = 0;
+  await hydrated({ who: 'player', rpcOverride: (n) => (n === 'week_submission_status' && ++calls > 1 ? { data: null, error: { code: '08006', message: 'network' } } : null) });
+  const prevAnswer = JSON.stringify(progKey().weeks);
+  const prevAt = progKey().at;
+  await new Promise((res) => setTimeout(res, 5));
+  const rFail = await captureConsoleAsync(() => sb.refreshWeekProgress());
+  assert(rFail.ok === false && rFail.failed.join() === 'w1', 'a refused read answers { ok:false, failed:["w1"] }');
+  assert(JSON.stringify(progKey().weeks) === prevAnswer, 'the PREVIOUS answer stays on the device (the strip keeps what it knew)');
+  assert(progKey().at === prevAt, 'and `at` does NOT advance — "as of" never claims more than was read');
+  assert(said(/week_submission_status\(w1\) refused/), 'the refusal is logged by week');
+
+  // ── ...except an account the server no longer recognises ──
+  await hydrated({ who: 'player' });
+  assert(!!progKey().weeks.w1, 'fixture: the answer is on the device');
+  {
+    const orig = CLIENT.rpc.bind(CLIENT);
+    CLIENT.rpc = (name, args) => (name === 'week_submission_status' ? Promise.resolve(named('not_member')) : orig(name, args));
+  }
+  await captureConsoleAsync(() => sb.refreshWeekProgress());
+  assert(!('w1' in progKey().weeks) && !!progKey(), 'not_member DELETES that week\'s entry (it renders as UNKNOWN, never as a stale count or a zero) and the key itself survives');
+
+  // ── identity / league moved while the answer was in flight: DISCARDED ──
+  await hydrated({ who: 'player' });
+  const keepJson = JSON.stringify(progKey());
+  CLIENT.rpc = ((orig) => (name, args) => { if (name === 'week_submission_status') EPOCH = EPOCH + 1; return orig(name, args); })(CLIENT.rpc.bind(CLIENT));
+  const rMoved = await captureConsoleAsync(() => sb.refreshWeekProgress());
+  assert(rMoved.ok === false && rMoved.reason === 'moved' && JSON.stringify(progKey()) === keepJson, 'the identity epoch moved during the await: the answer is DISCARDED and the key is untouched (I6, as for a hydrate)');
+  EPOCH = 7;
+  await hydrated({ who: 'player' });
+  const keepJson2 = JSON.stringify(progKey());
+  CLIENT.rpc = ((orig) => (name, args) => { if (name === 'week_submission_status') ACTIVE_LEAGUE = LEAGUE_B; return orig(name, args); })(CLIENT.rpc.bind(CLIENT));
+  const rLeague = await captureConsoleAsync(() => sb.refreshWeekProgress());
+  assert(rLeague.ok === false && rLeague.reason === 'moved' && JSON.stringify(progKey()) === keepJson2, 'the active league changed during the await: DISCARDED');
+  ACTIVE_LEAGUE = LEAGUE_A;
+
+  // ── a hydrate that lands while the refresh is in flight WINS ──
+  await hydrated({ who: 'player' });
+  ST.picks.push(newPick('pk_prog_9', 'p3', 'w1', 'g1'), newPick('pk_prog_10', 'p3', 'w1', 'g2'));
+  const staleRows = [{ member_id: 'p1', pick_count: 0, has_tiebreaker: false, has_extra_point: false, last_updated: null }, { member_id: 'p2', pick_count: 0, has_tiebreaker: false, has_extra_point: false, last_updated: null }, { member_id: 'p3', pick_count: 0, has_tiebreaker: false, has_extra_point: false, last_updated: null }];
+  const realRpc = CLIENT.rpc.bind(CLIENT);
+  let intercepted = 0;
+  CLIENT.rpc = (name, args) => {
+    if (name === 'week_submission_status' && intercepted === 0) {
+      intercepted++;
+      // this request's answer arrives only AFTER a full hydrate has landed (and is OLDER than it)
+      return (async () => { await sb.hydrate(LEAGUE_A, { epoch: EPOCH }); return { data: staleRows, error: null }; })();
+    }
+    return realRpc(name, args);
+  };
+  const seqBefore = sb._hydrateSeqForTest();
+  const rRace = await captureConsoleAsync(() => sb.refreshWeekProgress());
+  assert(sb._hydrateSeqForTest() === seqBefore + 1, 'fixture: a hydrate really landed while the refresh was in flight');
+  assert(rRace.ok === false && rRace.reason === 'moved', 'the refresh whose answer is OLDER than that hydrate is dropped ("moved")');
+  assert(progKey().weeks.w1.p3.pickCount === 2 && progKey().weeks.w1.p1.pickCount === 1, 'and the hydrate\'s fresher answer is what stays (the stale zeros never overwrite it)');
+
+  // ── one week failing leaves the others, and `at`, alone ──
+  initAdapter({ who: 'player' });
+  ST.weeks.push(row({ league_id: LEAGUE_A, id: 'w3', sport: 'cfb', season: '2026', week_number: 3, label: 'Week 3', status: 'open', picks_lock_at: null, revealed_at: null }));
+  await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  assert(!!progKey().weeks.w1 && !!progKey().weeks.w3, 'fixture: two open weeks, both answered by the hydrate');
+  const atTwo = progKey().at;
+  await new Promise((res) => setTimeout(res, 5));
+  ST.picks.push(newPick('pk_prog_11', 'p1', 'w1', 'g2'));
+  {
+    const orig = CLIENT.rpc.bind(CLIENT);
+    CLIENT.rpc = (name, args) => (name === 'week_submission_status' && args.p_week === 'w3' ? Promise.resolve({ data: null, error: { code: '08006', message: 'network' } }) : orig(name, args));
+  }
+  const rPart = await captureConsoleAsync(() => sb.refreshWeekProgress());
+  assert(rPart.ok === false && rPart.failed.join() === 'w3' && rPart.refreshed.join() === 'w1', 'one week failing: { ok:false, failed:["w3"], refreshed:["w1"] }');
+  assert(progKey().weeks.w1.p1.pickCount === 2 && !!progKey().weeks.w3, 'the week that answered is updated, the one that failed keeps its previous answer');
+  assert(progKey().at === atTwo, 'and `at` stays where it was: it advances only when EVERY requested week was read');
+
+  // ── the source, comment-blanked: one RPC, no table read, no persistence, no dirty mark ──
+  {
+    const codeOnly = readFileSync(join(__dirname, 'js', 'supabase-backend.js'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    const at0 = codeOnly.indexOf('export function refreshWeekProgress(');
+    const fn = codeOnly.slice(at0, codeOnly.indexOf('function _isPlainObject', at0));
+    assert(fn.length > 800 && /client\.rpc\('week_submission_status'/.test(fn), 'source: refreshWeekProgress() calls week_submission_status');
+    assert(!/\.from\(|\.select\(|_persistSnapshot|_dirty|_schedulePush|emit\(/.test(fn), 'source: it reads no table, persists nothing, marks nothing dirty and emits no status event');
+    assert(/_opMoved\(op\)/.test(fn) && /seq !== _hydrateSeq/.test(fn) && /_state !== 'ACTIVE'/.test(fn), 'source: the three discard guards (identity/league moved, a hydrate landed, not ACTIVE) are all present');
+    assert(/_state !== 'ACTIVE'\) return Promise\.resolve\(\{ ok: false, reason: 'not-active'/.test(fn), 'source: ACTIVE-only, refused before any client work');
+  }
 });
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -5239,6 +5680,48 @@ await section('\n[A-RETRY] a transient write failure is retried automatically, b
       `[A-RETRY9] (b) …the refused leg was never sent (server still LOCKED), the device shows the server's LOCKED, and the banner says the status moved (${JSON.stringify(bannersSince(m10))})`);
   }
 
+  {
+    // (c) PF-1 (2026-10-01, DI-494 / DI-492) — THE SERVER LOCKED FIRST. From migration 0039 the cron job auto_lock_weeks() locks a due week with no device. A commissioner whose device ticked
+    // (or who pressed Lock Week) in the same minute planned lock_week from the base it had read, `open`; by the time the RPC lands the server says `locked`, so lock_week answers `bad_transition`.
+    // That is the 23505 of the lock path: the retry of a write whose goal was already met by someone else. It must be classified `conflict` (a re-read), end CLEAN with no banner, and must
+    // NEVER be silenced when the week genuinely is not lockable (part 2 below).
+    const t11 = makeFakeTimers();
+    await hydrated({ who: 'commissioner', timers: t11 });
+    const wk11 = sb.get('cfbp_weeks').map((x) => ({ ...x }));
+    wk11.find((x) => x.weekId === 'w1').status = 'locked';
+    sb.set('cfbp_weeks', wk11);
+    assert(sb.planFlush().plan.some((o) => o.kind === 'rpc' && o.name === 'lock_week'),
+      '[A-RETRY9] (c) fixture — the plan really is lock_week from the base the device read (open)');
+    ST.weeks.find((w) => w.id === 'w1').status = 'locked';       // the job got there first
+    const m11 = bannerSeen.length;
+    await captureConsoleAsync(() => sb.flush());
+    assert(!bannersSince(m11).some((t) => /Nothing was saved|bad_transition/.test(t)),
+      `[A-RETRY9] (c) a bad_transition on lock_week raises no banner on the first attempt (${JSON.stringify(bannersSince(m11))})`);
+    assert(t11.count() === 1, `[A-RETRY9] (c) …it arms a re-read instead (${JSON.stringify(t11.delays())})`);
+    await captureConsoleAsync(() => t11.runNext());
+    assert(!bannersSince(m11).some((t) => /Nothing was saved|bad_transition|status moved/i.test(t)),
+      `[A-RETRY9] (c) …and the rebase finds the week already locked, so the operation vanishes and nothing is reported (${JSON.stringify(bannersSince(m11))})`);
+    assert(!sb._refusedKeysForTest().length && !sb._dirtyKeysForTest().includes('cfbp_weeks') && sb.get('cfbp_weeks').find((x) => x.weekId === 'w1').status === 'locked',
+      `[A-RETRY9] (c) …the run ends CLEAN, the device shows the server's LOCKED, and nothing is left pending (${JSON.stringify(sb._refusedKeysForTest())}, ${JSON.stringify(sb._dirtyKeysForTest())})`);
+    assert(!CLIENT._calls.rpc.some((c) => c.name === 'transition_week'),
+      '[A-RETRY9] (c) …and no transition_week was ever sent to repair it (the lock is not re-issued, nothing is reopened)');
+  }
+  {
+    // (c2) …but a lock_week that is REALLY not allowed still ends red: the week is DRAFT on the server, nothing locked it, and the re-read finds a genuine refusal.
+    const t12 = makeFakeTimers();
+    await hydrated({ who: 'commissioner', timers: t12 });
+    const wk12 = sb.get('cfbp_weeks').map((x) => ({ ...x }));
+    wk12.find((x) => x.weekId === 'w1').status = 'locked';
+    sb.set('cfbp_weeks', wk12);
+    ST.weeks.find((w) => w.id === 'w1').status = 'draft';        // someone sent it back to draft: lock_week requires open
+    const m12 = bannerSeen.length;
+    await captureConsoleAsync(() => sb.flush());
+    let guard12 = 0;
+    while (t12.count() && guard12++ < 6) await captureConsoleAsync(() => t12.runNext());
+    assert(ST.weeks.find((w) => w.id === 'w1').status === 'draft' && bannersSince(m12).some((t) => /bad_transition|Nothing was saved|Refusing to lock|status moved|now draft/i.test(t)),
+      `[A-RETRY9] (c2) a lock_week that is genuinely refused still ends RED — the re-read is a check, not a silencer, and the server's DRAFT was never overwritten (${JSON.stringify(bannersSince(m12))})`);
+  }
+
   // ── 8. THE JITTER IS REAL AND BOUNDED ───────────────────────────────────────────────────────
   const t8 = makeFakeTimers();
   await hydrated({ who: 'commissioner', timers: t8, random: () => 1 });
@@ -5424,7 +5907,11 @@ await section('\n[A-PAGE] SB-01 / RG-265 — every hydrate read is PAGED and PRO
         const c = new RegExp(`create table (?:if not exists )?public\\.${t}\\s*\\(([\\s\\S]*?)\\n\\);`, 'i').exec(sql);
         if (c) body = c[1];
       }
-      const m = body.match(/primary key \(league_id, (\w+)\)/);
+      // D1 DI-531 — `competition_members`' real key is the COMPOSITE (league_id, competition_id, league_member_id) (0033 §5); a keyset read needs ONE unique column, and the table carries one:
+      // `id text generated always as (competition_id::text || ':' || league_member_id) stored`. A composite key whose table has such a generated `id` is paged on it — and ONLY then:
+      // any other composite key (or a generated column that is not `id`) still reads as drift, so this exception cannot hide a real mismatch.
+      const generatedId = /(^|[\s,(])id\s+text\s+generated\s+always\s+as\s*\(/i.test(body);
+      const m = body.match(/primary key \(league_id, (\w+)\)/) || (generatedId && /primary key \(league_id, \w+, \w+/.test(body) ? [null, 'id'] : null);
       if (!m || pageKey(t) !== m[1]) drift.push(`${t}: schema ${m ? m[1] : '?'} vs adapter ${pageKey(t)}`);
       const cols = sb._selectColsForTest()[t];
       if (cols && !cols.split(',').includes(pageKey(t))) drift.push(`${t}: SELECT_COLS lacks ${pageKey(t)}`);
@@ -5802,6 +6289,628 @@ await section('\n[A-RECALC] SP-54 / Q9 - in a shared league "Recalculate Finaliz
   assert(call.length === 1 && call[0].args.p_results.some((x) => x.playerId === 'p1' && JSON.stringify(x.tieBreak) === JSON.stringify(TB)),
     '[A-RECALC] (2) the finalize_week payload carries the tie-break descriptor on the result row (a key the typed columns do not name, so 0026\'s finalize_week stores it in results.extra: `v.value - {typed keys}`)');
   assert(w2().status === 'final', '[A-RECALC] (2) and the week is FINAL on the server again');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// [A-FB026] — Drew, v0.29.0 (Feedback Log row 27, PM-126): "i clicked finalize week and this popped up:
+// Cross-device sync is OFF on this device. The server refused to save cfbp_obligations: obligations:
+// payer/recipient/week/type/created_at are immutable Nothing was saved."
+//
+// THE MECHANISM, end to end (the fake's finalize_week now writes what 0026's really writes — see FB-026 there):
+//   1. finalize_week inserts the week's new obligation with the SERVER'S created_at, and copies the client's
+//      createdAt (and six other typed fields) into `extra`;
+//   2. on the next hydrate (a reload, or any return to the app), `legacyFromRow` spreads `extra` over the typed
+//      columns, so the mirror says createdAt = the client's time while the base row says the server's;
+//   3. the next obligations save of ANY kind diffs EVERY row, so that row plans a PATCH carrying `created_at`
+//      (and `extra`), and obligations_guard refuses it — next week's Finalize is exactly such a save.
+// Plus the silent half the loud one was hiding: a typed column moved by a later patch (paid, voided) is read
+// back as its stale shadow in `extra`, and the next save would write the stale value back.
+// ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-FB026] FB-026 — after a reload, finalizing the next week never re-sends an obligation\'s immutable columns, and a paid/voided obligation reads back as the server holds it…', async () => {
+  // createObligation()'s exact shape (js/storage.js), so the payload is the one the app really sends.
+  const newOb = (id, weekId, createdAt) => ({
+    obligationId: id, type: 'weekly', weekId, payerPlayerId: 'p2', recipientPlayerId: 'p1',
+    amountOrPrize: 'beer', status: 'unpaid', createdAt, paidAt: null,
+    needsReview: false, reviewNote: null, voided: false, voidedAt: null, voidReason: null, mergedInto: null, mergedFrom: [],
+  });
+  // What app.js finalizeWeek() writes in ONE synchronous tick: the week's status, its results, and the
+  // obligation reconcileWeeklyObligation() appends (saveObligation -> save of the WHOLE array).
+  const finalizeInOneTick = (weekId, ob) => {
+    sb.set('cfbp_weeks', sb.get('cfbp_weeks').map((w) => (w.weekId === weekId ? { ...w, status: 'final' } : { ...w })));
+    sb.set('cfbp_results', [...sb.get('cfbp_results'), {
+      resultId: `wr_${weekId}_p2`, weekId, playerId: 'p2', displayName: 'Kevin',
+      correctPicks: 0, incorrectPicks: 1, correctCount: 0, incorrectCount: 1, noDecisions: 0, pending: 0,
+      tiebreakerGuess: null, tiebreakerDelta: null, rank: 2, isWinner: false, isLoser: true, wonByTiebreaker: false,
+    }]);
+    sb.set('cfbp_obligations', [...sb.get('cfbp_obligations'), ob]);
+  };
+  const IMMUTABLE = ['payer_member_id', 'recipient_member_id', 'week_id', 'type', 'created_at'];
+  const reload = () => captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+  const srvOb = (id) => ST.obligations.filter((o) => o.id === id);
+  const mirrorOb = (id) => sb.get('cfbp_obligations').find((o) => o.obligationId === id);
+  const obUpdatesSince = (n) => CLIENT._calls.updates.slice(n).filter((u) => u.table === 'obligations');
+
+  // ── (0) Week 2 finalizes. The fake now writes the LIVE row shape; prove it, so a revert of the fake is red here.
+  await hydrated({ who: 'commissioner' });
+  const C2 = new Date(NOW).toISOString();
+  finalizeInOneTick('w2', newOb('ob2', 'w2', C2));
+  await captureConsoleAsync(() => sb.flush());
+  assert(srvOb('ob2').length === 1 && srvOb('ob2')[0].created_at !== C2 && srvOb('ob2')[0].extra.createdAt === C2,
+    `[A-FB026] (0) precondition: finalize_week stamped the SERVER'S created_at and shadowed the client's in extra, as 0026 does live (${JSON.stringify(srvOb('ob2')[0] && { created_at: srvOb('ob2')[0].created_at, extra: srvOb('ob2')[0].extra })})`);
+  const S2 = srvOb('ob2')[0].created_at;
+
+  // ── (1) DREW'S REPORT. Week 3 goes live server-side, the app reloads, and the commissioner finalizes week 3.
+  ST.weeks.push(row({ league_id: LEAGUE_A, id: 'w3', sport: 'cfb', season: '2026', week_number: 3, label: 'Week 3', status: 'live', picks_lock_at: new Date(NOW - 3600e3).toISOString(), revealed_at: new Date(NOW - 1800e3).toISOString(), locked_at: new Date(NOW - 3600e3).toISOString(), locked_alma_maters: [], pending_finalization: true }));
+  await reload();
+  const C3 = new Date(NOW + 7 * 86400e3).toISOString();
+  finalizeInOneTick('w3', newOb('ob3', 'w3', C3));
+  const plan1 = captureConsole(() => sb.planFlush()).plan;
+  const leaked = plan1.filter((o) => o.key === 'cfbp_obligations' && o.op === 'patch' && IMMUTABLE.some((c) => c in o.changed));
+  assert(!leaked.length,
+    `[A-FB026] (1) the finalize batch plans NO obligations PATCH naming payer/recipient/week/type/created_at (${JSON.stringify(leaked.map((o) => ({ id: o.rowId, cols: Object.keys(o.changed) })))})`);
+  const mark1 = bannerSeen.length;
+  const upd1 = CLIENT._calls.updates.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(!bannersSince(mark1).some((t) => /immutable|Nothing was saved/i.test(t)),
+    `[A-FB026] (1) …and finalizing week 3 raises NO red "Nothing was saved" banner (${JSON.stringify(bannersSince(mark1))})`);
+  assert(!sb._refusedKeysForTest().includes('cfbp_obligations') && !sb._dirtyKeysForTest().includes('cfbp_obligations'),
+    `[A-FB026] (1) …cfbp_obligations ends neither refused nor pending (refused ${JSON.stringify(sb._refusedKeysForTest())}, dirty ${JSON.stringify(sb._dirtyKeysForTest())})`);
+  assert(!obUpdatesSince(upd1).some((u) => IMMUTABLE.some((c) => c in u.patch)),
+    `[A-FB026] (1) …no obligations UPDATE that reached the server named an immutable column (${JSON.stringify(obUpdatesSince(upd1).map((u) => Object.keys(u.patch)))})`);
+  assert(ST.weeks.find((w) => w.id === 'w3').status === 'final' && srvOb('ob3').length === 1 && srvOb('ob2')[0].created_at === S2,
+    `[A-FB026] (1) …week 3 is FINAL, its obligation is on the server exactly once, and week 2's obligation is untouched (ob3 x${srvOb('ob3').length})`);
+  // Retry / double-tap: the same tick replayed, then a second flush. Nothing is duplicated and nothing is re-sent.
+  const rpc1 = CLIENT._calls.rpc.length, ins1 = CLIENT._calls.inserts.length, upd1b = CLIENT._calls.updates.length;
+  sb.set('cfbp_obligations', sb.get('cfbp_obligations').map((o) => ({ ...o })));
+  await captureConsoleAsync(() => sb.flush());
+  await captureConsoleAsync(() => sb.flush());
+  assert(srvOb('ob3').length === 1 && CLIENT._calls.inserts.length === ins1 && CLIENT._calls.updates.length === upd1b
+    && !CLIENT._calls.rpc.slice(rpc1).some((c) => c.name === 'finalize_week'),
+    `[A-FB026] (1) a retry / double-tap re-sends nothing and duplicates nothing (ob3 x${srvOb('ob3').length}, +${CLIENT._calls.inserts.length - ins1} inserts, +${CLIENT._calls.updates.length - upd1b} updates)`);
+
+  // ── (2) THE SILENT HALF — fix (A). A row the server moved to PAID by a status/paid_at-only patch still carries
+  //    `extra.paidAt: null` from finalize_week. It must read back PAID WITH ITS DATE, and the next obligations save
+  //    must not write the stale null back.
+  const PAID_AT = new Date(NOW + 2 * 86400e3).toISOString();
+  Object.assign(srvOb('ob2')[0], { status: 'paid', paid_at: PAID_AT });
+  assert(srvOb('ob2')[0].extra.paidAt === null, '[A-FB026] (2) precondition: the live row still shadows paidAt: null in extra');
+  await reload();
+  assert(mirrorOb('ob2').status === 'paid' && mirrorOb('ob2').paidAt === PAID_AT,
+    `[A-FB026] (2) after a reload the mirror reads the COLUMN, not its stale shadow: paid, paidAt ${PAID_AT} (${JSON.stringify(mirrorOb('ob2') && { status: mirrorOb('ob2').status, paidAt: mirrorOb('ob2').paidAt })})`);
+  assert(Date.parse(mirrorOb('ob2').createdAt) === Date.parse(S2),
+    `[A-FB026] (2) …and createdAt is the server's instant, not the shadowed client one (${mirrorOb('ob2').createdAt} vs ${S2})`);
+  sb.set('cfbp_obligations', sb.get('cfbp_obligations').map((o) => (o.obligationId === 'ob1' ? { ...o, needsReview: true, reviewNote: 'check' } : { ...o })));
+  const plan2 = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_obligations');
+  assert(plan2.length === 1 && plan2[0].op === 'patch' && plan2[0].rowId === 'ob1',
+    `[A-FB026] (2) an unrelated obligations save plans ONE patch (ob1) and nothing for ob2 — the stale shadow is never written back (${JSON.stringify(plan2.map((o) => ({ id: o.rowId, changed: o.changed })))})`);
+  await captureConsoleAsync(() => sb.flush());
+  assert(srvOb('ob2')[0].paid_at === PAID_AT && srvOb('ob2')[0].status === 'paid', '[A-FB026] (2) …and the server still holds ob2 PAID with its date');
+
+  // ── (3) VOID on a finalize-created row, then a reload. The patch carries only what changed; the void survives.
+  await reload();
+  const VOID_AT = new Date(NOW + 3 * 86400e3).toISOString();
+  sb.set('cfbp_obligations', sb.get('cfbp_obligations').map((o) => (o.obligationId === 'ob3'
+    ? { ...o, voided: true, voidedAt: VOID_AT, voidReason: 'duplicate', needsReview: false } : { ...o })));
+  const plan3 = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_obligations');
+  assert(plan3.length === 1 && plan3[0].rowId === 'ob3'
+    && Object.keys(plan3[0].changed).sort().join(',') === 'void_reason,voided,voided_at',
+    `[A-FB026] (3) voiding ob3 plans ONE patch carrying exactly voided/voided_at/void_reason — no created_at, no extra (${JSON.stringify(plan3.map((o) => ({ id: o.rowId, cols: Object.keys(o.changed || {}) })))})`);
+  const mark3 = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(!bannersSince(mark3).length && srvOb('ob3')[0].voided === true,
+    `[A-FB026] (3) …the server accepts it (voided ${srvOb('ob3')[0].voided}; banners ${JSON.stringify(bannersSince(mark3))})`);
+  await reload();
+  // CLEAN first: a key still dirty keeps this device's own value across a hydrate (the rebase), which would make the
+  // next assertion pass without reading the server at all.
+  assert(!sb._dirtyKeysForTest().includes('cfbp_obligations') && mirrorOb('ob3').voided === true && mirrorOb('ob3').voidedAt === VOID_AT,
+    `[A-FB026] (3) …and after a reload (key clean, so read from the SERVER) ob3 is STILL voided — not resurrected by the voided:false shadow in extra (${JSON.stringify(mirrorOb('ob3') && { voided: mirrorOb('ob3').voided, voidedAt: mirrorOb('ob3').voidedAt })}, dirty ${JSON.stringify(sb._dirtyKeysForTest())})`);
+  sb.set('cfbp_obligations', sb.get('cfbp_obligations').map((o) => ({ ...o })));
+  const plan3b = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_obligations');
+  assert(!plan3b.length, `[A-FB026] (3) …and re-saving the unchanged array plans nothing at all — no un-void (${JSON.stringify(plan3b.map((o) => ({ id: o.rowId, changed: o.changed })))})`);
+
+  // ── (4) THE GUARD (C), on its own. Whatever the mirror says about an immutable column, a PATCH never carries it:
+  //    obligations_guard refuses any change to one, for everybody, so sending it can only ever be a refusal.
+  await reload();
+  sb.set('cfbp_obligations', sb.get('cfbp_obligations').map((o) => (o.obligationId === 'ob2'
+    ? { ...o, createdAt: new Date(NOW - 86400e3).toISOString(), weekId: 'w1', needsReview: true } : { ...o })));
+  const p4 = captureConsole(() => sb.planFlush());
+  const ob2p = p4.plan.filter((o) => o.key === 'cfbp_obligations' && o.rowId === 'ob2');
+  assert(ob2p.length === 1 && 'needs_review' in ob2p[0].changed && !IMMUTABLE.some((c) => c in ob2p[0].changed),
+    `[A-FB026] (4) a diverged created_at/week_id is NEVER sent in a PATCH; the mutable change still goes (${JSON.stringify(ob2p.map((o) => o.changed))})`);
+  assert(said(/ob2/) && said(/created_at/) && said(/week_id/),
+    '[A-FB026] (4) …and the drop is not silent: the console names the row and both immutable columns');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// [A-FB005] — Drew, v0.29.0 (Feedback Log row 6, PM-105): "approve scribe learnings glitching out and not marking as
+// approve".
+//
+// THE MECHANISM. `fromRows.cfbp_scribe_learnings` returns each row's payload in `ord` order and drops the row id;
+// `toRows` re-derives it from the ARRAY POSITION (`sl_<runId>_<position>` for every row without a learningId). The
+// server's writers (trainer/index.js nextOrd, scribe-learn/index.js) name a row `sl_<runId>_<max(ord)+1+i>`. The
+// two agree only while `ord` is exactly 0..n-1 — which nothing enforces (no unique constraint on ord; two writers
+// that read the same max write the same ord; any stray or probe row leaves a gap). When they disagree the approve
+// flip is planned against the WRONG ids: a position whose derived id belongs to a NEIGHBOUR patches the neighbour
+// (silently approving a different proposal), and a derived id the server never wrote becomes an INSERT that the
+// table refuses (no insert grant) — red banner, and the next refresh shows the row still pending.
+// ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-FB005] FB-005 — approving a SCRIBE proposal patches the SERVER\'S row, never a position-derived id…', async () => {
+  const at = new Date(NOW).toISOString();
+  const reload = () => captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+  const srv = (id) => ST.scribe_learnings.find((r) => r.id === id);
+  const approveAt = (pred) => {
+    const all = sb.get('cfbp_scribe_learnings').map((l) => ({ ...l }));
+    const idx = all.findIndex(pred);
+    // applyScribeLearningDecision()'s exact flip (js/app.js): all[idx] rewritten in place, whole array saved.
+    if (idx >= 0) { all[idx] = { ...all[idx], status: 'approved' }; sb.set('cfbp_scribe_learnings', all); }
+    return idx;
+  };
+
+  // ── (1) TWO WRITERS, ONE ORD. scribe-learn (an instant learning) and a Trainer run both read max(ord) = 1 and both
+  //    wrote ord 2. The Trainer's experiment is sl_r2_2, its fact candidate sl_r2_3 — positions 3 and 4 on the client.
+  await hydrated({ who: 'commissioner' });
+  ST.scribe_learnings.push(
+    row({ league_id: LEAGUE_A, id: 'sl_instant_fb9', ord: 2, run_id: 'ri', kind: 'learning', status: 'approved', origin: 'instant', payload: { kind: 'learning', learningId: 'sl_instant_fb9', runId: 'ri', category: 'humor', instruction: 'fewer puns', confidence: 0.8, status: 'approved', origin: 'instant', createdAt: at }, created_at: at }),
+    row({ league_id: LEAGUE_A, id: 'sl_r2_2', ord: 2, run_id: 'r2', kind: 'experiment', status: 'pending', origin: 'trainer', payload: { kind: 'experiment', runId: 'r2', experiment: 'more Kihoon', reason: 'reigning champion', confidence: 0.6, status: 'pending', origin: 'trainer', createdAt: at }, created_at: at }),
+    row({ league_id: LEAGUE_A, id: 'sl_r2_3', ord: 3, run_id: 'r2', kind: 'fact_candidate', status: 'pending', origin: 'trainer', payload: { kind: 'fact_candidate', runId: 'r2', playerId: 'p2', key: 'school', value: 'Notre Dame', confidence: 0.7, status: 'pending', createdAt: at }, created_at: at }),
+  );
+  await reload();
+  const before1 = sb.get('cfbp_scribe_learnings');
+  const expIdx = before1.findIndex((l) => l.kind === 'experiment' && l.runId === 'r2');
+  const derived = proj.toRows.cfbp_scribe_learnings(before1, { leagueId: LEAGUE_A }).scribe_learnings[expIdx].id;
+  assert(expIdx >= 0 && derived !== 'sl_r2_2',
+    `[A-FB005] (1) precondition: the experiment sits at position ${expIdx}, where the position rule derives "${derived}" — not its server id sl_r2_2`);
+  approveAt((l) => l.kind === 'experiment' && l.runId === 'r2');
+  const p1 = captureConsole(() => sb.planFlush());
+  const ops1 = p1.plan.filter((o) => o.key === 'cfbp_scribe_learnings');
+  assert(ops1.length === 1 && ops1[0].op === 'patch' && ops1[0].rowId === 'sl_r2_2' && JSON.stringify(ops1[0].changed) === '{"status":"approved"}' && !p1.refusals.length,
+    `[A-FB005] (1) approving the experiment plans ONE status patch on its SERVER id sl_r2_2 — no insert, no neighbour (${JSON.stringify(ops1.map((o) => ({ op: o.op, id: o.rowId, changed: o.changed })))})`);
+  const mark1 = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(srv('sl_r2_2').status === 'approved' && srv('sl_r2_3').status === 'pending' && !bannersSince(mark1).length,
+    `[A-FB005] (1) …the server approved the experiment and NOT the fact candidate beside it, with no banner (exp ${srv('sl_r2_2').status}, fact ${srv('sl_r2_3').status}, banners ${JSON.stringify(bannersSince(mark1))})`);
+  await reload();
+  const after1 = sb.get('cfbp_scribe_learnings');
+  // CLEAN first, for the same reason as [A-FB026] (3): a dirty key's own value survives a hydrate.
+  assert(!sb._dirtyKeysForTest().includes('cfbp_scribe_learnings')
+    && after1.find((l) => l.kind === 'experiment' && l.runId === 'r2').status === 'approved'
+    && after1.find((l) => l.kind === 'fact_candidate' && l.runId === 'r2').status === 'pending'
+    && after1.length === before1.length && ST.scribe_learnings.length === 5,
+    `[A-FB005] (1) …after a refresh (any device) it still reads approved, its neighbour still pending, and nothing was duplicated (${after1.length} items, ${ST.scribe_learnings.length} rows)`);
+
+  // ── (2) A GAP. A stray row at a high ord (a verification probe that committed) and the Trainer's next row after it.
+  ST.scribe_learnings.push(
+    row({ league_id: LEAGUE_A, id: 'v0022_a', ord: 900001, run_id: 'v0022', kind: 'fact_candidate', status: 'approved', payload: { kind: 'fact_candidate', status: 'approved', playerId: 'p2', key: 'v0022:probe-a', value: 'verification probe A', confidence: 0.9 }, created_at: at }),
+    row({ league_id: LEAGUE_A, id: 'sl_r3_900002', ord: 900002, run_id: 'r3', kind: 'experiment', status: 'pending', origin: 'trainer', payload: { kind: 'experiment', runId: 'r3', experiment: 'shorter recaps', reason: 'fewer scrolls', confidence: 0.6, status: 'pending', origin: 'trainer', createdAt: at }, created_at: at }),
+  );
+  await reload();
+  approveAt((l) => l.kind === 'experiment' && l.runId === 'r3');
+  const p2 = captureConsole(() => sb.planFlush());
+  const ops2 = p2.plan.filter((o) => o.key === 'cfbp_scribe_learnings');
+  assert(ops2.length === 1 && ops2[0].op === 'patch' && ops2[0].rowId === 'sl_r3_900002' && !p2.refusals.length,
+    `[A-FB005] (2) behind a gap the approve still patches the server id sl_r3_900002 — not an INSERT of sl_r3_<position> (${JSON.stringify(ops2.map((o) => ({ op: o.op, id: o.rowId || (o.rows || []).map((r) => r.id) })))})`);
+  await captureConsoleAsync(() => sb.flush());
+  assert(srv('sl_r3_900002').status === 'approved' && ST.scribe_learnings.length === 7,
+    `[A-FB005] (2) …and the server holds it approved, with no extra row (${srv('sl_r3_900002').status}, ${ST.scribe_learnings.length} rows)`);
+
+  // ── (3) CANON, the same screen's other list. A canon row whose model omitted canon_id is `sc_<runId>_<ord>` on the
+  //    server and '' on the client.
+  ST.scribe_canon.push(row({ league_id: LEAGUE_A, id: 'sc_r2_0', ord: 0, approval_status: 'pending', run_id: 'r2', kind: 'canon', origin: 'trainer', payload: { canonId: '', kind: 'canon', runId: 'r2', contextSummary: 'a bad beat', preferredResponse: 'brutal', confidence: 0.8, approvalStatus: 'pending', origin: 'trainer', createdAt: at }, created_at: at }));
+  await reload();
+  sb.set('cfbp_scribe_canon', sb.get('cfbp_scribe_canon').map((c) => ({ ...c, approvalStatus: 'approved' })));
+  const p3 = captureConsole(() => sb.planFlush());
+  const ops3 = p3.plan.filter((o) => o.key === 'cfbp_scribe_canon');
+  assert(ops3.length === 1 && ops3[0].op === 'patch' && ops3[0].rowId === 'sc_r2_0' && JSON.stringify(ops3[0].changed) === '{"approval_status":"approved"}',
+    `[A-FB005] (3) approving a canon entry with no canonId patches its server id sc_r2_0 (${JSON.stringify(ops3.map((o) => ({ op: o.op, id: o.rowId || (o.rows || []).map((r) => r.id), changed: o.changed })))})`);
+  await captureConsoleAsync(() => sb.flush());
+  assert(ST.scribe_canon.length === 1 && ST.scribe_canon[0].approval_status === 'approved', `[A-FB005] (3) …and the server holds it approved (${ST.scribe_canon.length} row)`);
+
+  // ── (4) A FAILED SAVE is loud, leaves the learning INACTIVE on the server, and is retryable.
+  await reload();
+  const comm = ST.league_members.find((m) => m.id === 'p1');
+  comm.role = 'player';                                    // the server no longer takes this device's approvals
+  approveAt((l) => l.kind === 'fact_candidate' && l.runId === 'r2');
+  const mark4 = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(bannersSince(mark4).some((t) => /cfbp_scribe_learnings/.test(t) && /Nothing was saved/.test(t)) && srv('sl_r2_3').status === 'pending',
+    `[A-FB005] (4) a refused approve raises the red banner naming the key, and the server row stays PENDING — the learning is not active (${srv('sl_r2_3').status}; ${JSON.stringify(bannersSince(mark4))})`);
+  comm.role = 'commissioner';                              // rights restored; the Retry path is a re-hydrate, then the queued write
+  await reload();
+  await captureConsoleAsync(() => sb.flush());
+  assert(srv('sl_r2_3').status === 'approved' && ST.scribe_learnings.length === 7 && !sb._refusedKeysForTest().includes('cfbp_scribe_learnings'),
+    `[A-FB005] (4) …and the retry lands it on the SAME row, once (${srv('sl_r2_3').status}, ${ST.scribe_learnings.length} rows)`);
+
+  // ── (5) A PAYLOAD THE SERVER CHANGED SINCE THE REFRESH still identifies its row. scribe_memory_apply stamps
+  //    `payload.memoryAppliedAt` on an approved fact, and the Trainer confirms a provisional learning; a write's
+  //    answer carries that change into the base while the mirror keeps the refreshed copy. Identity is the
+  //    proposal (kind, run, id), not its whole content — otherwise the NEXT approve would be refused.
+  ST.scribe_learnings.push(
+    row({ league_id: LEAGUE_A, id: 'sl_r4_900003', ord: 900003, run_id: 'r4', kind: 'fact_candidate', status: 'pending', origin: 'trainer', payload: { kind: 'fact_candidate', runId: 'r4', playerId: 'p3', key: 'school', value: 'Iowa State', confidence: 0.8, status: 'pending', origin: 'trainer', createdAt: at }, created_at: at }),
+    row({ league_id: LEAGUE_A, id: 'sl_r4_900004', ord: 900004, run_id: 'r4', kind: 'experiment', status: 'pending', origin: 'trainer', payload: { kind: 'experiment', runId: 'r4', experiment: 'roast the spread', reason: 'it moved', confidence: 0.6, status: 'pending', origin: 'trainer', createdAt: at }, created_at: at }),
+  );
+  await reload();
+  approveAt((l) => l.kind === 'fact_candidate' && l.runId === 'r4');
+  srv('sl_r4_900003').payload = { ...srv('sl_r4_900003').payload, memoryAppliedAt: at };   // the server's own stamp, after the refresh
+  await captureConsoleAsync(() => sb.flush());
+  approveAt((l) => l.kind === 'experiment' && l.runId === 'r4');
+  const p5 = captureConsole(() => sb.planFlush());
+  const ops5 = p5.plan.filter((o) => o.key === 'cfbp_scribe_learnings');
+  assert(!p5.refusals.length && ops5.length === 1 && ops5[0].rowId === 'sl_r4_900004',
+    `[A-FB005] (5) a payload the server changed after the refresh does not stop the next approve: ONE patch on sl_r4_900004, nothing refused (${JSON.stringify({ ops: ops5.map((o) => o.rowId), refusals: p5.refusals.map((e) => e.code) })})`);
+
+  // ── (6) AN ITEM THAT MATCHES NO SERVER ROW IS REFUSED, NEVER SENT UNDER A GUESSED ID. Spliced in at position 2 with
+  //    run r2, its position-derived id is sl_r2_2 — the experiment's real row — so sending it would overwrite that
+  //    row's status. (No production writer of this key changes the array's shape; this is the backstop.)
+  await reload();
+  const spliced = sb.get('cfbp_scribe_learnings').map((l) => ({ ...l }));
+  spliced.splice(2, 0, { kind: 'experiment', runId: 'r2', experiment: 'a local-only line', reason: '?', confidence: 0.5, status: 'rejected' });
+  sb.set('cfbp_scribe_learnings', spliced);
+  const p6 = captureConsole(() => sb.planFlush());
+  assert(p6.refusals.some((e) => e.code === 'row_identity_unresolved' && e.key === 'cfbp_scribe_learnings' && /Nothing was saved/.test(e.message))
+    && !p6.plan.some((o) => o.key === 'cfbp_scribe_learnings'),
+    `[A-FB005] (6) an item with no server row is REFUSED loudly and nothing is planned for the key — no insert, no write onto sl_r2_2 (${JSON.stringify({ refusals: p6.refusals.map((e) => e.code), ops: p6.plan.filter((o) => o.key === 'cfbp_scribe_learnings').map((o) => o.rowId || o.op) })})`);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// [A-FB005b] — F1 (security review of batch O, 2026-10-07): THE PENDING-EDIT REPLAY KEYS EVERY ROW THE WAY THE PLANNER DOES.
+//
+// RG-252's fold lays this device's unsent edits back over a base the server has moved (`_pendingRowEdits` ->
+// `_reapplyPendingRows`). For the two SCRIBE review keys `toRows` names a row by ARRAY POSITION, and `_diffRows` re-keys
+// it to the server row it was read from before comparing anything (`serverRowIds`, FB-005). The replay did not: a pending
+// approve was laid back onto the POSITION-DERIVED id — a neighbour's row (a different proposal reads as approved in the
+// mirror) or an id the server never wrote (a phantom duplicate item). `scribe_learnings` is not one of the four tables the
+// channel binds today, so the fold is driven through `_foldRealtimeRowForTest`, the seam RG-252 itself is tested with.
+// ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-FB005b] F1 — a replayed pending edit keeps the SERVER row id (neighbour, phantom row, unresolved)…', async () => {
+  const at = new Date(NOW).toISOString();
+  const reload = () => captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+  const srv = (id) => ST.scribe_learnings.find((r) => r.id === id);
+  const approveAt = (pred) => {
+    const all = sb.get('cfbp_scribe_learnings').map((l) => ({ ...l }));
+    const idx = all.findIndex(pred);
+    if (idx >= 0) { all[idx] = { ...all[idx], status: 'approved' }; sb.set('cfbp_scribe_learnings', all); }
+    return idx;
+  };
+  const statusOf = (pred) => (sb.get('cfbp_scribe_learnings').find(pred) || {}).status;
+  const isExp = (l) => l.kind === 'experiment' && l.runId === 'r2';
+  const isFact = (l) => l.kind === 'fact_candidate' && l.runId === 'r2';
+  // The event the fold receives: ANY other change to the table (a Trainer run confirming an unrelated learning).
+  const otherEvent = (id, extra = {}) => ({ eventType: 'UPDATE', new: { ...srv(id), ...extra, league_id: LEAGUE_A } });
+
+  await hydrated({ who: 'commissioner' });
+  ST.scribe_learnings.push(
+    row({ league_id: LEAGUE_A, id: 'sl_instant_fb9', ord: 2, run_id: 'ri', kind: 'learning', status: 'approved', origin: 'instant', payload: { kind: 'learning', learningId: 'sl_instant_fb9', runId: 'ri', category: 'humor', instruction: 'fewer puns', confidence: 0.8, status: 'approved', origin: 'instant', createdAt: at }, created_at: at }),
+    row({ league_id: LEAGUE_A, id: 'sl_r2_2', ord: 2, run_id: 'r2', kind: 'experiment', status: 'pending', origin: 'trainer', payload: { kind: 'experiment', runId: 'r2', experiment: 'more Kihoon', reason: 'reigning champion', confidence: 0.6, status: 'pending', origin: 'trainer', createdAt: at }, created_at: at }),
+    row({ league_id: LEAGUE_A, id: 'sl_r2_3', ord: 3, run_id: 'r2', kind: 'fact_candidate', status: 'pending', origin: 'trainer', payload: { kind: 'fact_candidate', runId: 'r2', playerId: 'p2', key: 'school', value: 'Notre Dame', confidence: 0.7, status: 'pending', createdAt: at }, created_at: at }),
+  );
+  await reload();
+  const items0 = sb.get('cfbp_scribe_learnings').length;
+  const expIdx = sb.get('cfbp_scribe_learnings').findIndex(isExp);
+  const derived = proj.toRows.cfbp_scribe_learnings(sb.get('cfbp_scribe_learnings'), { leagueId: LEAGUE_A }).scribe_learnings[expIdx].id;
+  assert(expIdx >= 0 && derived === 'sl_r2_3',
+    `[A-FB005b] (0) precondition: the experiment's POSITION-DERIVED id is "${derived}" — its neighbour the fact candidate's real server id (the experiment's own is sl_r2_2)`);
+
+  // ── (1) THE NEIGHBOUR. Approve the experiment (unsent), then ANY row event folds in.
+  approveAt(isExp);
+  assert(sb._dirtyKeysForTest().includes('cfbp_scribe_learnings'), '[A-FB005b] (1) precondition: the approve is unsent (the key is dirty)');
+  captureConsole(() => sb._foldRealtimeRowForTest('scribe_learnings', otherEvent('sl_instant_fb9', { payload: { ...srv('sl_instant_fb9').payload, instruction: 'fewer puns, please' } })));
+  assert(statusOf(isExp) === 'approved' && statusOf(isFact) === 'pending',
+    `[A-FB005b] (1) after the fold the mirror still has the EXPERIMENT approved and its neighbour the fact candidate PENDING (experiment ${statusOf(isExp)}, fact ${statusOf(isFact)}) — the replay used to approve the neighbour`);
+  assert(sb.get('cfbp_scribe_learnings').length === items0,
+    `[A-FB005b] (1) …and no item was added or lost (${sb.get('cfbp_scribe_learnings').length} vs ${items0})`);
+  const p1 = captureConsole(() => sb.planFlush());
+  const ops1 = p1.plan.filter((o) => o.key === 'cfbp_scribe_learnings');
+  assert(ops1.length === 1 && ops1[0].op === 'patch' && ops1[0].rowId === 'sl_r2_2' && JSON.stringify(ops1[0].changed) === '{"status":"approved"}' && !p1.refusals.length,
+    `[A-FB005b] (1) …and the edit the fold kept is still exactly ONE status patch on sl_r2_2 (${JSON.stringify(ops1.map((o) => ({ op: o.op, id: o.rowId, changed: o.changed })))})`);
+  await captureConsoleAsync(() => sb.flush());
+  assert(srv('sl_r2_2').status === 'approved' && srv('sl_r2_3').status === 'pending',
+    `[A-FB005b] (1) …and the server approved the experiment and not the neighbour (exp ${srv('sl_r2_2').status}, fact ${srv('sl_r2_3').status})`);
+
+  // ── (2) THE PHANTOM. A gap puts the derived id nowhere on the server: the replay used to INSERT a duplicate item.
+  ST.scribe_learnings.push(
+    row({ league_id: LEAGUE_A, id: 'v0022_a', ord: 900001, run_id: 'v0022', kind: 'fact_candidate', status: 'approved', payload: { kind: 'fact_candidate', status: 'approved', playerId: 'p2', key: 'v0022:probe-a', value: 'verification probe A', confidence: 0.9 }, created_at: at }),
+    row({ league_id: LEAGUE_A, id: 'sl_r3_900002', ord: 900002, run_id: 'r3', kind: 'experiment', status: 'pending', origin: 'trainer', payload: { kind: 'experiment', runId: 'r3', experiment: 'shorter recaps', reason: 'fewer scrolls', confidence: 0.6, status: 'pending', origin: 'trainer', createdAt: at }, created_at: at }),
+  );
+  await reload();
+  const items2 = sb.get('cfbp_scribe_learnings').length;
+  const isR3 = (l) => l.kind === 'experiment' && l.runId === 'r3';
+  approveAt(isR3);
+  captureConsole(() => sb._foldRealtimeRowForTest('scribe_learnings', otherEvent('sl_instant_fb9', { payload: { ...srv('sl_instant_fb9').payload, instruction: 'fewer puns, truly' } })));
+  assert(sb.get('cfbp_scribe_learnings').length === items2 && statusOf(isR3) === 'approved',
+    `[A-FB005b] (2) behind a gap the fold adds NO phantom item and keeps the approve on the r3 experiment (${sb.get('cfbp_scribe_learnings').length} vs ${items2} items; r3 ${statusOf(isR3)})`);
+  const p2 = captureConsole(() => sb.planFlush());
+  const ops2 = p2.plan.filter((o) => o.key === 'cfbp_scribe_learnings');
+  assert(ops2.length === 1 && ops2[0].op === 'patch' && ops2[0].rowId === 'sl_r3_900002' && !p2.refusals.length,
+    `[A-FB005b] (2) …and the plan is still one patch on sl_r3_900002, never an insert (${JSON.stringify(ops2.map((o) => ({ op: o.op, id: o.rowId || (o.rows || []).map((r) => r.id) })))})`);
+  await captureConsoleAsync(() => sb.flush());
+
+  // ── (3) NO SERVER ROW. An item the base cannot place is never replayed under a guessed id: the fold KEEPS the mirror and says so.
+  await reload();
+  const spliced = sb.get('cfbp_scribe_learnings').map((l) => ({ ...l }));
+  spliced.splice(2, 0, { kind: 'experiment', runId: 'r2', experiment: 'a local-only line', reason: '?', confidence: 0.5, status: 'rejected' });
+  sb.set('cfbp_scribe_learnings', spliced);
+  const before3 = JSON.stringify(sb.get('cfbp_scribe_learnings'));
+  captureConsole(() => sb._foldRealtimeRowForTest('scribe_learnings', otherEvent('sl_instant_fb9', { payload: { ...srv('sl_instant_fb9').payload, instruction: 'x' } })));
+  assert(JSON.stringify(sb.get('cfbp_scribe_learnings')) === before3 && said(/could not be read as rows/),
+    '[A-FB005b] (3) an item with no server row: the fold leaves the mirror exactly as the device had it and the console says why (never a guessed id, never a dropped edit)');
+
+  // ── (4) THE SOURCE PIN. The replay and the planner share ONE keying call (a regression that re-derives it in one place only is this defect again).
+  const code = readFileSync(join(__dirname, 'js', 'supabase-backend.js'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  const body = (name) => { const i = code.indexOf(`function ${name}(`); return i < 0 ? '' : code.slice(i, code.indexOf('\n}\n', i)); };
+  assert(/route\.serverRowIds\)\s*newRows\s*=\s*_serverRowIdsByPosition\(/.test(body('_diffRows'))
+    && /route\.serverRowIds\)\s*local\s*=\s*_serverRowIdsByPosition\(/.test(body('_pendingRowEdits')),
+    '[A-FB005b] (4) both `_diffRows` (the planner) and `_pendingRowEdits` (the replay) key serverRowIds routes through _serverRowIdsByPosition');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// [A-R19] — W-60 / R-19 (Drew D-44, "r-19 approve"): a PLAYER cannot mark an obligation paid, confirm it or deny it.
+// Every attempt raised the red banner "The server refused to save cfbp_obligations: obligations: only status/paid_at
+// may be self-edited … Nothing was saved."
+//
+// THE MECHANISM. handleObligationAction() (js/app.js) writes `deniedReason` on all three actions — null on Mark Paid
+// and Confirm, the typed reason on Deny. `deniedReason` is not a column, so the projection carries it in `extra`
+// (supabase-projection.js rowFromLegacy), and the row diff sent `extra` in the PATCH. obligations_guard
+// (0002_rls.sql:526-535) refuses ANY change to `extra` (or to any column but status/paid_at) from a non-commissioner,
+// so the WHOLE row was refused — the status change with it. The commissioner's path never failed: the guard returns
+// before that check for him.
+//
+// 0046 (Drew M-28 / D-53) — the reason moves to obligations.denied_reason, a player's paid date is the SERVER's, and a reason never
+// outlives its denial; (0) teaches the fake those rules, (3)/(5b)/(6)/(9) prove the client meets them. See also [A-0046-2K25].
+// Each action runs on a FRESH adapter, so one refusal cannot latch the key and decide the next action's outcome.
+// ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-R19] R-19 + 0046 — a player\'s Mark Paid / Confirm / Deny reaches the server: status, the SERVER\'s date, the reason in its own column…', async () => {
+  const at = new Date(NOW).toISOString();
+  const later = new Date(NOW + 1234).toISOString();
+  // The fake guard's clock (`now()` = NOW): 0046 dates a PLAYER's move to paid with it, never with the client's value.
+  const SERVER_NOW = new Date(NOW).toISOString();
+  const ob = (o) => row({ league_id: LEAGUE_A, type: 'weekly', week_id: 'w2', amount_or_prize: 'beer', created_at: at, paid_at: null,
+    needs_review: false, review_note: null, voided: false, voided_at: null, void_reason: null, merged_into: null, merged_from: [],
+    denied_reason: null, ...o });
+  // What finalize_week leaves in a live row's `extra` (0026_b_roles_pilot.sql:2255-2264; [A-FB026] (0) proves the fake writes the same).
+  const SHADOWS = { createdAt: at, paidAt: null, voided: false, voidedAt: null, voidReason: null, mergedInto: null, mergedFrom: [] };
+  const seed = () => ST.obligations.push(
+    ob({ id: 'obF', payer_member_id: 'p2', recipient_member_id: 'p3', status: 'unpaid', created_at: later, extra: { ...SHADOWS } }),
+    // After 0046's backfill: an earlier commissioner denial, its reason in the COLUMN.
+    ob({ id: 'obX', payer_member_id: 'p2', recipient_member_id: 'p3', status: 'unpaid', denied_reason: 'not received' }),
+    // BEFORE the backfill reached it (an old client wrote it between the paste and the deploy): the reason still in `extra`.
+    ob({ id: 'obL', payer_member_id: 'p2', recipient_member_id: 'p3', status: 'unpaid', extra: { deniedReason: 'stale' } }),
+    ob({ id: 'obU', payer_member_id: 'p3', recipient_member_id: 'p2', status: 'unpaid' }),
+    ob({ id: 'obC', payer_member_id: 'p3', recipient_member_id: 'p2', status: 'pending' }),
+    ob({ id: 'obC2', payer_member_id: 'p3', recipient_member_id: 'p2', status: 'pending' }),
+    ob({ id: 'obD', payer_member_id: 'p3', recipient_member_id: 'p2', status: 'pending' }),
+    ob({ id: 'obS', payer_member_id: 'p2', recipient_member_id: 'p3', status: 'pending' }),
+    ob({ id: 'obB', payer_member_id: 'p1', recipient_member_id: 'p3', status: 'unpaid' }),
+  );
+  const reload = () => captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+  const fresh = async (who) => { initAdapter({ who }); seed(); await reload(); };
+  const srvOb = (id) => ST.obligations.find((o) => o.id === id);
+  const mirrorOb = (id) => sb.get('cfbp_obligations').find((o) => o.obligationId === id);
+  // saveObligation()'s exact shape (js/storage.js): the record replaced in place, the WHOLE array saved.
+  const saveOb = (next) => sb.set('cfbp_obligations', sb.get('cfbp_obligations').map((o) => (o.obligationId === next.obligationId ? next : { ...o })));
+  // handleObligationAction()'s / applyObligationDeny()'s exact writes (js/app.js), one per (action, resulting status).
+  const WRITES = {
+    markPending: (o) => ({ ...o, status: 'pending', deniedReason: null }),
+    markPaid: (o) => ({ ...o, status: 'paid', paidAt: later, deniedReason: null }),
+    confirm: (o) => ({ ...o, status: 'paid', paidAt: later, deniedReason: null }),
+    deny: (o, reason) => ({ ...o, status: 'unpaid', deniedReason: reason, paidAt: null }),
+  };
+  /** Plan + flush what is in the mirror now, capturing everything the adapter said at BOTH steps. */
+  const push = async () => {
+    const planned = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_obligations');
+    const logs = [..._captured];                       // everything the adapter said while planning…
+    const mark = bannerSeen.length;
+    await captureConsoleAsync(() => sb.flush());
+    logs.push(..._captured);                           // …and while flushing (warn/info/error — the adapter uses no other)
+    return { planned, logs, banners: bannersSince(mark), refused: sb._refusedKeysForTest().includes('cfbp_obligations'),
+      dirty: sb._dirtyKeysForTest().includes('cfbp_obligations') };
+  };
+  /** One action, end to end, on a FRESH adapter (one refusal can never latch the key and decide the next action). */
+  const act = async (who, id, write, reason) => {
+    await fresh(who);
+    saveOb(write(mirrorOb(id), reason));
+    const r = await push();
+    return { ...r, srv: { ...srvOb(id) } };
+  };
+  const cols = (r) => r.planned.map((o) => `${o.op}:${o.rowId}:${Object.keys(o.changed || {}).sort().join('+')}`).join(' ');
+  const clean = (r) => !r.banners.length && !r.refused && !r.dirty;
+  const seen = (r) => JSON.stringify({ planned: cols(r), status: r.srv.status, paid_at: r.srv.paid_at, denied_reason: r.srv.denied_reason, banners: r.banners });
+
+  // ── (0) THE FAKE HAS TEETH — 0002's column/transition rules plus 0046's three additions and its CHECK. A green below means something.
+  await fresh('player');
+  const direct = (id, patch) => CLIENT.from('obligations').update(patch).eq('league_id', LEAGUE_A).eq('id', id).select('id');
+  const t1 = await direct('ob1', { status: 'pending', extra: { deniedReason: null } });            // a player may not touch extra
+  const t2 = await direct('obU', { paid_at: later });                                             // F2: a date alone
+  const t3 = await direct('ob1', { status: 'paid', paid_at: later });                             // the payer confirming himself
+  const t4 = await direct('ob1', { status: 'pending', paid_at: later });                          // a date on a row that is not paid
+  const t5 = await direct('ob1', { status: 'pending', denied_reason: 'my own reason' });          // the PAYER giving a reason
+  const t6 = await direct('obD', { denied_reason: 'no status move' });                            // a reason alone
+  const t7 = await direct('obD', { status: 'unpaid', denied_reason: 'x'.repeat(201) });           // over 200 characters (CHECK)
+  const t8 = await direct('obD', { status: 'unpaid', denied_reason: '   ' });                     // blank (CHECK)
+  const msgs = [t1, t2, t3, t4, t5, t6, t7, t8].map((t) => t.error && `${t.error.code}:${t.error.message}`);
+  assert(/42501:.*only status\/paid_at may be self-edited/.test(msgs[0]) && /42501:.*paid_at may change only with a status change/.test(msgs[1])
+    && /42501:.*illegal status transition/.test(msgs[2]) && /42501:.*paid_at must be null off paid/.test(msgs[3])
+    && /42501:.*only the recipient may give a reason/.test(msgs[4]) && /42501:.*denied_reason may change only with a status change/.test(msgs[5])
+    && /^23514:.*obligations_denied_reason_shape/.test(msgs[6]) && /^23514:.*obligations_denied_reason_shape/.test(msgs[7])
+    && srvOb('ob1').status === 'unpaid' && srvOb('ob1').paid_at == null && srvOb('ob1').denied_reason == null
+    && srvOb('obU').status === 'unpaid' && srvOb('obU').paid_at == null && srvOb('obD').status === 'pending' && srvOb('obD').denied_reason == null,
+    `[A-R19] (0) the modelled guard (0002 + 0046) refuses extra, a date alone, a self-confirm, a date off paid, a payer's reason, a reason alone, and the CHECK refuses an over-long or blank reason — each row unchanged (${JSON.stringify(msgs)})`);
+  const t9 = await direct('obC', { status: 'paid', paid_at: '2020-01-01T00:00:00.000Z' });
+  assert(!t9.error && srvOb('obC').status === 'paid' && srvOb('obC').paid_at === SERVER_NOW,
+    `[A-R19] (0) …and a creditor's back-dated Confirm is ACCEPTED but dated by the server (security F2: ${srvOb('obC').paid_at}, not 2020)`);
+
+  // ── (1) PAYER — Mark Paid (unpaid → pending, "waiting on the creditor").
+  const r1 = await act('player', 'ob1', WRITES.markPending);
+  assert(cols(r1) === 'patch:ob1:status', `[A-R19] (1) the payer's Mark Paid plans ONE patch carrying status alone — no extra (${cols(r1)})`);
+  assert(r1.srv.status === 'pending' && r1.srv.paid_at == null && clean(r1),
+    `[A-R19] (1) …the server holds it PENDING, and no red banner, nothing refused, nothing left unsent (${seen(r1)})`);
+
+  // ── (2) PAYER — Mark Paid on a row finalize_week created (its `extra` holds seven typed-column shadows).
+  const r2 = await act('player', 'obF', WRITES.markPending);
+  assert(cols(r2) === 'patch:obF:status' && r2.srv.status === 'pending' && clean(r2)
+    && JSON.stringify(r2.srv.extra) === JSON.stringify(SHADOWS) && r2.srv.created_at === later,
+    `[A-R19] (2) on a live finalize-created row too: status alone, PENDING, extra and created_at as the server wrote them (${seen(r2)})`);
+
+  // ── (3) PAYER — Mark Paid again after the COMMISSIONER denied it with a reason. 0046: the reason is a column the payer may
+  //    CLEAR (and the guard clears it anyway), so the old reason leaves with the new claim — the stale-reason bug's first half.
+  const r3 = await act('player', 'obX', WRITES.markPending);
+  assert(cols(r3) === 'patch:obX:denied_reason+status' && r3.srv.status === 'pending' && r3.srv.denied_reason == null && clean(r3),
+    `[A-R19] (3) after a commissioner's denial: status + the cleared reason, PENDING, and the server's reason is GONE (${seen(r3)})`);
+
+  // ── (3b) A row the backfill has not reached yet (reason still in `extra`): the mirror shows NO reason (the column wins over its
+  //    shadow), and the payer's tap sends status only — a player never writes `extra`, so the old key stays for the re-paste to sweep.
+  await fresh('player');
+  const shownBefore = 'deniedReason' in mirrorOb('obL');
+  saveOb(WRITES.markPending(mirrorOb('obL')));
+  const r3b = { ...(await push()), srv: { ...srvOb('obL') } };
+  assert(!shownBefore && cols(r3b) === 'patch:obL:status' && r3b.srv.status === 'pending' && r3b.srv.extra.deniedReason === 'stale' && clean(r3b),
+    `[A-R19] (3b) a pre-backfill row: no reason shown, the tap sends status alone, PENDING, extra left for the backfill (${seen(r3b)}, shown before: ${shownBefore})`);
+
+  // ── (4) CREDITOR — "Confirm Paid" straight from unpaid. The client still sends its date (so a 0002-era guard accepts it too), and
+  //    the server KEEPS ITS OWN (0046, security F2).
+  const r4 = await act('player', 'obU', WRITES.markPaid);
+  assert(cols(r4) === 'patch:obU:paid_at+status' && r4.srv.status === 'paid' && r4.srv.paid_at === SERVER_NOW && clean(r4),
+    `[A-R19] (4) the creditor's Confirm Paid plans status + paid_at, and the server holds it PAID with the SERVER's date (${seen(r4)})`);
+
+  // ── (5) CREDITOR — Confirm a pending payment.
+  const r5 = await act('player', 'obC', WRITES.confirm);
+  assert(cols(r5) === 'patch:obC:paid_at+status' && r5.srv.status === 'paid' && r5.srv.paid_at === SERVER_NOW && clean(r5),
+    `[A-R19] (5) the creditor's Confirm plans status + paid_at, and the server holds it PAID with the SERVER's date (${seen(r5)})`);
+
+  // ── (5b) TWO CONFIRMS IN A ROW on one device. After the first, this device's paidAt (its clock) and the server's differ, and
+  //    `obligations` is not in the Realtime publication — so the SECOND save must not re-send the first row's date alone, which
+  //    the guard would refuse WHOLE (security F2). The planner holds paid_at/denied_reason to a status move.
+  await fresh('player');
+  saveOb(WRITES.confirm(mirrorOb('obC')));
+  const first = await push();
+  saveOb(WRITES.confirm(mirrorOb('obC2')));
+  const second = await push();
+  assert(clean(first) && cols(second) === 'patch:obC2:paid_at+status' && clean(second)
+    && srvOb('obC').status === 'paid' && srvOb('obC2').status === 'paid' && srvOb('obC2').paid_at === SERVER_NOW
+    && second.logs.some((l) => /^(?=.*\bobC\b)(?=.*\bpaid_at\b)(?=.*not in its status)/.test(l)),
+    `[A-R19] (5b) a second Confirm on the same device sends ONLY the second row, both land, no banner — and the held-back date is SAID (${cols(second)}; ${JSON.stringify(second.banners)})`);
+
+  // ── (6) CREDITOR — Deny a pending payment, with a reason: it travels in its own column and the server keeps it.
+  const r6 = await act('player', 'obD', WRITES.deny, 'never got it');
+  assert(cols(r6) === 'patch:obD:denied_reason+status' && r6.srv.status === 'unpaid' && r6.srv.paid_at == null
+    && r6.srv.denied_reason === 'never got it' && JSON.stringify(r6.srv.extra) === '{}' && clean(r6),
+    `[A-R19] (6) the creditor's Deny plans status + the reason, and the server holds it UNPAID with the reason in denied_reason, extra untouched (${seen(r6)})`);
+  await reload();
+  assert(!sb._dirtyKeysForTest().includes('cfbp_obligations') && mirrorOb('obD').status === 'unpaid' && mirrorOb('obD').deniedReason === 'never got it',
+    `[A-R19] (6) …and after a refresh (key clean, so read from the SERVER) the payer's device shows the denial AND its reason (${JSON.stringify(mirrorOb('obD') && { status: mirrorOb('obD').status, deniedReason: mirrorOb('obD').deniedReason })})`);
+  // (6c) The reason edited later, with no status move: never sent (the guard would refuse it whole), said in ONE console line that
+  //      names the row and the column — and (security hardening, R-19 review) no console line at plan or flush carries the text.
+  saveOb({ ...mirrorOb('obD'), deniedReason: 'changed my mind about it' });
+  const r6c = await push();
+  assert(!r6c.planned.length && r6c.logs.some((l) => /^(?=.*\bobD\b)(?=.*\bdenied_reason\b)(?=.*not in its status)/.test(l))
+    && srvOb('obD').denied_reason === 'never got it' && !r6c.banners.length,
+    `[A-R19] (6c) a reason changed without a status move is NOT sent, and that is said by row and column; the server's reason stands (${JSON.stringify(r6c.logs)})`);
+  assert(r6c.logs.length > 0 && ![...r6.logs, ...r6c.logs].some((l) => l.includes('never got it') || l.includes('changed my mind')),
+    `[A-R19] (6c) …and no console line, at plan or at flush, carries a reason's text (${r6.logs.length + r6c.logs.length} line(s) read)`);
+
+  // ── (7) AUTHORITY STAYS: a row Kevin is not party to is never planned, whatever his mirror says. RLS is the boundary;
+  //    the planner does not even ask.
+  await fresh('player');
+  saveOb({ ...mirrorOb('obB'), status: 'paid', paidAt: later });
+  const p7 = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_obligations');
+  await captureConsoleAsync(() => sb.flush());
+  assert(!p7.length && srvOb('obB').status === 'unpaid',
+    `[A-R19] (7) a bystander's change to someone else's obligation is never planned, and the server row is untouched (${JSON.stringify(p7.map((o) => o.rowId))})`);
+
+  // ── (8) THE COMMISSIONER IS NOT NARROWED. His Deny carries the reason to the same column; the guard's commissioner branch is unchanged.
+  const r8 = await act('commissioner', 'obC', WRITES.deny, 'wrong week');
+  assert(cols(r8) === 'patch:obC:denied_reason+status' && r8.srv.status === 'unpaid' && r8.srv.denied_reason === 'wrong week'
+    && JSON.stringify(r8.srv.extra) === '{}' && clean(r8),
+    `[A-R19] (8) the commissioner's Deny sends status AND the reason, and the server keeps both, in the column (${seen(r8)})`);
+
+  // ── (9) THE STALE-REASON BUG, END TO END, ON ONE SERVER: the commissioner denies with a reason; the payer claims it again; the
+  //    commissioner denies AGAIN without one. Before 0046 the payer could not clear `extra`, so the first reason came back on the
+  //    second denial. Now it never does.
+  await fresh('commissioner');
+  const SRV = ST;
+  saveOb(WRITES.deny(mirrorOb('obS'), 'wrong week'));
+  const s1 = await push();
+  initAdapter({ who: 'player', server: SRV }); await reload();
+  const payerSaw = mirrorOb('obS').deniedReason;
+  saveOb(WRITES.markPending(mirrorOb('obS')));
+  const s2 = await push();
+  const afterClaim = { ...srvOb('obS') };
+  initAdapter({ who: 'commissioner', server: SRV }); await reload();
+  saveOb(WRITES.deny(mirrorOb('obS'), null));
+  const s3 = await push();
+  initAdapter({ who: 'player', server: SRV }); await reload();
+  assert(clean(s1) && clean(s2) && clean(s3) && payerSaw === 'wrong week' && afterClaim.status === 'pending' && afterClaim.denied_reason == null
+    && srvOb('obS').status === 'unpaid' && srvOb('obS').denied_reason == null && !('deniedReason' in mirrorOb('obS')),
+    `[A-R19] (9) the payer saw "wrong week"; his new claim cleared it; the second denial (no reason) shows NO reason — the old one never comes back (${JSON.stringify({ payerSaw, afterClaim: afterClaim.denied_reason, final: srvOb('obS').denied_reason, mirror: mirrorOb('obS') && mirrorOb('obS').deniedReason })})`);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// [A-0046-2K25] — the 2K25 "Outstanding Balances" card. Its status lives in league_kv settings.ob2025, which only the commissioner
+// may write; a PLAYER's saveSetting() was refused on his device and never saved. 0046's settle_2025_obligation is the narrow
+// server path; sb.settleOb2025() calls it, folds the returned settings row in like a Realtime event, and REJECTS on every refusal.
+// In this fake Kevin is p2: the RECIPIENT of ob_2025_wk1 (p3 -> p2) and wk2/wk5 (-> p2), the PAYER of ob_2025_wk6 (p2 -> p6);
+// ob_2025_wk4 (p6 -> p5) is not his.
+// ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-0046-2K25] a player settles HIS OWN 2K25 balance through settle_2025_obligation, and every refusal rejects — never a silent no-op…', async () => {
+  const kvRow = (lid = LEAGUE_A) => ST.league_kv.find((r) => r.league_id === lid && r.key === 'settings');
+  const srvMap = () => (kvRow().value && kvRow().value.ob2025) || {};
+  const mirrorMap = () => (sb.get('cfbp_settings') || {}).ob2025 || {};
+  const tryIt = async (args) => { try { return { ok: await sb.settleOb2025(args) }; } catch (e) { return { err: e }; } };
+  const rpcCalls = () => CLIENT._calls.rpc.filter((c) => c.name === 'settle_2025_obligation');
+
+  await hydrated({ who: 'player' });
+  const othersBefore = JSON.stringify({ ...kvRow().value, ob2025: undefined });
+  const r1 = await tryIt({ obligationId: 'ob_2025_wk6', action: 'mark' });
+  assert(r1.ok && r1.ok.status === 'pending' && srvMap().ob_2025_wk6 === 'pending' && mirrorMap().ob_2025_wk6 === 'pending'
+    && !sb._dirtyKeysForTest().includes('cfbp_settings') && rpcCalls().length === 1 && rpcCalls()[0].args.p_league === LEAGUE_A,
+    `[A-0046-2K25] (1) the PAYER's Mark Paid lands PENDING on the server, and this device's settings show it at once without a pending write (${JSON.stringify({ r: r1.ok, srv: srvMap(), mirror: mirrorMap() })})`);
+  assert(JSON.stringify({ ...kvRow().value, ob2025: undefined }) === othersBefore,
+    '[A-0046-2K25] (1) …and nothing else in the settings row moved — one key of one map');
+
+  const r2 = await tryIt({ obligationId: 'ob_2025_wk1', action: 'mark' });
+  assert(r2.ok && r2.ok.status === 'paid' && srvMap().ob_2025_wk1 === 'paid' && mirrorMap().ob_2025_wk1 === 'paid',
+    `[A-0046-2K25] (2) the RECIPIENT's Confirm Paid (unpaid -> paid) lands PAID (${JSON.stringify(srvMap())})`);
+
+  // Two payments the payers claimed elsewhere: pending on the server, then a refresh.
+  kvRow().value = { ...kvRow().value, ob2025: { ...srvMap(), ob_2025_wk2: 'pending', ob_2025_wk5: 'pending' } };
+  await captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+  const r3 = await tryIt({ obligationId: 'ob_2025_wk2', action: 'confirm' });
+  const r4 = await tryIt({ obligationId: 'ob_2025_wk5', action: 'deny' });
+  assert(r3.ok && r3.ok.status === 'paid' && srvMap().ob_2025_wk2 === 'paid' && r4.ok && r4.ok.status === 'unpaid'
+    && !('ob_2025_wk5' in srvMap()) && !('ob_2025_wk5' in mirrorMap()),
+    `[A-0046-2K25] (3) the recipient's Confirm lands PAID, his Deny puts it back to UNPAID (the key ABSENT, as the client writes it) (${JSON.stringify(srvMap())})`);
+
+  // REFUSALS — each REJECTS with the server's named code, and the map is unchanged.
+  const mapNow = JSON.stringify(srvMap());
+  const refusals = {
+    not_party: await tryIt({ obligationId: 'ob_2025_wk4', action: 'mark' }),
+    illegal_transition: await tryIt({ obligationId: 'ob_2025_wk6', action: 'confirm' }),   // the payer cannot confirm his own claim
+    bad_action: await tryIt({ obligationId: 'ob_2025_wk6', action: 'undo' }),              // undo is the commissioner's
+    not_found: await tryIt({ obligationId: 'ob_2025_wk99', action: 'mark' }),
+  };
+  assert(Object.entries(refusals).every(([code, r]) => r.err && r.err.code === code) && JSON.stringify(srvMap()) === mapNow,
+    `[A-0046-2K25] (4) a non-party, an illegal move, a commissioner-only action and an unknown row each REJECT with the server's own code; nothing moved (${JSON.stringify(Object.fromEntries(Object.entries(refusals).map(([k, r]) => [k, r.err ? r.err.code : 'RESOLVED'])))})`);
+  ST.leagues.find((l) => l.id === LEAGUE_A).status = 'paused';
+  const paused = await tryIt({ obligationId: 'ob_2025_wk6', action: 'mark' });
+  ST.leagues.find((l) => l.id === LEAGUE_A).status = 'active';
+  assert(paused.err && paused.err.code === 'league_paused' && JSON.stringify(srvMap()) === mapNow,
+    `[A-0046-2K25] (4) a PAUSED league refuses (${paused.err && paused.err.code})`);
+
+  initAdapter({ who: 'bOnly', leagueId: LEAGUE_B });
+  await captureConsoleAsync(() => sb.hydrate(LEAGUE_B, { epoch: EPOCH }));
+  const notPilot = await tryIt({ obligationId: 'ob_2025_wk6', action: 'mark' });
+  assert(notPilot.err && notPilot.err.code === 'not_pilot' && !(kvRow(LEAGUE_B) && kvRow(LEAGUE_B).value && kvRow(LEAGUE_B).value.ob2025),
+    `[A-0046-2K25] (5) a league that is NOT the pilot refuses (${notPilot.err && notPilot.err.code}), and its settings gain no 2K25 map`);
+
+  initAdapter({ who: 'nonMember' });
+  const stranger = await tryIt({ obligationId: 'ob_2025_wk6', action: 'mark' });
+  assert(stranger.err && stranger.err.code === 'not_member' && !srvMap().ob_2025_wk6,
+    `[A-0046-2K25] (5) an account with no seat in the league refuses (${stranger.err && stranger.err.code})`);
+
+  initAdapter({ who: 'player', rpcOverride: (name) => (name === 'settle_2025_obligation' ? { data: null, error: { message: 'TypeError: Failed to fetch' } } : null) });
+  await captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+  const offline = await tryIt({ obligationId: 'ob_2025_wk6', action: 'mark' });
+  assert(offline.err && offline.err.code === 'unavailable' && !srvMap().ob_2025_wk6,
+    `[A-0046-2K25] (6) a network failure REJECTS as 'unavailable' — never a resolved no-op (${offline.err && offline.err.code})`);
 });
 
 _realLog(`\n${pass} passed, ${fail} failed, ${SKIPPED.length} skipped.`);

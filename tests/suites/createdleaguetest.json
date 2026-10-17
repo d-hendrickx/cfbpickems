@@ -1,0 +1,10 @@
+{
+  "id": "createdleaguetest",
+  "script": "createdleaguetest.mjs",
+  "summary": "strict",
+  "floor": 40,
+  "tags": [
+    "quick"
+  ],
+  "note": "D1 Lane A review F-2 (2026-10-08): RAISED to 40 - the alma-mater card and the player alma line follow the LEAGUE (default competition's profile), never the commissioner's lens: [3d] re-derived on both lenses, [3e]-[3g] a college-football-main two-sport league keeps both and its Comm Rules and Players tabs are identical on either lens, two lens-following mutants in [6]. Before that: D1 Lane A (DI-551): a created league whose main sport is the NFL prints no alma-mater, college-football or Extra Point wording on Picks, Dashboard, Standings, Rules or Comm (outside the named allow-list), a college league renders IRB's shape byte for byte, a two-sport league keeps its college surfaces, the wizard builds an NFL week for an NFL main sport, NEW_LEAGUE_DEFAULTS is clean, and five in-memory mutants of app.js each turn a named check red."
+}

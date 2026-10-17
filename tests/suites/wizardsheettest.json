@@ -1,0 +1,26 @@
+{
+  "id": "wizardsheettest",
+  "script": "wizardsheettest.mjs",
+  "label": "112g",
+  "summary": "strict-noverdict",
+  "floor": 75,
+  "tags": [
+    "browser",
+    "slow"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/sw-register.js",
+    "css/**",
+    "index.html",
+    "service-worker.js",
+    "manifest.json",
+    "config.json",
+    "icons/**",
+    "vendor/**",
+    "reveal/**",
+    "favicon.*"
+  ],
+  "expectedMs": 39200,
+  "note": "RAISED from 68 by W-22 (gate 3b, 2026-10-08): the game modal is tapped only once its open animation has settled; C-1-save / C-4-save / C-5-save / C-6-save assert each Save tap landed on Save and closed the modal, and C-4b holds the save under 300 ms of injected tap latency. RAISED to 74 by W-22 (2026-10-08): 1-2b, the boot race — with the boot's config answer held back 1.5 s, the wizard still ends up over the Commissioner page (bootThenOpenWizard() waits for the boot's own landing, Home's first render); the gate-run red was A-0/A-15/A-16/A-18 with the sheet over Home. RAISED to 75 by W-70 (2026-10-14): A-13 re-derived (a fast drag on the header now dismisses on a touch device in the web app) and A-13b reopens the sheet for the sections that follow."
+}

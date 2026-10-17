@@ -1,0 +1,9 @@
+{
+  "id": "lockinstanttest",
+  "script": "lockinstanttest.mjs",
+  "summary": "loose",
+  "floor": 35,
+  "tags": ["quick"],
+  "expectedMs": 700,
+  "note": "PF-1 / UN-410, UN-411 / DI-489, 490, 495, 497, 498 (integrated as W-17 / DI-513, 0039 -> 0043): the lock instant's three copies (scoring.js, reminder-rules.js, 0043's week_lock_instant parsed from the SQL text) over a 300-case matrix, the boundary, the guard truth table against the client mirror, and the SP-53 Leave predicate fed the effective instant (modelled on 0042's leave_league with the G-6 bound). Registered 2026-10-07."
+}

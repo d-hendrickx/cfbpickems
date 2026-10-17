@@ -1,0 +1,12 @@
+{
+  "id": "joinnudgetest",
+  "script": "joinnudgetest.mjs",
+  "summary": "strict",
+  "floor": 108,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 2500,
+  "note": "D1 DESIGN_D1_E (2026-10-15, Drew D-88 'home should tease the picks of a sport you did not enter to entise you to join and give you fomo' / 'Add a join nudge now'; W-85): the Home half of the join nudge over the real js/home.js, js/home-sports.js and js/gameday.js - placeJoinNudges / cleanJoinOffers (one nudge per offered sport under its newest card, never in place of one), the feed over a CFB + NFL league (Variant A button, Variant B text only, the exact words, paging, the tease untouched, not an ordinary entry), the real dispatcher, privacy canaries, hostile text, Game Day for a non-entrant (Join NFL picks, 'you're not in NFL picks yet', no 'your picks are in'), the SWEEP over every GAME_DAY_STATES row x entered / not entered / signed out, the W-85 scene through the real Home, nowCardModel strings, and an in-memory MUTATION KIT of 18 mutants (S-3)."
+}

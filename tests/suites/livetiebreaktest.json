@@ -1,0 +1,17 @@
+{
+  "id": "livetiebreaktest",
+  "script": "livetiebreaktest.mjs",
+  "summary": "loose",
+  "floor": 77,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 1500,
+  "deps": [
+    "js/live-tiebreak.js",
+    "js/week-wizard.js",
+    "js/data-model.js"
+  ],
+  "note": "D1 / FB-002 / UN-415, PF-415 / DI-515, 516, 517: the alma-mater tiebreaker computed live from the scores on screen (parity with scoring.calculateAlmaMaterTotal over 3,200 random cases), the effective value every surface ranks with, the Dashboard order moving with a score change, the Comm card with no Auto-Calc button, Step 2's suggestion, rank movement. Registered 2026-10-07."
+}

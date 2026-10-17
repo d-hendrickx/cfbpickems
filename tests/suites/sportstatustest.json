@@ -1,0 +1,9 @@
+{
+  "id": "sportstatustest",
+  "script": "sportstatustest.mjs",
+  "summary": "strict",
+  "floor": 72,
+  "tags": ["quick"],
+  "expectedMs": 300,
+  "note": "(D1 combine, 2026-10-08: RAISED from 71 to 72 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - D1 (v0.30.0) DI-522/554/237: js/sport-status.js, the pure leaf behind every sport card — the state table, the exact copy of each row, the Join card, the due list and glance chips, the time formatters, and the blind rule"
+}

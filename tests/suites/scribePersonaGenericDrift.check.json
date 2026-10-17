@@ -1,0 +1,15 @@
+{
+  "id": "scribePersonaGenericDrift.check",
+  "script": "supabase/tests/scribePersonaGenericDrift.check.mjs",
+  "label": "81v",
+  "summary": "loose",
+  "floor": 70,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "supabase/tests/functions/*.mjs"
+  ],
+  "expectedMs": 100,
+  "note": "DI-432 §6 / S-7 — the generic persona equals docs/SCRIBE.md where it must (headings, heat ladder, hard rules, addendum) and the whole assembled non-pilot prompt of both consumers carries no IRB name, school, phrase or football-only word (one KNOWN, pinned exception: the shared …"
+}

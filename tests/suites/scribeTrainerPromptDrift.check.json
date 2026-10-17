@@ -1,0 +1,12 @@
+{
+  "id": "scribeTrainerPromptDrift.check",
+  "script": "supabase/tests/scribeTrainerPromptDrift.check.mjs",
+  "label": "81i",
+  "summary": "loose",
+  "floor": 18,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "DI-T6.12 G6 / reviewer BLOCK 2 — TRAINER_SAFETY_TEXT and TRAINER_PROMPT_BASE_TEXT are byte-identical to backend/Code.gs's SCRIBE_TRAINER_SAFETY_ / SCRIBE_TRAINER_PROMPT_BASE, extracted by declaration anchor rather than by line number (which rots), with five self-tests proving …"
+}

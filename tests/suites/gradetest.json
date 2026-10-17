@@ -1,0 +1,13 @@
+{
+  "id": "gradetest",
+  "script": "gradetest.mjs",
+  "label": "112i",
+  "summary": "strict-noverdict",
+  "floor": 96,
+  "tags": [
+    "smoke",
+    "tz"
+  ],
+  "expectedMs": 900,
+  "note": "batch-5b integration 2026-10-01 — set to the measured merged count (SB-24's data-proof and classifier assertions); earlier: floor 66 — set 2026-09-28 at its first spawned run). Raise the floor when the suite grows; the ratchet only tightens"
+}

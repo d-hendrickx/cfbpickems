@@ -1,0 +1,15 @@
+{
+  "id": "spreadlocktest",
+  "script": "spreadlocktest.mjs",
+  "summary": "loose",
+  "floor": 45,
+  "tags": [
+    "smoke"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/storage.js"
+  ],
+  "expectedMs": 500,
+  "note": "Item SS runtime half: drives the REAL lock-time paths and asserts the value frozen (or refused) when a week reaches LOCKED. Registered 2026-10-07 (W-11). \"loose\" for the same failure-line reason as spreadsigntest."
+}

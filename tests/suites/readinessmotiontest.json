@@ -1,0 +1,13 @@
+{
+  "id": "readinessmotiontest",
+  "script": "readinessmotiontest.mjs",
+  "label": "112c-ready",
+  "summary": "strict-combined",
+  "floor": 235,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 2100,
+  "note": "RAISED from 233 by the D1 Game Day consolidated round (2026-10-08): the thread sheet header's dot is the STATIC one (DI-592) — a 'still' role in place of its old .live-pulse role, and 5-15b proves the one-class static dot (the pre-fix selector) looped under .live-dot's later rule. | RAISED from 225 by themes DI A1.10 (2026-10-01): [0] 17 (+0-10b, FINAL renders the static line); [4] 47 (+the FINAL card role); [5] 36 (+5-19 FINAL mutant and its target check); [6] 56 (+6-5, Paper Dark's divider on a light paper .chat-surface); [7] 17 (7-1/7-5 re-derived …"
+}

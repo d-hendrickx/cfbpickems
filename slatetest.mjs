@@ -59,7 +59,7 @@
  *  10  DI-3 filters — nationalTV / tightOnly chips, same predicate pattern
  *  11  DI-7 render paths — 📺 badge on commissioner surfaces, ABSENCE on the
  *      player-facing card, CSV column, and all THREE add-to-slate paths
- *      (Apply Suggested 10 / add individually / Available Games / shortlist)
+ *      (RE-DERIVED D1 W-69: the one row Add through the one door / Add k suggested)
  *  12  DI-8 — Game Modal carry-forward vs. brand-new-manual default
  *  13  DI-6 — budget banner + anchor-not-filled muted notes, rendered
  *  M   Mutation battery (RED/GREEN, tmpdir copy, inversions included)
@@ -156,11 +156,14 @@ const {
   getTimeWindow, fetchByDateRange,
 } = dp;
 const {
-  renderAvailableGamesList, renderAdminGamesList, renderGameCard,
+  renderGameCard,
   filterAndGroupAvailableGames, renderAvailFilterBar,
   exportWeekSlateCSV, carryForwardBroadcastFields,
-  bindCommEventListeners, state,
+  state,
 } = app;
+// RE-DERIVED 2026-10-14 (D1 W-68 / W-69): the Available Games list and the Selected Slate list are ONE Games list (js/games-list.js), the three single add buttons are ONE row Add through ONE door
+// (requestAddToSlate), and "Apply Suggested 10" is "Add k suggested". The render and add seams below are the new ones; every DI-7 assertion they carried is kept.
+const GL = await import('./js/games-list.js');
 // N1 (coordinator ruling 2026-09-30): the six-school list is pilot-only in code — read through getAlmaMaters(). These are the PILOT league's own fixtures, so the list is asked for as the pilot.
 const { createGame, getAlmaMaters } = dm;
 const ALMA_MATERS = getAlmaMaters({ pilot: true });
@@ -788,25 +791,22 @@ console.log('\n[11] DI-7 — render paths + all add-to-slate paths carry the fie
   const TV_ICON11 = iconFn11('tv');
   assert(TV_ICON11.startsWith('<svg') && TV_ICON11.includes('<rect x="3" y="5" width="18" height="13"'),
     'fixture check: icon(\'tv\') resolves to the family television SVG (not vacuous)');
-  const availHtml = renderAvailableGamesList([tvGame, plainGame], [], WEEK);
-  assert(availHtml.includes('TVHome') && availHtml.includes('national-tv-badge'), 'renderAvailableGamesList(): national-tv-badge renders for a nationalTV game');
-  assert(availHtml.includes(`${TV_ICON11} FOX`), 'renderAvailableGamesList(): badge shows the tv icon followed by the network name, not a generic label');
+  const availHtml = app._gamesRowsHTMLForTest({ week: WEEK, slate: [], pool: [tvGame, plainGame] });
+  assert(availHtml.includes('TVHome') && availHtml.includes('national-tv-badge'), 'the Games row (Not on slate): national-tv-badge renders for a nationalTV game');
+  assert(availHtml.includes(`${TV_ICON11} FOX`), 'the Games row (Not on slate): badge shows the tv icon followed by the network name, not a generic label');
   const plainSection = availHtml.slice(availHtml.indexOf('PlainHome') - 50, availHtml.indexOf('PlainHome') + 400);
   assert(!plainSection.includes('national-tv-badge'), 'a non-nationalTV game in the SAME list gets no badge');
 
-  const adminHtml = renderAdminGamesList([tvGame], WEEK, {});
+  const adminHtml = app._gamesRowsHTMLForTest({ week: WEEK, slate: [tvGame], pool: [] });
   assert(adminHtml.includes('TVHome') && adminHtml.includes('national-tv-badge') && adminHtml.includes(`${TV_ICON11} FOX`),
-    'renderAdminGamesList() (Selected Slate) also shows the tv-icon badge with the network name');
+    'the Games row (On slate) also shows the tv-icon badge with the network name');
 
-  // ── DI-7's named highest-risk item: the hand-built Available Games payload
-  //    must carry the fields, not just spread them free. Extract the EXACT
-  //    string that becomes btn.dataset.game at runtime and JSON.parse it —
-  //    the same thing the real add-avail-game-btn click handler does.
-  const m = availHtml.match(/data-game='([^']*)'/);
-  assert(!!m, 'fixture check: the add-avail-game-btn data-game attribute is present in the rendered HTML');
-  const payload = JSON.parse(m[1].replace(/&#39;/g, "'"));
+  // ── DI-7's named highest-risk item: a game added from the list must CARRY the fields. The hand-built `data-game` JSON payload is gone (the Add reads the live pool game by the row's key when it is
+  //    tapped), so the risk now lives in the ONE payload builder every single add goes through: poolGameToSlateData(). Prove it carries nationalTV / broadcastNetwork, and that no game JSON is in the markup.
+  const payload = GL.poolGameToSlateData(tvGame, WEEK);
   assert(payload.nationalTV === true && payload.broadcastNetwork === 'FOX',
-    'renderAvailableGamesList()\'s hand-built payload carries nationalTV/broadcastNetwork — the exact gap named in the risk section');
+    'poolGameToSlateData() (the one add payload) carries nationalTV/broadcastNetwork — the exact gap named in the risk section');
+  assert(!/data-game=/.test(availHtml) && !availHtml.includes('"nationalTV"'), 'fixture check: the row carries no serialized game (nothing to drift from the live pool game)');
 
   // ── Player-facing surface does NOT show the badge, but genuinely rendered ──
   const playerCard = renderGameCard(tvGame, null, 'pending', false, false);
@@ -842,56 +842,37 @@ console.log('\n[11] DI-7 — render paths + all add-to-slate paths carry the fie
   if (realCreateObjectURL) globalThis.URL.createObjectURL = realCreateObjectURL;
   if (realRevoke) globalThis.URL.revokeObjectURL = realRevoke;
 
-  // ── All THREE (+1) add-to-slate paths carry the fields through storage ──
-  resetDom(); el('toast-container');
-  seedWeekAndGames([]); // empty slate
-  const suggestedList = [G({ gameId: 'sug1', nationalTV: true, broadcastNetwork: 'NBC', homeTeam: 'SuggestedHome', awayTeam: 'SuggestedAway' })];
-  const shortlistList = [G({ gameId: 'short1', nationalTV: true, broadcastNetwork: 'CBS', homeTeam: 'ShortlistHome', awayTeam: 'ShortlistAway' })];
-
-  el('add-suggested-btn-0').dataset.idx = '0';
-  selectorSets.set('.add-suggested-btn', [el('add-suggested-btn-0')]);
-  el('add-shortlist-btn-0').dataset.idx = '0';
-  selectorSets.set('.add-shortlist-btn', [el('add-shortlist-btn-0')]);
-  selectorSets.set('.reject-suggested-btn', []);
-  const availPayloadGame = G({ gameId: 'avail1', nationalTV: true, broadcastNetwork: 'ABC', homeTeam: 'AvailHome', awayTeam: 'AvailAway' });
-  const availHtmlForClick = renderAvailableGamesList([availPayloadGame], [], WEEK);
-  const availMatch = availHtmlForClick.match(/data-game='([^']*)'/);
-  const availBtn = el('add-avail-game-btn-0');
-  availBtn.dataset.game = availMatch[1].replace(/&#39;/g, "'");
-  selectorSets.set('.add-avail-game-btn', [availBtn]);
-  selectorSets.set('.avail-remove-btn', []);
-
-  bindCommEventListeners(WEEK, [], [], suggestedList, storage.getSettings(), [WEEK], shortlistList);
-
-  // Path 1: "Add suggested individually"
-  el('add-suggested-btn-0')._fire('click');
-  // Path 2: "Add" from the DI-4 shortlist
-  el('add-shortlist-btn-0')._fire('click');
-  // Path 3: "Available Games" list add
-  el('add-avail-game-btn-0')._fire('click');
-
-  const savedAfterThree = storage.getGames(WEEK.weekId);
-  assert(savedAfterThree.length === 3, `all three add paths actually saved a game each (got ${savedAfterThree.length})`);
-  const bySrc = Object.fromEntries(savedAfterThree.map(g => [g.homeTeam, g]));
-  assert(bySrc.SuggestedHome?.nationalTV === true && bySrc.SuggestedHome?.broadcastNetwork === 'NBC', 'PATH — add suggested individually: nationalTV/broadcastNetwork survive');
-  assert(bySrc.ShortlistHome?.nationalTV === true && bySrc.ShortlistHome?.broadcastNetwork === 'CBS', 'PATH — DI-4 shortlist "+ Add": nationalTV/broadcastNetwork survive');
-  assert(bySrc.AvailHome?.nationalTV === true && bySrc.AvailHome?.broadcastNetwork === 'ABC', 'PATH — Available Games "+ Add": nationalTV/broadcastNetwork survive via the hand-built payload');
-
-  // Path 4: "Apply Suggested 10"
+  // ── Every add path carries the fields through storage ──
+  // The three single adds (a suggested game, a Next-best game, an Available-Games game) are ONE row Add now: they differ only in which pool game they start from. Each goes through the real door,
+  // requestAddToSlate(), with the payload the row's Add builds. Then the bulk path ("Add k suggested", formerly "Apply Suggested 10") runs through the real handler.
   resetDom(); el('toast-container');
   seedWeekAndGames([]);
-  const applyList = [G({ gameId: 'apply1', nationalTV: true, broadcastNetwork: 'FOX', homeTeam: 'ApplyHome', awayTeam: 'ApplyAway' })];
-  el('apply-suggested-btn');
-  selectorSets.set('.add-suggested-btn', []);
-  selectorSets.set('.add-shortlist-btn', []);
-  selectorSets.set('.reject-suggested-btn', []);
-  selectorSets.set('.add-avail-game-btn', []);
-  selectorSets.set('.avail-remove-btn', []);
-  bindCommEventListeners(WEEK, [], [], applyList, storage.getSettings(), [WEEK], []);
-  el('apply-suggested-btn')._fire('click');
+  storage.setActiveWeekId(WEEK.weekId);
+  const suggestedGame = G({ gameId: 'sug1', nationalTV: true, broadcastNetwork: 'NBC', homeTeam: 'SuggestedHome', awayTeam: 'SuggestedAway', suggestionReasons: ['x'], _score: 90 });
+  const shortlistGame = G({ gameId: 'short1', nationalTV: true, broadcastNetwork: 'CBS', homeTeam: 'ShortlistHome', awayTeam: 'ShortlistAway' });
+  const availPayloadGame = G({ gameId: 'avail1', nationalTV: true, broadcastNetwork: 'ABC', homeTeam: 'AvailHome', awayTeam: 'AvailAway' });
+  for (const g of [suggestedGame, shortlistGame, availPayloadGame]) {
+    const r = app._requestAddToSlateForTest({ weekId: WEEK.weekId, data: GL.poolGameToSlateData(g, WEEK), origin: 'pool' });
+    assert(r.status === 'added', `fixture: the add of ${g.homeTeam} went straight onto an empty slate through the door (${r.status})`);
+  }
+  const savedAfterThree = storage.getGames(WEEK.weekId);
+  assert(savedAfterThree.length === 3, `all three single-add inputs actually saved a game each (got ${savedAfterThree.length})`);
+  const bySrc = Object.fromEntries(savedAfterThree.map(g => [g.homeTeam, g]));
+  assert(bySrc.SuggestedHome?.nationalTV === true && bySrc.SuggestedHome?.broadcastNetwork === 'NBC', 'PATH — a suggested game added from the list: nationalTV/broadcastNetwork survive');
+  assert(bySrc.ShortlistHome?.nationalTV === true && bySrc.ShortlistHome?.broadcastNetwork === 'CBS', 'PATH — a Next-best game added from the list: nationalTV/broadcastNetwork survive');
+  assert(bySrc.AvailHome?.nationalTV === true && bySrc.AvailHome?.broadcastNetwork === 'ABC', 'PATH — an Available game added from the list: nationalTV/broadcastNetwork survive');
+  assert(!('_score' in bySrc.SuggestedHome) && !('suggestionReasons' in bySrc.SuggestedHome), 'the suggestion engine\'s decoration (_score, suggestionReasons) does not ride onto the stored slate game');
+
+  // Path 4: "Add k suggested" (formerly "Apply Suggested 10") — the bulk handler, over the pool as the page reads it.
+  resetDom(); el('toast-container');
+  seedWeekAndGames([]);
+  storage.setActiveWeekId(WEEK.weekId);
+  const applyGame = G({ gameId: 'apply1', nationalTV: true, broadcastNetwork: 'FOX', homeTeam: 'ApplyHome', awayTeam: 'ApplyAway' });
+  storage.saveAvailableGames(WEEK.weekId, [applyGame]);
+  app._gamesAddSuggestedForTest();
   const savedAfterApply = storage.getGames(WEEK.weekId);
   assert(savedAfterApply.length === 1 && savedAfterApply[0].nationalTV === true && savedAfterApply[0].broadcastNetwork === 'FOX',
-    'PATH — "Apply Suggested 10": nationalTV/broadcastNetwork survive');
+    'PATH — "Add k suggested": nationalTV/broadcastNetwork survive');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -924,8 +905,10 @@ console.log('\n[12] DI-8 — Game Modal broadcast-field carry-forward…');
 // ═════════════════════════════════════════════════════════════════════════════
 console.log('\n[13] DI-6 — budget visibility banner + anchor muted notes…');
 {
-  const { renderSuggestedSlatePreview } = app;
-  assert(typeof renderSuggestedSlatePreview === 'function', 'fixture check: renderSuggestedSlatePreview is exported for direct testing');
+  // RE-DERIVED 2026-10-14 (D1 W-69): the banner and the notes were the top of the Suggested box (renderSuggestedSlatePreview). The box is gone; its budget banner and anchor notes are two muted lines above the
+  // ONE Games list (games-list.js suggestionNotes() -> the section's #games-notes). Same wording, minus the lock emoji (the family's lock icon draws it now).
+  const sectionFor = (built) => app._gamesSectionHTMLForTest({ week: WEEK, slate: [], pool: built.slate.concat(built.shortlist), suggested: built.slate, shortlist: built.shortlist, almaCount: built.almaCount, morningAnchorFilled: built.morningAnchorFilled, closingAnchorFilled: built.closingAnchorFilled });
+  assert(typeof app._gamesSectionHTMLForTest === 'function', 'fixture check: the Games section markup is reachable for direct testing');
 
   // ── Normal (<=10) case ──
   const pool = [];
@@ -939,11 +922,8 @@ console.log('\n[13] DI-6 — budget visibility banner + anchor muted notes…');
   assert(built.morningAnchorFilled === false, 'fixture: no Saturday-morning game this week');
   assert(built.closingAnchorFilled === false, 'fixture: no Saturday(Pacific) game this week at all');
 
-  const html = renderSuggestedSlatePreview(
-    { suggested: built.slate, shortlist: built.shortlist, almaCount: built.almaCount, morningAnchorFilled: built.morningAnchorFilled, closingAnchorFilled: built.closingAnchorFilled },
-    [], WEEK
-  );
-  assert(html.includes('🔒 6 of 10 slots reserved for alma mater games this week'), 'the REAL rendered banner matches DI-6\'s literal wording exactly for the <=10 case');
+  const html = sectionFor(built);
+  assert(html.includes('6 of 10 slots reserved for alma mater games this week') && html.includes('suggested-budget-banner'), 'the REAL rendered banner matches DI-6\'s literal wording for the <=10 case');
   assert(html.includes('No Saturday morning games this week — opening slot not filled automatically.'), 'morning muted note renders when genuinely unfilled');
   assert(html.includes('No Saturday games this week — closing slot not filled automatically.'), 'closing muted note renders when genuinely unfilled');
 
@@ -954,11 +934,8 @@ console.log('\n[13] DI-6 — budget visibility banner + anchor muted notes…');
   for (let i = 0; i < 12; i++) bigPool.push(SG(300 - i, { isAlmaMaterGame: true, timeWindow: 'afternoon', homeTeam: `Big${i}`, homeConference: `BC${i}`, kickoff: '2026-09-08T18:00:00Z' }));
   const builtBig = buildSuggestedSlate(bigPool, 10);
   assert(builtBig.almaCount === 12, 'fixture: 12 alma games — over budget');
-  const htmlBig = renderSuggestedSlatePreview(
-    { suggested: builtBig.slate, shortlist: builtBig.shortlist, almaCount: builtBig.almaCount, morningAnchorFilled: builtBig.morningAnchorFilled, closingAnchorFilled: builtBig.closingAnchorFilled },
-    [], WEEK
-  );
-  assert(htmlBig.includes('🔒 12 alma mater games this week — slate expanded'), 'over-budget banner uses the legible "N alma mater games this week — slate expanded" wording, not "12 of 10"');
+  const htmlBig = sectionFor(builtBig);
+  assert(htmlBig.includes('12 alma mater games this week — slate expanded'), 'over-budget banner uses the legible "N alma mater games this week — slate expanded" wording, not "12 of 10"');
   assert(!htmlBig.includes('12 of 10'), 'the confusing "N of 10" phrasing never appears once N exceeds 10');
 
   // ── Anchor flags stay accurate even in an over-budget week (section 8b
@@ -966,12 +943,12 @@ console.log('\n[13] DI-6 — budget visibility banner + anchor muted notes…');
   //    reflects it too) ──
   const bigPoolWithMorning = [...bigPool, SG(999, { timeWindow: 'morning', kickoff: '2026-09-05T16:00:00Z', homeTeam: 'RealMorning', homeConference: 'RM' })];
   const builtBigMorning = buildSuggestedSlate(bigPoolWithMorning, 10);
-  const htmlBigMorning = renderSuggestedSlatePreview(
-    { suggested: builtBigMorning.slate, shortlist: builtBigMorning.shortlist, almaCount: builtBigMorning.almaCount, morningAnchorFilled: builtBigMorning.morningAnchorFilled, closingAnchorFilled: builtBigMorning.closingAnchorFilled },
-    [], WEEK
-  );
+  const htmlBigMorning = sectionFor(builtBigMorning);
   assert(!htmlBigMorning.includes('No Saturday morning games this week'),
     'a real morning game existing (even though budget-exhausted Tier 1 left no room to ADD it) correctly suppresses the "no morning games" note — it would be false to claim none exist');
+  // The slate's size is no longer a constant 10 in the banner: it is the sport's.
+  const nflNotes = GL.suggestionNotes({ suggestedCount: 8, almaCount: 2, target: 8 });
+  assert(nflNotes[0].text === '2 of 8 slots reserved for alma mater games this week', 'the "of N" in the banner is the slate size it is given (the profile\'s), not a literal 10');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

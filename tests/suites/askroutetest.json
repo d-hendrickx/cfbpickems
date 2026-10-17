@@ -1,0 +1,15 @@
+{
+  "id": "askroutetest",
+  "script": "askroutetest.mjs",
+  "summary": "strict",
+  "floor": 75,
+  "tags": [
+    "smoke"
+  ],
+  "deps": [
+    "supabase/functions/scribe-ask/index.js",
+    "supabase/functions/_shared/*.mjs"
+  ],
+  "expectedMs": 100,
+  "note": "D1 Lane C DI-639: the deterministic league/sports/mixed/banter route, the lookup tool offered only on sports and mixed, and no raw web tool on any persona path (security C6). Registered 2026-10-08 (Lane C 3.B)."
+}

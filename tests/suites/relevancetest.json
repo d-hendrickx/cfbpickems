@@ -1,0 +1,22 @@
+{
+  "id": "relevancetest",
+  "script": "relevancetest.mjs",
+  "summary": "strict",
+  "floor": 65,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/feed-relevance.js",
+    "js/team-match.js",
+    "js/newsTransport.js",
+    "js/newsFeed.js",
+    "js/content-card.js",
+    "js/newsCard.js",
+    "js/newsRank.js",
+    "js/newsRules.js",
+    "js/auth.js"
+  ],
+  "expectedMs": 1500,
+  "note": "D1 Lane C (DI-668, DI-660, DI-669; 2026-10-08): the Home content cards' private relevance (own pick > slate > alma / team > sport; 'Texas' never claims 'Texas A&M'; nothing followed = not eligible), the windows (a preview until kickoff, a spotlight 72 hours), the cap of 40 kept by tier then unseen then newest and re-sorted newest-first, privacy (another player's pick or a signed-out viewer never earns 'Your pick'), normalizeContentRow (no server reason, model text only when ok), fetchContent / fetchContentDetail's exact arguments (no league, team or pick), cache, identity, errors, and the adapter (content beside the news, a failed content read is one calm note and never costs the news, News off = content only). KIT_MUTANTS: 13 (tests/kits/lane-c-news-kit.mjs client)."
+}

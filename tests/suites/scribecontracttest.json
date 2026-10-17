@@ -1,0 +1,16 @@
+{
+  "id": "scribecontracttest",
+  "script": "scribecontracttest.mjs",
+  "summary": "strict",
+  "floor": 39,
+  "tags": [
+    "smoke"
+  ],
+  "deps": [
+    "supabase/functions/scribe-ask/index.js",
+    "supabase/functions/scribe-autonomous/index.js",
+    "supabase/functions/_shared/*.mjs"
+  ],
+  "expectedMs": 100,
+  "note": "D1 Lane C DI-630/631: the SCRIBE behavioral contract as data - each surface's allowed blocks, buildSurfaceInput throws on a disallowed block, the model input is built through it in ask and autonomous. Registered 2026-10-08 (Lane C 3.A)."
+}

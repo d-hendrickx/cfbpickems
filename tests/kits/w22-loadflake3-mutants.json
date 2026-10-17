@@ -1,0 +1,102 @@
+[
+ {
+  "id": "W1-M1 no landing wait",
+  "kind": "measurement",
+  "why": "wizardsheettest's fixture opens the wizard without waiting for the boot's own landing (the old fixture): the boot's late navigateTo('home') lands after it",
+  "file": "wizardsheettest.mjs",
+  "old": "    const landed = await waitFor(`document.querySelector('#page-home.active') && !document.querySelector('#home-root .home-feed[aria-busy=\"true\"]')`, 10000);",
+  "new": "    const landed = true;   // MUTANT W1-M1: no wait for the boot's landing",
+  "suites": ["wizardsheettest.mjs"],
+  "red": { "suite": "wizardsheettest.mjs", "label": "1-2b:" }
+ },
+ {
+  "id": "W1-M2 no page lock",
+  "kind": "behaviour",
+  "why": "the page behind the wizard sheet is no longer locked: a swipe or wheel that reaches the page scrolls it (the leak checks were vacuous on the old fixture whenever the sheet sat over Home)",
+  "file": "css/styles.css",
+  "old": "html:has(#week-wizard-sheet-wrap){overflow:hidden}",
+  "new": "html:has(#week-wizard-sheet-wrap){}",
+  "suites": ["wizardsheettest.mjs"],
+  "red": { "suite": "wizardsheettest.mjs", "label": "A-7:" }
+ },
+ {
+  "id": "W1-M3 lock outlives the sheet",
+  "kind": "behaviour",
+  "why": "the page lock is never released: after the sheet closes the page cannot scroll",
+  "file": "css/styles.css",
+  "old": "html:has(#week-wizard-sheet-wrap){overflow:hidden}",
+  "new": "html{overflow:hidden}",
+  "suites": ["wizardsheettest.mjs"],
+  "red": { "suite": "wizardsheettest.mjs", "label": "A-16:" }
+ },
+ {
+  "id": "W2-M1 late read",
+  "kind": "measurement",
+  "why": "5f-1b reads the world some wall-clock time after the success (the old read) instead of what the success left",
+  "file": "wizardfinalizetest.mjs",
+  "old": "    atSuccess = atSuccess || { refused: ['(no success haptic: nothing was read)'], bannerUp: false, reloads: -1 };",
+  "new": "    atSuccess = state5f();   // MUTANT W2-M1: the late read",
+  "suites": ["wizardfinalizetest.mjs"],
+  "red": { "suite": "wizardfinalizetest.mjs", "label": "PF-416 follow-up 5f-1e:" }
+ },
+ {
+  "id": "W2-M2 success hides the banner by hand",
+  "kind": "behaviour",
+  "why": "the success path hides the red banner itself, AFTER the haptic (AD-06 loud-fail broken); the capture must still see it",
+  "file": "js/app.js",
+  "old": "    renderCommPage();\n    if (reloading) setTimeout(reloadApp, FINALIZE_RELOAD_AFTER_TOAST_MS);",
+  "new": "    renderCommPage();\n    hideBackendErrorBanner();   // MUTANT W2-M2\n    if (reloading) setTimeout(reloadApp, FINALIZE_RELOAD_AFTER_TOAST_MS);",
+  "suites": ["wizardfinalizetest.mjs"],
+  "red": { "suite": "wizardfinalizetest.mjs", "label": "PF-416 follow-up 5f-1b:" }
+ },
+ {
+  "id": "W2-M3 reload at once",
+  "kind": "behaviour",
+  "why": "the success reloads at once instead of after the toast",
+  "file": "js/app.js",
+  "old": "    if (reloading) setTimeout(reloadApp, FINALIZE_RELOAD_AFTER_TOAST_MS);",
+  "new": "    if (reloading) reloadApp();   // MUTANT W2-M3",
+  "suites": ["wizardfinalizetest.mjs"],
+  "red": { "suite": "wizardfinalizetest.mjs", "label": "PF-416 follow-up 5f-1b:" }
+ },
+ {
+  "id": "W2-G1 hand-hide one microtask later",
+  "kind": "behaviour",
+  "why": "the reviewer's gap mutant G1 (2026-10-14): the success path hides the red banner by hand ONE MICROTASK after the success, while cfbp_weeks is still refused (AD-06). The read at the success cannot see it; the 5f-1f invariant must",
+  "file": "js/app.js",
+  "old": "    renderCommPage();\n    if (reloading) setTimeout(reloadApp, FINALIZE_RELOAD_AFTER_TOAST_MS);",
+  "new": "    renderCommPage();\n    Promise.resolve().then(() => hideBackendErrorBanner());   // GAP MUTANT G1: hide one microtask later\n    if (reloading) setTimeout(reloadApp, FINALIZE_RELOAD_AFTER_TOAST_MS);",
+  "suites": ["wizardfinalizetest.mjs"],
+  "red": { "suite": "wizardfinalizetest.mjs", "label": "PF-416 follow-up 5f-1f:" }
+ },
+ {
+  "id": "W2-G2 hand-hide one timer hop later",
+  "kind": "behaviour",
+  "why": "the reviewer's gap mutant G2 (2026-10-14): the same hand-hide ONE TIMER HOP after the success (setTimeout 0), while cfbp_weeks is still refused",
+  "file": "js/app.js",
+  "old": "    renderCommPage();\n    if (reloading) setTimeout(reloadApp, FINALIZE_RELOAD_AFTER_TOAST_MS);",
+  "new": "    renderCommPage();\n    setTimeout(() => hideBackendErrorBanner(), 0);   // GAP MUTANT G2: hide one timer hop later\n    if (reloading) setTimeout(reloadApp, FINALIZE_RELOAD_AFTER_TOAST_MS);",
+  "suites": ["wizardfinalizetest.mjs"],
+  "red": { "suite": "wizardfinalizetest.mjs", "label": "PF-416 follow-up 5f-1f:" }
+ },
+ {
+  "id": "W3-M1 section-only retirement",
+  "kind": "measurement",
+  "why": "[17] retires only its own module copies again (the old isolation): an earlier section's armed retry reaches [17]'s plugin",
+  "file": "pushnativetest.mjs",
+  "old": "  const retireAll = () => { created.splice(0); for (const n of everyPushNative.splice(0)) { try { n._resetForTest(); } catch { /* ignore */ } } };",
+  "new": "  const retireAll = () => { for (const n of created.splice(0)) { try { n._resetForTest(); } catch { /* ignore */ } } };",
+  "suites": ["pushnativetest.mjs"],
+  "red": { "suite": "pushnativetest.mjs", "label": "[17d2]" }
+ },
+ {
+  "id": "W3-M2 league switch re-logs in",
+  "kind": "behaviour",
+  "why": "a league switch (same account) is no longer a no-op: it re-mints and logs in again",
+  "file": "js/push-native.js",
+  "old": "      && ((_boundKind === 'alias' && _boundAccountId === account) || _inflightAccountId === account)) {",
+  "new": "      && false) {   // MUTANT W3-M2",
+  "suites": ["pushnativetest.mjs"],
+  "red": { "suite": "pushnativetest.mjs", "label": "[17d]" }
+ }
+]

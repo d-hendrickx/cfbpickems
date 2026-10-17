@@ -1,0 +1,31 @@
+{
+  "id": "gamearrangetest",
+  "script": "gamearrangetest.mjs",
+  "summary": "strict",
+  "floor": 55,
+  "tags": [
+    "browser"
+  ],
+  "timeoutMs": 300000,
+  "deps": [
+    "js/app.js",
+    "js/game-sort.js",
+    "js/game-arrange.js",
+    "js/game-order.js",
+    "js/section-drag.js",
+    "js/nav-gestures.js",
+    "js/pick-chips.js",
+    "css/**",
+    "index.html",
+    "js/sw-register.js",
+    "service-worker.js",
+    "manifest.json",
+    "config.json",
+    "icons/**",
+    "vendor/**",
+    "reveal/**",
+    "favicon.*"
+  ],
+  "expectedMs": 45000,
+  "note": "D1 Lane B (DI-607 / DI-581 / PF-445 rev 3): REAL Chromium, the REAL app booted in local mode over HTTP (the sectiondragtest way), a live week of six games seeded through its own storage.js, driven with DevTools Input events (real mouse and touch, hit-tested by the engine): the Sort row at 375 pt and 1.3x text (one line, then the summary above and the button centered below, 44 pt), the sheet's geometry, choosing a mode re-sorts at once with the rows gliding 300-400 ms (none under Reduce Motion), arranging (44 pt grips and arrows 8 pt apart, an arrow is one write with focus kept and a spoken position, the mouse drag, the 500 ms touch hold that claims the touch and keeps the page still, a move before 500 ms is a scroll, Esc cancels, a hold released in place writes nothing, Done and its toast, the arrangement survives a reload), Live first parked behind an open sheet and played once on close and named. Engine-verified, never device-verified. Registered 2026-10-08."
+}

@@ -1,0 +1,23 @@
+{
+  "id": "newsIngest.twin",
+  "script": "supabase/tests/functions/newsIngest.twin.mjs",
+  "summary": "loose",
+  "floor": 76,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "supabase/functions/news-ingest/index.js",
+    "supabase/functions/_shared/news-fetch.js",
+    "supabase/functions/_shared/news-rules.mjs",
+    "supabase/functions/_shared/news-teams.mjs",
+    "supabase/news/fixtures/feeds/cbs-cfb.xml",
+    "supabase/news/fixtures/feeds/yahoo-nfl.xml",
+    "supabase/news/fixtures/feeds/ncaa-cfb.xml",
+    "supabase/news/fixtures/feeds/espn-cfb-json.json",
+    "js/newsRules.js",
+    "js/team-match.js"
+  ],
+  "expectedMs": 2500,
+  "note": "D1 Lane C (DI-670…672, DI-482 8.10 with Amendment 1; 2026-10-08): the news collector driven end to end against the recorded publisher feeds — auth first (C3), the platform mode fails closed with no job_runs row, single-flight, dryrun writes health only, the registry's publisher, the closed payload, the user-agent enum (espn_library only to site.api.espn.com), validators, 304/429/503/too-large, same-host vs off-host redirects (a Fox-shaped partnerKey redirect leaves nothing of the destination anywhere), fetch error text never escapes (SC-N3(b)), robots 401/503/cache, identity drift, per-host concurrency (the cap of 2 is reached, not passed) and spacing, both measured on a VIRTUAL CLOCK so the schedule the collector computes is exact under any load (W-58, 2026-10-14: the real-timer gap check failed on a loaded machine), the deadline, no body / query read (SC-N15). KIT_MUTANTS: 5 (tests/kits/lane-c-news-kit.mjs server)."
+}

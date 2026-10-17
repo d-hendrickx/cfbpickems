@@ -1,0 +1,12 @@
+{
+  "id": "participationtest",
+  "script": "participationtest.mjs",
+  "summary": "strict",
+  "floor": 54,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 6000,
+  "note": "(D1 combine, 2026-10-08: RAISED from 31 to 54 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - D1 (v0.30.0) DI-531 client half, security A3 / C4 / C1: nothing outside competition.js decides who is in a sport - a scan of every active-roster filter in js/*.js (classified with reasons, dead entries and new ones both fail, canaries), the A3 twin through the REAL finalize (a stray slate by a member who never joined changes no result, rank, obligation or standing), the late joiner, the surfaces that name a week's entrants, and in-memory mutants of app.js"
+}

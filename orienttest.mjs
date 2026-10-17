@@ -366,17 +366,15 @@ console.log('\n[3] Structural — renderGameCard\'s .live-score block, the admin
   assert(firstNumIsAway,
     '3c: THE BUG — renderLiveScoreBlockHTML\'s .live-score prints the AWAY score in grid column 1, under the away team name. It currently prints homeScore first, putting each score under the OTHER team [structural — only a browser confirms the pixels, but the grid columns make the mapping deterministic]');
 
-  // 3d — the commissioner's admin game list. Its label is "away @ home" too.
-  // Scope to renderAdminGamesList specifically — a second, unrelated
-  // .game-admin-meta block (the proposed-games list) appears earlier in the
-  // file and carries no score.
-  const adminFnIdx = APP_SRC.indexOf('function renderAdminGamesList');
-  const adminMetaIdx = APP_SRC.indexOf('<div class="game-admin-meta">', adminFnIdx);
-  const adminBlock = adminMetaIdx >= 0 ? APP_SRC.slice(adminMetaIdx, adminMetaIdx + 900) : '';
-  assert(/FINAL/.test(adminBlock), 'fixture check: the admin game list\'s FINAL score span located');
-  // Locator updated 2026-09-12 (XSS-HARDEN) — see the note at 2e.
-  assert(adminBlock.search(/\$\{(?:numHtml\()?game\.awayScore\)?\}/) < adminBlock.search(/\$\{(?:numHtml\()?game\.homeScore\)?\}/),
-    '3d: THE BUG — the admin game list\'s FINAL score must read AWAY–HOME to match the "away @ home" header directly above it');
+  // 3d — the commissioner's game list. Its label is "away @ home" too.
+  // RE-DERIVED 2026-10-14 (D1 W-69): the admin slate list (renderAdminGamesList, with its own .game-admin-meta block) is the ONE Games row now (js/games-list.js gameRowHTML, the `score` span in its
+  // .games-row-meta line); the row prints the score through the injected `ctx.num`.
+  const GL_SRC = readFileSync(new URL('./js/games-list.js', import.meta.url), 'utf8');
+  const scoreIdx = GL_SRC.indexOf("const score = ");
+  const scoreBlock = scoreIdx >= 0 ? GL_SRC.slice(scoreIdx, scoreIdx + 400) : '';
+  assert(/FINAL/.test(scoreBlock), 'fixture check: the Games row\'s FINAL score span located');
+  assert(scoreBlock.search(/\$\{(?:numHtml\(|ctx\.num\()?g\.awayScore\)?\}/) >= 0 && scoreBlock.search(/\$\{(?:numHtml\(|ctx\.num\()?g\.awayScore\)?\}/) < scoreBlock.search(/\$\{(?:numHtml\(|ctx\.num\()?g\.homeScore\)?\}/),
+    '3d: THE BUG — the Games row\'s FINAL score must read AWAY–HOME to match the "away @ home" header directly above it');
 
   // 3e — THE GUARD THAT MAKES THIS UNREPEATABLE. Sweep every score pair in
   // app.js and chat-ui.js. Any template that interpolates homeScore and
@@ -386,11 +384,11 @@ console.log('\n[3] Structural — renderGameCard\'s .live-score block, the admin
   // next season fails here the moment it is written the wrong way round.
   const CHAT_SRC = readFileSync(new URL('./js/chat-ui.js', import.meta.url), 'utf8');
   const offenders = [];
-  for (const [file, src] of [['js/app.js', APP_SRC], ['js/chat-ui.js', CHAT_SRC]]) {
+  for (const [file, src] of [['js/app.js', APP_SRC], ['js/chat-ui.js', CHAT_SRC], ['js/games-list.js', GL_SRC]]) {
     // Locator updated 2026-09-12 (XSS-HARDEN) — see the note at 2e. Without
     // the optional `numHtml(` this sweep matches NOTHING and passes vacuously,
     // which is the precise failure mode this block exists to prevent.
-    const re = /\$\{\s*(?:numHtml\()?\s*(?:game|g)\.(home|away)Score[^}]*\}\s*[–—-]\s*\$\{\s*(?:numHtml\()?\s*(?:game|g)\.(home|away)Score[^}]*\}/g;
+    const re = /\$\{\s*(?:numHtml\(|ctx\.num\()?\s*(?:game|g)\.(home|away)Score[^}]*\}\s*[–—-]\s*\$\{\s*(?:numHtml\(|ctx\.num\()?\s*(?:game|g)\.(home|away)Score[^}]*\}/g;
     let m;
     while ((m = re.exec(src)) !== null) {
       if (m[1] === 'home' && m[2] === 'away') {

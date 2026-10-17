@@ -592,13 +592,18 @@ console.log('\n[5] R1/R2 — display-only polling and the idempotent kickoff/fin
   {
     const { readFileSync } = await import('node:fs');
     const appSrc = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
-    const realtimeLine = appSrc.split('\n').find(l => l.includes('onRealtimeEvent:'));
+    // D1 DI-527 #4: the callback is a few lines now (it gates the repaint on the event's sport), so the "line" is the callback's whole body, from its opener to the closing `},`.
+    const rtAt = appSrc.indexOf('onRealtimeEvent:');
+    const realtimeLine = rtAt < 0 ? undefined : appSrc.slice(rtAt, appSrc.indexOf('\n    },', rtAt) + 7);
     assert(!!realtimeLine, '5i-0: fixture check — the onRealtimeEvent wiring line was found in js/app.js (a scan that found nothing would make the next assertion vacuous)');
-    assert(!!realtimeLine && realtimeLine.includes('reconcileGameEvents('),
+    // RE-PINNED 2026-10-08 (merge): the handler is the client's other-sport gate (which now only sets `skipTab` on the ONE repaint) plus the server's reconcile of EVERY sport's current week. Both halves are
+    // pinned here so neither merge side can silently drop the other: the reconcile is tickWeeks() (not getCurrentWeek()) and the repaint is unconditional.
+    assert(!!realtimeLine && realtimeLine.includes('for (const w of tickWeeks()) reconcileGameEvents(w)') && /_repaintForSupabaseData\('realtime', \{ skipTab: otherSport \}\)/.test(realtimeLine) && !/getCurrentWeek\(\)/.test(realtimeLine),
       `5i-1: call site (ii) — the Realtime handler reconciles after folding the change into the mirror. This is where a SERVER-performed LIVE/FINAL transition arrives, with no before/after pair for anything on this device to have noticed (got ${JSON.stringify((realtimeLine || '').trim().slice(0, 80))})`);
     const hydrateTail = appSrc.slice(appSrc.indexOf('sb.subscribeRealtime();'), appSrc.indexOf('sb.subscribeRealtime();') + 1200);
     assert(hydrateTail.includes('sb.subscribeRealtime();'), '5i-2: fixture check — the post-hydrate ACTIVE branch was located');
-    assert(hydrateTail.includes('reconcileGameEvents(getCurrentWeek())'),
+    // Re-derived 2026-10-07 (D1 / DI-535 #1): the catch-up reconciles EVERY sport's current week (`for (const w of tickWeeks()) reconcileGameEvents(w)`); for a one-sport league tickWeeks() is [getCurrentWeek()].
+    assert(hydrateTail.includes('for (const w of tickWeeks()) reconcileGameEvents(w)'),
       '5i-3: call site (iii) — the boot/re-hydrate catch-up. The case it exists for is the whole Saturday that finalizes with no phone open: the first app opened afterwards posts what is owed, once, by deterministic id');
   }
 
@@ -1159,6 +1164,71 @@ console.log('\n[9] RG-292 — the display-only poll (server switch ON) backfills
     `9-8: …and the player's copy is untouched — it receives the logo when the commissioner's write lands via Realtime (got ${JSON.stringify(p.g1 && { h: p.g1.homeLogo, a: p.g1.awayLogo, s: p.g1.homeScore })})`);
   assert(!!p.live1 && p.live1.detail === 'Q3 4:10',
     `9-9: …while its quarter/clock still render (got ${JSON.stringify(p.live1 && p.live1.detail)})`);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[10] FB-010 (D1 batch H) — a poll that changes nothing does not re-date the game (lastUpdated is "when this game last changed")…');
+// Drew, 2026-10-06: "there are some old posts staying at the top". The Home feed's game.final card sorts by game.lastUpdated, and
+// refreshScoresByEventIds() stamped `new Date()` on EVERY polled game, every 60 s, whether or not anything had changed — so on the
+// legacy client write path (the server switch off) every final game in the active week was "new" again each minute. The server job
+// already refuses that (job-rules.mjs GAMES_PATCH_COMPARE_COLS, S2: "no change, no write"); the client now keeps the same meaning.
+// A named check group, so the mutation proof below re-runs it against a scratch copy of js/data-provider.js.
+// ═════════════════════════════════════════════════════════════════════════════
+async function lastUpdatedChecks(provider) {
+  const out = {};
+  const T0 = '2026-09-08T18:30:00.000Z';
+  const base = { gameId: 'rg_fb10', espnEventId: '401520100', espnSport: 'college-football' };
+  const poll = async (event, stored) => { installEspnStub([event]); return (await provider.refreshScoresByEventIds(['401520100'], [stored])).updated[0]; };
+  // Learn what the real parser makes of this ESPN event (status, scores, winner), then store exactly that, stamped T0.
+  const learn = await poll(espnEvent({ statusName: 'STATUS_FINAL', homeScore: '24', awayScore: '10' }), base);
+  out['10-0: fixture — the parser reads the event as a FINAL game with a winner'] = !!learn && learn.status === GAME_STATUS.FINAL && !!learn.actualWinner;
+  if (!learn) return out;
+  const storedFinal = { ...base, status: learn.status, homeScore: learn.homeScore, awayScore: learn.awayScore, actualWinner: learn.actualWinner, lastUpdated: T0 };
+  const again = await poll(espnEvent({ statusName: 'STATUS_FINAL', homeScore: '24', awayScore: '10' }), storedFinal);
+  out[`10-1: a FINAL game polled again with the SAME score / status / winner keeps its lastUpdated (${T0}) — the poll is not an event`] = !!again && again.lastUpdated === T0;
+  const corrected = await poll(espnEvent({ statusName: 'STATUS_FINAL', homeScore: '27', awayScore: '10' }), storedFinal);
+  out['10-2: …a real change (a stat correction, 24 -> 27) DOES stamp a fresh lastUpdated — the rule is "no change, no new time", not "finals are frozen"'] =
+    !!corrected && corrected.lastUpdated !== T0 && Date.parse(corrected.lastUpdated) > Date.parse(T0) && corrected.homeScore === 27;
+  const liveLearn = await poll(espnEvent({ statusName: 'STATUS_IN_PROGRESS', homeScore: '7', awayScore: '10' }), base);
+  const storedLive = { ...base, status: liveLearn.status, homeScore: liveLearn.homeScore, awayScore: liveLearn.awayScore, actualWinner: liveLearn.actualWinner, lastUpdated: T0 };
+  const wentFinal = await poll(espnEvent({ statusName: 'STATUS_FINAL', homeScore: '7', awayScore: '10' }), storedLive);
+  out['10-3: …and the poll on which a game GOES FINAL (same score, live -> final, the winner recorded) is a change: it stamps the time the game ended'] =
+    !!wentFinal && wentFinal.status === GAME_STATUS.FINAL && wentFinal.lastUpdated !== T0;
+  // Review note 3 (2026-10-07): 10-3 changes the WINNER as well as the status (the parser records actualWinner only on a final), so it passed on the winner change
+  // alone. This fixture changes the STATUS and nothing else: the same 24-10 score and the same winner already on the stored row (a hand-entered result, or a
+  // correction) while it still reads live. Note: a tied final is NOT status-only either — the parser records actualWinner 'tie' (data-provider.js parse).
+  const statusOnly = await poll(espnEvent({ statusName: 'STATUS_FINAL', homeScore: '24', awayScore: '10' }), { ...storedFinal, status: GAME_STATUS.LIVE });
+  out['10-3b: a STATUS-ONLY change (live -> final; the same score and the same winner already stored) stamps a fresh lastUpdated — status is one of the compared columns'] =
+    !!statusOnly && statusOnly.status === GAME_STATUS.FINAL && statusOnly.homeScore === storedFinal.homeScore && statusOnly.actualWinner === storedFinal.actualWinner && statusOnly.lastUpdated !== T0;
+  const tieLive = { gameId: 'rg_fb10_nfl', espnEventId: '401520100', espnSport: 'nfl', status: GAME_STATUS.LIVE, homeScore: 17, awayScore: 17, actualWinner: null, lastUpdated: T0 };
+  const tieFinal = await poll(espnEvent({ statusName: 'STATUS_FINAL', homeScore: '17', awayScore: '17' }), tieLive);
+  out['10-3c: an NFL tie going final (17-17, live -> final) stamps a fresh lastUpdated (the parser records the winner as \'tie\')'] =
+    !!tieFinal && tieFinal.status === GAME_STATUS.FINAL && tieFinal.actualWinner === 'tie' && tieFinal.lastUpdated !== T0;
+  const quiet = await poll(espnEvent({ statusName: 'STATUS_IN_PROGRESS', homeScore: '7', awayScore: '10' }), storedLive);
+  out['10-4: a LIVE game between scores (nothing changed since the last poll) keeps its lastUpdated too'] = !!quiet && quiet.lastUpdated === T0;
+  const fresh = await poll(espnEvent({ statusName: 'STATUS_FINAL', homeScore: '24', awayScore: '10' }), { ...storedFinal, lastUpdated: null });
+  out['10-5: a stored row with NO lastUpdated yet is stamped (never written back as null), even when nothing else changed'] =
+    !!fresh && typeof fresh.lastUpdated === 'string' && !Number.isNaN(Date.parse(fresh.lastUpdated));
+  return out;
+}
+{
+  const provider = await import('./js/data-provider.js');
+  for (const [label, ok] of Object.entries(await lastUpdatedChecks(provider))) assert(ok === true, label);
+
+  // MUTATION PROOF (scratch copy loaded as a data: URL — never the file): a status-blind comparison. 10-3 alone stays GREEN under it (the gap review
+  // note 3 found); 10-3b must turn RED. The anchor must match exactly once.
+  const { readFileSync } = await import('node:fs');
+  let src = readFileSync(new URL('./js/data-provider.js', import.meta.url), 'utf8');
+  const ANCHOR = ' && same(s.status, f.status)';
+  const hits = src.split(ANCHOR).length - 1;
+  assert(hits === 1, `10-M0: fixture — the mutation anchor matches exactly once in js/data-provider.js (matched ${hits})`);
+  src = src.split(ANCHOR).join('').replace(/from '\.\/([\w.-]+)'/g, (_m, f) => `from '${new URL('./js/' + f, import.meta.url).href}'`);
+  const mutant = await import('data:text/javascript;base64,' + Buffer.from(src).toString('base64'));
+  const m = await lastUpdatedChecks(mutant);
+  const pick = (prefix) => m[Object.keys(m).find(k => k.startsWith(prefix))];
+  assert(pick('10-3:') === true && pick('10-3b') === false,
+    `10-M1: a STATUS-BLIND comparison (mutant) leaves 10-3 green (its winner change hides the gap) and turns 10-3b RED (10-3: ${pick('10-3:')}, 10-3b: ${pick('10-3b')})`);
+  assert(pick('10-1') === true && pick('10-4') === true, '10-M2: …and the mutant is otherwise intact (10-1 / 10-4 still green), so the red is the status column\'s doing');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -36,7 +36,7 @@
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="icon" type="image/x-icon" href="favicon.ico" />
-  <link rel="stylesheet" href="css/styles.css?v=29-0" />
+  <link rel="stylesheet" href="css/styles.css?v=30-0" />
   <style>
     /* v14.1: Hide app shell until JS is ready so users don't see a flash of the
        maroon header before the PIN gate / dashboard renders. JS removes the
@@ -245,7 +245,7 @@
          ready (four .feed-skel cards inside .home-feed): never the .loading-state spinner, so the first real
          paint replaces like with like and nothing shifts (homenavtest pins the two equal). -->
     <section class="page-section active" id="page-home">
-      <div id="home-root"><div class="home-feed" aria-busy="true"><p class="sr-only" role="status">Loading Home</p><div class="feed-item" data-card-key="skel:0"><article class="card feed-card feed-skel" aria-hidden="true"><div class="feed-skel-line feed-skel-line--narrow"></div><div class="feed-skel-line feed-skel-line--full"></div><div class="feed-skel-line feed-skel-line--wide"></div></article></div><div class="feed-item" data-card-key="skel:1"><article class="card feed-card feed-skel" aria-hidden="true"><div class="feed-skel-line feed-skel-line--narrow"></div><div class="feed-skel-line feed-skel-line--full"></div><div class="feed-skel-line feed-skel-line--wide"></div></article></div><div class="feed-item" data-card-key="skel:2"><article class="card feed-card feed-skel" aria-hidden="true"><div class="feed-skel-line feed-skel-line--narrow"></div><div class="feed-skel-line feed-skel-line--full"></div><div class="feed-skel-line feed-skel-line--wide"></div></article></div><div class="feed-item" data-card-key="skel:3"><article class="card feed-card feed-skel" aria-hidden="true"><div class="feed-skel-line feed-skel-line--narrow"></div><div class="feed-skel-line feed-skel-line--full"></div><div class="feed-skel-line feed-skel-line--wide"></div></article></div></div></div>
+      <div id="home-root"><div class="home-feed" aria-busy="true"><p class="sr-only" role="status">Loading Home</p><div class="feed-item" data-card-key="skel:0"><section class="gd gd--skeleton" aria-label="Game Day" aria-hidden="true"><div class="gd-head gd-head--static"><span class="gd-lab">Game Day</span></div><div class="gd-rail"><span class="gdp gdp--skel"></span><span class="gdp gdp--skel"></span></div></section></div><div class="feed-item" data-card-key="skel:1"><article class="card feed-card feed-skel" aria-hidden="true"><div class="feed-skel-line feed-skel-line--narrow"></div><div class="feed-skel-line feed-skel-line--full"></div><div class="feed-skel-line feed-skel-line--wide"></div></article></div><div class="feed-item" data-card-key="skel:2"><article class="card feed-card feed-skel" aria-hidden="true"><div class="feed-skel-line feed-skel-line--narrow"></div><div class="feed-skel-line feed-skel-line--full"></div><div class="feed-skel-line feed-skel-line--wide"></div></article></div><div class="feed-item" data-card-key="skel:3"><article class="card feed-card feed-skel" aria-hidden="true"><div class="feed-skel-line feed-skel-line--narrow"></div><div class="feed-skel-line feed-skel-line--full"></div><div class="feed-skel-line feed-skel-line--wide"></div></article></div></div></div>
     </section>
     <section class="page-section" id="page-picks">
       <div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>
@@ -305,7 +305,7 @@
       <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="19" x2="5" y2="13"/><line x1="12" y1="19" x2="12" y2="7"/><line x1="19" y1="19" x2="19" y2="10"/></svg></span><span class="sr-only">Dashboard</span>
     </button>
     <button class="nav-item active" data-tab="home" aria-label="Home" aria-current="page">
-      <span class="nav-icon nav-home-disc" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path class="home-roof" d="M3.5 9 12 4.5 20.5 9Z"/><line x1="7" y1="12" x2="7" y2="16"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="17" y1="12" x2="17" y2="16"/><line x1="4" y1="19.5" x2="20" y2="19.5"/></svg></span><span class="sr-only">Home</span>
+      <span class="nav-icon nav-home-disc" aria-hidden="true"><svg viewBox="205 250 614 495" fill="currentColor" aria-hidden="true" focusable="false"><path d="M 212 393 L 499.25 262.78 Q 512 257 524.75 262.78 L 812 393 L 812 401 Q 812 417 796 417 L 228 417 Q 212 417 212 401 L 212 393 Z"/><rect x="296" y="445.57" width="78" height="154.29"/><rect x="473" y="445.57" width="78" height="154.29"/><rect x="650" y="445.57" width="78" height="154.29"/><rect x="260" y="599.86" width="504" height="51.43" rx="7.71"/><rect x="212" y="679.86" width="600" height="57.14" rx="22.86"/></svg></span><span class="sr-only">Home</span>
     </button>
     <button class="nav-item" data-tab="chat" aria-label="Chat">
       <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 5.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-4 3.5v-3.5H6a2 2 0 0 1-2-2v-9Z"/></svg></span><span class="sr-only">Chat</span>
@@ -330,7 +330,7 @@
      disk by authtest.mjs [12]. Still vendored, still same-origin, still no
      CDN and no build step. -->
 <!-- Cache-bust the main entry script so a stale browser cache can't serve v9 app.js. -->
-<script type="module" src="js/app.js?v=29-0"></script>
+<script type="module" src="js/app.js?v=30-0"></script>
 <script type="module">
   // Service worker registration + auto-update.
   // The logic moved to js/sw-register.js on 2026-09-10 (reviewer BLOCK F1) so
@@ -347,7 +347,7 @@
   import { setupServiceWorker } from './js/sw-register.js';
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      setupServiceWorker({ scriptUrl: 'service-worker.js?v=29-0' })
+      setupServiceWorker({ scriptUrl: 'service-worker.js?v=30-0' })
         .catch(e => console.warn('[SW] setup failed', e)); // CONVENTIONS #4 — every await guarded inside, this keeps it that way
     });
   }

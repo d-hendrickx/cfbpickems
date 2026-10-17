@@ -1,0 +1,12 @@
+{
+  "id": "scribeProfile.twin",
+  "script": "supabase/tests/functions/scribeProfile.twin.mjs",
+  "label": "d1c-profile",
+  "summary": "loose",
+  "floor": 140,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 400,
+  "note": "D1 Lane C (FB-006 / DI-643…646, DI-682; security C8, C13): the scribe-profile Edge Function driven end to end against the fake client — class-U auth before the service role, identity from the JWT only, cross-league refusal, platform admin read-only, the view's fixed fields and league-scoped reads, history from the audit trail, add/correct instruction, player facts and lore on the caller's own client, pilot-only writes."
+}

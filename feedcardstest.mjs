@@ -875,6 +875,52 @@ function yearAgoFixtureChecks(F) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// FB-010 (D1 batch H, Drew 2026-10-06: "there are some old posts staying at the top"). Every card's sortKey is a GENUINE event time. Three types used to be
+// stamped with the RENDER clock (`picks.submitted` and `week.revealed` at `now`, `year.ago` at now − 1 ms), so they sat on top of the feed forever and every
+// newer card landed under them. Derived at two clocks three hours apart, nothing may move, and nothing may sort in the future. A named group, so the
+// mutation section re-runs it against scratch copies (11-36 … 11-39).
+// ═══════════════════════════════════════════════════════════════════════════
+function chronologyChecks(F) {
+  const out = {};
+  const LATER = NOW + 3 * 3600e3;
+  const at = (L, now, o = {}) => derive(F, snapshotWith(F, L, o), { now });
+  const keyOf = (cards, type) => { const c = cards.find(x => x.type === type && (x.weekId === 'w2' || type === 'year.ago')); return c ? c.sortKey : null; };
+  const o1 = at(OPEN_SET, NOW), o2 = at(OPEN_SET, LATER);
+  const slateT = Date.parse(keyOf(o1, 'slate.published'));
+  out[`FB10-1: picks.submitted is NOT re-dated by the clock — the same sortKey three hours later, and never in the future (got ${keyOf(o1, 'picks.submitted')} / ${keyOf(o2, 'picks.submitted')})`] =
+    !!keyOf(o1, 'picks.submitted') && keyOf(o1, 'picks.submitted') === keyOf(o2, 'picks.submitted') && Date.parse(keyOf(o1, 'picks.submitted')) <= NOW;
+  out['FB10-1b: …it belongs to the week\'s submission window, which opens with the slate: it sorts directly ABOVE that week\'s slate.published (its open time + 1 ms), never above newer cards'] =
+    Date.parse(keyOf(o1, 'picks.submitted')) === slateT + 1;
+  const l1 = at(LIVE_SET, NOW), l2 = at(LIVE_SET, LATER);
+  out[`FB10-2: week.revealed sorts at the REVEAL — the first kickoff (UN-116: picks go public at kickoff), 2026-09-12T16:00Z — not at "now" (got ${keyOf(l1, 'week.revealed')} / ${keyOf(l2, 'week.revealed')})`] =
+    keyOf(l1, 'week.revealed') === '2026-09-12T16:00:00.000Z' && keyOf(l1, 'week.revealed') === keyOf(l2, 'week.revealed');
+  {
+    const early = league('live');
+    early.games = early.games.map(g => (g.weekId === 'w2' ? { ...g, kickoff: new Date(NOW + 86400e3).toISOString() } : g));
+    early.weeks = early.weeks.map(w => (w.weekId === 'w2' ? { ...w, lockedAt: '2026-09-11T20:00:00.000Z' } : w));
+    const e1 = at(early, NOW), e2 = at(early, LATER);
+    out[`FB10-2b: a week made LIVE by hand before its first kickoff never sorts in the future: the reveal falls back to the lock time (got ${keyOf(e1, 'week.revealed')})`] =
+      keyOf(e1, 'week.revealed') === '2026-09-11T20:00:00.000Z' && keyOf(e2, 'week.revealed') === keyOf(e1, 'week.revealed');
+    const bare = league('live');
+    bare.games = bare.games.map(g => (g.weekId === 'w2' ? { ...g, kickoff: new Date(NOW + 86400e3).toISOString() } : g));
+    const b1 = at(bare, NOW);
+    out[`FB10-2c: …and with no lock time either, the week's own open time — still never the future, never the clock (got ${keyOf(b1, 'week.revealed')})`] =
+      Date.parse(keyOf(b1, 'week.revealed')) <= NOW && keyOf(b1, 'week.revealed') === keyOf(at(bare, LATER), 'week.revealed');
+  }
+  out[`FB10-3: year.ago is the current week's callback: it sorts with that week's slate (open time − 1 ms, directly beneath it), not at now − 1 ms (got ${keyOf(o1, 'year.ago')} / ${keyOf(o2, 'year.ago')})`] =
+    !!keyOf(o1, 'year.ago') && keyOf(o1, 'year.ago') === keyOf(o2, 'year.ago') && Date.parse(keyOf(o1, 'year.ago')) === slateT - 1;
+  const L = league('live');
+  L.games = L.games.map(g => (g.gameId === 'g21' ? { ...g, lastUpdated: new Date(NOW - 3600e3).toISOString() } : g));
+  const cs = at(L, NOW);
+  out[`FB10-4: acceptance 1 at the derivation layer — the game that ended an hour ago heads the newest-first list, above the week's reveal card (got ${cs.slice(0, 3).map(c => c.type).join(', ')})`] =
+    ['game.final', 'called.it', 'stood.alone'].includes(cs[0].type) && cs[0].gameId === 'g21' && cs.findIndex(c => c.type === 'week.revealed') > cs.findIndex(c => c.type === 'game.final');
+  out['FB10-5: NO card\'s sortKey depends on the render clock — an OPEN and a LIVE league derived a day / three hours apart give byte-identical (id, sortKey) lists'] =
+    JSON.stringify(at(OPEN_SET, NOW).map(c => [c.id, c.sortKey])) === JSON.stringify(at(OPEN_SET, NOW + 86400e3).map(c => [c.id, c.sortKey])) && JSON.stringify(l1.map(c => [c.id, c.sortKey])) === JSON.stringify(l2.map(c => [c.id, c.sortKey]));
+  return out;
+}
+for (const [label, ok] of Object.entries(chronologyChecks(fc))) assert(ok === true, label);
+
+// ═══════════════════════════════════════════════════════════════════════════
 console.log('\n[8] Copy and escaping (S-C6) — the injected escaper is REQUIRED; hostile data stays inert…');
 // ═══════════════════════════════════════════════════════════════════════════
 function copyChecks(F) {
@@ -1153,7 +1199,7 @@ async function mutantOf(label, edits, runner, mustFail, rewrites) {
   // T9 (no raw message field reaches a card) is guarded TWICE — the candidate is rebuilt minimal, AND facts are filtered by the allow-list — so killing it takes both mutations together.
   await mutantOf('11-10f: M10f the raw message passes through the candidate AND the allow-list stops filtering (feedback / meta reach a card)',
     [['return { id, ts: toMs(c.ts),', 'return { ...c, id, ts: toMs(c.ts),'],
-      ['facts: { messageId: c.id, body: c.body, timestamp: isoAt(c.ts) }', 'facts: { messageId: c.id, body: c.body, timestamp: isoAt(c.ts), meta: c.meta, feedback: c.feedback }'],
+      ['facts: { messageId: c.id, body: c.body, timestamp: isoAt(c.ts), ...(about ? { gameId: about, weekId: c.context.weekId } : {}) }', 'facts: { messageId: c.id, body: c.body, timestamp: isoAt(c.ts), meta: c.meta, feedback: c.feedback }'],   // D1 Lane B (DI-610): the facts literal gained the optional gameId/weekId spread
       ['for (const k of allowed) {', 'for (const k of Object.keys(facts || {})) {']], chatChecks, ['T9 S-C8']);
   {
     const onlyOne = await loadMutant('./js/feed-cards.js', [['for (const k of allowed) {', 'for (const k of Object.keys(facts || {})) {']]);
@@ -1166,7 +1212,7 @@ async function mutantOf(label, edits, runner, mustFail, rewrites) {
   // M13 a forbidden key sneaks into an allow-list — the MODULE LOAD must throw
   {
     let threw = null;
-    try { await loadMutant('./js/feed-cards.js', [["'called.it':        ['playerId', 'playerName', 'team', 'matchup', 'spreadDisplay', 'scoreLine'],", "'called.it':        ['playerId', 'playerName', 'team', 'matchup', 'spreadDisplay', 'scoreLine', 'margin'],"]]); }
+    try { await loadMutant('./js/feed-cards.js', [["'called.it':        ['playerId', 'playerName', 'team', 'matchup', 'spreadDisplay', 'scoreLine', 'gameId', 'gameIds', 'teamIds', 'weekId'],", "'called.it':        ['playerId', 'playerName', 'team', 'matchup', 'spreadDisplay', 'scoreLine', 'gameId', 'gameIds', 'teamIds', 'weekId', 'margin'],"]]); }
     catch (e) { threw = e; }
     assert(!!threw && /allow-lists forbidden key margin/.test(threw.message), `11-13: M13 adding \`margin\` to called.it's allow-list makes the MODULE LOAD throw — "${threw && threw.message}"`);
   }
@@ -1277,6 +1323,13 @@ async function mutantOf(label, edits, runner, mustFail, rewrites) {
   await mutantOf('11-33: M33 every week\'s size is assumed to be 10 (the old SLATE_SIZE_2025 constant, guards kept)', [['const size = SLATE_SIZE_BY_WEEK_2025[Number(weekNumber)];', 'const size = 10;']], yearAgoFixtureChecks, ['YF1', 'YF2', 'YF3'], YA_FIX);
   await mutantOf('11-34: M34 conflicting stated sizes are no longer treated as unknown (the last one wins)', [['out[wk] = (wk in out && out[wk] !== size) ? null : size;', 'out[wk] = size;']], yearAgoFixtureChecks, ['YF5'], YA_FIX);
   await mutantOf('11-35: M35 a stated size below the week\'s top score is believed', [['size > 0 && size >= max ?', 'size > 0 ?']], yearAgoFixtureChecks, ['YF4'], YA_FIX);
+  // FB-010 (D1 batch H) — each of the three render-clock stamps, put back one at a time, and the reveal's never-in-the-future fallback removed
+  const chronCtl = chronologyChecks(fc);
+  assert(Object.values(chronCtl).every(Boolean), `11-36-0: POSITIVE CONTROL — the unmutated module passes all ${Object.keys(chronCtl).length} FB-010 chronology checks`);
+  await mutantOf('11-36: M36 FB-010 picks.submitted is stamped with the render clock again', [['        sortKey: isoAt(openMs, 1),', '        sortKey: isoAt(now),']], chronologyChecks, ['FB10-1:', 'FB10-1b', 'FB10-5']);
+  await mutantOf('11-37: M37 FB-010 week.revealed is stamped with the render clock again', [['        sortKey: isoAt(revealMs),', '        sortKey: isoAt(now),']], chronologyChecks, ['FB10-2:', 'FB10-4', 'FB10-5']);
+  await mutantOf('11-38: M38 FB-010 year.ago is stamped now − 1 ms again', [['sortKey: isoAt(weekOpenMs(cur), -1),', 'sortKey: isoAt(now, -1),']], chronologyChecks, ['FB10-3', 'FB10-5']);
+  await mutantOf('11-39: M39 FB-010 a reveal whose first kickoff is still ahead sorts in the FUTURE (no lock-time fallback)', [['(firstMs && firstMs <= now) ? firstMs', 'firstMs ? firstMs']], chronologyChecks, ['FB10-2b', 'FB10-2c']);
 }
 
 console.log('\n══════════════════════════════════════════════════');

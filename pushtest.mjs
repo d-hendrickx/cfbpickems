@@ -1739,6 +1739,105 @@ console.log('\n[12] RG-192 — the external id is never attached, so no player i
     storage.clearSession();
   }
 
+  // ── [12z5] W-33 — THE ROW'S SAVED COPY BELONGS TO ONE IDENTITY (bugfixer, 2026-10-07) ──
+  // "Notifications row can show the previous league's or account's saved
+  // settings after an in-page switch, until reload." ROOT CAUSE: the row's
+  // saved copy (_lastNotifSettingsHTML, js/app.js) was ONE page-lifetime string
+  // keyed by nothing. A league switch or a second account on the same page never
+  // reloads; the drawer paints `bodies.notifSettingsHTML` straight from that
+  // string, and opening the row only re-resolves it when it is EMPTY — so the
+  // new identity was shown the previous one's switches (each league keeps its
+  // own; the row's own footer says so) until a reload. Drives the REAL drawer
+  // binder and the REAL control-center ctx builder.
+  {
+    const mkEl = (extra = {}) => {
+      const l = {};
+      const el = { disabled: false, checked: true, dataset: {}, classList: { toggle() {} },
+        addEventListener(t, fn) { (l[t] ||= []).push(fn); }, listeners: l, ...extra };
+      el.fire = async (t) => { for (const fn of (l[t] || [])) await fn({ currentTarget: el, target: el }); };
+      return el;
+    };
+    const mkDrawer = () => {
+      const btn = mkEl(), master = mkEl(), cat = mkEl({ dataset: { cat: 'chat' } });
+      const ccBody = {
+        querySelector: (s) => (s === '#notif-priming-btn' ? btn : s === '#notif-master-toggle' ? master : null),
+        querySelectorAll: (s) => (s === '.notif-cat-toggle' ? [cat] : []),
+      };
+      return { querySelector: (s) => (s === '#cc-body-notifications' ? ccBody : null), querySelectorAll: () => [] };
+    };
+    const rowState = { phase: 'open', pane: 'main', settingsOpenRow: 'notifications' };
+    const painted = () => appMod._buildControlCenterCtxForTest().bodies.notifSettingsHTML || '';
+    const hasChatSwitch = (h) => /data-cat="chat"/.test(h);
+    const chatOn = (h) => /data-cat="chat"\s+checked/.test(h);
+    const checking = (h) => />Checking…</.test(h);
+    const openRowAs = async (playerId, { wait = true } = {}) => {
+      storage.setSession(playerId, false, true);
+      appMod._bindControlCenterBodiesForTest(mkDrawer(), rowState);   // the row is open: the binder resolves the copy when it has none for this identity
+      if (wait) await settle(600);
+    };
+    const auth12z5 = await import('./js/auth.js');
+    installWorld({ permission: 'granted', subscribed: false });
+    Object.assign(globalThis.document, { getElementById: () => null, querySelector: () => null, querySelectorAll: () => [] });
+    push._resetForTest({ sdkReadyMs: 400 });
+    await keepAlive(push.ensureOneSignalInit());
+    storage.savePlayer({ playerId: 'w33_a', displayName: 'Member A', active: true, preferences: { notifyCategories: { chat: false } } });
+    storage.savePlayer({ playerId: 'w33_b', displayName: 'Member B', active: true, preferences: {} });
+    appMod._resetNotifSettingsRowCacheForTest?.();
+
+    await openRowAs('w33_a');
+    assert(hasChatSwitch(painted()) && !chatOn(painted()),
+      `12z5 fixture: A opened the row and it shows A's own Chat switch OFF (got ${JSON.stringify(painted().slice(0, 200))})`);
+
+    // The in-page switch (a league switch moves the member id; so does a second account). No reload.
+    storage.setSession('w33_b', false, true);
+    assert(!(hasChatSwitch(painted()) && !chatOn(painted())) && checking(painted()),
+      `12z5-1: THE BUG — after the switch the drawer does NOT paint A's saved switches for B; it shows the neutral "Checking…" until B's own copy resolves (got ${JSON.stringify(painted().slice(0, 200))})`);
+    await openRowAs('w33_b');
+    assert(hasChatSwitch(painted()) && chatOn(painted()),
+      `12z5-2: opening the row as B resolves B's OWN settings (Chat ON) instead of re-painting A's (got ${JSON.stringify(painted().slice(0, 200))})`);
+
+    // Same member id, a different league: the league term alone changes the identity.
+    auth12z5.setActiveLeagueId('w33_league_1');
+    await openRowAs('w33_b');
+    assert(hasChatSwitch(painted()) && !checking(painted()), '12z5-3 fixture: B\'s copy resolved in league 1');
+    auth12z5.setActiveLeagueId('w33_league_2');
+    assert(checking(painted()), `12z5-3: switching to another league (same member id) does not paint league 1's saved copy (got ${JSON.stringify(painted().slice(0, 120))})`);
+    auth12z5.setActiveLeagueId(null);
+
+    // A resolve that started for one identity and lands after the switch is never saved as the next one's.
+    appMod._resetNotifSettingsRowCacheForTest?.();
+    await openRowAs('w33_a', { wait: false });   // A's resolve is in flight…
+    storage.setSession('w33_b', false, true);     // …and B arrives before it lands
+    await settle(600);
+    assert(checking(painted()),
+      `12z5-4: a copy resolved for A that lands after the switch is DROPPED, never saved as B's: B's row still starts from "Checking…" (got ${JSON.stringify(painted().slice(0, 120))})`);
+    await openRowAs('w33_b');
+    assert(hasChatSwitch(painted()) && chatOn(painted()), '12z5-5: …and B opening the row then resolves B\'s own copy');
+    // …and when A comes BACK, that late copy is not A's either: it was rendered after the switch, from B's switches. It was dropped, so A sees
+    // "Checking…" and then its own, never B's Chat ON labelled as A's.
+    appMod._resetNotifSettingsRowCacheForTest?.();
+    await openRowAs('w33_a', { wait: false });   // A's resolve is in flight…
+    storage.setSession('w33_b', false, true);     // …B arrives before it lands…
+    await settle(600);
+    storage.setSession('w33_a', false, true);     // …and A comes back, same page, no reload
+    assert(!chatOn(painted()) && checking(painted()),
+      `12z5-4b: a copy that started for A but was rendered after the switch (B's switches) is never shown to A when A returns (got ${JSON.stringify(painted().slice(0, 120))})`);
+    await openRowAs('w33_a');
+    assert(hasChatSwitch(painted()) && !chatOn(painted()), '12z5-4c: …A opening the row resolves A\'s own copy (Chat OFF)');
+
+    // Signing out: the signed-out page never shows the last player's switches.
+    storage.clearSession();
+    assert(!hasChatSwitch(painted()), `12z5-6: after a sign-out the drawer never paints the previous player's switches (got ${JSON.stringify(painted().slice(0, 120))})`);
+    appMod._resetNotifSettingsRowCacheForTest?.();
+    // …and the identity chokepoint drops the copy with the other identity-scoped caches (authtest 65-5's shape), so the page does not keep the
+    // departed identity's switches in memory at all. Comments are blanked first so a code line, not prose, is what matches.
+    const appSrc12z5 = (await readFile(new URL('./js/app.js', import.meta.url), 'utf8'))
+      .replace(/\/\*[\s\S]*?\*\//g, ' ').split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+    const choke12z5 = (appSrc12z5.match(/function applyIdentityDeltaIfChanged\([\s\S]*?\n\}/) || [''])[0];
+    assert(/_lastNotifSettingsHTML = null;/.test(choke12z5) && /_lastNotifSettingsKey = null;/.test(choke12z5) && /_lastNotifSettingsResolved = null;/.test(choke12z5),
+      '12z5-7: applyIdentityDeltaIfChanged() clears the Notifications row\'s saved copy, its key and its resolved state on every identity change');
+  }
+
   // ── [12z2] AFTER A WEB DEPLOY: THE RELOADED PAGE HEALS ITSELF, NO TAP ──────
   // Drew, 2026-10-02: "I need push to not have to be re-activated with every
   // update." A deploy reloads the page once (sw-register.js's conditional
@@ -3187,7 +3286,7 @@ console.log('\n[18] A web deploy does not drop push — the shipped service-work
     getRegistration: async () => ({ active: { scriptURL: 'https://irbfootball.com/service-worker.js?appId=x&sdkVersion=160610' }, update: async () => { regCalls.push('update'); }, unregister: async () => { regCalls.push('unregister'); } }),
     register: async (u, o) => { regCalls.push('register:' + u + ':' + o?.scope); return {}; },
   } };
-  const out = await swReg.registerServiceWorker({ nav: navFake, scriptUrl: 'service-worker.js?v=29-0', scope: '/' });
+  const out = await swReg.registerServiceWorker({ nav: navFake, scriptUrl: 'service-worker.js?v=30-0', scope: '/' });
   assert(out.action === 'updated' && regCalls.join() === 'update',
     `18-5: the page that loads after a deploy calls update() on the existing registration (OneSignal's own URL at scope "/"), never unregister() or a second register() — got ${out.action} ${JSON.stringify(regCalls)}`);
   const swRegSrc = await readFile(new URL('./js/sw-register.js', import.meta.url), 'utf8');

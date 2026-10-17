@@ -451,7 +451,14 @@ function sbReady() {
 // step from leaking them into `meta`, and `emitted_by` in particular is excluded from every
 // member-readable grant by 0010 (annotation A2) — naming it here would turn every read into a
 // 42501. supabase/tests/static.check.mjs pins that this list never grows it.
-const SB_MESSAGE_COLS = 'league_id,id,seq,ts,type,author,game_tag,body,target_id,reply_to,notify,meta';
+//
+// D1 (DI-553 / DI-530): `sport_tag` joins the list. It is a column `authenticated` may SELECT since 0033 §6 (the grant is live), it is the SPORT a message belongs to ('' or one of
+// seven codes), and it is read from the column ONLY (js/supabase-projection.js rowToMessage). static.check S5/A2 pins this exact string.
+// D1 (W-54 / DI-680, migration 0045): `relayed` joins the list. It is the SERVER's answer to "did a member's session relay this row?"
+// (kept equal to emitted_by IS NOT NULL by 0045's trigger; granted to authenticated, written by nobody), mapped TOP-LEVEL by rowToMessage and read only as
+// `relayed === false` (Home's game posts, the source chips). 0045 must be applied before a client that names it is deployed: a column the
+// database does not have turns every chat read into an error.
+const SB_MESSAGE_COLS = 'league_id,id,seq,ts,type,author,game_tag,sport_tag,body,target_id,reply_to,notify,meta,relayed';
 
 function sbMapRow(row) {
   const map = _sbChat && _sbChat.rowToMessage;
@@ -502,7 +509,22 @@ function _rememberPermanent(ids, code) {
  *     with no dep injected the first rung of the ladder below is the fallback, which is why its
  *     first step is 2 s rather than something cleverer);
  *   • then on a BOUNDED ladder, never more than ONE resend in flight per id;
- *   • until a 60 s ceiling, after which it becomes the permanent refusal — the FAILED chip.
+ *   • until the ladder runs out (the last resend 127 s after the refusal) inside a 150 s wall-clock
+ *     ceiling, after which it becomes the permanent refusal — the FAILED chip.
+ *
+ * WHY THE LADDER OUTLASTS TWO MINUTES (0045 review, 2026-10-08). The race is no longer only the
+ * ~50 ms one above. Migration 0045 gates `sys_lc_PICKS_LOCKED_<week>` on the week being locked,
+ * live or final on the SERVER, and the client posts that notice from the week's EFFECTIVE status
+ * (js/app.js checkLifecyclePostDue: the lock time has passed on this device's clock). The server's
+ * own lock is 0043's `cfbp_auto_lock_weeks` cron, once a minute ('* * * * *'), and 0011's
+ * `cfbp_auto_go_live` flips live the same way for `sys_reveal_`. So a device can post up to a full
+ * minute (plus its clock's skew) before the state exists, and no adapter flush on THIS device will
+ * ever release it early. The previous ladder (2, 5, 10, 20 s; last resend at 37 s, under a 60 s
+ * ceiling) gave up before the cron's worst case and lost the notice. The resends now land at 2, 7,
+ * 17, 37, 67, 97 and 127 s: a cron run anywhere in the minute after the lock time is caught by the
+ * 67 s rung, and one late or skipped run by the 97 s and 127 s rungs. Seven resends per parked id,
+ * each one request, is still a bounded ladder (transporttest [17f] drives the production schedule
+ * on a virtual clock against a cron that lands at 59 s and at 119 s).
  *
  * BOUNDED IS LOAD-BEARING, for the reason every accelerated path in this file is bounded: an
  * unbounded resend against a state that is never going to arrive is a quota bug wearing a fix's
@@ -521,8 +543,8 @@ function _rememberPermanent(ids, code) {
  * under one identity; relaying it into another is the same failure chat.js's own outbox league
  * stamp exists to prevent (SECURITY F-4), one layer out.
  */
-const PARK_STEPS = Object.freeze([2000, 5000, 10000, 20000]);
-const PARK_CEILING_MS = 60000;
+const PARK_STEPS = Object.freeze([2000, 5000, 10000, 20000, 30000, 30000, 30000]);
+const PARK_CEILING_MS = 150000;
 let _parkSteps = PARK_STEPS;
 let _parkCeilingMs = PARK_CEILING_MS;
 const _parked = new Map();   // event id -> { ev, token, attempts, firstAt, timer, inFlight }
@@ -772,6 +794,13 @@ const SB_SYSTEM_AUTHORS = Object.freeze(['scribe', 'system']);
 function isSystemAuthored(ev) { return SB_SYSTEM_AUTHORS.includes(String(ev && ev.author || '')); }
 
 /**
+ * D1 (DI-553 / DI-530; security A4) — the closed set `messages.sport_tag` is CHECKed to (0033 §6), as this module's own copy: this file may import only `./backend.js` and
+ * `./platform.js` (static.check S5/T5.11), so js/sport-tag.js cannot be imported here. chatsporttest.mjs pins this list equal to js/sport-tag.js's and to the CHECK in 0033.
+ */
+const SB_SPORT_TAGS = new Set(['cfb', 'nfl', 'nba', 'cbb', 'mm', 'nhl', 'wjc']);
+function sbSportTag(value) { return typeof value === 'string' && SB_SPORT_TAGS.has(value) ? value : ''; }
+
+/**
  * DI-T5.4(a) — `notify` IS PACKED AS `meta._n`, and missing it is a live defect rather than a
  * detail. `chat_append` reads `coalesce((v_ev->'meta'->>'_n')::boolean, false)` (0008:364) — the
  * SHEET's packed shape, which Code.gs:930-931 produces. The client event carries a TOP-LEVEL
@@ -785,11 +814,15 @@ function isSystemAuthored(ev) { return SB_SYSTEM_AUTHORS.includes(String(ev && e
  */
 function sbPackEvent(ev) {
   const meta = { ...(ev.meta || {}), _n: ev.notify ? 1 : 0 };
+  const sportTag = sbSportTag(ev.sportTag);
   return {
     id: ev.id,
     type: ev.type || 'message',
     author: ev.author || 'unknown',
     gameTag: ev.gameTag || '',
+    // D1 (DI-553 / DI-530): a TAGGED event carries `sportTag`; an untagged one has NO key at all, so a one-sport league's wire payload is byte-identical to what it was before. The value is
+    // a closed code or nothing: 0033 CHECKs the column to the same set and a value outside it would be refused for the WHOLE append, so it never leaves this function.
+    ...(sportTag ? { sportTag } : {}),
     body: ev.body || '',
     targetId: ev.targetId || '',
     replyTo: ev.replyTo || '',

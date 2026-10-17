@@ -210,8 +210,8 @@ function decls(body) {
   return out;
 }
 const RULES = cssRules(CSS);
-// Custom properties are per viewport: `:root{--page-pad}` is 16 px, but 14 px at
-// <= 480 wide and 10 px at <= 360 (Chrome confirms 14 px at 375/390/430).
+// Custom properties are per viewport (the resolver reads whatever media tiers :root carries). Since W-57 Part 2 (2026-10-08, the app-wide Breathing Room inset) `--page-pad` is
+// 16 px at EVERY phone width — the old 14 px (<= 480) and 10 px (<= 360) tiers are gone — so the pad is no longer viewport-dependent below 768.
 const rootVars = vw => Object.fromEntries(RULES.filter(r => r.selectors.includes(':root') && r.media.every(m => mediaMatches(m, vw)))
   .flatMap(r => decls(r.body)).filter(([p]) => p.startsWith('--')));
 const varOf = (v, vw) => { const V = rootVars(vw); return v.replace(/var\(\s*(--[\w-]+)\s*(?:,[^)]*)?\)/g, (_, n) => V[n] ?? 'NaN'); };
@@ -411,10 +411,11 @@ console.log('\n[5] MODEL CALIBRATION — the pre-fix layout reproduces Chrome\'s
 // ═════════════════════════════════════════════════════════════════════════════
 {
   // The cascade resolver derives the card's width from styles.css the same way
-  // [4] does. Chrome measured the card at 347 / 362 / 402 px wide.
+  // [4] does. Chrome measured the card at 347 / 362 / 402 px wide when the phone inset was 14 px; RE-MEASURED 2026-10-08 for the 16 px inset (W-57 Part 2): 343 / 358 / 398,
+  // the same two-pad subtraction with the pad two points larger a side. (chatsportbrowsertest [8] measures every tab's content edge in a real Chromium at 16 px on 390/375/360/320.)
   const cardWidth = vw => vw - 2 * px(varOf('var(--page-pad)', vw));
-  assert(cardWidth(375) === 347 && cardWidth(390) === 362 && cardWidth(430) === 402,
-    `5a: the resolver puts the card at ${cardWidth(375)} / ${cardWidth(390)} / ${cardWidth(430)} px wide (Chrome: 347 / 362 / 402 — --page-pad is 14 px at <= 480 wide)`);
+  assert(cardWidth(375) === 343 && cardWidth(390) === 358 && cardWidth(430) === 398,
+    `5a: the resolver puts the card at ${cardWidth(375)} / ${cardWidth(390)} / ${cardWidth(430)} px wide (the 14 px-inset Chrome figures were 347 / 362 / 402; --page-pad is now 16 px at every phone width)`);
   const content = vw => { const P = resolve(['card', 'mt-md', 'text-center'], 'padding:16px', vw); return cardWidth(vw) - 2 * (px(P['border-width']) + px(P['padding-left'])); };
   // The pre-fix group, as plain resolved properties (not read from app.js):
   // a `text-align:center` card holding two inline buttons, `mr-sm` on Edit.
@@ -428,6 +429,33 @@ console.log('\n[5] MODEL CALIBRATION — the pre-fix layout reproduces Chrome\'s
   const at430 = measure(layout(old, items, content(430)), content(430));
   assert(!at430.wrapped && Math.abs(at430.hGaps[0] - 12.22) < 0.05,
     `5d: 430 wide — the old layout fits on one line, ${f2(at430.hGaps[0] ?? NaN)} px apart (Chrome measured 12.22)`);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[6] THE RED SYNC / NOTICE BANNER — .beb-inner (PF-1 reviewer BLOCK #1 B2, 2026-10-01)…');
+// ═════════════════════════════════════════════════════════════════════════════
+// The bar sits ON the screen edge: the Design Philosophy's Breathing Room asks >= 16 pt from a screen edge, >= 8 pt between controls in a group, >= 8 pt from a line, and the house tap target
+// (CONVENTIONS #17) is 40 px. It measured 12 px (phones) / 14 px (wider) at the sides, so Retry/Dismiss sat 12-14 px from the right edge of the screen. Every number is READ FROM THE CASCADE for
+// the viewport (the same resolver [3] and [4] use), so reverting a number in css/styles.css turns an assertion here red.
+{
+  for (const vw of [375, 390, 430, 481, 768, 1280]) {
+    const inner = resolve(['beb-inner'], '', vw);
+    const L = px(inner['padding-left']), R = px(inner['padding-right']), T = px(inner['padding-top']), B = px(inner['padding-bottom']);
+    assert(L >= 16 && R >= 16 && L === R,
+      `6a: ${vw} wide — the banner's side padding is ${L} / ${R} px (>= 16 from the screen edge, equal) — it was ${vw <= 480 ? 12 : 14} px`);
+    assert(T >= 8 && B >= 8 && T === B,
+      `6b: ${vw} wide — top / bottom padding ${T} / ${B} px (>= 8 from the 3px rule under it and equal above and below)`);
+    const gap = Math.min(px(inner['column-gap']), px(inner['row-gap']));
+    assert(gap >= 8, `6c: ${vw} wide — the gap between icon, text, Retry and Dismiss is ${gap} px (>= 8: buttons never touch), and it comes from the CONTAINER, not a margin`);
+    for (const cls of ['beb-retry', 'beb-close']) {
+      const b = resolve([cls], '', vw);
+      assert(px(b['min-height']) >= 40 && px(b['min-width']) >= 40 && !('margin-left' in b) && !('margin-right' in b),
+        `6d: ${vw} wide — .${cls} has a ${px(b['min-height'])} x ${px(b['min-width'])} px floor and no margin of its own`);
+    }
+  }
+  const at375 = resolve(['beb-inner'], '', 375), at768 = resolve(['beb-inner'], '', 768);
+  assert(at375['padding-left'] !== undefined && at768['padding-left'] !== undefined && at375['flex-wrap'] === 'wrap' && at768['flex-wrap'] === undefined,
+    '6e: fixture — the resolver really reads BOTH breakpoints of the banner (wraps on a phone, one row wider), so 6a-6d cannot pass by reading nothing');
 }
 
 console.log(`\n[btnspacingtest] ${pass} passed, ${fail} failed`);

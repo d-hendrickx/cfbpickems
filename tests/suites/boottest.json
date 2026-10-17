@@ -1,0 +1,14 @@
+{
+  "id": "boottest",
+  "script": "boottest.mjs",
+  "label": "76",
+  "summary": "strict",
+  "floor": 813,
+  "tags": [
+    "quick",
+    "slow",
+    "tz"
+  ],
+  "expectedMs": 90000,
+  "note": "RAISED from 797 by the v0.29.0 Home wiring window (2026-10-01): [HOME] S-C7 / W8 (+15): with no identity proven (no session, an expired session, no session and the SDK never lands) the real Home wiring writes NOTHING into #page-home, with a fixture trio and a positive control …"
+}

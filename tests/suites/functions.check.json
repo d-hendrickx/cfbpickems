@@ -1,0 +1,12 @@
+{
+  "id": "functions.check",
+  "script": "supabase/tests/functions.check.mjs",
+  "label": "81d",
+  "summary": "loose",
+  "floor": 1753,
+  "tags": [
+    "smoke"
+  ],
+  "expectedMs": 600,
+  "note": "Raised 1731 -> 1734 (2026-10-14, fix/d1-odds-daily-cap, DI-W71.10 / Drew D-80): the W-71 block re-pinned for the per-league daily limit - C3's order now gate, league row (paused), key, service client, week, games, the reservation, the vendor; the pilot-only rule REPLACED by 'no pilot flag anywhere'; C5 +3 (the adapter's memo < floor < reservation < network order and its word-only verdict; both fetchEvents calls handed the reservation with a reserve_error 500 on either; the one service-role rpc with the verified id); C7 AMENDED (0060 is the one migration that adds the lookup's objects; the function's only write is that rpc); reserve_failed joins the error-code list. MERGE int/v0.30.0 1ecf7a51 into feat/d1-commnav (2026-10-14): floor = the merged tree measured, 1730 (the int side 1669 plus the 61 W-71 odds-lookup clauses C1-C7, the class-U wiring and the review round-1 pins). MERGE int/v0.30.0 into feat/d1-creation-integrity (2026-10-08): floor re-measured on the merged tree = 1462. D1 Lane A security round (2026-10-08): RAISED to 1376 by the F3 / G5 call-side pins (push_identity_alias_of has one caller; nothing calls the two definer-only helpers). Before that: D1 Lane A (2026-10-08, DI-548/549/545/546): RAISED 1355 -> 1373 to the measured count. Before that: raised 1057 -> 1063 by N8 / DI-440 (2026-09-29): A3 gained its ONE named exemption — the live-upset verifier must read `messages.emitted_by` as a NULL/NOT-NULL test to tell a server-authored `scribe_auto_liveUpset_…` row from a member-minted one, so the rule that said the column … MERGE OF int/v0.30.0 (2026-10-08): raised 1057 -> 1063 by N8 / DI-440 (2026-09-29): A3 gained its ONE named exemption — the live-upset verifier must read `messages.emitted_by` as a NULL/NOT-NULL test to tell a server-authored `scribe_auto_liveUpset_…` row from a member-minted one, so the rule that said the column …"
+}

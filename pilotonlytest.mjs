@@ -49,7 +49,8 @@ const { PILOT_ONLY_REGISTRY, PILOT_ONLY_KEYS } = PO;
 console.log('\n[1] The registry is well-formed and closed…');
 {
   assert(Object.isFrozen(PILOT_ONLY_REGISTRY) && PILOT_ONLY_KEYS.every((k) => Object.isFrozen(PILOT_ONLY_REGISTRY[k])), '[1a] the registry is deep-frozen');
-  assert(PILOT_ONLY_KEYS.length === 8, `[1b] eight keys (got ${PILOT_ONLY_KEYS.length}: ${PILOT_ONLY_KEYS.join(', ')})`);
+  // D1 Lane C (2026-10-08): `newsPilotSources` is the NINTH (DI-479: pilot-status news sources reach pilot leagues only; the client mirror in newsTransport.js).
+  assert(PILOT_ONLY_KEYS.length === 9 && PILOT_ONLY_KEYS.includes('newsPilotSources'), `[1b] nine keys, newsPilotSources among them (got ${PILOT_ONLY_KEYS.length}: ${PILOT_ONLY_KEYS.join(', ')})`);
   for (const k of PILOT_ONLY_KEYS) {
     const e = PILOT_ONLY_REGISTRY[k];
     assert(Array.isArray(e.client) && Array.isArray(e.server), `[1c] ${k}: has a client list and a server list`);
@@ -207,6 +208,50 @@ console.log('\n[6] The six-school list is pilot-only IN CODE — one accessor, n
   // MUTATION on an in-memory copy: read the private list directly at the fallback and the [6k]-style scan reports it
   assert(/\bPILOT_ALMA_MATERS\b/.test(dmCode.replace('isPilotOnlyAllowed(\'sixSchoolAlmaMaters\', ...league) ? [...PILOT_ALMA_MATERS] : []', '[...PILOT_ALMA_MATERS]')) && !/isPilotOnlyAllowed\('sixSchoolAlmaMaters', \.\.\.league\)/.test(dmCode.replace('isPilotOnlyAllowed(\'sixSchoolAlmaMaters\', ...league) ? [...PILOT_ALMA_MATERS] : []', '[...PILOT_ALMA_MATERS]')),
     '[6o] mutation: removing the gate from getAlmaMaters() in a scratch copy is visible to the [6l] pin (the tripwire has teeth)');
+}
+
+console.log('\n[7] D1 Lane B (security O1) — Home never shows another league the PILOT\'s 2025 history (the year.ago card and its detail)…');
+{
+  const { createHome } = await import('./js/home.js');
+  const fx = await import('./statsfixtures.mjs');
+  const { calculateWeeklyResults } = await import('./js/scoring.js');
+  const appCode = stripComments(src('./js/app.js'));
+  const wiring = fnBody(appCode, 'function getHomeWiring()');
+  assert(/pilotHistoryAllowed:\s*\(\)\s*=>\s*isPilotOnlyAllowed\('season2025Record'\)/.test(wiring), '[7a] app.js getHomeWiring() hands Home pilotHistoryAllowed: () => isPilotOnlyAllowed(\'season2025Record\') — the registry\'s ONE predicate, no second one');
+  assert(PILOT_ONLY_REGISTRY.season2025Record.client.some((c) => c.file === 'js/app.js' && /getHomeWiring\(\)/.test(c.marker)), '[7b] the registry names that site (so a new surface of the pilot\'s history cannot be added without being listed)');
+  const L = fx.buildLeague({ w2: 'open', calculateWeeklyResults });
+  const NOW = Date.parse('2026-09-13T12:00:00.000Z');
+  const mk = (resolverLeague, { wire = true } = {}) => {
+    PO.setPilotOnlyLeagueResolver(resolverLeague === undefined ? null : () => resolverLeague);
+    const container = { _html: '', get innerHTML() { return this._html; }, set innerHTML(v) { this._html = String(v); }, get firstChild() { return this._html ? {} : null; }, addEventListener() {}, removeEventListener() {} };
+    const h = createHome({
+      escHtml: (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
+      isContentWithheld: () => false, confirmedStatusFor: (w) => w.status, picksReadConfirmed: () => true, renderCompact: () => '', chatCandidates: () => ({ scribe: [], lockerRoom: [] }),
+      getContainer: () => container, currentIdentityKey: () => 'acct|L1|p1', getCurrentTab: () => 'home', now: () => NOW,
+      ...(wire ? { pilotHistoryAllowed: () => PO.isPilotOnlyAllowed('season2025Record') } : {}),
+      read: { weeks: () => L.weeks, games: () => L.games, picks: () => L.picks, players: () => L.players, weeklyResults: () => L.weeklyResults, weekProgress: () => null, currentWeek: () => L.weeks[L.weeks.length - 1],
+        activeWeekId: () => null, viewer: () => ({ playerId: 'p1', isAdmin: false }), timezone: () => 'PT', leagueId: () => 'L1', isSupabase: () => false },
+    });
+    h.renderHome();
+    for (let i = 0; i < 6; i++) h.loadMore();                       // the whole feed, not just its first page
+    return { h, html: container.innerHTML, ids: h._sessionForTest().cardIds };
+  };
+  const pilot = mk({ pilot: true });
+  const yid = pilot.ids.find((i) => i.startsWith('year.ago:'));
+  assert(!!yid && /data-card-type="year\.ago"/.test(pilot.html), '[7c] the PILOT league (leagues.pilot === true) gets the year.ago card');
+  assert(!!pilot.h.resolveCardDetail(yid), '[7d] …and its detail (the pilot\'s own 2025 names and scores)');
+  for (const [label, league] of [['a non-pilot league (pilot: false)', { pilot: false }], ['a league row with no pilot flag', {}], ['no league resolved yet (fail closed)', null], ['no resolver installed at all', undefined]]) {
+    const r = mk(league);
+    assert(r.ids.every((i) => !i.startsWith('year.ago:')) && !/data-card-type="year\.ago"/.test(r.html) && !/A year ago this week/.test(r.html) && r.h.resolveCardDetail(yid) === null, `[7e] ${label}: NO year.ago card on the page, none in the tappable ids, and the pilot's detail id resolves to nothing`);
+  }
+  const unwired = mk({ pilot: true }, { wire: false });
+  assert(unwired.ids.every((i) => !i.startsWith('year.ago:')) && unwired.h.resolveCardDetail(yid) === null, '[7f] a Home built WITHOUT the predicate (a forgotten wire) shows no year.ago either — the default is closed, whatever the league is');
+  PO.setPilotOnlyLeagueResolver(null);
+  // MUTATION on an in-memory copy of the app wiring: dropping the predicate from getHomeWiring() is visible to [7a]
+  const mutated = appCode.replace(/pilotHistoryAllowed:\s*\(\)\s*=>\s*isPilotOnlyAllowed\('season2025Record'\),/, '');
+  assert(mutated !== appCode && !/pilotHistoryAllowed:\s*\(\)\s*=>\s*isPilotOnlyAllowed\('season2025Record'\)/.test(fnBody(mutated, 'function getHomeWiring()')), '[7g] mutation: removing the predicate from the wiring in a scratch copy is visible to the [7a] pin');
+  const mutated2 = appCode.replace("pilotHistoryAllowed: () => isPilotOnlyAllowed('season2025Record')", "pilotHistoryAllowed: () => true");
+  assert(mutated2 !== appCode && !/pilotHistoryAllowed:\s*\(\)\s*=>\s*isPilotOnlyAllowed\('season2025Record'\)/.test(fnBody(mutated2, 'function getHomeWiring()')), '[7h] mutation: a hard-coded `() => true` in the wiring is visible to the [7a] pin');
 }
 
 console.log(`\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed`);

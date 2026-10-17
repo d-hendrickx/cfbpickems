@@ -1,0 +1,15 @@
+{
+  "id": "pglite_repair.check",
+  "script": "supabase/tests/pglite_repair.check.mjs",
+  "summary": "loose",
+  "floor": 1,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "supabase/migrations/*.sql",
+    "supabase/repair/*.sql",
+    "supabase/tests/pglite-common.mjs"
+  ],
+  "note": "D1 Lane A (DI-545 F3): the pre-assembled LIVE repair file run end to end in an in-process Postgres (PGlite): a clean database is a no-op, each drift the canary names (the RG-313 mutation, an added permissive policy, a FOR ALL policy, a dropped policy, a redefined picks_visible / pick_window_open, two at once) is repaired and the blind rule WORKS again, a repair without the canary or 0043 is refused by name, and one that cannot restore the expected state is undone whole. Offline evidence only; SKIPS and passes with ONE assertion when PGlite is not installed (set PGLITE_DIR), so the floor is 1."
+}

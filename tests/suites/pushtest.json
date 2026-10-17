@@ -1,0 +1,24 @@
+{
+  "id": "pushtest",
+  "script": "pushtest.mjs",
+  "label": "87",
+  "summary": {
+    "regex": "(✅|❌) pushtest: (\\d+) passed, (\\d+) failed",
+    "flags": "",
+    "passed": 2,
+    "failed": 3,
+    "verdict": {
+      "group": 1,
+      "equals": "✅",
+      "combined": false
+    },
+    "skipped": null
+  },
+  "floor": 400,
+  "tags": [
+    "slow",
+    "tz"
+  ],
+  "expectedMs": 32400,
+  "note": "pushtest.mjs actually ran its full set (floor 389 — RAISED 380 -> 389 (2026-10-02, reviewer notes): [12z3] the Notifications row's saved copy leaves the Turn On card after a granted tap, [12z4] a flipped switch re-opens showing the saved value and a save that did not take snaps …"
+}

@@ -1,0 +1,16 @@
+{
+  "id": "sourcechipstest",
+  "script": "sourcechipstest.mjs",
+  "summary": "strict",
+  "floor": 105,
+  "tags": [
+    "smoke"
+  ],
+  "deps": [
+    "js/source-chips.js",
+    "js/platform.js",
+    "js/chat-ui.js"
+  ],
+  "expectedMs": 100,
+  "note": "D1 Lane C DI-641 (security C5): the CLIENT half of the source-chip boundary - chips only for SCRIBE's own message, every source re-validated and a bad one dropped, at most three, a date that is text (no locale, no zone), markup with no url and no href, escaping with and without the caller's escaper, and a tap that re-validates and opens only a validated https address. Registered 2026-10-08 (Lane C 3.B)."
+}

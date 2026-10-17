@@ -53,6 +53,17 @@
  * the moment the drawer is fully closed; the T-29 bounce still works for a
  * plain vertical drag; the ≥700px web layout (wheel over scrim / drawer).
  *
+ * [G] W-66 (Drew, 2026-10-14: "when I hit find games in request a game nothing
+ * happens") — the drawer's "Request a game" row answers real finger taps:
+ * Find games shows the loading line then ESPN's games, Request and Withdraw
+ * show their result, in a CFB-only and a CFB + NFL league (ESPN stubbed in
+ * the page); G-12/G-13 the filter and the chat box stay live after the filter
+ * repaints the results, and survive a close and reopen; G-14 a re-search keeps
+ * the previous games dimmed under the loading line (no jump); G-15 a News team
+ * change does not freeze the card. H-0 opening a row leaves the other group's
+ * open row still. [H] every drawer repaint keeps open rows open with no replayed
+ * opening, and a row still opening carries on. Kit: tests/kits/w66-mutants.json.
+ *
  * Only a device can show WebKit's own behaviour (rubber band, momentum,
  * UIScrollView pan vs. the drawer's axis lock). Blink measures the same
  * relations; the device checklist in the SB-05 hand-off covers the rest.
@@ -638,6 +649,273 @@ try {
     `F-11: THE BUG — the next touch releases it and the page scrolls again (data-dragging ${b.dragging}, overflow-y "${b.hOy}", window ${a.win}→${b.win}); before SB-15 the page stayed frozen until a drawer drag happened to end`);
   const bounce = await evaluate(S);
   assert(bounce.ob === OB_AUTO, `F-12: …and the page's own bounce is back too (${bounce.ob})`);
+
+  // ═════════════════════════════════════════════════════════════════════════
+  console.log('\n[G] W-66 — Request a game, in the drawer: Find games, Request and Withdraw answer a real finger tap (Drew, 2026-10-14: "when I hit find games in request a game nothing happens")…');
+  // ═════════════════════════════════════════════════════════════════════════
+  // The card's only host since DI-304 (UX Revamp wiring pass 1, 2026-09-25) is this drawer's "Request a game" row, which embeds the card as an HTML string built by
+  // buildControlCenterCtx(). Its handlers kept repainting the Rules page, which no longer carries it: ESPN was asked, the results landed in state, and the drawer never
+  // changed. ESPN is a page-side stub here (held until released, so the loading state can be read); every tap is a real touch on the element's centre.
+  await viewport(390, 844);
+  await freshPicks();
+  const GR_ROW = '#control-center [data-action="cc-toggle-row"][data-row="game-settings"]';
+  // The ESPN scoreboard, stubbed in the page: dates in `__espn.full` answer two FBS games kicking off at 18:00Z that day (13:00 Central, the same Central date);
+  // any other date answers no events. While `hold` is true each answer waits for `__espn.release()`. Only date-scoped scoreboard asks are counted.
+  const ESPN_STUB = `(() => {
+    const real = window.fetch.bind(window);
+    const ev = (id, d, home, away) => ({ id, date: d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6) + 'T18:00Z', status: { type: { name: 'STATUS_SCHEDULED', detail: '', shortDetail: '' } },
+      competitions: [{ timeValid: true, neutralSite: false, odds: [], broadcasts: [], notes: [], venue: { fullName: 'Stadium', address: { city: 'City', state: 'ST' } },
+        competitors: [{ homeAway: 'home', id: 'h' + id, score: '0', team: { id: 'h' + id, location: home, name: 'Home', shortDisplayName: home } },
+                      { homeAway: 'away', id: 'a' + id, score: '0', team: { id: 'a' + id, location: away, name: 'Away', shortDisplayName: away } }] }] });
+    window.__espn = { asked: [], held: [], hold: true, full: new Set() };
+    window.__espn.release = () => window.__espn.held.splice(0).map((f) => f()).length;
+    window.fetch = (input, init) => {
+      const u = String((input && input.url) || input);
+      const d = (/^https:\\/\\/site\\.api\\.espn\\.com\\/.*\\/scoreboard\\?(?:.*&)?dates=(\\d{8})/.exec(u) || [])[1];
+      if (!d) return real(input, init);
+      window.__espn.asked.push(u);
+      const events = window.__espn.full.has(d) ? [ev('401999001', d, 'Ohio State', 'Michigan'), ev('401999002', d, 'Alabama', 'Auburn')] : [];
+      const answer = () => new Response(JSON.stringify({ events }), { status: 200, headers: { 'content-type': 'application/json' } });
+      return window.__espn.hold ? new Promise((r) => window.__espn.held.push(() => r(answer()))) : Promise.resolve(answer());
+    };
+  })()`;
+  /** The card as the player sees it, read from the drawer itself (`rows[].req` is the event id on a row's Request button, null when it has none). */
+  const GR = `(async () => {
+    const body = document.getElementById('cc-body-game-settings'), res = document.getElementById('gr-results'), find = document.getElementById('gr-find');
+    const st = await import('./js/storage.js');
+    return { inDrawer: !!(body && res && body.contains(res)), date: (document.getElementById('gr-date') || {}).value ?? null,
+      text: res ? res.textContent.replace(/\\s+/g, ' ').trim() : null, busy: res ? res.getAttribute('aria-busy') : null, findDisabled: find ? find.disabled : null,
+      findTop: find ? Math.round(find.getBoundingClientRect().top) : null, anim: body ? getComputedStyle(body).animationName : null,
+      rows: [...document.querySelectorAll('#cc-body-game-settings #gr-results .gr-row')].map((r) => ({ req: (r.querySelector('.gr-request-btn') || { dataset: {} }).dataset.eventId || null, done: !!r.querySelector('.gr-state-done') })),
+      mine: [...document.querySelectorAll('#cc-body-game-settings .gr-mine-row')].map((r) => ({ status: ((r.querySelector('.gr-status-chip') || {}).className || '').replace(/.*gr-status-(\\w+).*/, '$1'), withdraw: !!r.querySelector('.gr-withdraw-btn') })),
+      filter: (document.getElementById('gr-filter') || {}).value ?? null, chat: (document.getElementById('gr-chat-toggle') || {}).checked ?? null,
+      asked: window.__espn ? window.__espn.asked.slice() : [],
+      stored: st.foldGameRequests().filter((r) => r.playerId === 'p1').map((r) => r.espnEventId + ':' + r.status) };
+  })()`;
+  /** A real finger tap: only the drawer's own list scrolls to bring the element into view (`center: false` taps it where it is), and, like a finger,
+   *  it taps only once the element is what is on screen at its centre (up to 1.5 s), then touchStart + touchEnd there (the engine turns that into the
+   *  click the page's own handlers hear). N4 (W-66 review): when the click does not land on the target, the line says what was under the finger and
+   *  what the click reached. Returns false when there is nothing to tap, so a red run reports every later check instead of throwing. */
+  const DESC = `((n) => !n ? null : n.id ? '#' + n.id : n.tagName.toLowerCase() + (typeof n.className === 'string' && n.className.trim() ? '.' + n.className.trim().split(/\\s+/).slice(0, 2).join('.') : ''))`;
+  const fingerTap = async (sel, { center = true } = {}) => {
+    const q = JSON.stringify(sel);
+    let at = null;
+    for (let t = 0; t < 1500; t += 50) {
+      at = await evaluate(`(() => { const e = document.querySelector(${q}); if (!e) return null;
+        const pane = ${center} ? e.closest('.control-center-pane-content') : null;
+        if (pane) { const er = e.getBoundingClientRect(), pr = pane.getBoundingClientRect(); pane.scrollTop += (er.top + er.height / 2) - (pr.top + pr.height / 2); }
+        const b = e.getBoundingClientRect(), x = Math.round(b.left + b.width / 2), y = Math.round(b.top + b.height / 2), h = document.elementFromPoint(x, y);
+        return { x, y, hit: !!h && (h === e || e.contains(h)), under: ${DESC}(h) }; })()`);
+      if (!at || at.hit) break;
+      await sleep(50);
+    }
+    if (!at) { console.log(`    (tap: nothing matches ${sel})`); return false; }
+    await evaluate(`(() => { window.__tapEl = document.querySelector(${q}); window.__tapClick = null;
+      document.addEventListener('click', (ev) => { window.__tapClick = window.__tapEl && window.__tapEl.contains(ev.target) ? 'target' : ${DESC}(ev.target); }, { capture: true, once: true }); })()`);
+    await tStart(at.x, at.y); await sleep(40); await tEnd(); await sleep(200);
+    const landed = await evaluate(`window.__tapClick`);
+    if (landed !== 'target') console.log(`    (tap on ${sel}: ${at.hit ? 'it was under the finger' : `under the finger was ${at.under}`}; ${landed ? `the click reached ${landed}` : 'no click'})`);
+    return true;
+  };
+  /** Scroll only the drawer's list so the element sits at the list's centre; its top, after. */
+  const centredTop = (sel) => evaluate(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return null; const pane = e.closest('.control-center-pane-content');
+    if (pane) { const er = e.getBoundingClientRect(), pr = pane.getBoundingClientRect(); pane.scrollTop += (er.top + er.height / 2) - (pr.top + pr.height / 2); }
+    return Math.round(e.getBoundingClientRect().top); })()`);
+  const rowsLanded = (n) => waitFor(`document.querySelectorAll('#cc-body-game-settings #gr-results .gr-row').length === ${n}`, 3000);
+  const openCard = async () => {
+    await evaluate(ESPN_STUB);
+    await fingerTap('#control-center-trigger');
+    await waitFor(`document.getElementById('control-center').dataset.phase === 'open'`, 2000);
+    await fingerTap(GR_ROW);
+    return waitFor(`document.querySelector('#cc-body-game-settings #gr-find')`, 2000);
+  };
+  const ymd = (d) => String(d || '').replace(/-/g, '');
+  const reqIds = (rows) => rows.map((r) => r.req).filter(Boolean).sort().join(',');
+
+  const cardOpen = await openCard();
+  let g = await evaluate(GR);
+  assert(cardOpen && g.inDrawer && await evaluate(`!document.querySelector('#page-rules .gr-card')`) && g.anim === 'cc-row-body-in',
+    `G-0: fixture — signed in as a player, the drawer's "Request a game" row is open on the card (Find games inside #cc-body-game-settings), opened with its 220 ms animation (${g.anim}), and the Rules page carries no copy of it (in drawer ${g.inDrawer})`);
+  const sats = await evaluate(`[...document.querySelectorAll('#gr-sat-chips .gr-sat-chip')].map((c) => c.dataset.date)`);
+  await evaluate(`window.__espn.full.add(${JSON.stringify(ymd(sats[0]))})`);
+  await fingerTap('#gr-sat-chips .gr-sat-chip');
+  g = await evaluate(GR);
+  assert(sats.length === 4 && g.date === sats[0], `G-1: tapping "This Sat" puts its date in the Game day field (${g.date}, chips ${sats.join(' ')})`);
+  const findTopBefore = await centredTop('#gr-find');
+  await fingerTap('#gr-find');
+  g = await evaluate(GR);
+  const findTopLoading = g.findTop;
+  assert(g.asked.length === 1 && g.asked[0].includes('dates=' + ymd(sats[0])),
+    `G-2: the tap on Find games reaches its handler: ESPN is asked once, for that Saturday (${g.asked.map((u) => u.replace(/^.*\/sports\//, '')).join(' | ') || 'nothing asked'})`);
+  assert(g.inDrawer && /Checking ESPN for that day/.test(g.text || '') && g.busy === 'true' && g.findDisabled === true,
+    `G-3: THE BUG — while ESPN has not answered, the drawer says so: "Checking ESPN for that day…", aria-busy, Find games disabled (text ${JSON.stringify(g.text)}, aria-busy ${g.busy}, disabled ${g.findDisabled}); before the fix the drawer did not change at all`);
+  await fingerTap('#gr-find');
+  g = await evaluate(GR);
+  assert(g.asked.length === 1, `G-4: a second tap on Find games while the search is out starts no second search (ESPN asked ${g.asked.length} time(s))`);
+  await evaluate(`window.__espn.release()`);
+  await rowsLanded(2);
+  g = await evaluate(GR);
+  assert(g.rows.length === 2 && reqIds(g.rows) === '401999001,401999002' && g.busy === null && g.findDisabled === false && g.date === sats[0],
+    `G-5: THE BUG — ESPN's answer reaches the drawer: both games listed, each with a Request button; not busy, Find games enabled, the date kept (rows ${JSON.stringify(g.rows)}, aria-busy ${g.busy}, disabled ${g.findDisabled}, date ${g.date})`);
+  assert(findTopBefore !== null && Math.abs(findTopLoading - findTopBefore) <= 1 && Math.abs(g.findTop - findTopBefore) <= 1,
+    `G-5b: …and the drawer does not jump: Find games stays where the finger tapped it, through the loading paint and the results paint (${findTopBefore}px before the tap → ${findTopLoading}px loading → ${g.findTop}px results)`);
+  assert(g.anim === 'none' && await evaluate(`[...document.querySelectorAll('#control-center .control-center-row-body')].every((b) => getComputedStyle(b).animationName === 'none')`),
+    `G-5c: …and the row does not replay its opening: a repaint of an open row is not the row opening (computed animation-name ${g.anim}; the replay collapses the card to nothing and fades it back, 220 ms, on every tap)`);
+  const reqTapped = await fingerTap('#cc-body-game-settings .gr-request-btn[data-event-id="401999001"]');
+  g = await evaluate(GR);
+  assert(reqTapped && g.stored.includes('401999001:pending') && g.rows.filter((r) => r.done).length === 1 && reqIds(g.rows) === '401999002'
+    && g.mine.length === 1 && g.mine[0].status === 'pending' && g.mine[0].withdraw,
+    `G-6: THE BUG — Request: saved through the seam AND shown in the drawer: that game reads "Requested" (the other still offers Request), "Your requests" lists it as pending with Withdraw (tapped ${reqTapped}, stored ${JSON.stringify(g.stored)}, rows ${JSON.stringify(g.rows)}, mine ${JSON.stringify(g.mine)})`);
+  const wdTapped = await fingerTap('#cc-body-game-settings .gr-withdraw-btn');
+  g = await evaluate(GR);
+  assert(wdTapped && g.stored.includes('401999001:withdrawn') && g.mine.length === 1 && g.mine[0].status === 'withdrawn' && !g.mine[0].withdraw
+    && reqIds(g.rows) === '401999001,401999002' && !g.rows.some((r) => r.done),
+    `G-7: THE BUG — Withdraw: saved, and the drawer shows it withdrawn with no Withdraw button, and both games offer Request again (tapped ${wdTapped}, stored ${JSON.stringify(g.stored)}, mine ${JSON.stringify(g.mine)}, rows ${JSON.stringify(g.rows)})`);
+  await fingerTap(GR_ROW);
+  await fingerTap(GR_ROW);
+  await waitFor(`document.querySelector('#cc-body-game-settings #gr-find')`, 2000);
+  g = await evaluate(GR);
+  assert(g.date === sats[0] && g.rows.length === 2 && g.anim === 'cc-row-body-in',
+    `G-8: closing and reopening the row shows the card as it now is (date ${g.date}, ${g.rows.length} games), opened with its animation (${g.anim}); before the fix it reopened on the copy built when the drawer was last painted — a blank date and no games`);
+  // A new touch while a search is out: close the drawer during it, then open it again.
+  await fingerTap('#gr-find');
+  const heldAt = await evaluate(GR);
+  await fingerTap('#control-center [data-action="cc-close"]');
+  await waitFor(`document.getElementById('control-center').dataset.phase === 'closed'`, 2000);
+  await evaluate(`window.__espn.release()`);
+  await sleep(300);
+  await fingerTap('#control-center-trigger');
+  await waitFor(`document.getElementById('control-center').dataset.phase === 'open'`, 2000);
+  await rowsLanded(2);
+  g = await evaluate(GR);
+  assert(heldAt.asked.length === 2 && /Checking ESPN/.test(heldAt.text || '') && g.rows.length === 2 && g.busy === null && g.findDisabled === false,
+    `G-9: closing the drawer while a search is out loses nothing: reopened, the row shows the answer that landed while it was closed (asked ${heldAt.asked.length}, loading shown ${/Checking ESPN/.test(heldAt.text || '')}, rows ${g.rows.length}, aria-busy ${g.busy})`);
+  await evaluate(`window.__espn.hold = false`);
+  await fingerTap(`#gr-sat-chips .gr-sat-chip[data-date="${sats[1]}"]`);
+  const nextSatSet = await waitFor(`(document.getElementById('gr-date') || {}).value === ${JSON.stringify(sats[1])}`, 1500);
+  assert(nextSatSet, `G-10a: tapping the next Saturday's chip puts its date in the Game day field before Find games is tapped, as G-1 checks for "This Sat" (want ${sats[1]}, field ${await evaluate(`(document.getElementById('gr-date') || {}).value`)})`);
+  await fingerTap('#gr-find');
+  await waitFor(`/No games found for that date/.test((document.getElementById('gr-results') || {}).textContent || '')`, 3000);
+  g = await evaluate(GR);
+  assert(g.date === sats[1] && /No games found for that date/.test(g.text || '') && g.rows.length === 0 && (g.asked.at(-1) || '').includes('dates=' + ymd(sats[1])),
+    `G-10: a Saturday ESPN has nothing for says so in the drawer: "No games found for that date…" (date ${g.date}, text ${JSON.stringify((g.text || '').slice(0, 60))})`);
+  // The same taps in a league that plays college football AND the NFL (the card searches college football: DI-175's v1 writes espnSport 'college-football' only).
+  await evaluate(`(async () => { const st = await import('./js/storage.js');
+    st.saveCompetition({ id: '11111111-1111-4111-8111-111111111111', sport: 'cfb', kind: 'season', enrollment: 'all', isDefault: true, archivedAt: null, activeWeekId: null, settings: {}, createdAt: '2026-01-01T00:00:00.000Z' });
+    st.saveCompetition({ id: '22222222-2222-4222-8222-222222222222', sport: 'nfl', kind: 'season', enrollment: 'all', isDefault: false, archivedAt: null, activeWeekId: null, settings: {}, createdAt: '2026-02-01T00:00:00.000Z' });
+    await new Promise((r) => setTimeout(r, 1200)); })()`);
+  await freshPicks();
+  const twoOpen = await openCard();
+  const sports = await evaluate(`import('./js/sport-seam.js').then((m) => m.liveCompetitions().map((c) => c.sport).sort().join(','))`);
+  await evaluate(`(() => { window.__espn.hold = false; window.__espn.full.add(${JSON.stringify(ymd(sats[0]))}); })()`);
+  await fingerTap('#gr-sat-chips .gr-sat-chip');
+  await fingerTap('#gr-find');
+  await rowsLanded(2);
+  g = await evaluate(GR);
+  assert(twoOpen && sports === 'cfb,nfl' && g.rows.length === 2 && g.date === sats[0],
+    `G-11: THE BUG, in a CFB + NFL league — the same taps list the games in the drawer (sports ${sports}, card open ${twoOpen}, rows ${g.rows.length}, date ${g.date})`);
+  // Touched-screen audit (coordinator, 2026-10-14): the row is drawn from the card's live state, never a snapshot, and the filter box and the chat box stay live after
+  // the filter repaints the results in place (both sit inside #gr-results; bound once, the first filter left them dead: typing stopped filtering, and unticking
+  // "Post to the Locker Room" no longer changed the choice the Request button acts on).
+  await fingerTap('#cc-body-game-settings #gr-filter');
+  await pg.send('Input.insertText', { text: 'ohio' });
+  const firstFilter = await waitFor(`[...document.querySelectorAll('#cc-body-game-settings #gr-results .gr-request-btn')].map((b) => b.dataset.eventId).join(',') === '401999001'`, 2000);
+  await evaluate(`document.getElementById('gr-filter').select()`);       // the next keystrokes replace the text, as a select-all would
+  await pg.send('Input.insertText', { text: 'aub' });
+  const secondFilter = await waitFor(`[...document.querySelectorAll('#cc-body-game-settings #gr-results .gr-request-btn')].map((b) => b.dataset.eventId).join(',') === '401999002'`, 2000);
+  await fingerTap('#cc-body-game-settings #gr-chat-toggle');
+  const typed = await evaluate(GR);
+  await fingerTap(GR_ROW);
+  await fingerTap(GR_ROW);
+  await waitFor(`document.querySelector('#cc-body-game-settings #gr-find')`, 2000);
+  g = await evaluate(GR);
+  assert(firstFilter && secondFilter && typed.filter === 'aub' && g.filter === 'aub' && reqIds(g.rows) === '401999002' && g.rows.length === 1 && g.date === sats[0],
+    `G-12: the filter keeps filtering as the player types on ("ohio" -> the Ohio State game ${firstFilter}; then "aub" -> the Auburn game ${secondFilter}), and its text and list survive closing and reopening the row (reopened: filter ${JSON.stringify(g.filter)}, ${g.rows.length} row(s) ${reqIds(g.rows)})`);
+  assert(typed.chat === false && g.chat === false,
+    `G-13: "Post to the Locker Room", unticked after filtering, is the player's choice: the reopened row (drawn from that choice) shows it unticked (box after the tap ${typed.chat}, reopened ${g.chat}); before, the box was dead after a filter and the request still posted`);
+  // W-66 review N1 (DI-175f amended by the coordinator, 2026-10-14; Interaction Principles, Loading: cached content first): a re-search keeps the previous games on
+  // screen, dimmed and busy, under the loading line. Cleared, the card shrank by their height and a drawer scrolled near its end jumped (158 px measured with Find near the top).
+  await evaluate(`window.__espn.hold = true`);
+  const near = await evaluate(`(() => { const e = document.getElementById('gr-find'), pane = e.closest('.control-center-pane-content'), pr = pane.getBoundingClientRect();
+    pane.scrollTop += e.getBoundingClientRect().top - pr.top - 80;
+    return { top: Math.round(e.getBoundingClientRect().top), paneTop: Math.round(pr.top), slack: Math.round(pane.scrollHeight - pane.clientHeight - pane.scrollTop) }; })()`);
+  const staleIds = reqIds((await evaluate(GR)).rows);
+  await fingerTap('#gr-find', { center: false });
+  await sleep(250);                                                       // past the 150 ms dim
+  const busyNow = await evaluate(GR);
+  const stale = await evaluate(`(() => { const s = document.querySelector('#gr-results .gr-stale'), line = document.querySelector('#gr-results .gr-loading-line');
+    return s ? { inert: s.inert === true, opacity: Number(getComputedStyle(s).opacity), ids: [...s.querySelectorAll('.gr-request-btn')].map((b) => b.dataset.eventId).sort().join(','),
+      lineAbove: !!line && line.getBoundingClientRect().bottom <= s.getBoundingClientRect().top + 1 } : null; })()`);
+  const staleTap = await fingerTap('#gr-results .gr-stale .gr-request-btn', { center: false });
+  const afterStaleTap = await evaluate(GR);
+  await evaluate(`window.__espn.release()`);
+  await rowsLanded(2);
+  g = await evaluate(GR);
+  const staleGone = await evaluate(`!document.querySelector('#gr-results .gr-stale')`);
+  await evaluate(`window.__espn.hold = false`);
+  assert(near.top - near.paneTop <= 90 && busyNow.findTop === near.top && g.findTop === near.top,
+    `G-14a: N1 — a re-search with Find games near the top of the drawer (${near.top - near.paneTop} px below it, ${near.slack} px of list below the fold) never moves it: ${near.top}px before, ${busyNow.findTop}px while ESPN is asked, ${g.findTop}px when the games land (158 px measured before N1)`);
+  assert(!!stale && stale.ids === staleIds && stale.opacity < 0.9 && stale.lineAbove && busyNow.busy === 'true' && /Checking ESPN for that day/.test(busyNow.text || ''),
+    `G-14b: N1 — while ESPN is asked again the previous games stay on screen (${stale ? stale.ids : 'cleared'}; were ${staleIds}), dimmed (opacity ${stale && stale.opacity}), under the loading line (${stale && stale.lineAbove}), the list busy (aria-busy ${busyNow.busy})`);
+  assert(!!stale && stale.inert && staleTap && afterStaleTap.stored.join() === busyNow.stored.join(),
+    `G-14c: N1 — the dimmed games take no tap: Request on one saves nothing (inert ${stale && stale.inert}; stored ${JSON.stringify(busyNow.stored)} → ${JSON.stringify(afterStaleTap.stored)})`);
+  assert(staleGone && g.rows.length === 2 && g.busy === null && g.filter === '',
+    `G-14d: N1 — the new games replace the dimmed ones, not busy, the filter cleared for the new list (dimmed block gone ${staleGone}, ${g.rows.length} rows, aria-busy ${g.busy}, filter ${JSON.stringify(g.filter)})`);
+  // W-66 review N3: a News team change copies the drawer's context; the copy must keep the card's getter, or the row reopens on the card as it was at that change.
+  const newsOpened = await fingerTap('#control-center [data-action="cc-push-news"]') && await waitFor(`document.getElementById('control-center').dataset.pane === 'news'`, 2000);
+  const addedTeam = await evaluate(`(() => { const sel = document.getElementById('cc-news-team-add'); const o = sel && [...sel.options].find((x) => x.value); if (!o) return null;
+    sel.value = o.value; sel.dispatchEvent(new Event('change', { bubbles: true })); return o.value; })()`);
+  await sleep(200);
+  await fingerTap('#control-center [data-action="cc-pop-news"]');
+  await waitFor(`document.getElementById('control-center').dataset.pane === 'main'`, 2000);
+  await fingerTap('#cc-body-game-settings #gr-filter');
+  await evaluate(`document.getElementById('gr-filter').select()`);
+  await pg.send('Input.insertText', { text: 'ohio' });
+  const newsFiltered = await waitFor(`[...document.querySelectorAll('#cc-body-game-settings #gr-results .gr-request-btn')].map((b) => b.dataset.eventId).join(',') === '401999001'`, 2000);
+  await fingerTap(GR_ROW);
+  await fingerTap(GR_ROW);
+  await waitFor(`document.querySelector('#cc-body-game-settings #gr-find')`, 2000);
+  g = await evaluate(GR);
+  assert(newsOpened && !!addedTeam && newsFiltered && g.filter === 'ohio' && reqIds(g.rows) === '401999001',
+    `G-15: N3 — after a News team is added (${addedTeam}), the row still reopens on the card as it is now (filter ${JSON.stringify(g.filter)}, games ${reqIds(g.rows)}), not on the copy taken at that change`);
+
+  // ═════════════════════════════════════════════════════════════════════════
+  console.log('\n[H] Touched-screen audit — every drawer repaint (time zone, theme, appearance, logos, notifications) keeps open rows open: no replayed opening…');
+  // ═════════════════════════════════════════════════════════════════════════
+  // refreshControlCenterAndSettingsPage() -> update() rebuilds every open row's body; a rebuilt body replayed its 220 ms opening (cc-row-body-in: collapse to nothing,
+  // fade back) right after the player's own choice. A row that is STILL opening when the repaint lands (Notifications: its async body resolves ~2 ms after the tap)
+  // must keep its place in the animation, neither restarting it nor snapping open.
+  const BODIES = `[...document.querySelectorAll('#control-center .control-center-row-body')].map((b) => b.id + ':' + getComputedStyle(b).animationName)`;
+  await waitFor(`(() => { const b = document.getElementById('cc-body-game-settings'); return b && b.getAnimations().length === 0; })()`, 2000);
+  await evaluate(`(() => { const b = document.getElementById('cc-body-game-settings'); if (b) b.__w66req = true; })()`);
+  await fingerTap('#control-center [data-action="cc-toggle-row"][data-row="logo-view"]');
+  const otherRow = await evaluate(`(() => { const b = document.getElementById('cc-body-game-settings'); return b ? { replaced: !b.__w66req, name: getComputedStyle(b).animationName } : null; })()`);
+  const logoOpened = await waitFor(`(() => { const b = document.getElementById('cc-body-logo-view'); return b && b.getAnimations().length === 0; })()`, 2000);
+  const logoOpenName = await evaluate(`(() => { const b = document.getElementById('cc-body-logo-view'); if (b) b.__w66old = true; return b ? getComputedStyle(b).animationName : null; })()`);
+  assert(logoOpened && logoOpenName === 'cc-row-body-in' && !!otherRow && otherRow.replaced && otherRow.name === 'none',
+    `H-0: N2 — opening a row (Team logos) animates that row only: the row already open in the other group (Request a game) is repainted but holds still (Team logos ${logoOpenName}; Request a game ${JSON.stringify(otherRow)})`);
+  await fingerTap('#cc-body-logo-view [data-action="cc-toggle-logo-view"]');
+  const afterLogo = await evaluate(`({ replaced: !!document.getElementById('cc-body-logo-view') && !document.getElementById('cc-body-logo-view').__w66old, bodies: ${BODIES} })`);
+  assert(logoOpened && logoOpenName === 'cc-row-body-in' && afterLogo.replaced && afterLogo.bodies.length === 2
+    && afterLogo.bodies.every((x) => x.endsWith(':none')),
+    `H-1: a tap on the Team logos switch repaints the drawer and both open rows stay open without replaying their opening (opened with ${logoOpenName}; repainted ${afterLogo.replaced}; after: ${afterLogo.bodies.join(', ')})`);
+  await pg.send('Animation.enable');
+  await pg.send('Animation.setPlaybackRate', { playbackRate: 0.1 });     // the 220 ms opening now takes 2.2 s, so the repaint lands inside it on any machine
+  await fingerTap('#control-center [data-action="cc-toggle-row"][data-row="timezone"]');
+  await sleep(500);
+  const mid = await evaluate(`(() => {
+    const old = document.getElementById('cc-body-timezone'), oa = old && old.getAnimations()[0];
+    const before = oa ? oa.currentTime : null;
+    const sel = old && old.querySelector('select[data-field="timezone"]');
+    if (!sel) return { before, missing: true };
+    sel.value = [...sel.options].find((o) => o.value !== sel.value).value;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    const nb = document.getElementById('cc-body-timezone'), na = nb && nb.getAnimations()[0];
+    return { before, replaced: !!nb && nb !== old, after: na ? na.currentTime : null, name: nb ? getComputedStyle(nb).animationName : null };
+  })()`);
+  await pg.send('Animation.setPlaybackRate', { playbackRate: 1 });
+  assert(mid.before > 5 && mid.replaced && mid.name === 'cc-row-body-in' && mid.after !== null && Math.abs(mid.after - mid.before) < 2,
+    `H-2: a time zone chosen while its row is still opening repaints the drawer and the opening carries on from where it was, neither restarting nor snapping open (at the change ${mid.before === null ? 'no animation' : Math.round(mid.before) + ' ms'} in; after the repaint ${mid.name}, ${mid.after === null ? 'no animation' : Math.round(mid.after) + ' ms'}; replaced ${mid.replaced})`);
 } catch (e) {
   assert(false, `the engine sections ran to completion (threw: ${e && e.message})`);
 } finally {

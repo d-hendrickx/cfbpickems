@@ -406,7 +406,9 @@ assert(!/\bdetail\s*:/.test(saveGameCallText) && !/\bshortDetail\s*:/.test(saveG
     && !/\bquarter\s*:/i.test(saveGameCallText) && !/\bclock\s*:/i.test(saveGameCallText)
     && !/(?<!lastUpdated:upd\.lastUpdated\}\); *\/\/ *)\bname\s*:/.test(saveGameCallText),
   'the saveGame() call-site literally contains none of detail:/shortDetail:/name:/quarter:/clock: as keys');
-const precedingComment = appJsSrc.slice(Math.max(0, appJsSrc.indexOf(saveGameCallText) - 700), appJsSrc.indexOf(saveGameCallText));
+// RE-DERIVED 2026-10-08 (W-22 / DI-543): the allow-list comment still sits DIRECTLY above the call, but the logo-backfill and security-F1 notes appended to it (2026-09-27/28) pushed its first line past the old 700-character window,
+// so the window was widened to 2600 (the comment is ~1700 characters); the assertion itself (an allow-list / never-persisted comment precedes the call) is unchanged.
+const precedingComment = appJsSrc.slice(Math.max(0, appJsSrc.indexOf(saveGameCallText) - 2600), appJsSrc.indexOf(saveGameCallText));
 assert(/allow-list/i.test(precedingComment) && /never.{0,15}persist|not.{0,10}(persist|includ)/i.test(precedingComment),
   'the saveGame() call is preceded by the required allow-list / intentionally-not-persisted comment');
 
@@ -488,11 +490,14 @@ liveStatusById.set(staleGame.gameId, { name: 'STATUS_IN_PROGRESS', detail: '2:00
 
 const tableStale = renderDashboardTable(players7, [staleGame], [{ pickId: 'pk_stale', weekId: week7.weekId, gameId: staleGame.gameId, playerId: 'ig_p1', selectedTeam: 'Home U' }], [{ playerId: 'ig_p1', correctPicks: 0, incorrectPicks: 0 }], week7.weekId, null);
 assert(tableStale.includes('live-dot-static'), 'renderDashboardTable: stale capture goes static');
-assert(/2:00 - 4th Quarter · updated 5m ago/.test(tableStale), 'renderDashboardTable: stale long-form text carries the "updated Nm ago" suffix');
+// RE-DERIVED 2026-10-08 (W-22 / DI-543; Game Day DI-570, merged after this section was written): a capture older than 3 minutes is the 'live-stale' PHASE - the dot goes static, the last score stays, and the
+// row carries the one chip 'Score may be behind'. The old long-form '<detail> · updated Nm ago' suffix was replaced by that chip (js/game-state.js), so what is pinned is the chip and the ABSENCE of the retired suffix.
+assert(/gs-chip--live-stale">Score may be behind</.test(tableStale) && !/updated 5m ago/.test(tableStale) && tableStale.includes('LIVE 17–21'), 'renderDashboardTable: stale capture shows the "Score may be behind" chip (DI-570), keeps the last score, and no longer carries the retired "updated Nm ago" suffix');
 
 const compactStale = renderDashboardCompact(players7, [staleGame], [], [{ playerId: 'ig_p1', correctPicks: 0, incorrectPicks: 0 }], week7.weekId, null);
 assert(compactStale.includes('live-dot-static'), 'renderDashboardCompact: stale capture goes static too, even though the short form has no room for the suffix');
-assert(extractChip(compactStale, 'dc-live-detail') === '2:00 - 4th', 'renderDashboardCompact: stale short-form chip stays the bare shortDetail (no suffix — no room in the budget)');
+// RE-DERIVED 2026-10-08 (W-22 / DI-543; DI-570): the compact row's 'dc-live-detail' short-detail chip is gone; a stale capture shows the same 'Score may be behind' chip beside the last score.
+assert(/gs-chip--live-stale">Score may be behind</.test(compactStale) && !compactStale.includes('dc-live-detail') && compactStale.includes('17–21'), 'renderDashboardCompact: stale capture shows the "Score may be behind" chip and the last score; the short-detail chip is retired (DI-570)');
 
 // ── 7d. FINAL games — deliberate no-op, even if a stray Map entry exists
 console.log('\n[7d] FINAL games — unchanged no-op, even with a (bogus) Map entry present…');
@@ -535,8 +540,10 @@ assert(!cardNoEntry.includes('live-status-detail') && !cardNoEntry.includes('sco
   'renderGameCard: no entry -> no detail line, no pulse suppression — 🔴 LIVE pulses exactly as pre-Item-2');
 
 const tableNoEntry = renderDashboardTable(players7, [freshGame], [{ pickId: 'pk_fresh', weekId: week7.weekId, gameId: freshGame.gameId, playerId: 'ig_p1', selectedTeam: 'Home U' }], [{ playerId: 'ig_p1', correctPicks: 0, incorrectPicks: 0 }], week7.weekId, null);
-assert(tableNoEntry.includes('LIVE 0–3') && !/LIVE 0–3 ·/.test(tableNoEntry) && !tableNoEntry.includes('live-dot-static'),
-  'renderDashboardTable: no entry -> the LIVE pill has no appended text and the dot keeps pulsing');
+// RE-DERIVED 2026-10-08 (W-22 / DI-543; DI-570): a LIVE game with NO capture at all is the 'live-stale' phase too (js/game-state.js: 'status live, no capture or one older than 3 minutes'), so its dot is static and it carries
+// the chip; what stays pinned is the original point - the pill has no appended detail text (no ' · <detail>').
+assert(tableNoEntry.includes('LIVE 0–3') && !/LIVE 0–3 ·/.test(tableNoEntry) && tableNoEntry.includes('live-dot-static') && /gs-chip--live-stale">Score may be behind</.test(tableNoEntry),
+  'renderDashboardTable: no entry -> the LIVE pill has no appended detail text; with no capture at all the phase is live-stale (static dot, "Score may be behind" chip, DI-570)');
 
 const compactNoEntry = renderDashboardCompact(players7, [freshGame], [], [{ playerId: 'ig_p1', correctPicks: 0, incorrectPicks: 0 }], week7.weekId, null);
 assert(!compactNoEntry.includes('dc-live-detail'), 'renderDashboardCompact: no entry -> no quarter/clock chip added at all');

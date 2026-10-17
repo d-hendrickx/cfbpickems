@@ -1,0 +1,12 @@
+{
+  "id": "notifyFanout.twin",
+  "script": "supabase/tests/functions/notifyFanout.twin.mjs",
+  "label": "81b",
+  "summary": "loose",
+  "floor": 437,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 200,
+  "note": "MERGE 26 (batch 8, 2026-10-14): floor-only conflict (int 417, creation 434); re-measured on the merged tree = 437. MERGE int/v0.30.0 into feat/d1-creation-integrity (2026-10-08): floor re-measured on the merged tree = 434. D1 Lane A (2026-10-08, DI-548/549/545/546): RAISED 346 -> 366 to the measured count. Before that: DI-T6.1 — the fan-out handler (raised from 161 to 176 at the v0.24.0 + native-push rebase, 2026-09-24: SCRIBE v3 HEAT-P1…P9 and the HEAT-P10 whole-payload leak guard; the floor had been left at 161 by the merge, so 14 assertions sat outside the ratchet — the reviewer note on … MERGE OF int/v0.30.0 (2026-10-08): DI-T6.1 — the fan-out handler (raised from 161 to 176 at the v0.24.0 + native-push rebase, 2026-09-24: SCRIBE v3 HEAT-P1…P9 and the HEAT-P10 whole-payload leak guard; the floor had been left at 161 by the merge, so 14 assertions sat outside the ratchet — the reviewer note on … Raised 375 -> 382 (security N-1, 0045 delta, 2026-10-08: [N1] seven cases, the commissioner-only announcement exemption read off the row's own league roster; `--kit` runs its 7 mutants through mutate-hook.mjs, each red as named)."
+}

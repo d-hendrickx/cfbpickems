@@ -81,9 +81,11 @@ import {
   // exercised directly by loadtest §69, unreadtest and pushtest [14].
   unreadCountOrUnknown, unreadAuthors, mentionUnreadCount, markSeen, getLastSeen,
   readThroughSeq,
+  // D1 (DI-553) — the Locker Room's sport pills: the sport-pill read cursor's ONE writer, the cursor tag of a pill, and the visibility test for a deep-link target.
+  markSportSeen, sportCursorTag, appearsUnderSport,
   backfill, chatDigest as _digest, setViewOpen, roomMode,
-  getRetentionDays, isChatEnabled,
-  backfillBlockedByEpoch,
+  getRetentionDays, retentionCutoff, isChatEnabled,
+  backfillBlockedByEpoch, chatLoadedFromTs,
   isHiddenByRetention, isHiddenByEpoch,
   isChatImagePreviewEnabled,
   forceRefresh,
@@ -135,10 +137,14 @@ import { captureDirtyFields, restoreDirtyFields, stampFieldOwner, isComposing } 
 // similarly from storage.js/scoring.js above.
 import { isLeaguePaused, PAUSED_LEAGUE_BANNER_TEXT } from './roles.js';
 import { getActiveLeagueId, getCachedMemberships, getCachedMaintenanceBanner } from './auth.js';
+import { playersForWeek } from './competition.js';   // D1 DI-531 (C4): a week's reveal post and live-game call name only that week's sport's ENTRANTS
 // UX Revamp Group A2 (DI-326, 2026-09-25) — native-only haptics, gated
 // internally by haptic() itself (isNativeShell()) — no extra gating needed
 // at any of this file's three call sites.
 import { haptic } from './haptics.js';
+import { icon } from './icons.js';   // D1 Lane B / DI-588: the Back chip's chevron (the one icon family)
+// D1 Lane C (DI-641, security C5) — the source chips under a SCRIBE answer: re-validated client-side, never an href built from meta.
+import { sourceChipsHTML, openSourceChip } from './source-chips.js';
 // DI-444 (UN-387, 2026-09-29) — the ONE platform predicate (AD-68); zero
 // dependencies, so this adds no cycle. Read by chatHeaderRefreshWanted() only.
 import { isNativeShell } from './platform.js';
@@ -151,7 +157,15 @@ import { isNativeShell } from './platform.js';
 // visual layer is gated exactly like week-swipe's), and `WEEK_SWIPE_BOUNCE_MS`
 // (the reply bubble's spring-back shares week-swipe's own Small-feedback
 // duration/--motion-fast token).
-import { bindBottomAnchor, BOTTOM_ANCHOR_PX, _rubberBandOffset, prefersReducedMotion, WEEK_SWIPE_BOUNCE_MS } from './nav-gestures.js';
+import { bindBottomAnchor, BOTTOM_ANCHOR_PX, _rubberBandOffset, prefersReducedMotion, WEEK_SWIPE_BOUNCE_MS, bindSwipeToDismiss } from './nav-gestures.js';
+// D1 Lane B (DI-597): Share to chat — the reference's one gate, the body, the meta and the duplicate check (a pure leaf).
+import { validShareRef, shareBody, shareMeta, findRecentShare, SHARE_COPY } from './chat-share.js';
+// D1 (DI-553 / DI-530) — the Locker Room's sport pills. competition.js is the read API over the storage seam (no cycle: it imports storage/auth/data-model/sports, never this file) and the ONE
+// source of "which sports does this league run" (isMultiSport / leagueSports); chat-sport-pills.js is the pure row builder; sport-tag.js is the closed set of tags.
+import { isMultiSport, leagueSports, competitionForWeek, getAllCurrentWeeks } from './competition.js';
+import { sportPillsMarkup } from './chat-sport-pills.js';
+import { validSportTag } from './sport-tag.js';
+import { getIdentityEpoch } from './auth.js';   // D1 (DI-553, N3): the pill is reset by ANY sign-in — see sportFilterOwnerKey()
 
 export const chatDigest = _digest;
 
@@ -204,10 +218,20 @@ const U = {
   returnToChat: false,      // set when a signed-out reader taps "Log in" in chat
   returnFilter: null,       // the filter they were reading, restored after login
   returnAt: 0,              // when it was set — the intent expires (see RETURN_WINDOW_MS)
+  sportFilter: 'all',       // D1 (DI-553) — the Locker Room's sport pill: 'all' | a dbCode. IN MEMORY ONLY (never stored), independent of the sport context, and read through currentSportFilter()
+  sportFilterOwner: '',     // D1 (DI-553, DI-538, security A5, N3) — whose selection it is: `${memberId}|${leagueId}|${identityEpoch}`; another account, another league or ANY new sign-in reads it as 'all'
 };
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// W-20 / DI-541 — the selector escape, a byte-identical twin of app.js's exported cssId() (this file cannot import app.js). An id from a chat message is a string a league member
+// chose, so it never goes into a `[data-mid="..."]` selector raw. xsstest pins the two bodies to each other.
+function cssId(v) {
+  const s = String(v ?? '');
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(s);
+  return s.replace(/[\u0000-\u001f\u007f"\\]/g, c => (c === '"' || c === '\\') ? '\\' + c : '\\' + c.charCodeAt(0).toString(16) + ' ');
 }
 
 // ── UN-110 / AD-06 — chat's own sync badge ────────────────────────────────────
@@ -383,6 +407,41 @@ function relTime(ts) {
   if (d < 3600e3) return Math.floor(d / 60e3) + 'm';
   if (d < 86400e3) return Math.floor(d / 3600e3) + 'h';
   return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+/**
+ * DI-573 (D1 Lane B, 2026-10-07; PF-440, Drew FB-009: "make the timing/timestamps for the messages underneath and not above") — the time now sits BENEATH the bubble.
+ * The visible text is relTime()'s (now / 5m / 3h) for the first day, then the date AND the time ("Oct 4, 3:42 PM") so a historical thread (DI-598) is legible;
+ * the <time> element carries the machine value and a SPOKEN full date, so VoiceOver reads "3 hours ago, Mon Oct 6, 3:42 PM" once. relTime() itself is unchanged
+ * (the search results still use it). A message with no timestamp yet has no <time> at all — the foot row says "Sending…" instead.
+ */
+function footTimeText(ts) {
+  if (!ts) return '';
+  const d = Date.now() - ts;
+  if (d < 86400e3) return relTime(ts);
+  return new Date(ts).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+function footTimeSpoken(ts) {
+  const d = Date.now() - ts;
+  let rel = '';
+  if (d < 60e3) rel = 'just now';
+  else if (d < 3600e3) { const n = Math.floor(d / 60e3); rel = `${n} ${n === 1 ? 'minute' : 'minutes'} ago`; }
+  else if (d < 86400e3) { const n = Math.floor(d / 3600e3); rel = `${n} ${n === 1 ? 'hour' : 'hours'} ago`; }
+  const full = new Date(ts).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  return rel ? `${rel}, ${full}` : full;
+}
+function timeElHTML(ts) {
+  if (!ts || !Number.isFinite(new Date(ts).getTime())) return '';
+  return `<time class="chat-time" datetime="${esc(new Date(ts).toISOString())}" aria-label="${esc(footTimeSpoken(ts))}">${esc(footTimeText(ts))}</time>`;
+}
+/** The foot row under a message's bubble: time, "edited", and the send state — pending reads "Sending…" with no time; failed reads "Not sent" (loud, plain) with a Retry. */
+function chatFootHTML(m, { pending, failed }) {
+  const sending = pending || !m.ts;
+  const timePart = sending ? '' : timeElHTML(m.ts);
+  const editedPart = m.edited && !sending ? '<span class="chat-edited">edited</span>' : '';
+  const sendingPart = sending && !failed ? '<span class="chat-pending" role="status">Sending…</span>' : '';
+  const failedPart = failed ? `<span class="chat-failed">Not sent</span><button type="button" class="chat-retry" data-retry="${esc(m.id)}" aria-label="Retry sending this message">Retry</button>` : '';
+  if (!timePart && !editedPart && !sendingPart && !failedPart) return '';
+  return `<div class="chat-foot${failed ? ' chat-foot--failed' : ''}">${timePart}${editedPart}${sendingPart}${failedPart}</div>`;
 }
 function gameById(id) {
   for (const w of getWeeks()) {
@@ -845,9 +904,9 @@ export const _chatViewerUnresolvedForTest = chatViewerUnresolved;
  * number gets a ReferenceError at load rather than a plausible-looking zero,
  * and unreadtest §[13] pins the absence so the import cannot quietly come back.
  */
-function unreadForRender(self, tag = 'all') {
+function unreadForRender(self, tag = 'all', ctx = null) {
   if (chatViewerUnresolved()) return { known: false, count: 0 };
-  return unreadCountOrUnknown(self, tag);
+  return unreadCountOrUnknown(self, tag, ctx);   // D1 (DI-553): `ctx` is only read for a `sport:` tag
 }
 export const _unreadForRenderForTest = unreadForRender;
 
@@ -924,6 +983,106 @@ export function updateChatBadges() {
   } catch {}
 }
 
+// ── D1 (DI-553 / DI-530) — the Locker Room's SPORT PILLS ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// A row of `All · CFB · NFL` pills above the Locker Room / Records / game pills. They are a VIEW FILTER over the ONE shared room (`cfbp_comments`): they decide which folded rows are shown
+// and which an unread dot counts, they never store, copy or tag anything, and they are INDEPENDENT of the sport context (the pointer): choosing a pill never moves the pointer and moving
+// the pointer never moves the pill. The row exists only in a league that runs two or more sports (lockerRoomSports()); a one-sport league gets no markup at all.
+function lockerRoomSportList() {
+  try { return isMultiSport() ? leagueSports() : []; } catch { return []; }   // the sports lane's two functions, nothing re-derived; a failed lookup draws no pills and never hides a message
+}
+/**
+ * The sport facts js/chat.js messageSport() resolves a row with, built once per render pass (null in a one-sport league, where nothing is filtered or tagged). The sport of a GAME or a WEEK
+ * is read from that game's / week's own COMPETITION (competitionForWeek, the one resolver), never from the sport pointer and never from a message's tag.
+ */
+function chatSportCtx(sports) {
+  if (!sports || !sports.length) return null;
+  const sportOfWeekRec = (week) => { try { const c = week ? competitionForWeek(week) : null; return c && c.sport ? c.sport : ''; } catch { return ''; } };
+  return {
+    sports: sports.map(s => s.dbCode),
+    sportOfGame: (gameId) => { const f = gameById(gameId); return f ? sportOfWeekRec(f.week) : ''; },
+    sportOfWeek: (weekId) => sportOfWeekRec(getWeeks().find(w => w.weekId === weekId)),
+  };
+}
+// Whose selection it is: the member, the league and the IDENTITY EPOCH (js/auth.js: it moves on every sign-out, forced sign-out and account change). The epoch is what makes ANY sign-in start at `All`
+// (N3, 2026-10-08): the same member signing out and straight back in changes neither term above, but it is a new sign-in, and DI-553 says the pill starts at `All` after one.
+const sportFilterOwnerKey = () => `${me() || ''}|${getActiveLeagueId() || ''}|${getIdentityEpoch()}`;
+/**
+ * The ONE read of the selected pill: 'all' or a dbCode that is a pill right now. It heals itself: a selection made under another account or league (DI-538, security A5) reads as 'all' and
+ * is dropped, as does one whose sport is no longer offered (archived, or the league back to one sport); and a game THREAD open for a sport other than the selected one resets it to 'all'
+ * first — a deep link, a push or "Open in chat" that lands on a thread the filter would hide is never hidden (DI-553).
+ */
+function currentSportFilter(sports = lockerRoomSportList()) {
+  if (U.sportFilter !== 'all') {
+    const owned = U.sportFilterOwner === sportFilterOwnerKey();
+    const offered = sports.some(s => s.dbCode === U.sportFilter);
+    const threadOfOther = offered && !['all', 'records', 'mentions'].includes(U.filter) && (chatSportCtx(sports).sportOfGame(U.filter) !== U.sportFilter);
+    if (!owned || !offered || threadOfOther) { U.sportFilter = 'all'; U.sportFilterOwner = ''; }
+  }
+  return U.sportFilter;
+}
+/** The sport a composed message carries (DI-553's single composer rule). A game-thread message is tagged with its GAME's sport; a plain Locker Room message is NEVER tagged — not by the selected pill, not by the pointer — so it shows under `All` and under every sport. One-sport league: '' (and the key is then absent from the event). */
+function currentComposerSportTag(gameTag) {
+  if (!gameTag) return '';
+  const sports = lockerRoomSportList();
+  if (!sports.length) return '';
+  const ctx = chatSportCtx(sports);
+  const code = validSportTag(ctx.sportOfGame(gameTag));
+  return code && ctx.sports.includes(code) ? code : '';
+}
+/** A system row carries its week's (or its game's) sport, only in a league that runs two or more sports: `{ sportTag }` or `{}` — spread into the event so a one-sport league's events stay byte-identical. */
+function systemSportFields({ weekId = '', gameId = '' } = {}) {
+  try {
+    const sports = lockerRoomSportList();
+    if (!sports.length) return {};
+    const ctx = chatSportCtx(sports);
+    const code = validSportTag((weekId && ctx.sportOfWeek(weekId)) || (gameId && ctx.sportOfGame(gameId)) || '');
+    return code && ctx.sports.includes(code) ? { sportTag: code } : {};
+  } catch { return {}; }
+}
+function sportPillsHTML() {
+  const sports = lockerRoomSportList();
+  if (!sports.length) return '';
+  const ctx = chatSportCtx(sports);
+  const self = me();
+  const view = (u) => ({ badge: unreadBadgeText(u), unread: (u && u.known) ? u.count : 0 });
+  return sportPillsMarkup({
+    sports, selected: currentSportFilter(sports),
+    allUnread: view(unreadForRender(self, 'all')),
+    unreadOf: (dbCode) => view(unreadForRender(self, sportCursorTag(dbCode), ctx)),
+    esc,
+  });
+}
+/**
+ * A deep link or "Open in chat" that wants ONE message on screen: if the selected sport pill would hide it, the filter goes back to `All` first (DI-553: a target is never hidden). Returns
+ * whether the filter was reset. A message that is not in the fold YET (a push can arrive before the room has been read this session) also resets it: it may land hidden, and a target is never
+ * hidden. A message the pill DOES show leaves the selection alone.
+ */
+export function ensureChatTargetVisible({ messageId = '' } = {}) {
+  const sports = lockerRoomSportList();
+  if (!sports.length) return false;
+  const selected = currentSportFilter(sports);
+  if (selected === 'all') return false;
+  const m = getMessage(String(messageId));
+  if (m && appearsUnderSport(m, selected, chatSportCtx(sports))) return false;   // the target shows under the selected pill: leave the filter alone
+  U.sportFilter = 'all'; U.sportFilterOwner = '';                                  // hidden, or not in the fold yet (it may land hidden): back to All
+  return true;
+}
+/** Test seams for the sport pills (chatsporttest.mjs): the real state, the real ctx, the real composer rule, the real stamps — never a copy of them. Production never calls these. */
+export function _getSportFilterForTest() { return currentSportFilter(); }
+export function _setSportFilterForTest(v) { U.sportFilter = v; U.sportFilterOwner = v === 'all' ? '' : sportFilterOwnerKey(); }
+export function _lockerRoomSportListForTest() { return lockerRoomSportList(); }
+export function _chatSportCtxForTest() { return chatSportCtx(lockerRoomSportList()); }
+export function _currentComposerSportTagForTest(gameTag) { return currentComposerSportTag(gameTag); }
+export function _systemSportFieldsForTest(args) { return systemSportFields(args); }
+export function _setChatFilterForTest(v) { U.filter = v; }
+export function _getChatFilterForTest() { return U.filter; }
+export function _onSportPillTapForTest(v) { onSportPillTap(v); }
+/** The RAW (not yet escaped) label a game pill is built from — so a test can show the hostile text really reaches the sink and that the page only shows it inert. */
+export function _gamePillLabelForTest(gameId) {
+  const f = gameById(gameId); const sports = lockerRoomSportList();
+  return f ? gamePillLabel(f.game, f.week, sports, sports.length ? chatSportCtx(sports) : null) : null;
+}
+
 // ── Filter pills ──────────────────────────────────────────────────────────────
 function activeGameTags() {
   // Games worth a pill: any tagged traffic, or live games on the current slate.
@@ -933,15 +1092,48 @@ function activeGameTags() {
   getMessages({ tag: 'all', respectRetention: true }).forEach(m => {
     if (m.gameTag) tags.set(m.gameTag, Math.max(tags.get(m.gameTag) || 0, m.ts || 0));
   });
-  const wk = getCurrentWeek();
-  if (wk) getGames(wk.weekId).forEach(g => {
-    if (g.status === GAME_STATUS.LIVE && !tags.has(g.gameId)) tags.set(g.gameId, Date.now());
+  // D1 (DI-553, DI-530): in a league that runs two or more sports the live games of EVERY sport's current week get a pill, and a selected sport pill narrows the row to that sport's games
+  // (`All` lists every sport's). A one-sport league reads exactly the current week it always did.
+  const sports = lockerRoomSportList();
+  const weeks = sports.length ? getAllCurrentWeeks() : [getCurrentWeek()];
+  weeks.forEach(wk => {
+    if (wk) getGames(wk.weekId).forEach(g => {
+      if (g.status === GAME_STATUS.LIVE && !tags.has(g.gameId)) tags.set(g.gameId, Date.now());
+    });
   });
-  return [...tags.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id).slice(0, 10);
+  const selected = sports.length ? currentSportFilter(sports) : 'all';
+  if (selected !== 'all') {
+    const ctx = chatSportCtx(sports);
+    [...tags.keys()].forEach(id => { if (ctx.sportOfGame(id) !== selected) tags.delete(id); });
+  }
+  const byActivity = [...tags.entries()].sort((a, b) => b[1] - a[1]);
+  // DI-530 (W-57 Part 2, 2026-10-08) — in a league that runs two or more sports the row is ordered LIVE FIRST, then by KICKOFF (soonest first, no kickoff last), activity breaking ties; the cap of ten
+  // then keeps the live games. A one-sport league keeps its activity order, byte-identical to before.
+  if (sports.length) {
+    const rank = (id) => { const f = gameById(id); const g = f && f.game; const t = g && g.kickoff ? Date.parse(g.kickoff) : NaN; return { live: g && g.status === GAME_STATUS.LIVE ? 0 : 1, at: Number.isFinite(t) ? t : Infinity }; };
+    const ranked = new Map(byActivity.map(([id]) => [id, rank(id)]));
+    byActivity.sort((a, b) => (ranked.get(a[0]).live - ranked.get(b[0]).live) || (ranked.get(a[0]).at === ranked.get(b[0]).at ? 0 : (ranked.get(a[0]).at < ranked.get(b[0]).at ? -1 : 1)) || (b[1] - a[1]));
+  }
+  return byActivity.map(([id]) => id).slice(0, 10);
+}
+
+/**
+ * A game pill's label. One-sport league: gameShort()'s `AWAY/HOME`, byte-identical to before. In a league that runs two or more sports (DI-530, N6, 2026-10-08) it is `{code} · {away} @ {home}` —
+ * `NFL · DETR @ GB` — from the same house abbreviations, so the pill names its sport instead of leaving it to two team names. A game whose sport is not among the pills (an archived sport's) keeps the short form.
+ */
+function gamePillLabel(game, week, sports, ctx) {
+  if (!sports.length || !game) return gameShort(game, week);
+  const sport = sports.find(s => s.dbCode === ctx.sportOfWeek(week && week.weekId));
+  if (!sport) return gameShort(game, week);
+  const map = abbrMapFor(week?.weekId, [game]);
+  const abbr = t => map.get(t) || t || '';
+  return `${sport.code} · ${abbr(game.awayTeam)} @ ${abbr(game.homeTeam)}`;
 }
 
 function pillsHTML() {
   const self = me();
+  const labelSports = lockerRoomSportList();
+  const labelCtx = labelSports.length ? chatSportCtx(labelSports) : null;
   const mainUnread = unreadForRender(self, 'all');
   // Takes the {known,count} shape, not a number: an unanswerable count paints
   // no dot at all, which is the same markup "caught up" produces and a
@@ -959,9 +1151,10 @@ function pillsHTML() {
     const live = found.game.status === GAME_STATUS.LIVE;
     const n = unreadForRender(self, tag);
     html += `<button class="chat-pill${U.filter === tag ? ' active' : ''}${live ? ' chat-pill-live' : ''}" data-chat-filter="${esc(tag)}">
-      ${live ? '<span class="live-pulse"></span>' : ''}${esc(gameShort(found.game, found.week))} ${dot(n)}</button>`;
+      ${live ? '<span class="live-pulse"></span>' : ''}${esc(gamePillLabel(found.game, found.week, labelSports, labelCtx))} ${dot(n)}</button>`;
   });
-  return `<div class="chat-pills-scroll">${html}</div>`;
+  // D1 (DI-553): the sport row (above, '' in a one-sport league) rides in the same call, so the page template, the periodic repaint and the search toggle swap ONE thing.
+  return `${sportPillsHTML()}<div class="chat-pills-scroll">${html}</div>`;
 }
 export const _pillsHTMLForTest = pillsHTML;
 
@@ -2286,7 +2479,7 @@ function messageHTML(m, self, showNewDivider) {
     return `${showNewDivider ? '<div class="chat-new-divider"><span>NEW</span></div>' : ''}
       <div class="chat-msg chat-system${reveal ? ' chat-reveal' : ''}${scribeAck ? ' chat-scribe-ack' : ''}" data-mid="${esc(m.id)}">
         <div class="chat-system-body">${reveal ? `<div class="chat-reveal-title">🔓 ${esc(m.meta?.title || 'Picks are in')}</div>` : ''}${scribeAck ? '🕐 ' : ''}${bodyHTML(m).replace(/\n/g, '<br>')}</div>
-        <span class="chat-time">${relTime(m.ts)}</span>
+        ${m.ts ? timeElHTML(m.ts) : '<span class="chat-time">sending…</span>'}
       </div>`;
   }
   if (m.type === 'gamereact') return '';   // rendered via coalescing pass
@@ -2317,14 +2510,13 @@ function messageHTML(m, self, showNewDivider) {
         ${privateChip}
         ${pickChip(m.author, m.gameTag)}
         ${tagChipHTML(m)}
-        <span class="chat-time">${relTime(m.ts)}</span>
-        ${m.edited ? '<span class="chat-edited">edited</span>' : ''}
         ${m.pinned ? '<span class="chat-pinned">📌</span>' : ''}
-        ${pending ? '<span class="chat-pending">🕐</span>' : ''}
-        ${failed ? `<span class="chat-failed">FAILED</span><button class="chat-retry" data-retry="${esc(m.id)}">retry</button>` : ''}
       </div>
       ${quoteHTML(m)}
       <div class="chat-bubble">${m.deleted ? '<span class="chat-tombstone">🪦 message withdrawn</span>' : bodyHTML(m).replace(/\n/g, '<br>')}</div>
+      ${scribe && !m.deleted ? sourceChipsHTML(m, esc) : ''}
+      ${!scribe && !m.deleted ? shareAttachHTML(m) : ''}
+      ${chatFootHTML(m, { pending, failed })}
       ${reactionsHTML(m, self, persistentStarHTML(m, self))}
       ${m.deleted ? '' : whatsNewLinkHTML(m)}
       ${m.deleted ? '' : wagerAckHTML(m, self)}
@@ -2361,6 +2553,61 @@ function messageHTML(m, self, showNewDivider) {
  */
 export const _messageHTMLForTest = messageHTML;
 
+// ═══ D1 Lane B — DI-597 / PF-454: SHARE TO CHAT ═══════════════════════════════════════════════════════════════════════════════════════════════
+// A share is ONE ordinary player message (chat.js mints its uuid id — never a sys_ / scribe_ / pin_ id, which migration 0045 refuses on the player path) whose body is complete on its own (the comment
+// and the one-line headline: an older client shows exactly that) and whose meta is `{ ref: { type, id } }` and nothing else (no key 0045 reserves). A READER never renders anything from the reference:
+// the attachment under the bubble is fixed copy, and whether it opens is decided by the app's resolver against THE READER'S OWN data and gates (a card's reveal class, a game's week), at every paint
+// and again at the tap. app.js registers the resolver (this module cannot import app.js); none registered = every attachment reads "not available".
+let _shareResolver = null;
+/** @param {{available:(ref)=>boolean, open:(ref)=>void}|null} r */
+export function registerShareResolver(r) { _shareResolver = (r && typeof r.available === 'function' && typeof r.open === 'function') ? r : null; }
+function shareAvailable(ref) {
+  if (!ref || !_shareResolver) return false;
+  try { return _shareResolver.available(ref) === true; } catch { return false; }
+}
+function shareAttachHTML(m) {
+  if (!m || !m.meta || typeof m.meta !== 'object' || !Object.prototype.hasOwnProperty.call(m.meta, 'ref')) return '';
+  const ref = validShareRef(m.meta.ref);
+  if (ref && shareAvailable(ref)) {
+    return `<button type="button" class="chat-share-attach" data-share-open="${esc(m.id)}">${esc(SHARE_COPY.open)}<span class="chat-share-chev" aria-hidden="true">${icon('chevronRight')}</span></button>`;
+  }
+  return `<p class="chat-share-attach chat-share-attach--none">${esc(SHARE_COPY.unavailable)}</p>`;
+}
+/** The tap: the message is looked up BY ID in the store (the DOM carries only the id), its reference re-validated and re-resolved for this reader, then opened. */
+function openShareAttachment(mid) {
+  const m = typeof mid === 'string' && mid ? getMessage(mid) : null;
+  if (!m || m.deleted || m.author === 'scribe') return;
+  const ref = validShareRef(m.meta && m.meta.ref);
+  if (!ref || !shareAvailable(ref)) return;
+  haptic('light');
+  if (document.getElementById('chat-sheet-wrap')) closeSheet();   // opened from a game's thread sheet: the sheet steps aside for the detail
+  try { _shareResolver.open(ref); } catch (e) { console.error('[chat] the shared item could not open', e); }
+}
+/** "You already shared this": this member's message for the same reference in the same place in the last 10 minutes, or null. */
+export function findShareDuplicate({ ref, gameTag = '' } = {}) {
+  const self = me();
+  if (!self) return null;
+  const tag = typeof gameTag === 'string' ? gameTag : '';
+  return findRecentShare(getMessages({ tag: 'all' }), { ref, gameTag: tag, author: self, now: Date.now() });
+}
+/**
+ * Post ONE share. `{ ok:true, id }` · `{ ok:false, reason:'duplicate', id }` (already shared here in the last 10 minutes: nothing is sent) · `{ ok:false, reason:'invalid'|'unavailable' }` (nothing is sent).
+ * A throw from the send is the caller's "Couldn't share" (and no message was created: chat.js ingests only after it has built the event).
+ */
+export function postShareToChat({ ref, line, comment = '', gameTag = '' } = {}) {
+  const self = me();
+  if (!self || !isChatEnabled()) return { ok: false, reason: 'unavailable' };
+  const meta = shareMeta(ref);
+  const body = shareBody(comment, line);
+  if (!meta || !body) return { ok: false, reason: 'invalid' };
+  const tag = typeof gameTag === 'string' && gameTag && gameById(gameTag) ? gameTag : '';
+  const dup = findRecentShare(getMessages({ tag: 'all' }), { ref: meta.ref, gameTag: tag, author: self, now: Date.now() });
+  if (dup) return { ok: false, reason: 'duplicate', id: dup.id };
+  const sportTag = tag ? currentComposerSportTag(tag) : '';
+  const id = sendEvent({ type: 'message', author: self, body, gameTag: tag, ...(sportTag ? { sportTag } : {}), notify: true, meta });
+  return { ok: true, id };
+}
+
 /** Ambient coalescing: consecutive gamereacts by one author within 5 min render
  *  as a single attributed line (attribution is the whole point in a 6-man room). */
 function coalesceStream(list) {
@@ -2388,7 +2635,7 @@ function gamereactRunHTML(run) {
   }).join(' · ');
   return `<div class="chat-msg chat-system chat-gamereact" data-ts="${esc(run.ts)}">
     <div class="chat-system-body">${esc(nameOf(run.author))} reacted &nbsp;${parts}</div>
-    <span class="chat-time">${relTime(run.ts)}</span>
+    ${timeElHTML(run.ts)}
   </div>`;
 }
 
@@ -2482,13 +2729,20 @@ export function renderChatPage() {
   _abbrMemo.clear();                                 // per-pass cache only (see abbrMapFor)
   const self = me();
   const st = chatStatus();
+  // D1 (DI-553) — which sport pill is selected, resolved FIRST: it is part of "which list is this" for the reader's scroll place (a different pill is a different list, so it opens at its
+  // newest message), and resolving it here is also what drops a selection a deep link or another account made stale. `sportCtx` is null in a one-sport league (nothing is filtered).
+  const sportList = lockerRoomSportList();
+  const sportSel = currentSportFilter(sportList);
+  const sportCtx = sportList.length ? chatSportCtx(sportList) : null;
+  const sportFilter = (sportSel !== 'all' && sportCtx) ? { sport: sportSel, ctx: sportCtx } : undefined;
+  const chatViewKey = `${U.filter}|${sportSel}`;
   // RG-279 — read the reader's place off the OLD thread before innerHTML
   // replaces it, and whether the room was already open, before
   // setViewOpen(true) below makes it so.
   const keepScrollTop = _chatReaderScrollTopToKeep(document.getElementById('chat-scroll'), {
     pin: _chatPinNextRender,
     roomWasOpen: roomMode() !== 'closed',
-    sameView: !U.searchOpen && _chatScrollView === U.filter,
+    sameView: !U.searchOpen && _chatScrollView === chatViewKey,
   });
   _chatPinNextRender = false;
   setViewOpen(true);
@@ -2499,14 +2753,15 @@ export function renderChatPage() {
   // so Hall of Records is unaffected either way — passing it everywhere keeps
   // the intent uniform instead of relying on that exemption silently.
   let list;
-  if (U.filter === 'records') list = getMessages({ tag: 'all', pinned: true, respectRetention: true });
+  // D1 (DI-553): the sport pill narrows the Locker Room ('all') and Records views; a game THREAD is already one game's lens (the pill narrowed which threads are OFFERED).
+  if (U.filter === 'records') list = getMessages({ tag: 'all', pinned: true, respectRetention: true, sportFilter });
   else if (U.filter === 'mentions') {
     // v0.17.1 — mention inbox removed. If a device has stale state pointing at
     // 'mentions', treat it as 'all' and fix the filter forward.
     U.filter = 'all';
-    list = getMessages({ tag: 'all', respectRetention: true });
+    list = getMessages({ tag: 'all', respectRetention: true, sportFilter });
   }
-  else if (U.filter === 'all') list = getMessages({ tag: 'all', respectRetention: true });
+  else if (U.filter === 'all') list = getMessages({ tag: 'all', respectRetention: true, sportFilter });
   else list = getMessages({ tag: U.filter, respectRetention: true });
   list = filterSupersededScribeAcks(list);
 
@@ -2514,7 +2769,10 @@ export function renderChatPage() {
   if (!showSys) list = list.filter(m => m.type !== 'system');
 
   const ls = getLastSeen();
-  const boundary = U.filter === 'all' ? ls.seq : (ls.byTag[U.filter] ?? ls.seq);
+  // D1 (DI-553): a sport-filtered view's "new" divider sits at THAT PILL's cursor (the pill, not the room, is what is being read).
+  const boundary = (sportFilter && (U.filter === 'all' || U.filter === 'records'))
+    ? (ls.byTag[sportCursorTag(sportSel)] ?? ls.seq)
+    : (U.filter === 'all' ? ls.seq : (ls.byTag[U.filter] ?? ls.seq));
   let dividerPlaced = false;
 
   const stream = coalesceStream(list);
@@ -2547,11 +2805,17 @@ export function renderChatPage() {
       const score = g.homeScore != null ? `${esc(g.awayScore)}–${esc(g.homeScore)}` : '';
       const myViewPick = self ? getPicks(found.week.weekId, self).find(p => p.gameId === g.gameId) : null;
       const headerCls = gameThreadHeaderClass(myViewPick, g);
+      // D1 Lane B / DI-598 - a PAST game opened from History ("Open in chat" on its thread) may have no pill (the row keeps the ten most recent threads). It then names itself in full - "{away} at {home} · Week {N}" -
+      // and offers the way back to every message; a game that has its pill keeps the header exactly as it was (the pill is its label, and the Locker Room pill is the way back).
+      const offPill = !activeGameTags().includes(U.filter);
+      const wkN = Number(found.week.weekNumber);
+      const weekText = Number.isFinite(wkN) && wkN > 0 ? `Week ${wkN}` : String(found.week.label || 'Week');
+      const matchupText = offPill ? `${esc(g.awayTeam)} at ${esc(g.homeTeam)} · ${esc(weekText)}` : `${esc(g.awayTeam)} @ ${esc(g.homeTeam)}`;
       viewHeader = `<div class="chat-view-header${headerCls}">
-        <div><strong>${esc(g.awayTeam)} @ ${esc(g.homeTeam)}</strong>
+        <div><strong>${matchupText}</strong>
           <span class="text-muted text-xs">${esc(formatSpread(g.lockedSpread ?? g.spread, g.favorite, g) || '')}</span></div>
         <div>${g.status === GAME_STATUS.LIVE ? `<span class="live-pulse"></span> LIVE ${score}` : score}</div>
-      </div>`;
+      </div>${offPill ? '<div class="chat-view-back"><button type="button" class="chat-view-all" data-chat-filter="all">All messages</button></div>' : ''}`;
     }
   }
 
@@ -2614,6 +2878,7 @@ export function renderChatPage() {
           ${chatHeaderRefreshWanted() ? refreshControlHTML('chat-refresh') : ''}
         </div>
       </div>
+      ${returnChipHTML()}
       ${U.searchOpen ? searchBarHTML() : pillsHTML()}
       ${viewHeader}
     </div>
@@ -2723,7 +2988,7 @@ export function renderChatPage() {
   watchChatStickyMetrics();
   _unbindChatThreadAnchor();
   _unbindChatThreadAnchor = () => {};
-  _chatScrollView = U.searchOpen ? null : U.filter;
+  _chatScrollView = U.searchOpen ? null : chatViewKey;
   if (U.searchOpen) {
     // Focus (and restore caret position) rather than scroll-to-bottom — this
     // page re-renders on every keystroke (same pattern as every other U.*
@@ -2743,6 +3008,7 @@ export function renderChatPage() {
       } else {
         scroll.scrollTop = scroll.scrollHeight;
       }
+      runChatListFade(scroll);   // D1 (DI-553): only the repaint a sport-pill tap asked for
       // Bound AFTER the position is set: the anchor records "at the bottom"
       // at bind time, so its first reading must be the reader's (RG-279).
       // v0.27.x bugfix (Drew, 2026-09-27) — T-25's keyboard-up layout grows
@@ -2763,7 +3029,12 @@ function scheduleMarkRead() {
   U.markTimer = setTimeout(() => {
     U.markTimer = null;
     if (!chatPageActive()) return;
-    markSeen(U.filter === 'all' || U.filter === 'records' || U.filter === 'mentions' ? 'all' : U.filter);
+    // D1 (DI-553): with a sport pill selected the Locker Room / Records view is that PILL's view, so reading it marks the PILL's cursor — and (N1, 2026-10-08) advances the ROOM's too, up to but never
+    // past the oldest unread row this pill hides, so `All`, the Chat tab badge, the title and the app badge count only what the reader has not seen. No other pill's dot moves: a row visible under two
+    // pills clears each only when that pill is opened. A game thread still marks its own thread.
+    const sportSel = currentSportFilter();
+    if (sportSel !== 'all' && (U.filter === 'all' || U.filter === 'records')) markSportSeen(sportSel, chatSportCtx(lockerRoomSportList()));   // N1: the room cursor follows, bounded below the oldest unread row this pill hides
+    else markSeen(U.filter === 'all' || U.filter === 'records' || U.filter === 'mentions' ? 'all' : U.filter);
     updateChatBadges();
     renderPillsOnly();
   }, 1000);
@@ -2779,6 +3050,9 @@ function renderPillsOnly() {
   // renderChatPage()), so `host` is null and this periodic refresh correctly
   // no-ops rather than clobbering the search input mid-edit.
   const host = document.querySelector('#page-chat .chat-pills-scroll');
+  // D1 (DI-553): pillsHTML() now carries the sport row above its own row (its dots move with the same marks; it appears if the league just became multi-sport and goes if it stopped being one),
+  // so the old sport row, if any, is dropped as the pair is swapped in. A one-sport league has none, so this adds nothing there.
+  if (host) document.querySelector('#page-chat .chat-sport-pills')?.remove();
   if (host) host.outerHTML = pillsHTML();
   bindFilterButtons(document.getElementById('page-chat'));
 }
@@ -3239,7 +3513,7 @@ function doSend() {
   consumeComposerDraft();
   let sentId;
   try {
-    sentId = sendMessage({ body, gameTag, replyTo: U.replyTo || '', author: self, mentions });
+    sentId = sendMessage({ body, gameTag, sportTag: currentComposerSportTag(gameTag), replyTo: U.replyTo || '', author: self, mentions });   // D1 (DI-553): '' for a plain Locker Room message, its game's sport for a thread message
   } catch (err) {
     // Nothing was queued, so nothing was sent — give the words back rather than
     // making the player retype them. (The ordinary transport failure is NOT
@@ -3277,10 +3551,41 @@ function standingsCtx() {
 // ── Bindings ──────────────────────────────────────────────────────────────────
 function bindFilterButtons(root) {
   root?.querySelectorAll('[data-chat-filter]').forEach(b => b.addEventListener('click', () => {
+    try { _returnHooks && typeof _returnHooks.onFilterChange === 'function' && _returnHooks.onFilterChange(); } catch { /* the chip is a courtesy */ }   // D1 DI-588: a filter tap ends the Back chip
     U.filter = b.dataset.chatFilter;
     U.replyTo = null; U.tagStripped = false;
     renderChatPage();
   }));
+  root?.querySelectorAll('[data-chat-sport-filter]').forEach(b => b.addEventListener('click', () => onSportPillTap(b.dataset.chatSportFilter)));   // D1 (DI-553)
+}
+
+/**
+ * D1 (DI-553) — a tap on a sport pill. Tapping the pill that is already selected does nothing (no haptic, no repaint). Otherwise: the selection haptic (native only; haptic() gates itself),
+ * the selection moves, and the SAME page repaints (the composer is carried across, nothing is rebuilt that was not already rebuilt for a game pill) with a 150 ms fade-in of the new list,
+ * landing on its newest message. It never touches the sport pointer. If a game thread for ANOTHER sport is open, the room goes back to the Locker Room view — the thread the reader was in
+ * is not part of the sport they just chose.
+ */
+let _chatFadeNext = false;
+function onSportPillTap(value) {
+  const sports = lockerRoomSportList();
+  const next = sports.some(s => s.dbCode === value) ? value : 'all';
+  if (next === currentSportFilter(sports)) return;
+  haptic('selection');
+  try { _returnHooks && typeof _returnHooks.onFilterChange === 'function' && _returnHooks.onFilterChange(); } catch { /* the chip is a courtesy */ }   // D1 DI-588: a sport pill is a chat filter pill; changing it ends the Back chip
+  U.sportFilter = next;
+  U.sportFilterOwner = next === 'all' ? '' : sportFilterOwnerKey();
+  if (next !== 'all' && !['all', 'records', 'mentions'].includes(U.filter) && chatSportCtx(sports).sportOfGame(U.filter) !== next) U.filter = 'all';
+  U.replyTo = null; U.tagStripped = false;
+  _chatFadeNext = true;
+  renderChatPage();
+}
+/** The pill tap's list fade (Interaction Principles: small feedback, `--motion-fast`). One class, removed when it ends; Reduce Motion has no animation to run (css/styles.css). */
+function runChatListFade(scroll) {
+  if (!_chatFadeNext) return;
+  _chatFadeNext = false;
+  if (!scroll || prefersReducedMotion()) return;
+  scroll.classList.add('chat-scroll-fade');
+  scroll.addEventListener('animationend', () => scroll.classList.remove('chat-scroll-fade'), { once: true });
 }
 
 /**
@@ -3303,6 +3608,7 @@ function bindFilterButtons(root) {
  * was already correctly wired in both surfaces before this batch existed.
  */
 function bindMessageActionButtons(host, renderFn, surface) {
+  host?.querySelectorAll('[data-share-open]').forEach(b => b.addEventListener('click', () => openShareAttachment(b.dataset.shareOpen)));   // D1 DI-597: a shared item's "Open details"
   host?.querySelectorAll('[data-reply]').forEach(b => b.addEventListener('click', () => openReplyFor(b.dataset.reply, surface)));
   host?.querySelectorAll('[data-reply]').forEach(keepComposerFocus);   // RG-297 (RG-296 review finding 1)
   // ONE query, reused twice below — the wiring and the DI-268 re-mount both
@@ -3347,6 +3653,14 @@ function bindMessageActionButtons(host, renderFn, surface) {
     renderFn();
   }));
   host?.querySelectorAll('[data-pin]').forEach(keepComposerFocus);   // RG-297 (RG-296 review finding 1)
+  // D1 Lane C (DI-641, PD-C3) — a source chip opens the validated page: the in-app browser on the phone, a new tab on the web; a light haptic on the phone only (haptic() gates itself). The
+  // tap resolves the chip's INDEX against the in-memory message and re-validates the url; nothing is read from the DOM but the message id and the index.
+  host?.querySelectorAll('[data-source-idx]').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    const msg = getMessage(b.dataset.sourceMsg);
+    if (!msg) return;
+    if (openSourceChip(msg, b.dataset.sourceIdx)) haptic('light');
+  }));
   host?.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => {
     const self = me(); if (!self) return;
     const msg = getMessage(b.dataset.edit); if (!msg) return;
@@ -3402,7 +3716,7 @@ function bindMessageActionButtons(host, renderFn, surface) {
     const self = me(); if (!self) return;
     const msg = getMessage(b.dataset.callout); if (!msg) return;
     sendEvent({
-      type: 'message', author: self, gameTag: msg.gameTag, notify: true,
+      type: 'message', author: self, gameTag: msg.gameTag, sportTag: currentComposerSportTag(msg.gameTag), notify: true,   // D1 (DI-553, R3): the third player send path — a thread message files under its game's sport like the other two
       body: 'Prior statement, for the record:',
       meta: { mentions: [msg.author], quote: { id: msg.id, author: msg.author, body: msg.body.slice(0, 160) } },
     });
@@ -3417,6 +3731,7 @@ export const _bindMessageActionButtons = bindMessageActionButtons;
 function bindChatPage() {
   const c = document.getElementById('page-chat'); if (!c) return;
   bindFilterButtons(c);
+  bindReturnChip(c);   // D1 DI-588
   bindLoginPrompt(c);
 
   // DI-398 (UN-358, 2026-09-28) — the Chat tab's own ⚙ trigger and its
@@ -3490,7 +3805,7 @@ function bindChatPage() {
     const mid = b.dataset.searchJump;
     U.searchOpen = false; U.searchQuery = '';
     renderChatPage();
-    const target = document.querySelector(`#chat-scroll [data-mid="${mid}"]`);
+    const target = document.querySelector(`#chat-scroll [data-mid="${cssId(mid)}"]`);
     if (target) { target.scrollIntoView({ block: 'center' }); target.classList.add('chat-flash'); setTimeout(() => target.classList.remove('chat-flash'), 1200); }
   }));
 
@@ -3510,7 +3825,7 @@ function bindChatPage() {
   jump?.addEventListener('click', () => { if (scroll) scroll.scrollTop = scroll.scrollHeight; });
 
   c.querySelectorAll('[data-jump]').forEach(b => b.addEventListener('click', () => {
-    const el = c.querySelector(`[data-mid="${b.dataset.jump}"]`);
+    const el = c.querySelector(`[data-mid="${cssId(b.dataset.jump)}"]`);
     if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('chat-flash'); setTimeout(() => el.classList.remove('chat-flash'), 1200); }
   }));
 
@@ -3680,15 +3995,15 @@ let _lpTimer = null, _lpStart = null, _lpTargetMid = null;
 
 function revealMessageActions(mid, rootId = 'chat-scroll') {
   if (_revealedMsgId && (_revealedMsgId !== mid || _revealedRootId !== rootId)) {
-    document.querySelector(`#${_revealedRootId} .chat-msg[data-mid="${_revealedMsgId}"]`)?.classList.remove('chat-actions-revealed');
+    document.querySelector(`#${_revealedRootId} .chat-msg[data-mid="${cssId(_revealedMsgId)}"]`)?.classList.remove('chat-actions-revealed');
   }
   _revealedMsgId = mid;
   _revealedRootId = rootId;
-  document.querySelector(`#${rootId} .chat-msg[data-mid="${mid}"]`)?.classList.add('chat-actions-revealed');
+  document.querySelector(`#${rootId} .chat-msg[data-mid="${cssId(mid)}"]`)?.classList.add('chat-actions-revealed');
 }
 function dismissRevealedActions() {
   if (!_revealedMsgId) return;
-  document.querySelector(`#${_revealedRootId} .chat-msg[data-mid="${_revealedMsgId}"]`)?.classList.remove('chat-actions-revealed');
+  document.querySelector(`#${_revealedRootId} .chat-msg[data-mid="${cssId(_revealedMsgId)}"]`)?.classList.remove('chat-actions-revealed');
   _revealedMsgId = null;
   _revealedRootId = null;
 }
@@ -4112,7 +4427,7 @@ function openReactPickerFor(mid, surface = 'main') {
   if (!me()) return;
   const rootId = surface === 'sheet' ? 'chat-sheet-scroll' : 'chat-scroll';
   revealMessageActions(mid, rootId);
-  const btn = document.querySelector(`#${rootId} .chat-msg[data-mid="${mid}"] [data-react-open]`);
+  const btn = document.querySelector(`#${rootId} .chat-msg[data-mid="${cssId(mid)}"] [data-react-open]`);
   if (btn) toggleMessageReactPicker(btn, mid, surface === 'sheet' ? renderSheetMessages : renderChatPage);
 }
 
@@ -4129,7 +4444,7 @@ function wireRevealCloser() {
   _revealCloserWired = true;
   document.addEventListener('click', e => {
     if (!_revealedMsgId) return;
-    if (e.target.closest?.(`.chat-msg[data-mid="${_revealedMsgId}"]`)) return;
+    if (e.target.closest?.(`.chat-msg[data-mid="${cssId(_revealedMsgId)}"]`)) return;
     dismissRevealedActions();
   });
   document.addEventListener('keydown', e => {
@@ -4478,7 +4793,7 @@ function sendSheetMessage() {
   const body = (inp?.value || '').trim();
   const self = me();
   if (!body || !self) return;
-  const sentId = sendMessage({ body, gameTag: gameId, replyTo: U.sheetReplyTo || '', author: self, mentions: extractMentions(body) });
+  const sentId = sendMessage({ body, gameTag: gameId, sportTag: currentComposerSportTag(gameId), replyTo: U.sheetReplyTo || '', author: self, mentions: extractMentions(body) });   // D1 (DI-553): the game's sport
   try { scribeInspectMessage({ author: self, authorName: nameOf(self), body, gameTag: gameId, triggerMessageId: sentId }); } catch {}
   if (inp) inp.value = '';
   U.sheetReplyTo = null;
@@ -4518,11 +4833,62 @@ function renderSheetComposer() {
   bindSheetComposer();
 }
 
+/**
+ * D1 Lane B / DI-575 — "Open in chat" from a Home card's detail: show the Locker Room (all messages, no search) and bring ONE message into view with the house flash (.chat-flash, the same
+ * mechanism as the reply-quote jump). Called right after navigateTo('chat') has painted the page; a message that is not in the loaded window is simply not found (the room still opens).
+ */
+export function showChatMessage(messageId) {
+  const id = String(messageId ?? '').replace(/["\\]/g, '');
+  if (!id) return false;
+  ensureChatTargetVisible({ messageId: id });   // D1 (DI-553): a sport pill that would hide this message goes back to All first
+  U.filter = 'all'; U.searchOpen = false; U.searchQuery = '';
+  renderChatPage();
+  const el = typeof document !== 'undefined' ? document.querySelector(`#chat-scroll [data-mid="${cssId(id)}"]`) : null;
+  if (!el) return false;
+  el.scrollIntoView({ block: 'center' });
+  el.classList.add('chat-flash');
+  setTimeout(() => el.classList.remove('chat-flash'), 1200);
+  return true;
+}
+
+// ── D1 Lane B / DI-588 — the Back chip ("◀ Back to {screen}") ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// When a reader leaves a pushed screen (a Game view, a card detail) for the Chat tab — "Locker Room" on the Game view, or "Open in chat" on its thread sheet — js/app.js RECORDS the stack and this page shows ONE
+// return chip above the pills. Tapping it rebuilds the stack exactly as it was; the chip clears on any tab change, a chat-filter change (the pills), an identity or league change, or a new push. app.js owns the
+// state (it owns the pushed screens); this module only DRAWS the chip it is handed and reports the two moments it can see (a filter tap, "Open in chat"). No hooks registered = no chip.
+let _returnHooks = null;
+export function registerChatReturnHooks(h) { _returnHooks = (h && typeof h === 'object') ? h : null; }
+function returnChipHTML() {
+  let chip = null;
+  try { chip = _returnHooks && typeof _returnHooks.getChip === 'function' ? _returnHooks.getChip() : null; } catch { chip = null; }
+  if (!chip || typeof chip.label !== 'string' || !chip.label.trim()) return '';
+  // assembled from parts (the house pattern for a constant SVG glyph, js/home.js's glyphSpan): the label is escaped, the glyph is the icon family's constant
+  return ['<div class="chat-return-row"><button type="button" class="chat-return-chip" id="chat-return-chip" data-chat-return aria-label="', esc('Back to ' + chip.label), '"><span class="chat-return-glyph" aria-hidden="true">', icon('chevronLeft'), '</span><span class="chat-return-text">Back to ', esc(chip.label), '</span></button></div>'].join('');
+}
+function bindReturnChip(root) {
+  root?.querySelector?.('[data-chat-return]')?.addEventListener('click', () => { try { _returnHooks && typeof _returnHooks.onTap === 'function' && _returnHooks.onTap(); } catch (e) { console.error('[chat] return chip failed', e); } });
+}
+/** Show a chat view PROGRAMMATICALLY (not a pill tap, so it never clears the Back chip): 'all' (the Locker Room) or a game id. */
+export function showChatFilter(filter) {
+  U.filter = (typeof filter === 'string' && filter && filter !== 'all' && gameById(filter)) ? filter : 'all';
+  U.searchOpen = false; U.searchQuery = ''; U.replyTo = null; U.tagStripped = false;
+  renderChatPage();
+  return true;
+}
+
+/** DI-530 (N6): the game thread sheet's header names the sport — `NFL · ` ahead of its sub-line — only in a league that runs two or more sports; '' otherwise (a one-sport league's header is byte-identical). */
+function sheetSportLead(week) {
+  const sports = lockerRoomSportList();
+  if (!sports.length || !week) return '';
+  const code = chatSportCtx(sports).sportOfWeek(week.weekId);
+  const sport = sports.find(s => s.dbCode === code);
+  return sport ? `${esc(sport.code)} · ` : '';
+}
+
 export function openGameChatSheet(gameId) {
   if (!isChatEnabled()) { redirectChatDisabled(); return; }
+  closeSheet();                                    // one thread sheet at a time; also ends a previous one's drag binding
   U.sheetGameId = gameId;
   U.sheetReplyTo = null;
-  document.getElementById('chat-sheet-wrap')?.remove();
   const found = gameById(gameId);
   const wrap = document.createElement('div');
   wrap.id = 'chat-sheet-wrap';
@@ -4536,24 +4902,28 @@ export function openGameChatSheet(gameId) {
   wrap.setAttribute('data-hold-teardown', '');
   const g = found?.game;
   const score = g && g.homeScore != null ? `${esc(g.awayScore)}–${esc(g.homeScore)}` : '';
-  const firstUse = !lsGet('cfbp_chat_sheet_hint');
   const selfForHeader = me();
   const myHeaderPick = (selfForHeader && found) ? getPicks(found.week.weekId, selfForHeader).find(p => p.gameId === gameId) : null;
   const headerCls = gameThreadHeaderClass(myHeaderPick, g);
+  const sportLead = sheetSportLead(found && found.week);   // DI-530 (N6): the sport, in a league that runs two or more
+  // D1 DI-592 (the touched-screen audit of this sheet): the title is the matchup; the status line keeps the line and the score, and a live game shows the STATIC live dot (chat surfaces never pulse,
+  // v0.17.2); the subtitle says, permanently, what a thread is ("Also appears in the Locker Room" — it replaces the one-time hint that used to sit under cfbp_chat_sheet_hint); the close is the one
+  // icon family's ✕, 44 × 44 pt, labelled "Close"; "Open in chat" leaves the crowded header for its own centred row beneath it; native gets the grabber and the interactive drag-down (the week-wizard
+  // sheet's recipe, bound to the header only so it never fights the message list's own scroll); web keeps ✕, the backdrop and Esc (PBD-B3).
+  const status = g?.status === GAME_STATUS.LIVE ? ` · <span class="live-dot live-dot-static" aria-hidden="true"></span>LIVE ${score}` : g?.status === GAME_STATUS.FINAL && score ? ` · Final ${score}` : score ? ` · ${score}` : '';
   wrap.innerHTML = `
     <div class="chat-sheet-backdrop"></div>
-    <div class="chat-sheet">
-      <div class="chat-sheet-header${headerCls}">
-        <div><div class="chat-sheet-title">${g ? esc(g.awayTeam) + ' @ ' + esc(g.homeTeam) : 'Game thread'}</div>
-          <div class="chat-sheet-sub">${g ? esc(formatSpread(g.lockedSpread ?? g.spread, g.favorite, g) || '') : ''}
-            ${g?.status === GAME_STATUS.LIVE ? ` · <span class="live-pulse"></span> LIVE ${score}` : score ? ' · ' + score : ''}</div></div>
+    <div class="chat-sheet" id="chat-thread-sheet">
+      <div class="chat-sheet-header${headerCls}">${isNativeShell() ? '<span class="sheet-grabber" aria-hidden="true"></span>' : ''}
+        <div class="chat-sheet-head-text"><div class="chat-sheet-title">${g ? esc(g.awayTeam) + ' @ ' + esc(g.homeTeam) : 'Game thread'}</div>
+          <div class="chat-sheet-sub">${sportLead}${g ? esc(formatSpread(g.lockedSpread ?? g.spread, g.favorite, g) || '') : ''}${status}</div>
+          <div class="chat-sheet-sub chat-sheet-lens">Also appears in the Locker Room</div></div>
         <div class="chat-sheet-header-actions">
-          <button class="btn btn-ghost btn-sm" id="chat-sheet-open-main">Open in chat</button>
           ${refreshControlHTML('chat-sheet-refresh')}
-          <button class="chat-sheet-close" id="chat-sheet-close">✕</button>
+          <button type="button" class="chat-sheet-close" id="chat-sheet-close" aria-label="Close">${icon('close')}</button>
         </div>
       </div>
-      ${firstUse ? '<div class="chat-sheet-hint" id="chat-sheet-hint">Posts here also appear in the main room, tagged to this game. <button id="chat-sheet-hint-ok">Got it</button></div>' : ''}
+      <div class="chat-sheet-openrow"><button type="button" class="btn btn-ghost btn-sm" id="chat-sheet-open-main">Open in chat</button></div>
       <div class="chat-scroll chat-sheet-scroll" id="chat-sheet-scroll"></div>
       ${sheetComposerHTML()}
     </div>`;
@@ -4563,14 +4933,47 @@ export function openGameChatSheet(gameId) {
   bindSheetComposer();
   wrap.querySelector('.chat-sheet-backdrop')?.addEventListener('click', closeSheet);
   document.getElementById('chat-sheet-close')?.addEventListener('click', closeSheet);
-  document.getElementById('chat-sheet-hint-ok')?.addEventListener('click', () => {
-    lsSet('cfbp_chat_sheet_hint', '1');
-    document.getElementById('chat-sheet-hint')?.remove();
-  });
-  document.getElementById('chat-sheet-open-main')?.addEventListener('click', () => { closeSheet(); U.filter = gameId; navToChat(); });
+  document.getElementById('chat-sheet-open-main')?.addEventListener('click', () => { try { _returnHooks && typeof _returnHooks.beforeOpenMain === 'function' && _returnHooks.beforeOpenMain(gameId); } catch (e) { console.error('[chat] return hook failed', e); } closeSheet(); U.filter = gameId; navToChat(); });   // D1 DI-588: the hook records (and closes) a pushed stack the reader is leaving
   document.getElementById('chat-sheet-refresh-btn')?.addEventListener('click', onChatRefreshTap);
+  bindThreadSheetDrag(wrap);
+  // Esc closes the sheet on the web (PBD-B3) — only when it is the top surface (a revealed message or a modal over it takes Esc first). Read in the CAPTURE phase, before anything below changes, and
+  // the close itself waits one task so every other keydown listener still sees the sheet (a Game view beneath it must not pop on the same press).
+  _threadSheetKey = (e) => {
+    if (!e || e.key !== 'Escape' || document.getElementById('chat-sheet-wrap') !== wrap) return;
+    if (_revealedRootId || document.querySelector('.modal-overlay, #site-gate-overlay, #share-sheet-wrap')) return;
+    setTimeout(() => { if (document.getElementById('chat-sheet-wrap') === wrap) closeSheet(); }, 0);
+  };
+  document.addEventListener('keydown', _threadSheetKey, true);
   markSeen(gameId);
   updateChatBadges();
+}
+
+// ── DI-592: the thread sheet's drag-down (native; bindSwipeToDismiss() is a no-op on web) — the week-wizard sheet's recipe, with this sheet's own custom property ───────────────────────────
+let _unbindThreadSheetDrag = null;
+let _threadSheetKey = null;
+const THREAD_SLIDE_FALLBACK_MS = 400;
+function bindThreadSheetDrag(wrap) {
+  const sheetEl = wrap.querySelector('#chat-thread-sheet');
+  const headerEl = wrap.querySelector('.chat-sheet-header');
+  if (!sheetEl || !headerEl) return;
+  _unbindThreadSheetDrag = bindSwipeToDismiss(headerEl, {
+    axis: 'y',
+    getBlocked: () => !!document.querySelector('.modal-overlay, #site-gate-overlay, #share-sheet-wrap'),   // another surface over this sheet (a modal, the sign-in gate, a share sheet) owns the touch
+    getDistancePx: () => sheetEl.getBoundingClientRect().height || window.innerHeight || 1,
+    onProgress: (progress) => { sheetEl.setAttribute('data-dragging', 'true'); wrap.setAttribute('data-dragging', 'true'); wrap.style.setProperty('--thread-drag-y', String(progress)); },
+    onSettle: ({ dismissed, reducedMotion } = {}) => {
+      sheetEl.removeAttribute('data-dragging'); wrap.removeAttribute('data-dragging');
+      if (!dismissed) { wrap.style.setProperty('--thread-drag-y', '0'); return; }   // cancelled: spring back (the CSS transition; none under Reduce Motion)
+      // dismissed: play the rest of the slide, then close — never pop
+      if (reducedMotion) { wrap.style.setProperty('--thread-drag-y', '1'); closeSheet(); return; }
+      let done = false;
+      const finish = () => { if (done) return; done = true; sheetEl.removeEventListener('transitionend', onEnd); if (document.getElementById('chat-sheet-wrap') === wrap) closeSheet(); };
+      const onEnd = (e) => { if (!e || e.target === sheetEl) finish(); };
+      sheetEl.addEventListener('transitionend', onEnd);
+      setTimeout(finish, THREAD_SLIDE_FALLBACK_MS);
+      wrap.style.setProperty('--thread-drag-y', '1');
+    },
+  });
 }
 /**
  * F5 (3c fix window, third pass) — app.js's identity-change sweep removes
@@ -4590,6 +4993,9 @@ function closeSheet() {
   if (_revealedRootId === 'chat-sheet-scroll') dismissRevealedActions();
   U.sheetGameId = null;
   U.sheetReplyTo = null;
+  try { _unbindThreadSheetDrag?.(); } catch { /* best effort */ }
+  _unbindThreadSheetDrag = null;
+  if (_threadSheetKey) { try { document.removeEventListener('keydown', _threadSheetKey, true); } catch { /* best effort */ } _threadSheetKey = null; }
   document.getElementById('chat-sheet-wrap')?.remove();
 }
 
@@ -4616,6 +5022,29 @@ function bindSheetScrollDismiss(root) {
   root.addEventListener('scroll', () => onChatScrollEvent(root, null));
 }
 
+/**
+ * D1 Lane B / DI-598 + DI-592 (the empty words, built here because the history screens open past games' threads): what a game's thread says when it shows nothing. It takes the GAME, not its id.
+ *   - before or during the game: "No messages about this game yet."
+ *   - a FINAL game that kicked off before the league's chat-retention cutoff: "Older messages are hidden by this league's chat retention." - decided by the game's TIME against the cutoff
+ *     (DI-592's literal rule), never by whether an old message happens to exist: with the window on, an empty thread cannot honestly say "no one talked".
+ *   - a game that kicked off before the oldest message THIS DEVICE has loaded (chatLoadedFromTs, review B1): "Older messages aren't loaded on this device." - the device may simply not hold the thread,
+ *     so it never claims absence; the sheet's "Open in chat" is the way to load earlier.
+ *   - otherwise a final game nobody talked about: "No one talked about this game."
+ */
+export function threadEmptyCopy(game) {
+  if (!game) return 'No messages about this game yet.';
+  const ko = Date.parse(game.kickoff);
+  const final = game.status === GAME_STATUS.FINAL;
+  let cutoff = 0;
+  try { cutoff = retentionCutoff(); } catch { cutoff = 0; }
+  if (final && cutoff && Number.isFinite(ko) && ko < cutoff) return "Older messages are hidden by this league's chat retention.";
+  let from = -Infinity;
+  try { from = chatLoadedFromTs(); } catch { from = -Infinity; }
+  if (Number.isFinite(ko) && ko < from) return "Older messages aren't loaded on this device.";
+  return final ? 'No one talked about this game.' : 'No messages about this game yet.';
+}
+export const _threadEmptyCopyForTest = threadEmptyCopy;
+
 function renderSheetMessages() {
   _abbrMemo.clear();                                 // per-pass cache only (see abbrMapFor)
   const host = document.getElementById('chat-sheet-scroll');
@@ -4637,7 +5066,7 @@ function renderSheetMessages() {
   const list = coalesceStream(filterSupersededScribeAcks(getMessages({ tag: U.sheetGameId, respectRetention: true })));
   host.innerHTML = list.length
     ? list.map(item => item.kind === 'gamereact-run' ? gamereactRunHTML(item) : messageHTML(item, self, false)).join('')
-    : '<div class="chat-empty">No entries for this game yet.</div>';
+    : `<div class="chat-empty">${esc(threadEmptyCopy(gameById(U.sheetGameId)?.game))}</div>`;
   host.scrollTop = sheetKeepTop !== null ? sheetKeepTop : host.scrollHeight;
   host.querySelectorAll('[data-react]').forEach(b => b.addEventListener('click', () => {
     if (!self) return; toggleReact(b.dataset.target, b.dataset.react, self); renderSheetMessages();
@@ -4843,6 +5272,7 @@ export function setChatChannel(ch) {
 export function emitPicksLockedEvent(weekId, playerId, count, total) {
   sendEvent({
     id: `sys_lock_${weekId}_${playerId}`, type: 'system', author: 'system', notify: false,
+    ...systemSportFields({ weekId }),   // D1 (DI-553): a system row carries its week's sport (two or more sports only)
     body: `${nameOf(playerId)} locked ${count}/${total}`,
     meta: { kind: 'picksLocked', weekId, playerId },
   });
@@ -4858,7 +5288,7 @@ export function emitPickRevealEvent(week) {
   if (!arePicksPublic(week)) return;
   const games = getGames(week.weekId).sort((a, b) => new Date(a.kickoff) - new Date(b.kickoff));
   if (!games.length) return;
-  const players = getPlayers().filter(p => p.active);
+  const players = playersForWeek(week);   // D1 DI-531 (C4): the reveal names the week's own sport's entrants - nobody who never joined is posted as "no picks on file" (a one-sport league: every active player, as before)
   // Shorthand for the reveal grid comes from the shared table, built over THIS
   // slate so the dedup pass guarantees no two teams in the grid collapse to the
   // same cell. This event is written once under a deterministic id into an
@@ -4878,6 +5308,7 @@ export function emitPickRevealEvent(week) {
   });
   sendEvent({
     id: `sys_reveal_${week.weekId}`, type: 'system', author: 'system', notify: true,
+    ...systemSportFields({ weekId: week.weekId }),   // D1 (DI-553): files the reveal under this sport's pill. It is a `type:'system'` row, which never pushes (shouldFanout); narrowing a PUSH by sport is DI-537 #1, on the sports lane
     body: lines.join('\n'),
     meta: { kind: 'reveal', weekId: week.weekId, title: `${formatWeekLabel(week)} — the picks are in` },
   });
@@ -4900,7 +5331,7 @@ export function emitPickRevealEvent(week) {
 export function emitKickoffEvent(game) {
   sendEvent({
     id: `sys_kick_${game.gameId}`, type: 'system', author: 'system', notify: false,
-    gameTag: game.gameId,
+    gameTag: game.gameId, ...systemSportFields({ weekId: game.weekId, gameId: game.gameId }),   // D1 (DI-553)
     body: `🏈 Kickoff — ${game.awayTeam} @ ${game.homeTeam} ${formatSpread(game.lockedSpread ?? game.spread, game.favorite, game) || ''}`,
     meta: { kind: 'kickoff', gameId: game.gameId },
   });
@@ -4934,7 +5365,7 @@ export function emitGameFinalEvent(game, atsWinner, winnerIds = [], loserIds = [
     : ` — right: ${winnerIds.length ? winnerIds.map(nameOf).join(', ') : 'nobody'}; wrong: ${loserIds.length ? loserIds.map(nameOf).join(', ') : 'nobody'}`;
   sendEvent({
     id: `sys_final_${game.gameId}`, type: 'system', author: 'system', notify: false,
-    gameTag: game.gameId,
+    gameTag: game.gameId, ...systemSportFields({ weekId: game.weekId, gameId: game.gameId }),   // D1 (DI-553)
     body: `FINAL: ${game.awayTeam} ${game.awayScore}–${game.homeScore} ${game.homeTeam}. ${cover}${who}`,
     meta: { kind: 'gameFinal', gameId: game.gameId },
   });
@@ -4966,6 +5397,7 @@ export function emitExtraPointEvent(weekId, graded) {
   });
   sendEvent({
     id: `sys_ep_${weekId}`, type: 'system', author: 'system', notify: false,
+    ...systemSportFields({ weekId }),   // D1 (DI-553)
     body: `🎯 Extra Point — actual ${graded.actual} yd\n${lines.join('\n')}${graded.allBusted ? '\nEveryone over. The house wins.' : ''}`,
     meta: { kind: 'extraPoint', weekId },
   });
@@ -4983,6 +5415,7 @@ export function emitWeekFinalEvent(week, rankedResults) {
   const lines = rankedResults.map(r => `${r.rank}. ${nameOf(r.playerId)} — ${r.correctPicks}`);
   sendEvent({
     id: `sys_weekfinal_${week.weekId}`, type: 'system', author: 'system', notify: false,
+    ...systemSportFields({ weekId: week.weekId }),   // D1 (DI-553)
     body: `📊 ${formatWeekLabel(week)} final\n${lines.join('\n')}`,
     meta: { kind: 'weekFinal', weekId: week.weekId },
   });
@@ -5212,6 +5645,16 @@ function routeLiveUpset({ gameId, weekId, reason, side, fallbackTrigger }) {
   return outcome;
 }
 
+/**
+ * The pick rows of ONE game that may count in a live call-out (security N2, 2026-10-08): the week's ENTRANTS' only (playersForWeek, C4). A member who never joined the sport can still hold a pick ROW in it
+ * (the server admits one); it counts for nothing here - not toward the "three or more picked" gate, not as a side of the crowd. A one-sport league: every active player's row, as before.
+ */
+export function scribeLivePicksFor(week, gameId) {
+  if (!week || !arePicksPublic(week)) return [];   // the blind rule at the source of the read (scribeLiveGameCheck opens with the same gate; this keeps the helper safe on its own)
+  const ids = new Set(playersForWeek(week).map(p => p.playerId));
+  return getPicks(week.weekId).filter(p => p && p.gameId === gameId && ids.has(p.playerId));
+}
+
 /** Called per game on each score refresh with the pre-update copy and the
  *  poll's transient live status (`liveStatusById` shape; `period` is ESPN's).
  *  `prevGame` is no longer the coverage-flip baseline (rule 2 above). */
@@ -5234,9 +5677,9 @@ export function scribeLiveGameCheck(prevGame, nextGame, liveStatus = null) {
     const period = liveStatus?.period;
     const now = Date.now();
     const spread = nextGame.lockedSpread ?? nextGame.spread;
-    const players = getPlayers().filter(p => p && p.active);
+    const players = playersForWeek(week);   // D1 DI-531 (C4)
     const activeIds = new Set(players.map(p => p.playerId));
-    const picksForGame = getPicks(week.weekId).filter(p => p.gameId === gameId);
+    const picksForGame = scribeLivePicksFor(week, gameId);   // security N2: the week's ENTRANTS' rows only - a stray row by a member who never joined is not part of a "crowd"
     const nPicks = picksForGame.length;
     /** Distinct ACTIVE players whose pick on this game is `team`. */
     const pickersOn = team => new Set(picksForGame

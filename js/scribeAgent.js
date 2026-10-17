@@ -50,6 +50,8 @@ import {
 // own `settings.serverJobs.*` switch; what goes is the OTHER arm of each
 // branch, not the branch's outcome.
 import { chatTransportMode, askScribe } from './chatTransport.js';
+// D1 / DI-681 — the client mirror of the server's "who is active" rule needs the same two predicates the server uses.
+import { isHumanApproved, isLearningExpired } from './scribe-trainer-rules.js';
 // ── PHASE III STEP 6 (Phases 3/4/5) — the class-U Edge Function seam ────────
 // `getSupabaseClient`/`getActiveLeagueId` from js/auth.js (no cycle: auth.js imports backend.js,
 // supabase-backend.js and push-onesignal.js, never this module) — the SAME client/session
@@ -101,8 +103,12 @@ export function isScribeLearningsEnabled() {
  */
 export function getActiveContext() {
   if (!isScribeLearningsEnabled()) return { activeLearnings: [], canonExamples: [] };
+  // D1 / DI-681 — the same rule as `scribe-context.mjs`: a row a human approved is active whatever its confidence and never expires;
+  // every other row needs the floor and (for a provisional one) an unexpired window.
   const activeLearnings = getScribeLearnings().filter(l =>
-    l.kind === 'learning' && l.status === 'approved' && Number(l.confidence) >= SCRIBE_RUNTIME_CONFIDENCE_THRESHOLD);
+    l.kind === 'learning' && l.status === 'approved'
+    && (isHumanApproved(l) || Number(l.confidence) >= SCRIBE_RUNTIME_CONFIDENCE_THRESHOLD)
+    && !isLearningExpired(l));
   const canonExamples = getScribeCanon().filter(c =>
     c.approvalStatus === 'approved' && Number(c.confidence) >= SCRIBE_RUNTIME_CONFIDENCE_THRESHOLD);
   return { activeLearnings, canonExamples };

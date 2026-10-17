@@ -5462,7 +5462,7 @@ console.log('\n[25] RG-179 — the player\'s saved theme/timezone are re-applied
 
   // ── (e) THE STRUCTURE THAT KEEPS IT FIXED ───────────────────────────────
   {
-    const repaintBody25 = appSrc25.slice(appSrc25.indexOf('function _repaintForSupabaseData(reason) {'),
+    const repaintBody25 = appSrc25.slice(appSrc25.indexOf('function _repaintForSupabaseData(reason, { skipTab = false } = {}) {')   /* re-anchored 2026-10-08 (merge): the signature gained { skipTab } - the function's body is what is sliced, unchanged in meaning */,
       appSrc25.indexOf('export function _resetSupabaseDataForTest'));
     assert(/applyTheme\(getTheme\(\)\)/.test(repaintBody25),
       '[25] the adapter-serving repaint re-applies the theme — this is the ONE place on a Supabase boot where the player record is known to exist [structural]');
@@ -5622,9 +5622,20 @@ console.log('\n[26] RG-180 follow-up — a write held offline puts the adapter\'
   // `cfbp_feedback` refusal must render the feedback-specific title and
   // must NOT carry the picks hint; every OTHER key (unchanged) keeps
   // today's wording.
+  //
+  // Reviewer note 3 (0046 round 3): the feedback refusal carries its OWN owner ('feedback'), so the pick submit never reads it as "sync is
+  // off" — and by B8 it never REPLACES a real sync failure already up (its "Nothing else on this device is affected" would be false): the
+  // picks refusal above is still on the banner, so the feedback refusal keeps it and says itself in a toast.
+  const toastBox26 = mkEl26(); toastBox26.id = 'toast-container';
   appMod26._onSupabaseDataStatusForTest('refused', { state: 'ACTIVE', key: 'cfbp_feedback', keys: ['cfbp_feedback'],
     banner: 'The server refused to save cfbp_feedback: permission denied. Nothing was saved.' });
-  assert(!!red26() && /Your feedback was not saved\./.test(red26().innerHTML),
+  assert(!!red26() && red26().getAttribute('data-owner') === 'app' && /Picks made on THIS device/.test(red26().innerHTML) && !/Your feedback was not saved\./.test(red26().innerHTML)
+    && toastBox26._kids.some((t) => /Your feedback was not saved\./.test(t.innerHTML)),
+    '[26b0] a feedback refusal while a REAL sync failure is still on the banner KEEPS that banner and is said in a toast (reviewer note 3)');
+  red26().style.display = 'none';   // sync recovered ('synced' takes the banner down); a feedback refusal now IS the banner
+  appMod26._onSupabaseDataStatusForTest('refused', { state: 'ACTIVE', key: 'cfbp_feedback', keys: ['cfbp_feedback'],
+    banner: 'The server refused to save cfbp_feedback: permission denied. Nothing was saved.' });
+  assert(!!red26() && /Your feedback was not saved\./.test(red26().innerHTML) && red26().getAttribute('data-owner') === 'feedback',
     `[26b] a cfbp_feedback refusal shows the feedback-specific title (got ${red26() ? red26().innerHTML : 'no banner'})`);
   assert(!!red26() && !/Picks made on THIS device/.test(red26().innerHTML),
     '[26b] …and does NOT carry the picks-shaped hint — no pick was involved');
@@ -5971,7 +5982,7 @@ console.log('\n[31] RG-199/RG-200 — a rejected token is not a missing league, 
 
     // THE BUG, as a source fact: the repaint reaches for the accessor that
     // cannot answer yet, so it repaints NEUTRAL over a correct first frame.
-    const repaintBody31 = appSrc31.slice(appSrc31.indexOf('function _repaintForSupabaseData(reason) {'),
+    const repaintBody31 = appSrc31.slice(appSrc31.indexOf('function _repaintForSupabaseData(reason, { skipTab = false } = {}) {')   /* re-anchored 2026-10-08 (merge): see [25] */,
       appSrc31.indexOf('function _resetSupabaseDataForTest'));
     assert(repaintBody31.length > 0, '[31-B] fixture: _repaintForSupabaseData() was located in the source [structural]');
     assert(/applyTheme\(bootThemeKey\(\)\)/.test(repaintBody31),

@@ -157,6 +157,10 @@
      high-contrast foreground (white text on Oxblood = 10.20:1 AAA, per the
      contrast table above), for text/icons painted on an --oxblood surface. */
   --oxblood:#7A1F2B;--oxblood-on:#FFFFFF;
+  /* D1 Lane B / Game Day (DI-603, 2026-10-08) — the four colours the Game Day card paints ON its own maroon gradient: the pill's fill (a 14% BLACK veil, so it follows whatever the look's gradient is and DARKENS the surface the mint and amber words sit on: a white veil measured 3.5-4.4:1 for those words on the lighter end of the Razorback, Sooner, Trojan, Irish and Neutral gradients; gamedaytest [9] now pins 4.5:1 in every look and side) and its white hairline, and
+     the two coverage words, mint (covering) and amber (trailing — never red for a live pick). They sit on the card's gradient, which is dark in every look, so they are CONSTANTS like --oxblood/--oxblood-on:
+     no theme block sets them, and contrastscan.mjs pins each against the gradient's lightest end in every look (the pill pairs). */
+  --gameday-pill-bg:rgba(0,0,0,.14);--gameday-pill-line:rgba(255,255,255,.2);--gameday-cover:#A8F0C2;--gameday-trail:#FFD58A;   /* the pill veil is a 14% BLACK, a declared deviation from the mockup's white 15%: white measured 3.54-4.46:1 for the mint and amber words on six of the ten gradients, this measures 5.73-8.75:1 on all ten (gamedaytest 9a pins every look >= 4.5:1) */
   /* SP-52 (DI-448 C2/C3, 2026-10-01) — the label colours that sit ON a theme-owned fill. --on-accent is the text/glyph on
      background:var(--maroon*) (white everywhere except Graphite Dark, whose accent is near-white); --on-gold is the text on a
      --gold fill (the avatar initials). Unlike --oxblood-on these FOLLOW the look. themetest [T9] fails a rule that pairs an
@@ -888,6 +892,7 @@ body.theme-graphite {
     .dashboard-scroll,
     .stand-box,
     .game-admin-card,
+    .games-row,
     .toast,
     .modal,
     .chat-scroll,
@@ -997,6 +1002,7 @@ body.theme-graphite {
     --maroon-mid-text:#E5E5EA;
     --maroon-light-text:#D1D1D6;
     --on-accent:#14110E;
+    --gameday-pill-bg:rgba(20,17,14,.08);--gameday-pill-line:rgba(20,17,14,.2);--gameday-cover:#0F5C2E;--gameday-trail:#6E4A00;   /* D1 Game Day: the card's gradient is NEAR-WHITE here, so its veils and coverage words go dark (white-on-white would vanish) */
     --gold:#D4A017;
     --gold-light:#E8C96A;
     --gold-pale:#302612;
@@ -1259,6 +1265,7 @@ body.theme-paper[data-color-scheme="dark"] {
   .dashboard-scroll,
   .stand-box,
   .game-admin-card,
+  .games-row,
   .toast,
   .modal,
   .chat-scroll,
@@ -1368,6 +1375,7 @@ body.theme-graphite[data-color-scheme="dark"] {
   --maroon-mid-text:#E5E5EA;
   --maroon-light-text:#D1D1D6;
   --on-accent:#14110E;
+  --gameday-pill-bg:rgba(20,17,14,.08);--gameday-pill-line:rgba(20,17,14,.2);--gameday-cover:#0F5C2E;--gameday-trail:#6E4A00;   /* D1 Game Day: the card's gradient is NEAR-WHITE here, so its veils and coverage words go dark (white-on-white would vanish) */
   --gold:#D4A017;
   --gold-light:#E8C96A;
   --gold-pale:#302612;
@@ -1844,8 +1852,8 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(calc(100% + var(--nav-pi
 .nav-item.active::after{content:'';position:absolute;bottom:4px;left:50%;
   transform:translateX(-50%);width:4px;height:4px;border-radius:50%;
   background:var(--chrome-tab-icon-selected)}
-/* Home wiring (2026-10-01; DESIGN_NEEDS_HOME Amendment 3 + 3.1, Treatment E) — the centred Home disc. Brand fill ALWAYS; selected = the roof fills AND a 2px inner ring appears
-   (shapes, not colour alone). The disc is flex-centred in the pill (no translate, no margin, no offset: the overhang is equal above and below by construction), is a DESCENDANT of the
+/* Home wiring (2026-10-01; DESIGN_NEEDS_HOME Amendment 3 + 3.1, Treatment E) — the centred Home disc. Brand fill ALWAYS; selected = a 2px inner ring appears
+   (a shape, not colour alone). D1 DI-584 (Drew chose mark B, D-56): the mark is the full filled Munera temple, reversed out of the theme disc in --chrome-tab-bg. The disc is flex-centred in the pill (no translate, no margin, no offset: the overhang is equal above and below by construction), is a DESCENDANT of the
    Home button (a tap on its overhang is a tap on the button), and its collar is a box-shadow (painted, not hit-testable). NEVER add overflow:hidden to .bottom-nav. The fallbacks name the
    shipped tokens, so the rules are correct before and after SP-52's --chrome-tab-* retarget. No hex, no new colour token. */
 .nav-item[data-tab="home"]{overflow:visible}
@@ -1853,12 +1861,10 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(calc(100% + var(--nav-pi
 .nav-icon.nav-home-disc{position:relative;display:block;flex:none;width:var(--nav-disc-d);height:var(--nav-disc-d);border-radius:50%;
   background:var(--chrome-tab-icon-selected,var(--maroon-text));color:var(--chrome-tab-bg,var(--bg-card));
   box-shadow:0 0 0 var(--nav-disc-cut) var(--chrome-tab-bg,var(--bg-card)),0 0 0 var(--nav-disc-ring) var(--chrome-tab-border,var(--border))}
-.nav-icon.nav-home-disc svg{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:28px;height:28px;stroke-width:1.5;display:block}
-.nav-home-disc .home-roof{fill:none;transition:fill var(--motion-fast) ease-out}
-.nav-item.active .nav-home-disc .home-roof{fill:currentColor}
+.nav-icon.nav-home-disc svg{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:32px;height:auto;display:block}   /* DI-584: the filled mark, 32 pt wide (the proportion of the home-screen icon), auto height, no stroke */
 .nav-home-disc::after{content:'';position:absolute;inset:4px;border-radius:50%;box-shadow:inset 0 0 0 2px currentColor;opacity:0;transition:opacity var(--motion-fast) ease-out}
 .nav-item.active .nav-home-disc::after{opacity:1}
-@media (prefers-reduced-motion:reduce){.nav-home-disc .home-roof,.nav-home-disc::after{transition:none}}
+@media (prefers-reduced-motion:reduce){.nav-home-disc::after{transition:none}}
 /* F2 (WIRING_CHECKLIST_B_092526.md) — Munera icon-family sizing for inline
    chrome icons that sit beside text (alma-mater badges, card titles,
    admin-section titles, the game-filter chip labels, the Rules-tab section
@@ -1977,7 +1983,9 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(calc(100% + var(--nav-pi
 @media (prefers-reduced-motion:reduce){.score-status{animation:none}}
 .live-status-detail{padding-top:2px}
 /* Same reasoning for the small pulsing dot used in dashboard live pills/chips. */
-.live-dot-static{animation:none;opacity:1;transform:none}
+/* D1 Lane B Game Day (2026-10-08): two classes, so it beats `.live-dot`'s own pulse whatever the order (`.live-dot` is defined further down and, at equal weight, its animation used to win — the
+   "still" dot pulsed at halftime and when stale). The game thread sheet's header uses it too (DI-592: chat surfaces never pulse). */
+.live-dot.live-dot-static{animation:none;opacity:1;transform:none}
 /* Time chips */
 .time-chip{display:inline-flex;align-items:center;gap:4px;font-size:.7rem;font-weight:600;font-family:'Oswald',sans-serif;padding:2px 8px;border-radius:20px;text-transform:uppercase;letter-spacing:.04em}
 .time-morning{background:#FEF9EC;color:#9A6B00;border:1px solid #F0DC8A}
@@ -2093,13 +2101,16 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(calc(100% + var(--nav-pi
    instead of adding a new hardcoded color (CONVENTIONS #13). No animation — chat surfaces use the static variant
    (locked, v0.17.2, same rule that keeps thread-header colors static). */
 .badge-beta{background:var(--bg-input);color:var(--text-muted);border:1px solid var(--border)}
-.badge-open{background:var(--win-bg);color:var(--win);border:1px solid rgba(26,122,63,.3)}
+/* D1 third pass (P-8, sportgeometrytest [7]): the three borders below were LITERALS (CONVENTIONS #13) on the D1 surfaces that show these badges (the league overview's cards, the Comm All
+   sports card). Each keeps its literal as the fallback for an engine without color-mix() and then takes its colour FROM ITS OWN TOKEN at the same 30%: in Light it is the same rgba
+   (--win #1A7A3F, --live #DC2626), and in Dark it now follows the Dark token instead of staying a light-theme green / red on a dark card. */
+.badge-open{background:var(--win-bg);color:var(--win);border:1px solid rgba(26,122,63,.3);border-color:color-mix(in srgb,var(--win) 30%,transparent)}
 .badge-locked{background:var(--maroon-pale);color:var(--maroon-text);border:1px solid var(--maroon-tint)}
-.badge-live{background:var(--live-bg);color:var(--live-text);border:1px solid rgba(220,38,38,.3);animation:pulse 1.5s infinite}
+.badge-live{background:var(--live-bg);color:var(--live-text);border:1px solid rgba(220,38,38,.3);border-color:color-mix(in srgb,var(--live-text) 30%,transparent);animation:pulse 1.5s infinite}
 /* SB-18 (2026-10-01): no pulse under Reduce Motion, full opacity — the pattern the dashboard's live cells and chips already follow. */
 @media (prefers-reduced-motion:reduce){.badge-live{animation:none}}
 .badge-final{background:var(--bg-input);color:var(--text-muted);border:1px solid var(--border)}
-.badge-win{background:var(--win-bg);color:var(--win);border:1px solid rgba(26,122,63,.3)}
+.badge-win{background:var(--win-bg);color:var(--win);border:1px solid rgba(26,122,63,.3);border-color:color-mix(in srgb,var(--win) 30%,transparent)}
 .badge-loss{background:var(--loss-bg);color:var(--loss);border:1px solid rgba(185,28,28,.3)}
 .badge-nd{background:var(--nd-bg);color:var(--nd-text);border:1px solid rgba(122,106,90,.3)}
 .result-win{color:var(--win)}.result-loss{color:var(--loss)}.result-push{color:var(--push-text)}
@@ -2188,15 +2199,26 @@ label:has(+ .form-value-static){color:var(--text-muted);font-weight:500;font-siz
    one-time 150ms fade-in DI-345 §Interaction spec asks for ("a brief
    120-180ms fade-in on first render... no pulse, no repeated animation" —
    a static/persistent condition, not a live one, so this never repeats). */
-.paused-league-banner{margin-bottom:12px;animation:paused-banner-fade-in .15s ease-out}
+.paused-league-banner{margin-bottom:16px;animation:paused-banner-fade-in .15s ease-out}   /* D1 / DI-557 touched-screen finding: 12px was off the 8-pt grid; the three in-page notices take 16px (Breathing Room) */
 @keyframes paused-banner-fade-in{from{opacity:0}to{opacity:1}}
 @media (prefers-reduced-motion:reduce){.paused-league-banner{animation:none}}
 /* NOTE 6 / BLOCK 4 (2026-09-25) — the platform-wide maintenance banner.
    Reuses the SAME .warning-box shape and the SAME one-time fade-in as
    .paused-league-banner immediately above (independent condition, identical
    visual/motion treatment — no new look invented for this one). */
-.maintenance-banner{margin-bottom:12px;animation:paused-banner-fade-in .15s ease-out}
+.maintenance-banner{margin-bottom:16px;animation:paused-banner-fade-in .15s ease-out}   /* D1 / DI-557: 16px, as its two siblings */
 @media (prefers-reduced-motion:reduce){.maintenance-banner{animation:none}}
+/* D1 (DI-557, 2026-10-14) - the sport stall banner: the THIRD in-page notice, below the maintenance and paused-league banners. Reuses .warning-box verbatim (caution, not red: --push-bg fill,
+   --warning-text, already remapped for all seven themes and the night modes), so there is no new color and no hex. Layout: the red banner's warning glyph (24px, from `.warning-box svg`),
+   then one <p> per row, 8px apart (and 8px between the glyph and the text); the page gives the 16px side inset and the banner gives 16px below it to the next group (Breathing Room). No fixed
+   height, clamp or truncation, so it scales with Dynamic Type. The fade runs ONLY on the node that arrives with `.sport-stall-in` (a row set that CHANGED, --motion-fast on the app's native ease);
+   a repaint of an unchanged row set puts the node back with no class and so no animation. Reduce Motion: none. No button, so no tap-target question. */
+.sport-stall-banner{display:flex;align-items:flex-start;gap:8px;margin-bottom:16px}
+.sport-stall-banner svg{flex:0 0 24px}
+.sport-stall-rows{display:flex;flex-direction:column;gap:8px;min-width:0;padding-top:2px}   /* the 2px is optical: it centres the first line of text on the 24px glyph */
+.sport-stall-rows p{margin:0;overflow-wrap:anywhere}   /* an unbroken code (a typo'd sport key) wraps inside the banner at the largest text size instead of poking out of it */
+.sport-stall-banner.sport-stall-in{animation:paused-banner-fade-in var(--motion-fast) var(--ease-native)}
+@media (prefers-reduced-motion:reduce){.sport-stall-banner.sport-stall-in{animation:none}}
 /* ESPN URL box */
 .api-url-box{background:var(--bg-input);border:1px solid var(--border);border-radius:var(--btn-radius);padding:12px 14px}
 .api-url-label{font-size:.75rem;font-weight:600;color:var(--text-muted);font-family:'Oswald',sans-serif;text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:4px}
@@ -2872,6 +2894,19 @@ input[id^="pin-"],input[id^="rp-pin"],input[id="comm-password-input"]{autocomple
 .league-pill{cursor:default}
 .league-pill[role="button"]{cursor:pointer}
 .league-pill[role="button"]:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+/* D1 third pass (P-8, sportgeometrytest [3-7]/[3-9]) — the pill is a CONTROL (DI-556: it opens the league overview), so its TAP TARGET is 44 pt; the drawn capsule is unchanged.
+   The element grows 8 pt above and below and gives that back with a -8 pt margin, so the one-line header's row and every neighbour stay where they were (the row is already 64 pt: the
+   44 pt control-center trigger). The capsule - its fill, its 1 pt outline, its 20 pt radius - moves to ::before, inset 8 pt top and bottom, so it is drawn exactly where the element's own
+   border box was: the element's 1 pt border becomes 1 pt more padding (12 -> 13 at the sides, 4 + 1 + 8 = 13 above and below), so the label sits 13 pt in from the capsule's edge as
+   before and the width is unchanged. overflow:hidden (the ellipsis) still clips the label to the element; isolation keeps ::before behind the label and above the header. Keyboard focus
+   draws inside the capsule, not around the taller target. Press: the DI's 97% over --motion-fast, none under Reduce Motion. */
+.league-pill[role="button"]{position:relative;isolation:isolate;border:0;padding:13px;margin-top:-8px;margin-bottom:-8px;background:none;
+  transition:transform var(--motion-fast) var(--ease-native)}
+.league-pill[role="button"]::before{content:'';position:absolute;left:0;right:0;top:8px;bottom:8px;z-index:-1;border-radius:20px;background:var(--chrome-pill-bg);border:1px solid var(--chrome-pill-border);pointer-events:none}
+.league-pill[role="button"]:focus-visible{outline:none}
+.league-pill[role="button"]:focus-visible::before{box-shadow:inset 0 0 0 2px var(--gold)}
+.league-pill[role="button"]:active{transform:scale(.97)}
+@media (prefers-reduced-motion:reduce){.league-pill[role="button"]{transition:none}.league-pill[role="button"]:active{transform:none}}
 /* DI-417 (UN-372, 2026-09-28) — the sport portion of the pill
    ("<league> · <sport>"), a lighter weight/opacity than the league name per
    the Design Philosophy's Typography section ("spacing/weight communicate
@@ -3360,11 +3395,10 @@ label[for="week-show-history"],label:has(#week-show-history){
    sit after .comm-tabbar's own rule to win the cascade. Search "RG-188, the
    deliberate SCOPE HOLD". */
 
-/* Narrow viewports — tighten page padding so 12+content+12 fits an iPhone SE
-   width (375px) without bleeding past. v14.1: bumped from 12→14px so cards
-   have a visible breathing margin on the left/right edges. */
+/* Narrow viewports. The page edge inset USED to tighten here (12 -> 14 pt, and 10 pt below 360 pt) so content fit an iPhone SE without bleeding. W-57 Part 2 (2026-10-08, the app-wide Breathing
+   Room audit; the coordinator's order after the Chat page alone went to 16 and the edge jumped 2 pt between tabs): the phone inset is the base `--page-pad: 16px` on EVERY phone width and EVERY tab
+   (Breathing Room: >= 16 pt from a screen edge; check at 375 pt, the smallest iPhone), so there is no phone override of the token any more. The tablet tier (24 pt from 768 pt) is untouched. */
 @media (max-width: 480px) {
-  :root { --page-pad: 14px; }
   .app-header-inner { gap: 8px; padding: 10px var(--page-pad); }
   /* Header right-side: PT/MT/CT/ET + theme dropdown + sync badge were
      fighting for horizontal space (UN-108 moved header-meta out to its own
@@ -3401,7 +3435,7 @@ label[for="week-show-history"],label:has(#week-show-history){
 
 /* Very narrow (under 360px — older iPhone SE / mini) */
 @media (max-width: 360px) {
-  :root { --page-pad: 10px; }
+  /* W-57 Part 2: the 10 pt page inset that lived here is gone (16 pt on every phone width, see the <= 480 block). */
   /* UN-108 follow-through: header-meta used to be hidden here because it was
      the LAST, lowest-priority item crammed into the right-side tower. It is
      now the header's LEFT slot (week label + status badge) — hiding it would
@@ -3502,6 +3536,11 @@ label[for="week-show-history"],label:has(#week-show-history){
 .dc-chip-pick.logo-broken .dc-chip-logo{display:none}
 .dc-chip-pick.logo-broken .dc-chip-pick-fallback{display:inline}
 @media (prefers-reduced-motion:reduce){.dc-chip-logo{transition:none}}
+/* FB-024 (2026-10-07) — a logo whose file has already loaded on this page is
+   shown at once on a repaint (js/app.js primeLoadedLogo() adds `.logo-instant`
+   with `.is-loaded`): no fade, so a pull-to-refresh or a score tick never blanks
+   it. Every other logo keeps its hidden-until-loaded fade (the four rules above). */
+.pick-btn-logo.logo-instant,.dc-chip-logo.logo-instant,.matrix-hdr-logo.logo-instant,.slate-row-logo.logo-instant{transition:none}
 /* Decided states — bold colours, mirror the matrix */
 .dc-chip-win{background:var(--win-bg);border-color:rgba(26,122,63,.35);color:var(--win)}
 .dc-chip-win .dc-chip-init{background:var(--win-fill);color:#fff}
@@ -3616,7 +3655,9 @@ label[for="week-show-history"],label:has(#week-show-history){
    Belt-and-suspenders to ensure cards never hug the viewport edges on phones,
    regardless of what padding overrides any inner component might have. */
 @media (max-width: 480px) {
-  .main-content { padding-left: 14px; padding-right: 14px; }
+  /* W-57 Part 2: this guard hard-coded 14px and so held every tab 2 pt short of Breathing Room whatever the token said. It now reads the token (16 on a phone), which is also what makes the
+     `--page-pad` change above reach `.main-content` at all. */
+  .main-content { padding-left: var(--page-pad); padding-right: var(--page-pad); }
   /* dashboard-scroll wraps the wide matrix; let it have a touch of horizontal
      margin too, since it sits flush against .main-content with no .card wrapper */
   .dashboard-scroll, .batch-grid-scroll { margin-left: 0; margin-right: 0; }
@@ -3701,8 +3742,11 @@ label[for="week-show-history"],label:has(#week-show-history){
   padding-top:env(safe-area-inset-top,0px);
   background:#7c1010;color:#fff;font-family:'Inter',sans-serif;border-bottom:3px solid #4a0808;
   box-shadow:0 2px 8px rgba(0,0,0,.25)}
+/* PF-1 reviewer BLOCK #1 B2 (2026-10-01) — Breathing Room (Design Philosophy, AD-103): at least 16 pt from a screen edge and 8 pt from a line. The bar sits ON the screen edge, so its buttons were 12-14px
+   from the right edge (and the text the same from the left), and 9-10px from the 3px rule under it. Sides are 16px at BOTH breakpoints; top and bottom are 12px (the buttons are 40px tall now, and 12px
+   keeps them well clear of the border-bottom rule). The 10px / 8px gaps between the icon, the text and the two buttons are the in-group spacing (>= 8) and are unchanged. */
 .beb-inner{max-width:var(--max-width);margin:0 auto;display:flex;align-items:flex-start;gap:10px;
-  padding:10px 14px}
+  padding:12px 16px}
 .beb-icon{font-size:1.3rem;line-height:1;flex-shrink:0;margin-top:1px}
 /* Reviewer round 3, item 5 (2026-09-26) — D-1: the banner's ⚠️ is now
    icon('warning') (Munera SVG family), not emoji. One rule per host class,
@@ -3721,9 +3765,21 @@ label[for="week-show-history"],label:has(#week-show-history){
 .beb-close{padding:5px 9px;display:inline-flex;align-items:center;justify-content:center}
 /* Full-app review Step 6 (2026-09-26) — Dismiss is icon('close') now. */
 .beb-close svg{width:14px;height:14px;display:block}
+/* PF-1 / DI-495 touched-screen audit (2026-10-01) — Retry and Dismiss measured ~24-28pt tall (padding 4-5px, .68rem), under the house 40px minimum tap target (CONVENTIONS #17; Interaction
+   Principles, Accessibility: large tap targets). Both get a 40px floor at BOTH breakpoints; the 8-10px gap between them and the text is untouched (Breathing Room: buttons never touch). CSS only. */
+.beb-retry, .beb-close{min-height:40px;min-width:40px}
 @media (max-width:480px){
-  .beb-inner{flex-wrap:wrap;padding:9px 12px;gap:8px}
-  .beb-retry, .beb-close{font-size:.68rem;padding:4px 8px}
+  .beb-inner{flex-wrap:wrap;padding:12px 16px;gap:8px}
+  .beb-retry, .beb-close{font-size:.68rem;padding:4px 8px;min-height:40px;min-width:40px}
+}
+/* PF-1 reviewer BLOCK #1 N7 (2026-10-01) — press feedback (Interaction Principles, Button Behavior: touch down scales to ~97%, release returns smoothly). The banner's Retry and Dismiss
+   acknowledged no touch at all (the Late Entry sheet's close button, the other half of N7, sits beside its own size rule further down). The SAME `scale(.97)` convention every `.btn:active`
+   in this file uses, over --motion-fast (150ms, inside the 120-180ms small-feedback range) on the shared ease. Reduce Motion turns the movement off. Neither control is ever disabled. */
+.beb-retry, .beb-close{transition:transform var(--motion-fast) var(--ease-native)}
+.beb-retry:active, .beb-close:active{transform:scale(.97)}
+@media (prefers-reduced-motion:reduce){
+  .beb-retry, .beb-close{transition:none}
+  .beb-retry:active, .beb-close:active{transform:none}
 }
 
 /* ── v15.1 Priority 2: Stark final colors that override alternating rows ──
@@ -4194,6 +4250,8 @@ body.theme-graphite .dc-status.dc-live-detail{color:var(--loss)}
    offered twice (Interaction Principles: "avoid creating competing
    gestures"). Web keeps the arrows — no swipe binder is armed there. */
 body.native-shell .picks-week-nav button{display:none}
+/* D1 / DI-510 touched-screen audit — the week navigator's arrows are 44 pt targets on the web (the 8 pt column gap above is kept); the native shell hides them (swipe moves between weeks). */
+.picks-week-nav>button{min-height:44px;min-width:44px}
 body.native-shell .picks-week-nav{justify-content:center}
 .picks-week-current{color:var(--text-muted);font-size:.7rem;font-weight:400}
 .picks-week-past{color:#B8860B;font-size:.7rem;font-weight:500}
@@ -4239,7 +4297,7 @@ body.native-shell .picks-week-nav{justify-content:center}
    DI-409. One animation LANGUAGE (this same CSS attribute + JS
    matched-duration fallback timer), two motion-system buckets — not three
    ad-hoc durations. */
-#page-picks,#page-dashboard{transform:translateX(var(--week-swipe-x,0px))}
+#page-picks,#page-dashboard,#page-commissioner,#week-wizard-pager{transform:translateX(var(--week-swipe-x,0px))}
 /* SB-23 (Drew, 2026-10-01: "it looks jumpy because you can still scroll
    vertically… vertical should stay static") — the week swipe's axis lock was
    visual only: its listeners are passive (RG-TBD-A4), so locking horizontal
@@ -4256,17 +4314,17 @@ body.native-shell .picks-week-nav{justify-content:center}
       off for the same span) — the guarantee for an engine whose scroll view
       has already begun panning. Engine-measured in weekpagertest.mjs; the
       iPhone's own scroll view is a device check. */
-#page-picks,#page-dashboard{touch-action:pan-y pinch-zoom}
-html:has(#page-picks[data-week-swipe-dragging="true"]),html:has(#page-dashboard[data-week-swipe-dragging="true"]){overflow:hidden}
-html:has(#page-picks[data-week-swipe-dragging="true"]),html:has(#page-dashboard[data-week-swipe-dragging="true"]),
-html:has(#page-picks[data-week-swipe-dragging="true"]) body,html:has(#page-dashboard[data-week-swipe-dragging="true"]) body{overscroll-behavior:none}
-#page-picks[data-week-swipe-animating="commit"],#page-dashboard[data-week-swipe-animating="commit"]{
+#page-picks,#page-dashboard,#page-commissioner,#week-wizard-pager{touch-action:pan-y pinch-zoom}
+html:has(#page-picks[data-week-swipe-dragging="true"]),html:has(#page-dashboard[data-week-swipe-dragging="true"]),html:has(#page-commissioner[data-week-swipe-dragging="true"]){overflow:hidden}
+html:has(#page-picks[data-week-swipe-dragging="true"]),html:has(#page-dashboard[data-week-swipe-dragging="true"]),html:has(#page-commissioner[data-week-swipe-dragging="true"]),
+html:has(#page-picks[data-week-swipe-dragging="true"]) body,html:has(#page-dashboard[data-week-swipe-dragging="true"]) body,html:has(#page-commissioner[data-week-swipe-dragging="true"]) body{overscroll-behavior:none}
+#page-picks[data-week-swipe-animating="commit"],#page-dashboard[data-week-swipe-animating="commit"],#page-commissioner[data-week-swipe-animating="commit"],#week-wizard-pager[data-week-swipe-animating="commit"]{
   transition:transform var(--motion-nav) ease-out}
-#page-picks[data-week-swipe-animating="bounce"],#page-dashboard[data-week-swipe-animating="bounce"]{
+#page-picks[data-week-swipe-animating="bounce"],#page-dashboard[data-week-swipe-animating="bounce"],#page-commissioner[data-week-swipe-animating="bounce"],#week-wizard-pager[data-week-swipe-animating="bounce"]{
   transition:transform var(--motion-fast) ease-out}
 @media (prefers-reduced-motion:reduce){
-  #page-picks[data-week-swipe-animating="commit"],#page-dashboard[data-week-swipe-animating="commit"],
-  #page-picks[data-week-swipe-animating="bounce"],#page-dashboard[data-week-swipe-animating="bounce"]{transition:none}
+  #page-picks[data-week-swipe-animating="commit"],#page-dashboard[data-week-swipe-animating="commit"],#page-commissioner[data-week-swipe-animating="commit"],#week-wizard-pager[data-week-swipe-animating="commit"],
+  #page-picks[data-week-swipe-animating="bounce"],#page-dashboard[data-week-swipe-animating="bounce"],#page-commissioner[data-week-swipe-animating="bounce"],#week-wizard-pager[data-week-swipe-animating="bounce"]{transition:none}
 }
 /* RG-TBD-A1 (2026-09-29) — Reduce Motion's week change: the incoming week
    fades in over --motion-fast while js/nav-gestures.js fades the outgoing
@@ -4274,9 +4332,50 @@ html:has(#page-picks[data-week-swipe-dragging="true"]) body,html:has(#page-dashb
    IS the reduced-motion treatment (iOS swaps slides for dissolves under
    Reduce Motion), so it is deliberately not inside the media block above;
    the binder only ever sets ="fade" when prefers-reduced-motion matches. */
-#page-picks[data-week-swipe-animating="fade"],#page-dashboard[data-week-swipe-animating="fade"]{
+#page-picks[data-week-swipe-animating="fade"],#page-dashboard[data-week-swipe-animating="fade"],#page-commissioner[data-week-swipe-animating="fade"],#week-wizard-pager[data-week-swipe-animating="fade"]{
   animation:weekSwipeFadeIn var(--motion-fast) ease-out both}
 @keyframes weekSwipeFadeIn{from{opacity:0}to{opacity:1}}
+/* W-70 (2026-10-14, DI-W70.3 / DI-W70.2) - the Comm tab pager and the wizard's step pager are the SAME pager as the week swipe above: the three lists name #page-commissioner and
+   #week-wizard-pager beside #page-picks / #page-dashboard (a static test fails if a list names Picks and not Comm). What is new is only what a PANEL of tabs needs:
+   1. A layer shows ITS tab. All five tabs' sections sit in one DOM and the rules at "Default: hide all sections" key on the live panel's data-comm-active, which a copy would inherit
+      (the incoming layer sits inside the panel) or miss altogether (the exit layer sits outside it). A .comm-pane layer therefore carries only its own tab's sections (the script
+      filters the copy) and this rule shows them whatever the flag says, without the fade-in the live panel plays (the slide is the motion; a layer is already fully drawn). One specificity
+      step above the rules it overrides, in its own block.
+   2. A swipe sets data-comm-instant on the panel for the length of the slide: the sections it reveals do not fade in over it (the incoming layer was already showing them at full
+      opacity, so a fade from 0 would blink the page at the instant it lands). The engine clears it when the slide ends (onSettled) and a tap clears it at once. It shortens the fade to
+      ZERO duration rather than switching the animation off: the animation keeps its name, so clearing the flag afterwards changes only a finished animation's duration and cannot start
+      the fade again over the tab that has just landed (an animation-name change from none would). */
+#page-commissioner .comm-pane[data-comm-pane] .admin-section[data-comm-tab],
+.week-swipe-exit-layer.comm-pane[data-comm-pane] .admin-section[data-comm-tab]{display:block;animation:none}
+#page-commissioner[data-comm-instant="true"] .admin-section[data-comm-tab]{animation-duration:0s}
+/* W-70 (DI-W70.2) - the wizard's step pager: the sheet's body sits inside a pane (the thing that slides) inside a clip (a stationary box that cuts the slide off at the sheet's edge, and
+   the box the exit layer is positioned in: the sheet is a TRANSFORMED element, so a viewport-fixed layer would be placed relative to the sheet). The pane and the clip take the flex role
+   the body had in the sheet (flex:1 with room to shrink); the body inside is unchanged. */
+.wiz-pager-clip{flex:1 1 auto;min-height:0;position:relative;overflow:hidden;display:flex;flex-direction:column}
+.wiz-pager{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;position:relative}
+/* W-71 (2026-10-14, DI-W71.5) - "Find spreads" and its "Include this spread?" cards, in wizard Step 3 and on the Games tab. The surface is the app's own vocabulary and nothing new: the existing
+   .info-box for a card (its fill, border, radius, type), the existing .btn / .btn-primary / .btn-ghost / .btn-secondary, and tokens only (no new colour, font or icon). What these rules add is
+   geometry and motion. Breathing Room: 8 pt between controls in a group, 16 pt between groups and from the edges, a button group centred in its container, a row of buttons that does not fit
+   wraps into a stack and keeps its gap. Every tap target is >= 44 pt (the house floor is 40; the DI asks 44). A card collapses over 200 ms (opacity and height together) when it is answered,
+   and the press is the shared 97% over --motion-fast; Reduce Motion drops both. The block patches in place - nothing around it moves when a lookup answers except the card appearing. */
+.spread-find{display:flex;flex-direction:column;gap:8px;margin-bottom:16px}
+.spread-find-row{display:flex;justify-content:center}
+.spread-find-btn{min-height:44px}
+.spread-find-note{text-align:center}
+.spread-find-note-error{color:var(--loss)}
+.spread-card{display:flex;flex-direction:column;gap:8px;padding:16px;overflow:hidden;max-height:480px;
+  transition:opacity 200ms ease-out,max-height 200ms ease-out,padding 200ms ease-out,margin 200ms ease-out,border-width 200ms ease-out}
+.spread-card.is-leaving{opacity:0;max-height:0;padding-top:0;padding-bottom:0;margin:0;border-width:0}
+.spread-card-q{font-weight:600;color:var(--text-primary)}
+.spread-card-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
+.spread-card-btn{min-height:44px;flex:1 1 120px;transition:transform var(--motion-fast) var(--ease-native)}
+.spread-card-btn:active{transform:scale(.97)}
+.spread-find-btn:active:not(:disabled){transform:scale(.97)}
+/* Review N-3 (2026-10-14): the error note's "Try again" is a tap target like the others - 44 pt tall, on its own line under the sentence (8 pt below it), centred, with the shared press. */
+.spread-find-note .spread-try-btn{display:block;margin:8px auto 0;min-height:44px;transition:transform var(--motion-fast) var(--ease-native)}
+.spread-find-note .spread-try-btn:active{transform:scale(.97)}
+/* The block's 16 pt bottom margin is the gap to whatever follows it: the Step 3 list, and the Games list's segmented control (the summary entry, DI-W71.2, sits under the summary line - not in a card). */
+@media (prefers-reduced-motion:reduce){.spread-card{transition:none}.spread-card-btn,.spread-find-btn,.spread-find-note .spread-try-btn{transition:none}.spread-card-btn:active,.spread-find-btn:active:not(:disabled),.spread-find-note .spread-try-btn:active{transform:none}}
 
 /* ── Historical read-only week view ── */
 .hist-game-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid var(--bg-input);flex-wrap:wrap}
@@ -4402,17 +4501,33 @@ html:has(#page-picks[data-week-swipe-dragging="true"]) body,html:has(#page-dashb
 .nav-unread{position:absolute;top:-3px;left:calc(50% + 4px);background:#D62828;color:#fff;font-size:.6rem;font-weight:700;border-radius:9px;min-width:16px;height:16px;display:flex;align-items:center;justify-content:center;padding:0 4px;line-height:1}
 
 /* ── Chat page ── */
-.chat-pills-scroll{display:flex;gap:8px;overflow-x:auto;/* Breathing Room sweep (2026-10-01): gap 6 -> 8 */padding:2px 0 8px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+/* The Chat page's 16 pt screen-edge inset (W-57 review N4) is now the app-wide phone inset: see the `--page-pad` note on the <= 480 block (W-57 Part 2). No Chat-only rule remains. */
+.chat-pills-scroll{display:flex;gap:8px;overflow-x:auto;/* Breathing Room sweep (2026-10-01): gap 6 -> 8 */padding:8px 0 8px;/* W-57 review R1 (2026-10-08): top 2 -> 8, so the row never touches the header's divider (Breathing Room: >= 8 pt from a divider) and sits 16 pt below the sport row (8 + 8) when both show */-webkit-overflow-scrolling:touch;scrollbar-width:none}
 .chat-pills-scroll::-webkit-scrollbar{display:none}
 /* min-height:40px on ALL pills (CONVENTIONS #17) — was ~28-30px with no floor,
    under the tap-target minimum. box-sizing keeps the padding from pushing the
    real height past 40px. Fixed for every pill uniformly (Records + game
    pills), not just the one that prompted the audit — a row of inconsistently
    sized buttons is worse than the original problem. */
-.chat-pill{flex:0 0 auto;border:1px solid var(--bg-input);background:var(--bg-card);border-radius:999px;padding:6px 12px;min-height:40px;box-sizing:border-box;font-size:.78rem;font-weight:600;color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;gap:6px}
+.chat-pill{flex:0 0 auto;border:1px solid var(--bg-input);background:var(--bg-card);border-radius:999px;padding:6px 12px;min-height:44px;box-sizing:border-box;font-size:.78rem;font-weight:600;color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;gap:6px;transition:transform var(--motion-fast) var(--ease-native)}
 .chat-pill.active{background:var(--maroon);border-color:var(--maroon);color:var(--on-accent)}
 .chat-unread-dot{background:#D62828;color:#fff;font-size:.6rem;font-weight:700;border-radius:9px;min-width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;padding:0 4px}
 .chat-pill.active .chat-unread-dot{background:var(--on-accent);color:var(--maroon)}
+/* D1 (DI-553, W-57; Drew D-48) — the Locker Room's SPORT FILTER PILLS and the Chat touched-screen audit that rides with them.
+   • 44 pt: `.chat-pill` was min-height:40px (the CONVENTIONS #17 floor); the sport row is 44 pt and every existing pill (Locker Room, Records, game pills) is raised to match in the same change, so
+     the two rows read as one family. The 8 pt gap between pills is unchanged.
+   • Touch feedback: every pill now compresses to 97% on press and returns over --motion-fast (Interaction Principles, Button Behavior); Reduce Motion turns the movement off.
+   • `.chat-sport-pills` is the sport row: the same horizontal scroller as `.chat-pills-scroll` (momentum kept, no scrollbar, scrolls past the edge at the largest text size) with 8 pt ABOVE it, so it
+     never touches the header's divider (Breathing Room: >= 8 pt from a divider) and 8 pt below it before the next row. It exists only in a league that runs two or more sports.
+   • `.chat-scroll-fade`: the list's 150 ms fade-in after a sport-pill tap (--motion-fast, the small-feedback range); Reduce Motion has no animation to run. */
+.chat-sport-pills{display:flex;gap:8px;overflow-x:auto;padding:8px 0 8px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.chat-sport-pills::-webkit-scrollbar{display:none}
+.chat-sport-glyph{display:inline-flex;align-items:center;flex:0 0 auto;width:1.25em;height:1.25em}   /* em, not px: the glyph grows with Dynamic Type exactly as the label beside it does (16 px at the default pill size) */
+.chat-sport-glyph svg{width:100%;height:100%}
+.chat-pill:active{transform:scale(.97)}
+@keyframes chatSportFade{from{opacity:0}to{opacity:1}}
+.chat-scroll-fade{animation:chatSportFade var(--motion-fast) var(--ease-native)}
+@media (prefers-reduced-motion:reduce){.chat-pill{transition:none}.chat-pill:active{transform:none}.chat-scroll-fade{animation:none}}
 /* UN-110 (batch 4, v0.17.5) — REVERSES UN-104's SAME-DAY "keep the header,
    make it unobtrusive" answer. Authoritative; do not re-litigate (see the
    ledger's UN-110 row). Drew: chat should take up the majority of the visible
@@ -4576,7 +4691,7 @@ body[data-tab="chat"] .page-wrapper{min-height:100dvh}
    3 places the glyph within it relative to the BUBBLE (see that rule). */
 .chat-msg{display:flex;gap:8px;margin-bottom:10px;position:relative}
 .chat-msg.is-pending{opacity:1} /* v0.17.0 — pending shows a 🕐, never dimmed text (stuck-dim was the offline bug's symptom) */
-.chat-msg.is-failed .chat-bubble{border:1px solid #B02A37}
+.chat-msg.is-failed .chat-bubble{border:1px solid var(--loss)}
 .chat-flash .chat-bubble{outline:2px solid var(--maroon);transition:outline .2s}
 .chat-avatar{flex:0 0 30px;width:30px;height:30px;border-radius:50%;background:var(--maroon-tint);color:var(--maroon-text);display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:700;margin-top:2px}
 .chat-avatar-scribe{background:#1C1410;color:#F3EFEA}
@@ -4686,11 +4801,11 @@ body[data-tab="chat"] .page-wrapper{min-height:100dvh}
 .chat-system-body{font-size:.7rem;color:var(--text-secondary);background:var(--bg-card-alt);border:1px dashed var(--bg-input);border-radius:999px;padding:3px 10px;text-align:center}
 .chat-system .chat-time{font-size:.6rem;color:var(--text-muted)}
 .chat-pending{font-size:.7rem}
-.chat-failed{color:#B02A37;font-weight:700;font-size:.65rem}
-.chat-retry{background:#B02A37;color:#fff;border:none;border-radius:6px;padding:1px 6px;font-size:.6rem;cursor:pointer;margin-left:4px;position:relative}
+.chat-failed{color:var(--loss);font-weight:700;font-size:.65rem}
+.chat-retry{background:var(--bg-card);color:var(--loss);border:1px solid var(--loss);border-radius:6px;padding:1px 8px;font-size:.65rem;font-weight:600;cursor:pointer;position:relative}
 /* Reviewer R1 (third pass) — a 40px hit area without growing the meta row:
    the same out-of-flow ::before technique .dc-meta .chat-bubble-btn uses. */
-.chat-retry::before{content:'';position:absolute;top:50%;left:50%;width:max(100%,40px);height:40px;transform:translate(-50%,-50%)}
+.chat-retry::before{content:'';position:absolute;top:50%;left:50%;width:max(100%,44px);height:44px;transform:translate(-50%,-50%)}   /* DI-573: a 44 pt hit area (was 40) without growing the foot row */
 .chat-reply-quote{display:block;width:100%;text-align:left;background:var(--bg-card-alt);border:none;border-left:3px solid var(--maroon-light);border-radius:6px;padding:4px 8px;font-size:.7rem;color:var(--text-secondary);margin-top:3px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* position:relative (2026-09-10, reviewer BLOCK finding #1) — the containing
    block for toggleFeedbackPicker()'s absolutely-positioned popover when it is
@@ -4947,6 +5062,11 @@ body[data-tab="chat"] .page-wrapper{min-height:100dvh}
    Pinned engine-measured in wizardsheettest.mjs [A]. */
 html:has(#week-wizard-sheet-wrap){overflow:hidden}
 #week-wizard-body{overscroll-behavior:contain}
+/* W-70 (DI-W70.1, 2026-10-14) - the sheet's swipe-down starts anywhere on the sheet, so a drag that starts on the BODY (at scroll-top, moving down) is claimed. From the claim to the
+   release the body is not scrollable and does not rubber-band under the finger: the outcome the DI pins. [data-dragging] is already set on the sheet by the drag's progress handler
+   for exactly that span (a claimed drag only; an upward drag is a scroll and never claims). Engine-measured in the browser suite; the iPhone's scroll view is a device check
+   (iOS 15 predates overscroll-behavior). Reduce Motion and the side-panel layout are unaffected: neither changes what a claimed drag does to the body. */
+#week-wizard-sheet[data-dragging="true"] #week-wizard-body{overflow-y:hidden;overscroll-behavior-y:none}
 
 /* ═══ Z-INDEX LADDER (RG-283, 2026-09-28) ═══════════════════════════════════
    One place that lists every stacking tier, lowest first. The values live
@@ -4984,6 +5104,53 @@ html:has(#week-wizard-sheet-wrap){overflow:hidden}
 /* DI-C1 §2.2 — the native grabber, and the header (the drag handle) owns its
    vertical touches so the WebView does not scroll/bounce under the drag. */
 body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;padding-top:14px;touch-action:none}
+/* PF-1 / Amendment 1 (2026-10-01) — the LATE ENTRY sheet ("Re-open Picks" after the lock instant; js/app.js openLateEntrySheet) is the shared bottom-sheet shell with the wizard sheet's own
+   recipe, scoped to ITS ids: the sheet and the scrim follow `--late-drag-y` (0..1, set by the header drag and by the exit), a live drag drops the transitions, Reduce Motion drops them
+   altogether, the page behind does not scroll while it is up, and the native header is the drag handle. Tokens only (--motion-nav); no new colour, font or icon. The body keeps 16pt from the
+   screen edge (the sheet's 12px + 4px), the field and the buttons never touch (the .btn-row 8px gap, wrapping into a stack at 375pt), and the consequence + error regions have a FIXED height
+   so typing never moves the buttons (no layout jump). */
+#late-entry-sheet-wrap{position:fixed;inset:0;z-index:8000}
+html:has(#late-entry-sheet-wrap){overflow:hidden}
+#late-entry-sheet{transform:translateY(calc(100% * var(--late-drag-y,0)));transition:transform var(--motion-nav) ease-out}
+#late-entry-sheet[data-dragging="true"]{transition:none}
+#late-entry-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--late-drag-y,0));transition:opacity var(--motion-nav) ease-out}
+#late-entry-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
+@media (prefers-reduced-motion:reduce){#late-entry-sheet,#late-entry-sheet-wrap .chat-sheet-backdrop{transition:none}}
+body.native-shell #late-entry-sheet .chat-sheet-header{position:relative;padding-top:14px;touch-action:none}
+/* D1 (DI-532, 2026-10-07) - the Add a sport sheet: the late-entry sheet's recipe, scoped to ITS ids. The sheet and the scrim follow --sport-drag-y (0..1), a live drag drops the transitions, Reduce Motion drops them
+   all; a radio row is a >= 56 pt target with the 97% press over --motion-fast; 16 between groups, 8 between rows, the action pair 8 apart and centred. Tokens only (all seven themes). */
+#add-sport-sheet-wrap{position:fixed;inset:0;z-index:8000}
+html:has(#add-sport-sheet-wrap){overflow:hidden}
+#add-sport-sheet{transform:translateY(calc(100% * var(--sport-drag-y,0)));transition:transform var(--motion-nav) ease-out}
+#add-sport-sheet[data-dragging="true"]{transition:none}
+#add-sport-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--sport-drag-y,0));transition:opacity var(--motion-nav) ease-out}
+#add-sport-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
+body.native-shell #add-sport-sheet .chat-sheet-header{position:relative;padding-top:14px;touch-action:none}
+#add-sport-body{padding:4px 4px 8px;overscroll-behavior:contain;min-height:0;display:flex;flex-direction:column;gap:16px}
+.as-group{display:flex;flex-direction:column;gap:8px}
+.as-radio{display:flex;align-items:flex-start;gap:12px;width:100%;min-height:56px;padding:12px;text-align:left;border:1px solid var(--border);border-radius:12px;background:var(--bg-card);color:var(--text-primary);
+  font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;
+  transition:transform var(--motion-fast) var(--ease-native),border-color var(--motion-fast) ease-out,box-shadow var(--motion-fast) ease-out}
+.as-radio:active{transform:scale(.97)}
+.as-radio[aria-checked="true"]{border-color:var(--maroon-text);box-shadow:inset 0 0 0 1px var(--maroon-text)}
+.as-radio-dot{flex:none;width:20px;height:20px;margin-top:2px;border-radius:50%;border:2px solid var(--border-strong);box-sizing:border-box;transition:border-color var(--motion-fast) ease-out,background-color var(--motion-fast) ease-out}
+.as-radio[aria-checked="true"] .as-radio-dot{border-color:var(--maroon-text);background:radial-gradient(circle,var(--maroon-text) 0 4px,transparent 5px)}
+.as-radio-text{display:flex;flex-direction:column;gap:4px}
+.as-radio-title{font-weight:600}
+.as-line{margin:0}
+.as-actions{display:flex;gap:8px;justify-content:center}
+.as-actions .btn{flex:1;min-height:44px}
+@media (prefers-reduced-motion:reduce){#add-sport-sheet,#add-sport-sheet-wrap .chat-sheet-backdrop,.as-radio,.as-radio-dot{transition:none}.as-radio:active{transform:none}}
+/* D1 (DI-534) - the Comm sport lens: the control-center segmented control (.cc-quick-*) laid in a Comm section; 16 below it, none above the first card. */
+.comm-lens{margin:0 0 16px}
+.comm-lens .cc-quick-track{margin:0}
+/* DI-534 REV 5: the caption under the lens, only while the lens is separate from the player pointer - Caption level, 8 pt under the control (the section's 16 pt keeps the first card clear). */
+.comm-lens-note{margin:8px 0 0}
+#late-entry-body{padding:4px 4px 8px;overscroll-behavior:contain;min-height:0}
+/* N3 (reviewer BLOCK #1, 2026-10-01): the consequence line can now carry a second sentence ("Some games will already have started."). The region keeps a FIXED height of THREE lines (one sentence wraps
+   to two at 375pt, plus the clause = three) so toggling the clause never moves the buttons below it (Design Philosophy: no layout jump). Larger text sizes wrap further; named on the device checklist. */
+.late-entry-consequence{margin:8px 0 0;min-height:calc(3 * 1.4em);font-size:.88rem;line-height:1.4;color:var(--text-primary)}
+.late-entry-actions{margin-top:16px}
 .sheet-grabber{position:absolute;top:5px;left:50%;transform:translateX(-50%);
   width:36px;height:5px;border-radius:3px;background:var(--border-strong);pointer-events:none}
 /* REVIEWER BLOCK item 1 — keyboard behavior for the wizard's own text
@@ -5015,6 +5182,23 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
    .control-center-identity-tap, .chat-react-pill, .chat-search-result, .player-tile
    and `.chat-replying button`. */
 .chat-sheet-close{background:var(--bg-input);color:var(--text-primary);border:none;border-radius:50%;width:30px;height:30px;cursor:pointer}
+/* PF-1 / Amendment 1 (2026-10-01) — the Late Entry sheet's close button is icon('close') (D-1: chrome icons are the Munera SVG family, not a ✕ character), so the shared class gets its scoped
+   svg size (one rule per host class, never a global svg{} selector) and, in THAT sheet only, a 40px tap target (the shared 30px circle is under the house minimum; CONVENTIONS #17). */
+.chat-sheet-close svg{width:16px;height:16px;display:block}
+#late-entry-sheet .chat-sheet-close{width:40px;height:40px;display:inline-flex;align-items:center;justify-content:center}
+/* PF-1 reviewer BLOCK #1 N7 (2026-10-01): the sheet's close button's press feedback (the banner's is with the banner above): `scale(.97)` on touch, back over --motion-fast, off under Reduce Motion. It sits
+   AFTER the shared close-button rule on purpose and is scoped to the sheet's own id, so the shared rule (chat, wizard) is untouched and stays the FIRST rule block for that class in the file
+   (controlcolortest [3b]'s mutation edits the first match of the class's rule opener). */
+#late-entry-sheet .chat-sheet-close{transition:transform var(--motion-fast) var(--ease-native)}
+#late-entry-sheet .chat-sheet-close:active{transform:scale(.97)}
+@media (prefers-reduced-motion:reduce){#late-entry-sheet .chat-sheet-close{transition:none}#late-entry-sheet .chat-sheet-close:active{transform:none}}
+/* D1 (DI-532) - the Add a sport sheet's close button: a 44 pt target (D1 third pass, sportgeometrytest [6-2]: it was 40, copied from the late-entry sheet; the approved drawing,
+   docs/mockups/d1/league-overview-sheet.html, gives this sheet's close the same 44 pt `.x` as the overview's) and the 97% press, scoped to ITS id and carried by its OWN class
+   (`.as-close`, beside the shared `.chat-sheet-close`), so the shared rule is untouched and stays the FIRST block for that class (controlcolortest [3b] and lockclienttest
+   [5h3b/5h4] depend on that). Reduce Motion drops the press. */
+#add-sport-sheet .as-close{width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;transition:transform var(--motion-fast) var(--ease-native)}
+#add-sport-sheet .as-close:active{transform:scale(.97)}
+@media (prefers-reduced-motion:reduce){#add-sport-sheet .as-close{transition:none}#add-sport-sheet .as-close:active{transform:none}}
 /* v0.17.4: this inherited overflow-y from .chat-scroll. When that was removed,
    sheet content spilled out of the sheet, unclipped and unscrollable, over the
    composer and the backdrop. Declare it here so it never depends on a sibling
@@ -5281,9 +5465,22 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 .chat-prefs .chat-prefs-row-wrap #scribe-file-btn{flex:1 1 auto;min-width:0}
 /* Sheet extras */
 .chat-sheet-header-actions{display:flex;align-items:center;gap:8px}   /* Breathing Room sweep (2026-10-01): 6 -> 8 */
-.chat-sheet-hint{background:var(--gold-pale);border:1px solid var(--gold);border-radius:8px;
-  padding:6px 10px;margin:8px 12px 0;font-size:.72rem;display:flex;justify-content:space-between;gap:8px;align-items:center}
-.chat-sheet-hint button{background:none;border:none;color:var(--maroon-text);font-weight:700;cursor:pointer;font-size:.72rem}
+/* D1 DI-592 (2026-10-08) — the game thread sheet, #chat-thread-sheet (the one-time "Posts here also appear…" hint is gone: its sentence is the permanent subtitle now). The title block shrinks before the
+   actions do; the close is the icon family's ✕ at 44 x 44 pt with the 97% press; "Open in chat" has its own centred row, 8 pt under a hairline, 44 pt tall; native drags the sheet down by its header
+   (the wizard sheet's recipe: --thread-drag-y 0..1 set by js/chat-ui.js through bindSwipeToDismiss(), the backdrop dimming with it, no transition while the finger is down, none under Reduce Motion). */
+.chat-sheet-head-text{flex:1 1 auto;min-width:0}
+#chat-thread-sheet .chat-sheet-title{overflow-wrap:anywhere}
+.chat-sheet-lens{margin-top:2px}
+#chat-thread-sheet .chat-sheet-close{width:44px;height:44px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;transition:transform var(--motion-fast) var(--ease-native)}
+#chat-thread-sheet .chat-sheet-close:active{transform:scale(.97)}
+.chat-sheet-openrow{display:flex;justify-content:center;margin:0 0 8px;padding-top:8px;border-top:1px solid var(--border)}
+.chat-sheet-openrow .btn{min-height:44px;min-width:44px}
+#chat-thread-sheet{transform:translateY(calc(100% * var(--thread-drag-y,0)));transition:transform var(--motion-nav) ease-out}
+#chat-thread-sheet[data-dragging="true"]{transition:none}
+#chat-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--thread-drag-y,0));transition:opacity var(--motion-nav) ease-out}
+#chat-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
+body.native-shell #chat-thread-sheet .chat-sheet-header{position:relative;padding-top:14px;touch-action:none}
+@media (prefers-reduced-motion:reduce){#chat-thread-sheet,#chat-sheet-wrap .chat-sheet-backdrop,#chat-thread-sheet .chat-sheet-close{transition:none}#chat-thread-sheet .chat-sheet-close:active{transform:none}}
 .recap-alias{color:var(--text-muted);font-size:.72em;font-style:italic}
 
 /* ── v0.17.1 obligation filter tabs (What I owe / Owed to me) ──────────── */
@@ -5378,6 +5575,20 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
   margin-bottom: 12px; padding: 10px 12px;
 }
 .lock-countdown-compact .lock-countdown-main { font-size: .86rem; }
+/* D1 / DI-510 — the chrome glyphs on the lock countdown and the timing line are the Munera family (currentColor SVG), sized like the emoji they replace. */
+.lock-countdown-icon svg { width: 24px; height: 24px; display: block; }
+.pt-item svg { width: 16px; height: 16px; flex-shrink: 0; }
+/* D1 / DI-510 — THE FLIP AT THE LOCK INSTANT: the one repaint the lock timer causes fades the badge and the countdown in once (small feedback, --motion-fast). Reduce Motion: none. No haptic (passive). */
+@keyframes lockFlipFadeIn { from { opacity: 0 } to { opacity: 1 } }
+.lock-flip-in { animation: lockFlipFadeIn var(--motion-fast, 150ms) var(--ease-native, ease-out) both; }
+@media (prefers-reduced-motion: reduce) { .lock-flip-in { animation: none; } }
+/* D1 / DI-517 — the live notes under the summary title ("Tiebreaker so far…", "Tied — settles when the week is final", "Ranks appear once games start."): each line is its own paragraph, 8 pt from the next
+   line and from the table, never touching either. The Provisional chip sits at the end of the card header's flex row; the Comm card's source chip is 8 pt from its label. */
+.tb-live-line { margin: 0 0 8px; }
+.tb-source-chip { margin-left: 8px; }
+/* D1 / DI-510 — the mid-edit notice (the week locked under an unsaved draft): title, detail, hint as one 8 pt group inside the existing .warning-box. */
+.lock-draft-notice { display: flex; flex-direction: column; gap: 8px; }
+.lock-draft-notice .btn { align-self: flex-start; min-height: 44px; }   /* fix round B1: the way out is a full 44 pt target, left-aligned under the hint */
 
 /* ── v0.17.2 · Signed-out chat composer replacement ───────────────────────── */
 .chat-login-prompt {
@@ -5455,13 +5666,14 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 /* Occupies the EXACT slot .chat-pills-scroll used to (renderChatPage() swaps
    one for the other) — same row height budget, matching CONVENTIONS #17's
    40px floor via .form-input's existing min-height:46px. */
-.chat-search-row{display:flex;align-items:center;gap:8px;padding:2px 0 8px}   /* Breathing Room sweep (2026-10-01): gap 6 -> 8 (input + its button) */
-.chat-search-input{flex:1;min-height:40px}
+.chat-search-row{display:flex;align-items:center;gap:8px;padding:8px 0 8px}   /* Breathing Room sweep (2026-10-01): gap 6 -> 8 (input + its button); W-57 review R1 (2026-10-08): top 2 -> 8 to match the pills row it replaces (same slot, no jump when search opens) */
+.chat-search-input{flex:1;min-height:44px;box-sizing:border-box}   /* 40 -> 44 with the pills (W-57, DI-553 audit): the slot keeps the pills row's height, 44 + 8 + 8 */
 /* Non-blocking finding #11 (CONVENTIONS #17) — .btn-sm's base min-height is
    34px, under the 40px tap-target floor. These three are icon/short-label
    buttons a player taps directly (search toggle, clear, close), so they get
    an explicit floor rather than inheriting the smaller default. */
-#chat-search-btn, #chat-search-close, #chat-search-clear{min-height:40px;min-width:40px}
+#chat-search-btn{min-height:40px;min-width:40px}
+#chat-search-close, #chat-search-clear{min-height:44px;min-width:44px}   /* W-57 audit (2026-10-08): the two buttons that live in the search row take the row's 44 pt; the header's 🔍 keeps its 40 */
 
 /* ── DI-168 — manual chat refresh button + status text ────────────────────
    Two buttons (main .chat-header-actions + the game-thread sheet's
@@ -5533,8 +5745,13 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
    sized per the design input's own math: "~2×150px + gap ≈ 306px — fits
    inside a 320px viewport with the popover's own small inset margin (match
    .reaction-picker's existing max-width clamp pattern)". */
-.feedback-picker-grid{display:grid;grid-template-columns:repeat(2,150px);
-  gap:6px;max-width:calc(100vw - 48px)}
+.feedback-picker-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:6px;width:min(306px,calc(100vw - 96px));max-width:calc(100vw - 48px)}
+/* N4 (W-57 follow-up, 2026-10-08, reviewer; Breathing Room): the natural 2x2 popover is 320 px wide (306 + the wrapper's 6 px padding and 1 px border each side) and opens from the message column's left
+   edge (x = 64 on the ROW path, 65 on the long-press .chat-actions path), so on a 385-400 pt phone its right edge sat 0-15 pt from the screen edge (6 pt at 390, measured in Chromium). The grid's WIDTH is
+   now `min(306px, 100vw - 96px)`: 96 = 65 (the popover's left edge, the worse of the two paths) + 16 (Breathing Room) + 14 (the wrapper's padding and border) + 1 (slack). The 2x2 grid stays a 2x2 grid; its
+   two columns give back a few points (about 144 pt each at 390, never under 44 pt tall), and from about 402 pt up nothing changes. The reason row below carries the SAME expression, so the popover is
+   one width before and after a rating is chosen (no jump). Below 385 pt the single-column rule still applies. */
 /* Single-column fallback, ≤360px (reviewer BLOCK finding #2: widened from
    ≤320px — the 306px grid (2×150px+gap) does not reliably fit inside a
    321–360px viewport once the popover's own inset padding/margin is
@@ -5574,7 +5791,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
    chat-ui.js's reasonSectionHTML). Widths track .feedback-picker-grid's own
    math above — 2×150px+gap ≈ 306px, collapsing with it at ≤384px — so the
    popover never gets wider when the chips appear, only taller. */
-.feedback-reason{width:306px;max-width:calc(100vw - 48px);margin-top:8px;
+.feedback-reason{width:min(306px,calc(100vw - 96px));max-width:calc(100vw - 48px);margin-top:8px;
   padding-top:8px;border-top:1px solid var(--border)}
 @media (max-width:384px){
   .feedback-reason{width:180px}
@@ -5679,8 +5896,12 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
    annoyance. Explicit floor here rather than raising `.btn-sm` globally
    (which would reflow every compact row in the app). Same narrow,
    named-selector approach `#chat-search-btn` et al. already take above. */
+/* D1 batch O follow-up (2026-10-07, "the Retry control is a 44 pt tap target"): the floor is Apple's 44 pt, not 40. The same
+   rule now covers the learned list's on/off switch (it shows "Saving…" and "Retry" in the same control), and `min-width` keeps
+   the short "Retry" label from collapsing to a thumb-sized sliver. Scoped to these names, never `.btn-sm` itself. */
 .scribe-approve-btn, .scribe-reject-btn,
-.scribe-canon-approve-btn, .scribe-canon-reject-btn{min-height:40px}
+.scribe-canon-approve-btn, .scribe-canon-reject-btn,
+.scribe-learning-toggle-btn{min-height:44px;min-width:44px}
 
 /* ── Build 3, Group D (2026-09-11) — SCRIBE participation dial (DI-D1) +
    "My SCRIBE File" (DI-D4). Mobile-first (CONVENTIONS #14); every tap
@@ -6039,6 +6260,11 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 .gr-filter{margin:4px 0 8px;min-height:44px}
 .gr-cap-note{color:var(--loss);background:var(--loss-bg);border-radius:var(--btn-radius);padding:6px 10px;margin:0 0 8px}
 .gr-result-list,.gr-mine{display:flex;flex-direction:column}
+/* W-66 review N1 (DI-175f amended, 2026-10-14) — a re-search keeps the previous games, dimmed under the loading line (cached content
+   first); the dim is the busy-control value (.ls-row-switch[aria-busy]) and eases in over --motion-fast. The block is inert in the markup. */
+.gr-stale{opacity:.6;animation:gr-stale-in var(--motion-fast) ease-out}
+@keyframes gr-stale-in{from{opacity:1}}
+@media (prefers-reduced-motion:reduce){.gr-stale{animation:none}}
 .gr-row,.gr-mine-row,.gr-comm-row{display:flex;align-items:center;gap:10px;
   padding:8px 0;border-top:1px solid var(--border)}
 .gr-row:first-child,.gr-comm-row:first-child{border-top:none}
@@ -6740,6 +6966,35 @@ body.native-shell .pick-chip{-webkit-touch-callout:none}
    without growing the row's rhythm — the row keeps its 8 px padding, the
    button's own height does the work. */
 .week-wizard-check-row .btn{margin-left:auto;min-height:44px;flex:0 0 auto}
+/* FB-027 / DI-518 (bug batch W, 2026-10-07) — touched-screen audit of the Manage screen: the status buttons, the Finalize entry and "Not yet" hold the
+   44 pt floor (.btn-sm is 34 px); the status row keeps its 8 pt gap and stacks at 375 pt (Breathing Room). */
+.week-wizard-status-btn,#wiz-open-finalize-btn,#wiz-final-not-yet{min-height:44px}
+@media (max-width:375px){.week-wizard-status-row{flex-direction:column;align-items:stretch}}
+/* DI-519 — the review card's missing row, the tiebreaker's source chip, and the calm inline retry row (red text, never a toast; hidden until used). */
+.week-wizard-check-row.is-missing{color:var(--loss)}
+.wiz-fin-chip{display:inline-block;padding:2px 8px;border-radius:999px;background:var(--bg-input);color:var(--text-secondary);font-weight:600}
+.wiz-fin-chip[hidden]{display:none}
+.wiz-fin-failure{display:flex;flex-wrap:wrap;align-items:center;gap:8px;color:var(--loss);font-size:.9rem}
+.wiz-fin-failure[hidden]{display:none}
+.wiz-fin-failure .btn{min-height:44px}
+/* PF-416 follow-up, review N6 (2026-10-08) — "Not sent yet" is not a failure: the muted amber weight (--warning-text, the .warning-box family; DI-180c
+   keeps a held write out of the red), with the same layout and 44 pt Retry. Red .wiz-fin-failure is the refusal's alone. */
+.wiz-fin-pending{display:flex;flex-wrap:wrap;align-items:center;gap:8px;color:var(--warning-text);font-size:.9rem}
+.wiz-fin-pending[hidden]{display:none}
+.wiz-fin-pending .btn{min-height:44px}
+/* Review round 1 — the review card's marks are the Munera glyphs (check / warning, D-1), sized to the row's text and coloured by the row's state;
+   Step 3's Detect sits under the field with its result beside it (8 pt gap, 16 pt to what follows), on the 44 pt target. */
+.wiz-fin-review-mark{display:inline-flex;width:18px;height:18px}
+.wiz-fin-review-mark svg{width:18px;height:18px}
+.week-wizard-check-row.is-missing span.wiz-fin-review-mark{color:var(--loss)}
+.wiz-fin-ep-detect-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 16px}
+#wiz-fin-ep-detect{min-height:44px}
+/* DI-518 amendment (coordinator, 2026-10-07) — the draft view's "Week N is live" row: the label leading, its Finalize button trailing, 8 pt between them
+   (a container gap, never a margin on the button), 16 pt to the edges and to the step content below (Breathing Room); it wraps to two lines on a narrow
+   phone rather than shrinking the button, which holds the 44 pt target. */
+.wiz-live-week-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:8px 16px;margin:0 0 16px;
+  border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text-primary);font-size:.9rem;font-weight:600}
+.wiz-live-week-row .btn{min-height:44px}
 /* Step 6's standing reason beside the disabled Open button: red while it is
    blocking the chosen mode, muted under "Keep as draft" (a heads-up, not a
    block). Colour only — never a height change — so switching mode cannot jump. */
@@ -7477,6 +7732,18 @@ body.native-shell #pwacct-delete-sheet .chat-sheet-header{position:relative;padd
 /* the action sheet's optional message (Archive {League}? carries one; the discard prompt does not) */
 .lc-as-ttl-has-msg{border-bottom:none;padding-bottom:0;font-weight:600;color:var(--text-primary)}
 .lc-as-msg{padding:8px 16px 16px;text-align:center;font-size:.78rem;line-height:1.5;color:var(--text-muted);border-bottom:1px solid var(--border)}
+/* R-19 follow-up (0046) — the Deny sheet's optional reason: ONE field between the message and the destructive button.
+   8pt inside the group, 16pt to the edges (Breathing Room); a 44pt field; 16px text so iOS does not zoom on focus. */
+.lc-as-field{display:flex;flex-direction:column;gap:8px;padding:16px;border-bottom:1px solid var(--border);text-align:left}
+.lc-as-field-lbl{font-size:.78rem;font-weight:600;color:var(--text-secondary)}
+.lc-as-input{box-sizing:border-box;width:100%;min-height:44px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;
+  background:var(--bg-input);color:var(--text-primary);font:inherit;font-size:16px}
+.lc-as-input:focus{outline:2px solid var(--maroon-text);outline-offset:1px}
+.lc-as-count{align-self:flex-end;font-size:.72rem;color:var(--text-muted);font-variant-numeric:tabular-nums}
+/* M-30 (Drew D-61, 2026-10-07) — a denied payment's reason, VISIBLE under the Unpaid row (Standings Weekly History note row and the Comm
+   Obligations card). Muted by token, never a hardcoded colour; wraps at 375 pt and at the largest text size (rem, overflow-wrap:anywhere);
+   no margin — the 4 pt above it is its own padding (a tie note beside it, or the meta line above it). */
+.ob-denied-line{padding-top:4px;font-size:.75rem;line-height:1.45;color:var(--text-secondary);white-space:normal;overflow-wrap:anywhere}
 
 /* Reduce Motion: nothing MOVES — the sheet takes no slide (and its drag/transform transition is off), and its arrival is the 150ms crossfade instead; the spinner holds still. */
 @media (prefers-reduced-motion:reduce){
@@ -7721,6 +7988,58 @@ body.native-shell #ls-sheet .chat-sheet-header{position:relative;padding-top:14p
 @media (prefers-reduced-motion:reduce){
   .news-card{transition:none}
 }
+/* --- D1 LANE C (DI-663 storyline card, DI-672 grouped card + "Also from" sheet, 2026-10-08) --- the same card shell and tokens; nothing new in colour or weight.
+   A GROUPED card moves the link role to .news-card__main, so the "Also from" control is a SIBLING (never a button nested in a link). The main block presses like
+   every card; the row below it is a 44 pt ghost control, 16 in from the card edge and 16 below the article text (a separate group, Breathing Room). The storyline eyebrow is caption text (12 pt,
+   --text-secondary) with an 8 gap; the tag truncates with an ellipsis and never pushes the kind label off the line. */
+.news-card--grouped{cursor:default;transition:none}
+.news-card--grouped:active{transform:none}
+.news-card__main{display:block;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.news-card__main:active{transform:scale(.97)}
+.news-card__main:focus-visible{outline:2px solid var(--maroon-text);outline-offset:-2px;border-radius:var(--card-radius)}
+.news-card__also-row{display:flex;padding:0 16px 16px}
+.news-card__also{min-height:44px;width:100%;display:flex;align-items:center;justify-content:flex-start;padding:8px 16px;border:1px solid var(--border);border-radius:var(--card-radius);background:var(--bg-card-alt);
+  color:var(--text-secondary);font-size:.8125rem;font-weight:600;line-height:1.35;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.news-card__also:active{transform:scale(.97)}
+.news-card__also:focus-visible{outline:2px solid var(--maroon-text);outline-offset:2px}
+.news-card__eyebrow{margin:0;display:flex;align-items:center;gap:8px;min-width:0;max-width:100%;font-size:.75rem;line-height:1.35;color:var(--text-secondary)}
+.news-card__kind{flex:none;font-weight:600}
+.news-card__tag{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.news-card__updated{color:var(--text-secondary)}
+#news-also-sheet-wrap{position:fixed;inset:0;z-index:8000}
+html:has(#news-also-sheet-wrap){overflow:hidden}
+#news-also-sheet-body{overscroll-behavior:contain;padding:16px}
+#news-also-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--news-also-drag-y,0));transition:opacity var(--motion-nav) ease-out}
+#news-also-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
+#news-also-sheet{transform:translateY(calc(100% * var(--news-also-drag-y,0)));transition:transform var(--motion-modal) var(--ease-native);animation-duration:var(--motion-modal);animation-timing-function:var(--ease-native)}
+#news-also-sheet[data-dragging="true"]{transition:none}
+#news-also-sheet-wrap[data-closing]{pointer-events:none}
+#news-also-sheet-wrap[data-closing="fade"]{opacity:0;transition:opacity var(--motion-fast) linear}
+body.native-shell #news-also-sheet .chat-sheet-header{position:relative;touch-action:none}
+.news-also-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.news-also-open{width:100%;min-height:44px;display:flex;align-items:center;gap:16px;padding:8px 16px;border:1px solid var(--border);border-radius:var(--card-radius);background:var(--bg-card);
+  color:var(--text-primary);text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.news-also-open:active{transform:scale(.97)}
+.news-also-text{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 auto}
+.news-also-headline{font-weight:600;font-size:.9375rem;line-height:1.35;overflow-wrap:anywhere}
+.news-also-meta{font-size:.75rem;color:var(--text-secondary)}
+.news-also-go{flex:none;font-size:.8125rem;font-weight:600;color:var(--maroon-text)}
+@media (prefers-reduced-motion:reduce){
+  .news-card__main,.news-card__also,.news-also-open,#news-also-sheet,#news-also-sheet-wrap .chat-sheet-backdrop{transition:none}
+  .news-card__main:active,.news-card__also:active,.news-also-open:active{transform:none}
+}
+/* --- D1 LANE C (DI-660…662, DI-664, DI-669, 2026-10-08) — the Home CONTENT cards (matchup, player to watch, spotlight). They wear the feed card's own shell
+   (.feed-card .feed-card--tap: 16 pt padding, 8 pt rhythm, the 97% press, the eyebrow, title, body and caption); only the pieces a feed card has no word for are here.
+   No new colour or weight: the kind label is the eyebrow's caption text, the lists are body text, the stale caption takes --text-muted. --- */
+.content-card-kind{font-size:.75rem;font-weight:600;line-height:1.35;color:var(--text-secondary)}
+.content-card-sub{margin:0;font-size:.8125rem;line-height:1.45;color:var(--text-secondary)}
+.content-card-lines{margin:0;padding:0 0 0 16px;display:flex;flex-direction:column;gap:4px;font-size:.875rem;line-height:1.45;color:var(--text-primary)}
+.content-card-watch{display:flex;flex-direction:column;gap:4px}
+.content-card-label{margin:0;font-size:.75rem;font-weight:600;line-height:1.35;color:var(--text-secondary)}
+.content-card-talk{margin:0;display:flex;flex-direction:column;gap:4px;font-size:.875rem;line-height:1.45;color:var(--text-primary)}
+.content-card-why{color:var(--text-primary)}
+.content-card-caption.content-card-caption--stale{color:var(--text-muted)}   /* two classes: it must win over .feed-card-caption, which sits later in the sheet (newsrendertest [G] measured the miss) */
+.content-error{gap:16px}
 
 /* The News settings pane (the drawer's third pane): the same flex-column rhythm as Profile - 16 between groups, nothing touches an edge. */
 .control-center-news{gap:16px}
@@ -7759,6 +8078,1048 @@ body.native-shell #ls-sheet .chat-sheet-header{position:relative;padding-top:14p
 @media (min-width:600px){
   .stand-table .stand-note td{padding-left:12px;padding-right:12px}          /* the same side padding the ≥600px table cells use */
 }
+/* ═══ D1 LANE B · HISTORY - BEGIN (DI-595 the comparison · DI-596 the week detail · DI-598 thread rows and the chat's filter label; js/compare.js, js/week-detail.js) ═══════════════════════════
+   Placed with the Standings rules it extends. SEMANTIC TOKENS ONLY (no colour literal) so it reads in Light, Dark and every school overlay; 8 pt grid; nothing touches an edge, a line or another control;
+   every tap target is >= 44 pt; the shipped press (scale .97 over --motion-fast with --ease-native) on every control, removed under Reduce Motion; one motion language. The two screens live inside the
+   pushed-screen shell (.ps-body already gives 16 pt between groups and to the edges) and compose the card detail's vocabulary (.cd-card, .cd-h, .cd-rows, .cd-sentence, .cd-more, .cd-actions). */
+
+/* Standings entries. A name (Season Summary) and a revealed week (Weekly History) become row-sized buttons. The button is made as tall as its cell by cancelling the cell's own padding with a negative
+   margin, so the row does not grow (a 48 pt row stays 48: the cell's box is 48 less its 4 + 4 padding and its 1 pt rule = 39, so the button is 47 pt tall, inside the rule, measured in historybrowsertest) and the
+   tap target is the whole cell; the visible text still sits >= 8 pt from the row's lines. The chevron is the disclosure (decorative). */
+.stand-cmp,.stand-wk-btn{appearance:none;-webkit-appearance:none;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;box-sizing:border-box;min-height:47px;
+  -webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.stand-cmp:active,.stand-wk-btn:active{transform:scale(.97)}
+.stand-cmp:focus-visible,.stand-wk-btn:focus-visible{outline:2px solid var(--maroon-text);outline-offset:-2px}
+.stand-cmp{width:calc(100% + 16px);margin:-4px -8px;padding:4px 8px}
+.stand-cmp-chev{flex:none;display:inline-flex;width:12px;height:12px;margin-left:auto;color:var(--text-secondary)}
+.stand-cmp-chev svg,.stand-wk-chev svg{width:12px;height:12px}
+.stand-wk-btn{position:relative;display:block;width:calc(100% + 8px);margin:-4px 0 -4px -8px;padding:4px 0 4px 8px}
+.stand-wk-btn .stand-wk-name{padding-right:16px}
+.stand-wk-chev{position:absolute;top:8px;right:4px;display:inline-flex;width:12px;height:12px;color:var(--text-secondary)}
+@media (prefers-reduced-motion:reduce){.stand-cmp,.stand-wk-btn{transition:none}.stand-cmp:active,.stand-wk-btn:active{transform:none}}
+
+/* The nav bar's right-hand text action ("Change"): the Back button's twin on the other side. */
+.ps-action{min-width:44px;min-height:44px;padding:0 8px;border:0;border-radius:var(--btn-radius);background:transparent;color:var(--maroon-text);font:inherit;font-size:1rem;font-weight:600;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.ps-action:active{transform:scale(.97)}
+.ps-action:focus-visible{outline:2px solid var(--maroon-text);outline-offset:2px}
+
+/* The comparison. */
+.cmp{min-width:0}
+.cmp-through{font-variant-numeric:tabular-nums}
+.cmp-seg{display:flex;gap:8px}
+.cmp-seg-btn{flex:1 1 0;min-width:0;min-height:44px;padding:0 16px;border:1px solid var(--border);border-radius:var(--btn-radius);background:var(--bg-input);color:var(--text-secondary);font:inherit;font-size:.9375rem;font-weight:600;
+  cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.cmp-seg-btn:active{transform:scale(.97)}
+.cmp-seg-btn.is-on{background:var(--maroon);border-color:var(--maroon);color:var(--on-accent)}
+.cmp-seg-btn:focus-visible{outline:2px solid var(--maroon-text);outline-offset:2px}
+.cmp-n{font-variant-numeric:tabular-nums}
+.cmp-split-wrap{display:flex;align-items:center;gap:8px}
+.cmp-split-n{flex:none;min-width:2ch;font-size:1.125rem;font-weight:700;line-height:1;color:var(--text-primary);font-variant-numeric:tabular-nums}
+.cmp-split-n:last-child{text-align:right}
+.cmp-bar{flex:1 1 auto;min-width:0;display:flex;height:12px;border-radius:6px;overflow:hidden;background:var(--bg-input)}
+.cmp-bar-a,.cmp-bar-b{flex:1 1 0;min-width:0;height:100%}
+.cmp-bar-a{background:var(--maroon-text)}
+.cmp-bar-b{background:var(--text-secondary)}
+.cmp-split-names{display:flex;justify-content:space-between;gap:16px;font-size:.8125rem;line-height:1.4;color:var(--text-secondary)}
+.cmp-grid{display:flex;flex-direction:column}
+.cmp-gridrow{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:baseline;column-gap:16px;padding:8px 0}   /* label, You, them on one line; at a large text size the label drops to its own line and, past that, each value to its own - nothing overflows */
+.cmp-gridrow+.cmp-gridrow{border-top:1px solid var(--border)}
+.cmp-gridhead{font-size:.75rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-secondary)}
+.cmp-lab{flex:1 1 5em;min-width:0;font-size:.875rem;line-height:1.4;color:var(--text-secondary);overflow-wrap:anywhere}
+.cmp-val{flex:0 0 auto;min-width:min(6em,100%);text-align:right;white-space:nowrap;font-size:.9375rem;font-weight:600;line-height:1.4;color:var(--text-primary);font-variant-numeric:tabular-nums}
+.cmp-gridhead .cmp-val{font-size:.75rem;color:var(--text-secondary);font-weight:600}
+.cmp-foot{margin-top:0}
+/* DI-597: the Share button on the comparison and the week detail is the card detail's action button; its label may wrap at the largest text sizes (the card detail's nowrap would push a 300% label past the 16 pt gutters). */
+.cmp .cd-action,.wd .cd-action{white-space:normal;min-width:0;text-align:center}
+
+/* A game row on either screen: the whole row opens the game; the Thread button sits beside it (never inside it). */
+.hx-items{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.hx-item{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;padding:8px 0}   /* at a large text size the Thread button drops under the game instead of squeezing it to a sliver */
+.hx-item+.hx-item{border-top:1px solid var(--border)}
+.hx-open{flex:1 1 10em;min-width:0;min-height:44px;display:flex;flex-direction:column;gap:8px;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.hx-open:active,.hx-thread:active{transform:scale(.97)}
+.hx-open:focus-visible,.hx-thread:focus-visible{outline:2px solid var(--maroon-text);outline-offset:2px}
+.hx-main{display:flex;flex-direction:column;gap:4px;min-width:0}
+.hx-title{font-size:.9375rem;line-height:1.35;color:var(--text-primary);overflow-wrap:anywhere}
+.hx-sub{font-size:.8125rem;line-height:1.35;color:var(--text-secondary);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.hx-cover{font-weight:600;color:var(--text-primary)}
+.hx-picks{display:flex;flex-direction:column;gap:4px;font-size:.8125rem;line-height:1.35;color:var(--text-primary)}
+.hx-pick{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px;min-width:0;overflow-wrap:anywhere}
+.hx-who{color:var(--text-secondary)}
+.hx-mark{font-weight:700}
+.hx-mark--win,.hx-mark--covering{color:var(--win)}
+.hx-mark--loss{color:var(--loss)}
+.hx-mark--trailing{color:var(--warning-text)}
+.hx-thread{flex:0 0 auto;align-self:center;min-width:44px;min-height:44px;padding:0 12px;border:1px solid var(--border);border-radius:var(--btn-radius);background:var(--bg-input);color:var(--text-secondary);
+  font:inherit;font-size:.8125rem;font-weight:600;white-space:nowrap;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.hx-item--extra{display:none}
+.cmp-splits[data-expanded="true"] .hx-item--extra{display:flex}
+@media (prefers-reduced-motion:reduce){.ps-action,.cmp-seg-btn,.hx-open,.hx-thread{transition:none}.ps-action:active,.cmp-seg-btn:active,.hx-open:active,.hx-thread:active{transform:none}}
+
+/* The week detail. */
+.wd{min-width:0}
+.wd-part{margin:0;padding:8px 0 0;font-size:.8125rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-secondary)}
+.wd-part:first-child{padding-top:0}
+
+/* The rival picker sheet (the shared sheet shell, scoped to its ids): rows are 56 pt targets, 8 apart; the sheet and the scrim follow --rival-drag-y; Reduce Motion drops the movement. */
+#rival-picker-sheet-wrap{position:fixed;inset:0;z-index:8000}
+html:has(#rival-picker-sheet-wrap){overflow:hidden}
+#rival-picker-sheet{transform:translateY(calc(100% * var(--rival-drag-y,0)));transition:transform var(--motion-nav) ease-out}
+#rival-picker-sheet[data-dragging="true"]{transition:none}
+#rival-picker-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--rival-drag-y,0));transition:opacity var(--motion-nav) ease-out}
+#rival-picker-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
+body.native-shell #rival-picker-sheet .chat-sheet-header{position:relative;padding-top:14px;touch-action:none}
+#rival-picker-body{padding:4px 4px 16px;overscroll-behavior:contain;min-height:0;display:flex;flex-direction:column;gap:8px}
+.rp-close{width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;transition:transform var(--motion-fast) var(--ease-native)}
+.rp-close:active{transform:scale(.97)}
+.cmp-picker-sub,.cmp-picker-empty{margin:0;font-size:.875rem;line-height:1.45;color:var(--text-secondary)}
+.cmp-picks-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.cmp-pick-row{display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%;min-height:56px;padding:12px 16px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card);color:var(--text-primary);
+  font:inherit;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:transform var(--motion-fast) var(--ease-native)}
+.cmp-pick-row:active{transform:scale(.97)}
+.cmp-pick-row.is-current{border-color:var(--maroon-text);box-shadow:inset 0 0 0 1px var(--maroon-text)}
+.cmp-pick-name{min-width:0;font-weight:600;overflow-wrap:anywhere}
+.cmp-pick-check{flex:none;display:inline-flex;width:20px;height:20px;color:var(--maroon-text)}
+.cmp-pick-check svg{width:20px;height:20px}
+@media (prefers-reduced-motion:reduce){#rival-picker-sheet,#rival-picker-sheet-wrap .chat-sheet-backdrop,.rp-close,.cmp-pick-row{transition:none}.rp-close:active,.cmp-pick-row:active{transform:none}}
+
+/* The chat's game filter for a past game that has no pill (DI-598): its label is in the header above; this is the way back, a 44 pt row 8 pt below it. */
+.chat-view-back{display:flex;justify-content:flex-start;margin-bottom:8px}
+.chat-view-all{min-height:44px;padding:0 16px;border:1px solid var(--border);border-radius:var(--btn-radius);background:var(--bg-input);color:var(--text-secondary);font:inherit;font-size:.875rem;font-weight:600;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.chat-view-all:active{transform:scale(.97)}
+@media (prefers-reduced-motion:reduce){.chat-view-all{transition:none}.chat-view-all:active{transform:none}}
+/* ═══ D1 LANE B · HISTORY - END ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+/* ═══ "WHO'S IN" — UN-412 / DI-501 (Social Platform, 2026-10-01) — the pick-status strip ═══════════════════════════
+   Who has submitted (names, never picks) while a week is blind. Composes the shipped vocabulary: the .card, the round Oswald avatar of
+   .player-avatar, icon('check') from the one icon family, the Munera tokens. NO new colour, font, icon or token. Informational: no tap
+   target, no press state, no haptic. State is never colour alone (the name and the group's aria-label say it), "not yet" is NEVER red,
+   and the locked-state "No picks" is a neutral ring (UN-46). Sizes are rem/em so Dynamic Type scales the text AND the avatar, and the
+   row wraps (more rows) instead of overlapping. 8 pt grid: 16 card padding, 12 title-to-avatars, 8 between tiles, 12 between wrapped
+   rows, 12 above the note (the app's --gap), 16 around a gate's strip. */
+.week-status-card + .pick-status-card{margin-top:16px}
+.pick-status-block{margin:0 0 12px}
+.empty-state .pick-status-block,.text-center .pick-status-block{margin:16px 0;text-align:left}
+.dash-gate-actions{margin-top:16px}
+.ps-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:0 0 12px}
+.ps-title{font-size:.6875rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-secondary)}
+.ps-count{font-size:.8125rem;font-weight:700;color:var(--text-primary);font-variant-numeric:tabular-nums;text-align:right}
+.ps-list{display:flex;flex-wrap:wrap;gap:12px 8px;margin:0;padding:0;list-style:none}
+.ps-m{flex:1 1 0;min-width:3.6em;max-width:72px;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:.6875rem}
+.ps-av{position:relative;box-sizing:border-box;width:2.25rem;height:2.25rem;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid transparent;font-family:'Oswald',sans-serif;font-weight:700;font-size:.75rem;transition:background-color var(--motion-fast) ease-out,border-color var(--motion-fast) ease-out,color var(--motion-fast) ease-out}
+.ps-m[data-state="in"] .ps-av{background:var(--maroon);color:var(--on-accent)}      /* D1 (themetest T9, DI-448 C2): a label on an accent fill is --on-accent, per theme - not the literal --oxblood-on this was written with before the theme system */
+.ps-m[data-state="notyet"] .ps-av{background:transparent;border-color:var(--border-strong);color:var(--text-secondary)}
+.ps-m[data-state="unknown"] .ps-av{background:transparent;border-style:dashed;border-color:var(--border-strong);color:var(--text-secondary)}
+.ps-badge{position:absolute;right:-3px;bottom:-3px;box-sizing:border-box;width:1rem;height:1rem;border-radius:50%;background:var(--win);color:var(--bg-card);display:flex;align-items:center;justify-content:center;border:2px solid var(--bg-card);opacity:0;transform:scale(.8);transition:opacity var(--motion-fast) ease-out,transform var(--motion-fast) ease-out}
+.ps-badge svg{width:70%;height:70%}
+.ps-m[data-state="in"] .ps-badge{opacity:1;transform:scale(1)}
+.ps-name{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;color:var(--text-secondary);transition:color var(--motion-fast) ease-out}
+.ps-m[data-state="in"] .ps-name{color:var(--text-primary);font-weight:600}
+.ps-m.you .ps-name{font-weight:700;color:var(--text-primary)}
+.ps-sub{font-size:.625rem;line-height:1.2;color:var(--text-secondary)}
+.pick-status[data-ps-phase="locked"] .ps-sub{min-height:1.2em}
+.ps-note{margin:12px 0 0;font-size:.75rem;line-height:1.4;color:var(--text-secondary)}
+.ps-note[hidden]{display:none}
+/* the first ask: the skeleton, in the SAME footprint (no layout jump) — the shipped shimmer token and the same opacity-pulse language Home uses */
+.ps-loading .ps-av{background:var(--border-strong);border-color:transparent;animation:ps-pulse var(--skeleton-shimmer,1400ms) ease-in-out infinite}
+.ps-loading .ps-name{width:70%;height:.5rem;margin:.4rem 0;border-radius:4px;background:var(--border-strong);animation:ps-pulse var(--skeleton-shimmer,1400ms) ease-in-out infinite}
+@keyframes ps-pulse{0%,100%{opacity:.5}50%{opacity:.9}}
+/* on Home's Now card (a gradient surface): the same markup, light-on-dark overrides */
+.ps-on-dark .ps-title,.ps-on-dark .ps-count{color:var(--oxblood-on)}
+.ps-on-dark .ps-name,.ps-on-dark .ps-sub{color:var(--oxblood-on)}
+.ps-on-dark .ps-m[data-state="in"] .ps-av{background:var(--oxblood-on);color:var(--oxblood)}
+.ps-on-dark .ps-m[data-state="notyet"] .ps-av,.ps-on-dark .ps-m[data-state="unknown"] .ps-av{border-color:var(--oxblood-on);color:var(--oxblood-on)}
+.ps-on-dark .ps-badge{border-color:var(--maroon-mid)}
+.ps-on-dark .ps-note{color:var(--oxblood-on)}
+/* Reduce Motion: one rule PER animated selector. The state change still happens (fill, ring, check) — it simply does not fade — and the
+   looping skeleton pulse holds still at a visible mid opacity (.7, inside the pulse's own .5-.9 range), never at its dim end. */
+@media (prefers-reduced-motion:reduce){
+  .ps-av{transition:none}
+  .ps-badge{transition:none}
+  .ps-name{transition:none}
+  .ps-loading .ps-av{animation:none;opacity:.7}
+  .ps-loading .ps-name{animation:none;opacity:.7}
+}
+/* ═══ "WHO'S IN" — END ═══════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* ═══ DEPLOYMENT 1 · LANE B — BEGIN (js/game-state.js DI-570 chips · js/pushed-screen.js DI-571 · js/card-detail.js DI-575/576 · chat foot row DI-573) ═══════════════════════════
+   Appended BEFORE the Home block on purpose (hometest [11-2] pins the Home block as the LAST thing in this file, and [11-4] / [11-22] pin its token list and animated selectors).
+   SEMANTIC TOKENS ONLY — no colour literal — so it reads in Light, Dark and every school overlay. One motion language: --motion-fast press / --motion-nav push / --ease-native;
+   Reduce Motion removes every transform and keeps at most a fade. 8 pt grid; nothing touches an edge, a line or another control. */
+
+/* DI-570 — the honest state chips: "Score may be behind" (amber, a still dot), "Waiting for a score update", "Score not available yet". Reused on the compact row (.dc-status) and the
+   matrix pill (.status-pill); never red (a stale or missing score is not a loss), never the live-dot's pulse. */
+.gs-chip{display:inline-flex;align-items:center;white-space:nowrap}
+.gs-chip--live-stale{background:var(--push-bg);color:var(--warning-text);border:1px solid var(--push)}
+.gs-chip--awaiting,.gs-chip--no-score{background:transparent;color:var(--text-secondary)}
+/* DI-571 — the pushed-screen shell. The League overlay's recipe, once: a fixed root in the same z-index band (150: above the header and nav at 100, below .modal-overlay at 200), each level a
+   full-screen column (navigation bar + a body that scrolls natively), the top level's transform driven by --pushed-drag-x (0..1, set by bindSwipeToDismiss on iOS). The root takes no
+   pointer events itself; only the levels do. A covered level stays rendered underneath (inert). Safe areas are honoured top and bottom. Mobile-first; >= 600 px is a centred column. */
+#pushed-root{position:fixed;inset:0;z-index:150;pointer-events:none}
+.ps-level{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--bg);pointer-events:auto;overscroll-behavior:contain;
+  transform:translateX(calc(100% * var(--pushed-drag-x,0)));transition:transform var(--motion-nav) var(--ease-native)}
+.ps-level--entering,.ps-level--leaving{transform:translateX(100%)}
+.ps-level[data-dragging="true"]{transition:none}
+.ps-nav{flex:0 0 auto;display:grid;grid-template-columns:minmax(44px,1fr) minmax(0,auto) minmax(44px,1fr);align-items:center;gap:8px;
+  padding:calc(env(safe-area-inset-top,0px) + 8px) 8px 8px;background:var(--bg-card);border-bottom:1px solid var(--border)}
+.ps-back{justify-self:start;display:inline-flex;align-items:center;gap:4px;min-width:44px;min-height:44px;padding:0 8px;border:0;border-radius:var(--btn-radius);background:transparent;color:var(--maroon-text);
+  font:inherit;font-size:1rem;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.ps-back:active{transform:scale(.97)}
+.ps-back:focus-visible{outline:2px solid var(--maroon-text);outline-offset:2px}
+.ps-back-glyph{display:inline-flex;flex:0 0 auto;width:20px;height:20px}
+.ps-back-glyph svg{width:20px;height:20px}
+.ps-back-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ps-title{margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;font-size:1rem;font-weight:600;line-height:1.3;color:var(--text-primary)}
+.ps-title:focus{outline:none}
+.ps-right{justify-self:end;display:flex;align-items:center;gap:8px;min-width:0}
+.ps-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:16px;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+  padding:16px max(16px,env(safe-area-inset-right,0px)) calc(16px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.ps-skeleton{display:flex;flex-direction:column;gap:8px}
+.ps-empty{display:flex;flex-direction:column;gap:8px;padding:16px;text-align:center}
+.ps-empty-title{margin:0;font-size:1rem;font-weight:600;color:var(--text-primary)}
+.ps-empty-body{margin:0;font-size:.875rem;line-height:1.45;color:var(--text-secondary)}
+@media (min-width:600px){
+  #pushed-root{background:var(--bg)}
+  .ps-level{inset:0 auto 0 50%;width:min(100%,var(--max-width,740px));transform:translateX(calc(-50% + 100% * var(--pushed-drag-x,0)));opacity:1;transition:opacity var(--motion-nav) var(--ease-native)}
+  .ps-level--entering,.ps-level--leaving{transform:translateX(-50%);opacity:0}
+}
+@media (prefers-reduced-motion:reduce){
+  .ps-level{transition:none}
+  .ps-back{transition:none}
+}
+/* DI-572 — the 48 pt team lockup (js/keyed-list.js teamLockupHTML). The abbreviation is always there; the logo is the SHIPPED matrix-hdr-logo inside its box, so js/app.js's one logo binder shows it on
+   load and (error arm) marks the box `.logo-broken`, which here means "hide the picture, keep the abbreviation". SB-07 (Drew): NO plate, halo or gray backing behind a team logo — so the circle's fill
+   exists only while the abbreviation is what is showing, and a loaded logo drops it and hides the abbreviation (`:has`, iOS 15.4+; an older engine keeps the abbreviation behind a logo, nothing else).
+   The box never changes size: no layout shift when the picture arrives. */
+.tl{position:relative;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:48px;height:48px;border-radius:50%;background:var(--bg-input)}
+.tl:has(.is-loaded){background:transparent}
+.tl-abbr{position:relative;font-family:'Oswald',sans-serif;font-size:.8rem;font-weight:600;letter-spacing:.03em;color:var(--text-secondary)}
+.tl-box:has(.is-loaded) ~ .tl-abbr{visibility:hidden}
+.tl-box.matrix-hdr-logo-box{position:absolute;inset:0;width:100%;height:100%;padding:6px;box-sizing:border-box}
+.tl-box.matrix-hdr-logo-box.logo-broken{display:flex}
+.tl-box.logo-broken .matrix-hdr-logo{display:none}
+.tl--sm{width:24px;height:24px}   /* the inline row lockup (Game Day's open card, fix round 2): the same circle at 24 pt; the abbreviation shrinks with it */
+.tl--sm .tl-abbr{font-size:.5rem;letter-spacing:0}
+.tl--sm .tl-box.matrix-hdr-logo-box{padding:2px}
+.tl-rank{position:absolute;top:-4px;right:-4px;display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:var(--bg-card);border:1px solid var(--border);color:var(--text-secondary);font-size:.65rem;font-weight:700;line-height:1;box-sizing:border-box}
+/* DI-573 — the time BENEATH a chat message (PF-440). `.chat-meta` keeps the identity and attributes (author, private chip, pick chip, tag chip, pin); the new `.chat-foot` row sits directly under the
+   bubble: <time> · "edited" · the send state. It aligns with the bubble column (the column's own align-items: right for the viewer's messages, left for others and SCRIBE). 4 pt under the bubble (text to
+   text), 8 pt between its items; Time/meta text is --text-secondary (the muted token fails AA on a card). A failed message states the plain fact, "Not sent", in --loss and gives a bordered Retry with a
+   44 pt hit area (the existing ::before expander) kept 8 pt above the reactions row. System rows and react runs put the time centred on its own line under the pill. */
+.chat-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:4px;font-size:.68rem;line-height:1.35;color:var(--text-secondary)}
+.chat-msg.chat-mine .chat-foot{justify-content:flex-end}
+.chat-foot .chat-time{font-size:.68rem;color:var(--text-secondary)}
+.chat-foot .chat-pending{font-size:.68rem;color:var(--text-secondary)}
+.chat-foot .chat-failed{font-size:.72rem}
+.chat-foot--failed{margin-bottom:8px}
+.chat-system{flex-direction:column;gap:4px}
+.chat-system .chat-time{font-size:.6rem;color:var(--text-secondary)}
+/* DI-575 / DI-576 — the card detail (js/card-detail.js, shown in the pushed screen's .ps-body). The body already gives 16 pt between the groups (.ps-body gap) and 16 pt to the screen edges; INSIDE the
+   detail, each `.cd-card` is one group: 16 pt of padding (the shipped .card), 8 pt between its lines. `.card + .card` adds a top margin for stacked cards elsewhere; here the column's own gap does that
+   job, so the margin is zeroed (otherwise the gap would be 32). SEMANTIC TOKENS ONLY, 8 pt grid, one motion language (the shipped button press). Every SVG is sized by a rule scoped to the glyph's own
+   wrapper — NEVER a global `svg{}` — so an icon the markup forgot to size cannot fill the card (the first review's screenshot). */
+.cd{display:flex;flex-direction:column;gap:16px;min-width:0;overflow-wrap:anywhere}
+.cd .card+.card{margin-top:0}
+.cd-card{display:flex;flex-direction:column;gap:8px;min-width:0}
+.cd-eyebrow{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.cd-eyebrow-icon{display:inline-flex;flex:0 0 auto;width:16px;height:16px;color:var(--maroon-text)}
+.cd-eyebrow-icon svg{width:16px;height:16px}
+.cd-sport,.cd-reason{display:inline-flex;align-items:center;min-height:24px;padding:0 8px;border-radius:12px;background:var(--bg-card-alt);color:var(--text-secondary);font-size:.72rem;font-weight:600;letter-spacing:.02em}
+.cd-title{margin:0;font-size:1.125rem;font-weight:600;line-height:1.3;color:var(--text-primary)}
+.cd-body{margin:0;font-size:.9375rem;line-height:1.45;color:var(--text-secondary)}
+.cd-body--message{white-space:pre-line;color:var(--text-primary)}
+.cd-fresh,.cd-note{margin:0;font-size:.8125rem;line-height:1.45;color:var(--text-secondary)}
+.cd-note{text-align:center}
+.cd-h{margin:0;font-family:'Oswald',sans-serif;font-size:.8rem;font-weight:600;line-height:1.3;letter-spacing:.08em;text-transform:uppercase;color:var(--text-secondary)}
+/* "The numbers": the label on the left, the value on the right, in tabular numerals so a column of figures lines up. */
+.cd-rows{margin:0;display:flex;flex-direction:column;gap:8px}
+.cd-row{display:flex;align-items:baseline;justify-content:space-between;gap:16px}
+.cd-row dt{margin:0;flex:0 1 auto;min-width:0;font-size:.875rem;line-height:1.4;color:var(--text-secondary)}
+.cd-row dd{margin:0;flex:0 1 auto;min-width:0;text-align:right;font-size:.9375rem;font-weight:600;line-height:1.4;color:var(--text-primary);font-variant-numeric:tabular-nums}
+/* Lists: no bullets; each row is its title with the subtitle on a line of its own, and the mark (the result, in words for VoiceOver) at the end. Past the first 12, a row is hidden until "Show all N" opens it. */
+.cd-items{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.cd-item{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px 0}
+.cd-item+.cd-item{border-top:1px solid var(--border)}
+.cd-item-main{display:flex;flex-direction:column;gap:4px;min-width:0}
+.cd-item-title{font-size:.9375rem;line-height:1.35;color:var(--text-primary)}
+.cd-item-sub{font-size:.8125rem;line-height:1.35;color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.cd-mark{flex:0 0 auto;font-size:.9375rem;font-weight:700;line-height:1;color:var(--text-secondary)}
+.cd-mark--win,.cd-mark--covering{color:var(--win)}
+.cd-mark--loss{color:var(--loss)}
+.cd-mark--trailing{color:var(--warning-text)}
+.cd-item--extra{display:none}
+.cd-list[data-expanded="true"] .cd-item--extra{display:flex}
+.cd-sentence{margin:0;font-size:.9375rem;line-height:1.45;color:var(--text-primary)}
+.cd-table{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.cd-table table{width:100%}
+/* Buttons: the group is centred and wraps into a stack that keeps its 8 pt gap (Breathing Room: the space comes from the container's gap, never from a margin on one button). The shipped press (.btn: scale .97),
+   44 pt minimum. Primary / secondary are the SHIPPED button tokens (.btn-primary, .btn-secondary), not a second palette. */
+.cd-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+.cd-action,.cd-more{min-height:44px;-webkit-tap-highlight-color:transparent}
+.cd-action{flex:1 1 140px;white-space:nowrap}   /* a label never wraps inside its button ("SEE / STANDINGS"): when two do not fit side by side the group stacks, keeping its 8 pt gap (Std-1) */
+.cd-action--primary{background:var(--maroon);color:var(--on-accent);box-shadow:var(--shadow-btn)}
+.cd-action--secondary,.cd-more{background:var(--bg-input);color:var(--text-secondary);border:1px solid var(--border)}
+.cd-more{align-self:stretch}
+/* ═══ DEPLOYMENT 1 · LANE B — END ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* ═══ DEPLOYMENT 1 · LANE B · GAME DAY — BEGIN (js/gameday.js · gameday-sheet.js · gameday-dom.js · pick-groups.js · game-view.js · chat-ui.js's Back chip) ════════════════════════════════════════════════
+   The red card at the top of Home (DI-603…606; Drew D-58 "the red card itself open[s] up", D-63 "home gameday ready to build"), the By person / By team pick lines (DI-612), the Game view (DI-591) and the Back chip (DI-588).
+   TOKENS ONLY, no hex: the card is painted on --maroon → --maroon-mid like the Now card it replaces, text --oxblood-on; the four --gameday-* constants are the pill's veils and the two coverage words (:root).
+   BREATHING ROOM: 16 pt card padding, 16 pt between groups, 8 pt inside a group, every control >= 44 pt, a button group centred and wrapping into a stack that keeps its 8 pt gap (375 pt and the largest text are the cases).
+   MOTION: the card's HEIGHT grows / shrinks in place over --motion-modal on --ease-native (js/gameday-dom.js sets the height inline for the duration and clears it on transitionend, so the final state is `height:auto`),
+   its new content fades in over the last 150 ms (100 ms delay); a press is the shipped 97% over --motion-fast. Nothing slides, bounces or overshoots. Reduce Motion: an instant change, no fade, no press scale.
+   SCROLLING: the card is the first item of the feed and scrolls away with it; `#page-home` carries overflow-anchor:none so the browser can never move the page to keep a lower element still when the card changes height. */
+#page-home{overflow-anchor:none}
+.gd{display:flex;flex-direction:column;min-width:0;border-radius:16px;overflow:hidden;overflow:clip;background:linear-gradient(135deg,var(--maroon) 0%,var(--maroon-mid) 100%);color:var(--on-accent);box-shadow:var(--shadow-card)}
+.gd-head{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:0 8px;min-height:44px;width:100%;padding:8px 40px 8px 16px;border:0;background:none;color:inherit;font:inherit;text-align:left;-webkit-tap-highlight-color:transparent}   /* wraps to a second line under large text (nothing truncates meaning); the chevron is pinned, so the wrap never moves it */
+button.gd-head{cursor:pointer;transition:transform var(--motion-fast) ease-out}
+button.gd-head:active{transform:scale(.97)}
+button.gd-head:focus-visible,.gdp:focus-visible{outline:2px solid var(--on-accent);outline-offset:-2px}
+.gd-row:focus-visible{outline:2px solid var(--maroon-text);outline-offset:-2px}
+.gd-head--static{padding-right:16px}
+.gd-dot{flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:var(--on-accent);animation:gd-pulse 1.6s ease-in-out infinite}
+@keyframes gd-pulse{50%{opacity:.35;transform:scale(.75)}}
+.gd-lab{font-size:.7rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;white-space:nowrap}
+.gd-cnt{font-size:.8rem;font-weight:600;white-space:nowrap}
+.gd-me{margin-left:auto;font-size:.78rem;font-weight:600;white-space:nowrap}
+.gd-stalechip{margin-right:auto;padding:3px 8px;border-radius:99px;background:var(--push-bg);color:var(--warning-text);font-size:.7rem;font-weight:700;white-space:nowrap}
+.gd-chev{position:absolute;right:16px;top:50%;display:inline-flex;width:16px;height:16px;margin-top:-8px;opacity:.9;transform:rotate(-90deg)}
+.gd-chev svg{width:16px;height:16px}
+.gd-head[aria-expanded="true"] .gd-chev{transform:rotate(90deg)}
+
+/* the collapsed card: pills (live games only) or ONE calm two-line message */
+.gd-rail{display:flex;gap:8px;overflow-x:auto;overflow-y:hidden;padding:0 16px 16px;scroll-padding:0 16px;scroll-snap-type:x proximity;overscroll-behavior-x:contain;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.gd-rail::-webkit-scrollbar{display:none}
+.gdp{flex:0 0 10.9em;display:flex;flex-direction:column;justify-content:center;gap:2px;min-height:56px;padding:8px 16px;border-radius:12px;border:1px solid var(--gameday-pill-line);background:var(--gameday-pill-bg);color:inherit;font:inherit;font-size:.875rem;text-align:left;cursor:pointer;scroll-snap-align:start;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) ease-out,opacity var(--motion-fast) ease-out}
+.gdp:active{transform:scale(.97)}
+.gdp[data-leaving="true"]{opacity:0;pointer-events:none}   /* DI-604: a game that ended leaves the rail with a 150 ms fade (js/gameday-dom.js removes the pill after it); Reduce Motion removes it at once */
+.gdp-l1{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-weight:700;font-size:.86em;font-variant-numeric:tabular-nums;white-space:nowrap}
+.gdp-sp{font-size:.66em;font-weight:700;letter-spacing:.06em;opacity:.8}
+.gdp-l2{font-size:.76em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gdp-cv{font-weight:700}
+.gdp-cv--covering{color:var(--gameday-cover)}
+.gdp-cv--trailing,.gdp-cv--stale{color:var(--gameday-trail)}
+.gdp-cv--even,.gdp-cv--none{font-weight:600;opacity:.8}
+.gdp--more{flex-basis:6.5em;justify-content:center;border-style:dashed}
+.gdp--more .gdp-l1{justify-content:flex-start}
+.gdp--skel{pointer-events:none;opacity:.5;animation:feed-skel-pulse var(--skeleton-shimmer,1400ms) ease-in-out infinite}
+.gd-msg{display:flex;align-items:center;gap:8px 16px;padding:0 16px 16px}
+.gd-tx{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:2px;font-size:.8125rem;line-height:1.4;container-type:inline-size}   /* Footnote under a Subheadline title: two lines stay two lines at large text (the size budget) */
+/* DI-599 / D-54 (fix round 2, measured in gamedaybudgettest): the Final card's "· Next: …" folds away when the text column is narrower than 12.5 of its own ems (the smallest phone at the largest standard
+   text, where it would push the collapsed card past the 33% cap); the open card always carries the full What's next sentence. */
+@container (max-width:12.5em){.gd-next{display:none}}
+/* N2 (review round 3): iOS 15 has no container queries, so the rule above never fires there. In such an engine the short form is folded at every size (no viewport query: styles.css keeps a single
+   max-height query, brandtest [15d]); the open card still carries the full What's next sentence (gamedaybudgettest [4h]). */
+@supports not (container-type:inline-size){.gd-next{display:none}}
+.gd-tx b{font-size:.9375rem;line-height:1.3}
+.gd-msg .gd-btn{flex:0 0 auto}
+
+/* the open card: the card itself, grown */
+.gd-x{display:flex;flex-direction:column;gap:16px;padding:0 16px 16px}
+.gd-h{position:absolute;width:1px;height:1px;margin:0;overflow:hidden;clip:rect(0 0 0 0)}
+.gd-h:focus{outline:none}
+.gd-sub{margin:0;font-size:.8rem;line-height:1.5}
+.gd-cap{opacity:.85}
+.gd-stats{display:flex;flex-direction:column;gap:8px}
+.gd-stat{margin:0;font-size:.92rem;font-weight:700;line-height:1.4}
+.gd-stat--note{font-weight:500;font-size:.88rem}
+.gd-list{display:flex;flex-direction:column;gap:8px}
+.gd-lbl{margin:8px 0 0;font-size:.68rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;opacity:.9}
+.gd-lbl:first-child{margin-top:0}
+.gd-foot{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+.gd-error{display:flex;flex-direction:column;gap:8px;align-items:center;text-align:center;font-size:.88rem}
+.gd-btn{min-height:44px;padding:8px 16px;font-family:inherit;font-size:.875rem;font-weight:600;letter-spacing:0;text-transform:none}   /* the approved mockup's buttons: sentence case in the system face (the card is a compact surface; "Make picks" is 25% narrower than Oswald caps, which is what keeps the message two lines at large text) */
+.gd .feed-action--solid{background:var(--oxblood-on);color:var(--oxblood);border:1px solid var(--on-accent)}   /* the shipped white-on-crimson button; the 1px --on-accent edge keeps it a button on Graphite Dark's near-white card */
+.gd .feed-action--outline{background:transparent;color:var(--on-accent);border:1px solid var(--on-accent)}
+.gd-row{display:flex;flex-direction:column;gap:4px;width:100%;min-height:44px;padding:8px 16px;border:1px solid var(--border);border-radius:14px;background:var(--bg-card);color:var(--text-primary);font:inherit;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) ease-out}
+.gd-row:active{transform:scale(.97)}
+.gd-row--hl{outline:2px solid var(--on-accent);outline-offset:2px}
+.gd-r1{display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:700}
+.gd-r1-t{min-width:0;font-variant-numeric:tabular-nums}
+.gd-r1-m{display:flex;align-items:center;gap:8px;min-width:0}   /* with Team logos on: [away lockup] matchup [home lockup], 8 pt apart, the matchup wrapping before anything overflows */
+.gd-tm{display:inline-flex;flex:0 0 auto}
+.gd-row-chev{display:inline-flex;flex:0 0 auto;width:16px;height:16px;color:var(--text-secondary)}
+.gd-row-chev svg{width:16px;height:16px}
+.gd-r2{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:.76rem;color:var(--text-secondary)}
+.gd-r3{font-size:.86rem}
+.gd-r4{display:block;font-size:.76rem}
+.gd-mut{color:var(--text-secondary)}
+.gd-cov{font-weight:700}
+.gd-cov--covering,.gd-cov--covered{color:var(--win)}
+.gd-cov--trailing{color:var(--live-trail-text)}
+.gd-cov--missed{color:var(--loss)}
+.gd-st{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:99px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary);font-size:.74rem;font-weight:700}
+.gd-st--live{border-color:transparent;background:var(--live-bg);color:var(--live-text)}
+.gd-st--final{border-color:transparent;background:var(--text-primary);color:var(--bg-card)}
+.gd-st--stale{border-color:var(--push);background:var(--push-bg);color:var(--warning-text)}
+.gd-st--sp{background:var(--bg-card-alt)}
+.gd-st-dot{width:8px;height:8px;border-radius:50%;background:var(--live);animation:gd-pulse 1.6s ease-in-out infinite}
+.gd-st-dot--still{animation:none}
+.gd-sub .gd-st--stale{margin-top:4px}
+@keyframes gd-fade-in{from{opacity:0}to{opacity:1}}
+/* The new content fades in ONLY while the card is moving (js/gameday-dom.js sets data-gd-moving for the height change): an open body that is merely drawn again — a repaint, a feed change elsewhere (fix round 1, B3) — must not replay a fade. */
+.gd[data-gd-moving="true"] .gd-rail,.gd[data-gd-moving="true"] .gd-msg,.gd[data-gd-moving="true"] .gd-x{animation:gd-fade-in var(--motion-fast) ease-out 100ms both}
+
+/* By person / By team (js/pick-groups.js): one row, three forms */
+.pg-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px}
+.pg-row--dash{padding:0}
+.pg-cluster{display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px}
+.pg-label{margin-right:4px;font-size:.76rem;font-weight:700;white-space:nowrap}
+.pg-cluster--cov .pg-label,.pg-cluster--win .pg-label{color:var(--win)}
+.pg-cluster--trl .pg-label{color:var(--live-trail-text)}
+.pg-cluster--los .pg-label{color:var(--loss)}
+.pg-cluster--none .pg-label{color:var(--text-secondary);font-weight:600}
+.pg-ini{display:inline-flex;align-items:center;justify-content:center;min-width:32px;min-height:28px;padding:0 6px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);font-size:.74rem;font-weight:700;color:var(--text-primary)}
+.pg-ini--me{border-color:var(--maroon-text)}
+.pg-row--card{font-size:.76rem}
+.pg-row--card .pg-ini{min-width:0;min-height:0;padding:0;border:0;border-radius:0;background:none}
+.pg-row--card .pg-ini--me{color:var(--maroon-text);text-decoration:underline}
+.pg-pp{font-weight:700;white-space:nowrap}
+.pg-pp--me .pg-who{color:var(--maroon-text);text-decoration:underline}
+.pg-pp--cov,.pg-pp--win{color:var(--win)}.pg-pp--trl{color:var(--live-trail-text)}.pg-pp--los{color:var(--loss)}
+.pg-pp--blind{color:var(--text-secondary)}
+.pg-cap{margin:0;font-size:.76rem;color:var(--text-secondary);flex:1 1 100%}
+.pg-row--panel{display:block}
+.pg-split{margin-top:8px}
+
+/* the Game view (js/game-view.js): the pushed screen's body */
+.gv{display:flex;flex-direction:column;gap:16px;min-width:0}
+.gv > .card + .card{margin-top:0}   /* fix round 2 (P-8, measured in Chromium): the cards are 16 pt apart from the column's gap alone — the global .card+.card margin made it 28 (Breathing Room: space comes from the container) */
+.gv-card{display:flex;flex-direction:column;gap:8px;min-width:0}
+.gv-teams{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px}
+.gv-team{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0;text-align:center}
+.gv-team-name{font-size:.86rem;font-weight:700;overflow-wrap:anywhere}
+.gv-big{display:flex;align-items:center;justify-content:center;gap:8px;font-family:'Oswald',sans-serif;font-size:2rem;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.gv-status{display:flex;justify-content:center}
+.gv-fresh,.gv-line,.gv-neutral{margin:0;text-align:center;font-size:.875rem;line-height:1.45;color:var(--text-secondary)}
+.gv-fresh--stale{color:var(--warning-text)}
+.gv-neutral{font-weight:600;color:var(--text-primary)}
+.gv-h{margin:0;font-family:'Oswald',sans-serif;font-size:.8rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text-secondary)}
+.gv-yours{margin:0;font-size:.9375rem;line-height:1.45}
+.gv-cov{font-weight:700}
+.gv-cov--covering,.gv-cov--covered{color:var(--win)}.gv-cov--trailing{color:var(--live-trail-text)}.gv-cov--missed{color:var(--loss)}
+.gv-note{margin:0;font-size:.9rem;line-height:1.45;color:var(--text-secondary)}
+.gv-picks{display:flex;flex-direction:column;gap:8px}
+.gv-yours-box,.gv-note-box{display:flex;flex-direction:column;gap:8px}   /* (fix round 2: the panel's parts are fixed containers so a repaint patches in place; the 8 pt rhythm is theirs) */
+.gv-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+.gv-btn{flex:1 1 140px;min-height:44px;white-space:nowrap}
+.gv-thread-head{display:flex;flex-direction:column;gap:2px}
+.gv-cap{font-size:.75rem;color:var(--text-secondary)}
+.gv-msgs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.gv-msg{display:flex;flex-direction:column;gap:2px;padding:8px 0;border-top:1px solid var(--border)}
+.gv-msg:first-child{border-top:0}
+.gv-msg-who{font-size:.8rem;font-weight:700}
+.gv-msg-text{font-size:.9rem;line-height:1.4;overflow-wrap:anywhere}
+.gv-msg-when{font-size:.72rem;color:var(--text-secondary)}
+.gv-related{display:flex;flex-direction:column;gap:8px}
+.gv-sect{margin:0;padding:0 4px;font-size:.7rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary)}
+.gv-related-list{display:flex;flex-direction:column;gap:8px}
+.gv-rel{min-width:0}
+.gv-step{display:inline-flex;gap:8px}
+.gv-step-btn{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border:0;border-radius:50%;background:transparent;color:var(--maroon-text);cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) ease-out}
+.gv-step-btn:active:not(:disabled){transform:scale(.97)}
+.gv-step-btn:disabled{opacity:.35;cursor:default}
+.gv-step-glyph{display:inline-flex;width:20px;height:20px}
+.gv-step-glyph svg{width:20px;height:20px}
+.ps-body.gv-fade{animation:gd-fade-in var(--motion-fast) ease-out both}
+/* DI-591: the prev / next CROSS-FADE — the old body stays on top as an inert ghost (same box, same scroll, the screen's own background) and fades out over 150 ms while the next game is already underneath */
+.ps-body.ps-body-ghost{position:absolute;left:0;right:0;overflow:hidden;background:var(--bg);pointer-events:none;animation:gd-fade-out var(--motion-fast) ease-out both}
+@keyframes gd-fade-out{from{opacity:1}to{opacity:0}}
+/* DI-572(a) / DI-593 / DI-610: a part that is NEW in an in-place repaint fades in (a Final game's What's next and Related cards: --motion-large for a section, --motion-fast for a card); the status chip CROSS-FADES */
+.gv-enter{animation:gd-fade-in var(--motion-fast) ease-out both}
+.gv > .gv-enter{animation-duration:var(--motion-large)}
+.gv-status.gv-xf{display:grid;justify-items:center;align-items:center}
+.gv-status.gv-xf > *{grid-area:1/1}
+.gv-xf-in{animation:gd-fade-in var(--motion-fast) ease-out both}
+.gv-xf-out{animation:gd-fade-out var(--motion-fast) ease-out both;pointer-events:none}
+.gv-fresh:empty,.gv-line:empty,.gv-neutral:empty,.gv-yours-box:empty,.gv-picks:empty,.gv-note-box:empty{display:none}
+.feed-item--hl{outline:2px solid var(--maroon-text);outline-offset:2px;border-radius:var(--card-radius)}
+
+/* DI-588 — the Back chip in Chat: a 44 pt row in the docked stack, 16 pt from the sides, 8 pt from the pills; a long label ellipsizes INSIDE the chip (min-width:0 / max-width:100%: fix round 2, P-8 measured it running 300+ pt past the screen) */
+.chat-return-row{display:flex;padding:0 16px 8px}
+.chat-return-chip{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:100%;min-height:44px;padding:0 16px 0 8px;border:1px solid var(--border);border-radius:22px;background:var(--bg-card);color:var(--maroon-text);font:inherit;font-size:.9rem;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) ease-out}
+.chat-return-chip:active{transform:scale(.97)}
+.chat-return-glyph{display:inline-flex;width:20px;height:20px}
+.chat-return-glyph svg{width:20px;height:20px}
+.chat-return-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+@media (prefers-reduced-motion:reduce){
+  .gd-dot,.gd-st-dot{animation:none}
+  .gd-x,.gd[data-gd-moving="true"] .gd-rail,.gd[data-gd-moving="true"] .gd-msg,.gd[data-gd-moving="true"] .gd-x{animation:none}
+  button.gd-head,.gdp,.gd-row,.gv-step-btn,.chat-return-chip{transition:none}
+  .gdp--skel{animation:none;opacity:.5}
+  .ps-body.gv-fade,.ps-body.ps-body-ghost,.gv-enter,.gv > .gv-enter,.gv-xf-in,.gv-xf-out{animation:none}
+  .ps-body.ps-body-ghost,.gv-xf-ghost{display:none}
+}
+@media (min-width:600px){
+  .gd-foot .feed-action,.gd-msg .feed-action{flex:0 1 220px}
+}
+/* ── D1 Lane B · DI-607 / DI-581 · the Dashboard's Sort row, the Sort sheet and the Custom arrange (js/game-sort.js · js/game-arrange.js) ──────────────────────────────────────────────────────
+   Tokens only. The row sits directly under the "All Picks by Game" header: "{n} games" (15 pt semibold) over a 12 pt caption on the left, the 44 pt bordered Sort button on the right; at large text the row
+   wraps and the button (auto margins take the free space only when it is alone on its line) is centered 8 pt below the summary. Buttons and lines never touch: 8 pt in a group, 16 pt between groups and
+   from the card edge. */
+.card-title-glyph{display:inline-flex;vertical-align:-3px;margin-right:8px}
+.card-title-glyph svg{width:18px;height:18px;display:block}
+.refresh-btn-mini{min-height:44px;min-width:44px;justify-content:center;gap:8px}
+.refresh-btn-glyph{display:inline-flex}
+.refresh-btn-glyph svg{width:16px;height:16px;display:block}
+.layout-toggle-btn{min-height:44px}
+.dc-listctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 16px}
+.dc-listctl-text{flex:1 1 7rem;min-width:0;display:flex;flex-direction:column;gap:2px}
+.dc-listctl-title{font-size:.94rem;font-weight:600;line-height:1.3;color:var(--text-primary)}
+.dc-listctl-cap{font-size:.75rem;line-height:1.35;color:var(--text-muted)}
+.btn.dc-sort-btn{flex:0 0 auto;margin:0 auto;min-height:44px;padding:0 16px;gap:8px;background:transparent;color:var(--text-primary);border:1px solid var(--border);text-transform:none;letter-spacing:0;font-family:inherit;font-size:.88rem;font-weight:600;box-shadow:none}
+.btn.dc-sort-btn:hover{border-color:var(--maroon);color:var(--text-primary);background:transparent}
+.dc-sort-glyph{display:inline-flex;color:var(--text-secondary)}
+.dc-sort-glyph svg{width:18px;height:18px;display:block}
+.dc-sort-mode{font-weight:500;font-size:.8rem;color:var(--text-muted)}
+.dc-listctl--arranging .dc-listctl-title{color:var(--maroon-text)}
+.btn.dc-sort-done{flex:0 0 auto;margin:0 auto;min-height:44px;min-width:120px}
+/* the sheet: the wizard sheet's recipe scoped to its own ids (the fixed layer, the drag variable, the scrim that fades with it, the page behind that does not scroll) */
+#sort-sheet-wrap{position:fixed;inset:0;z-index:8000}
+#sort-sheet-wrap ~ .modal-overlay{z-index:8100}
+html:has(#sort-sheet-wrap){overflow:hidden}
+#sort-sheet{transform:translateY(calc(100% * var(--sort-drag-y,0)));animation-duration:var(--motion-modal);animation-timing-function:var(--ease-native);transition:transform var(--motion-modal) var(--ease-native)}
+#sort-sheet[data-dragging="true"]{transition:none}
+#sort-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--sort-drag-y,0));transition:opacity var(--motion-nav) ease-out}
+#sort-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
+@media (prefers-reduced-motion:reduce){#sort-sheet,#sort-sheet-wrap .chat-sheet-backdrop{transition:none;animation:none}}
+body.native-shell #sort-sheet .chat-sheet-header{position:relative;padding-top:14px;touch-action:none}
+#sort-sheet .chat-sheet-header{align-items:flex-start;margin-bottom:8px}
+#sort-sheet .chat-sheet-close{width:44px;height:44px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;transition:transform var(--motion-fast) var(--ease-native)}
+#sort-sheet .chat-sheet-close:active{transform:scale(.97)}
+@media (prefers-reduced-motion:reduce){#sort-sheet .chat-sheet-close{transition:none}#sort-sheet .chat-sheet-close:active{transform:none}}
+#sort-sheet .chat-sheet-scroll{flex:0 1 auto;min-height:0}
+#sort-sheet-body{overscroll-behavior:contain;padding:0 4px 8px}
+.dc-sort-head{display:flex;flex-direction:column;gap:2px;min-width:0;padding-top:4px}
+.dc-sort-body{display:flex;flex-direction:column}
+.dc-sort-group{display:flex;flex-direction:column;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--bg-card)}
+.dc-sort-opt{display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%;min-height:56px;padding:12px 16px;background:transparent;color:var(--text-primary);border:none;border-top:1px solid var(--border);text-align:left;font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:background var(--motion-fast) ease-out}
+.dc-sort-opt:first-child{border-top:none}
+.dc-sort-opt:active:not(:disabled){background:var(--bg-input)}
+.dc-sort-opt:disabled{cursor:default;opacity:.6}
+.dc-sort-opt-tx{display:flex;flex-direction:column;gap:2px;min-width:0}
+.dc-sort-opt-tx b{font-size:.94rem;font-weight:600;color:var(--text-primary)}
+.dc-sort-opt-tx span{font-size:.78rem;line-height:1.35;color:var(--text-muted)}
+.dc-sort-radio{flex:0 0 22px;width:22px;height:22px;border-radius:50%;border:2px solid var(--border-strong,var(--border));position:relative;transition:border-color var(--motion-fast) ease-out}
+.dc-sort-opt[aria-checked="true"] .dc-sort-radio{border-color:var(--maroon-text)}
+.dc-sort-opt[aria-checked="true"] .dc-sort-radio::after{content:'';position:absolute;inset:3px;border-radius:50%;background:var(--maroon-text)}
+.dc-sort-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:16px}
+/* DI-607 (All sports, REV 3): when the Sort row is drawn its "{n} games" title says what the plain count line said, so the count line steps aside (one statement of the number, not two). */
+.dc-listctl + .all-sports-count{display:none}
+/* D1 Lane B — DI-597 Share to chat (2026-10-08). The sheet is the sort sheet's recipe on its own ids (fixed layer, --share-drag-y with the scrim fading with it, the page behind held still, no motion
+   under Reduce Motion), laid out as the approved Game view frame draws it (docs/mockups/d1/gameday.html "sheet:share"): title and subtitle, a 44 pt close, the preview card, the comment field, "Post to
+   chat" and "Cancel" centred 8 pt apart, and the footnote. Spacing on the 8 pt grid; tokens only. */
+#share-sheet-wrap{position:fixed;inset:0;z-index:8000}
+#share-sheet-wrap ~ .modal-overlay{z-index:8100}
+html:has(#share-sheet-wrap){overflow:hidden}
+#share-sheet{transform:translateY(calc(100% * var(--share-drag-y,0)));animation-duration:var(--motion-modal);animation-timing-function:var(--ease-native);transition:transform var(--motion-modal) var(--ease-native)}
+#share-sheet[data-dragging="true"]{transition:none}
+#share-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--share-drag-y,0));transition:opacity var(--motion-nav) ease-out}
+#share-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
+body.native-shell #share-sheet .chat-sheet-header{position:relative;padding-top:14px;touch-action:none}
+#share-sheet .chat-sheet-header{align-items:flex-start;margin-bottom:8px}
+.share-head-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 auto;padding-top:4px}
+#share-sheet .chat-sheet-close{width:44px;height:44px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;transition:transform var(--motion-fast) var(--ease-native)}
+#share-sheet .chat-sheet-close:active{transform:scale(.97)}
+#share-sheet .chat-sheet-scroll{flex:0 1 auto;min-height:0}
+#share-sheet-body{overscroll-behavior:contain;padding:0 4px 8px;display:flex;flex-direction:column;gap:16px}
+.share-preview{margin:0;padding:16px;display:flex;flex-direction:column;gap:8px}
+.share-eyebrow{display:flex;align-items:center;gap:8px;font-size:.78rem;color:var(--text-secondary);min-width:0}
+.share-eyebrow > span:last-child{min-width:0;overflow-wrap:anywhere}
+.share-eyebrow-icon{flex:0 0 16px;width:16px;height:16px;display:inline-flex}
+.share-eyebrow-icon svg{width:16px;height:16px;display:block}
+.share-title{margin:0;font-size:1rem;line-height:1.35;color:var(--text-primary);overflow-wrap:anywhere}
+.share-comment{width:100%;min-height:44px;box-sizing:border-box;padding:10px 16px;border:1px solid var(--border);border-radius:12px;background:var(--bg-input);color:var(--text-primary);font:inherit;font-size:1rem;resize:none}
+.share-status{margin:0;text-align:center;font-size:.88rem;color:var(--text-primary)}
+.share-status--error{color:var(--loss,var(--text-primary))}
+.share-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
+.share-btn{flex:1 1 140px;min-height:44px;white-space:nowrap;transition:transform var(--motion-fast) var(--ease-native)}
+.share-btn.btn-primary{border:1px solid transparent}   /* the same box as Cancel's 1 px border, so the two are one height side by side AND stacked at the largest text */
+.share-btn:active:not(:disabled){transform:scale(.97)}
+.share-btn:disabled{opacity:.6}
+.share-foot{margin:0;text-align:center;font-size:.75rem;color:var(--text-muted)}
+@media (prefers-reduced-motion:reduce){#share-sheet,#share-sheet-wrap .chat-sheet-backdrop,#share-sheet .chat-sheet-close,.share-btn{transition:none;animation:none}#share-sheet .chat-sheet-close:active,.share-btn:active{transform:none}}
+/* the Share buttons themselves: the card detail's and the Game view's own buttons with the share glyph before the label */
+.cd-action-icon,.gv-btn-icon{display:inline-flex;width:16px;height:16px;margin-right:8px;vertical-align:-3px}
+.cd-action-icon svg,.gv-btn-icon svg{width:16px;height:16px;display:block}
+.gv-share{margin:0}
+/* a shared item's attachment under the bubble (DI-597): "Open details ›" (44 pt) or the calm unavailable line — fixed copy only */
+.chat-share-attach{display:inline-flex;align-items:center;gap:8px;margin:8px 0 0;min-height:44px;padding:0 16px;border:1px solid var(--border);border-radius:12px;background:var(--bg-input);color:var(--maroon-text);font:inherit;font-size:.88rem;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.chat-share-attach:active{transform:scale(.97)}
+.chat-share-chev{display:inline-flex;width:16px;height:16px}
+.chat-share-chev svg{width:16px;height:16px;display:block}
+.chat-share-attach--none{display:block;min-height:0;padding:0;border:0;background:none;color:var(--text-muted);font-weight:400;font-size:.78rem;cursor:default}
+.chat-share-attach--none:active{transform:none}
+@media (prefers-reduced-motion:reduce){.chat-share-attach{transition:none}.chat-share-attach:active{transform:none}}
+.btn.dc-sort-act{min-height:44px;padding:0 20px;text-transform:none;letter-spacing:0;font-family:inherit;font-size:.9rem}
+.btn.dc-sort-act--ghost{background:transparent;color:var(--maroon-text);box-shadow:none}
+.dc-sort-note{margin:16px 0 0;text-align:center;font-size:.8rem;line-height:1.4;color:var(--text-muted)}
+.dc-sort-foot{display:flex;justify-content:center;margin-top:16px}
+/* arranging: a grip at the leading edge and Move up / Move down at the trailing edge, each 44 x 44 pt and 8 pt apart; the chips are gone (the row is a handle, not a reader) */
+.dc-game--arrange{display:flex;align-items:center;gap:8px;position:relative;padding:8px 8px 8px 4px;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.dc-game--arrange .dc-game-main{flex:1 1 auto;min-width:0}
+.dc-game--arrange .dc-game-head{margin-bottom:0}
+.dc-arrange-grip{flex:0 0 44px;width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;color:var(--text-muted);touch-action:none;cursor:grab}
+.dc-arrange-grip svg{width:20px;height:20px;display:block}
+.dc-arrange-arrows{flex:0 0 auto;display:inline-flex;gap:8px}
+.dc-arrange-mv{width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;padding:0;background:var(--bg-input);color:var(--text-primary);border:none;border-radius:50%;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native),opacity var(--motion-fast) ease-out}
+.dc-arrange-mv svg{width:18px;height:18px;display:block;transform:rotate(90deg)}
+.dc-arrange-mv:active:not(:disabled){transform:scale(.97)}
+.dc-arrange-mv:disabled{opacity:.35;cursor:default}
+@media (prefers-reduced-motion:reduce){.dc-arrange-mv{transition:none}.dc-arrange-mv:active:not(:disabled){transform:none}}
+.dc-game[data-lifted="true"]{position:relative;z-index:6;box-shadow:var(--shadow-lift),0 0 0 1px var(--border-strong,var(--border))}
+@media (hover:hover) and (pointer:fine){.dc-game--arrange{cursor:grab}.dc-game[data-lifted="true"]{cursor:grabbing}}
+@media (hover:none) and (pointer:coarse){
+  html:has(.dc-game[data-lifted="true"]){overflow:hidden}
+  html:has(.dc-game[data-lifted="true"]),html:has(.dc-game[data-lifted="true"]) body{overscroll-behavior:none}
+}
+/* ── D1 Lane B · DI-613 · the Control Center's "Show picks" row: two labelled segmented controls (the drawer's own .cc-quick-seg idiom), 16 pt between the groups, 8 pt label-to-control; at accessibility sizes the segments stack 8 pt apart */
+.cc-pv-group{display:flex;flex-direction:column;gap:8px;margin:0 0 16px}
+.cc-pv-label{font-size:.78rem;font-weight:600;color:var(--text-secondary)}
+.cc-pv-group .cc-quick-track{flex-wrap:wrap;column-gap:2px;row-gap:8px}
+.cc-pv-seg{flex:1 1 7rem}
+.cc-pv-seg span{white-space:nowrap}
+/* PBD-B11: the Standard web matrix is always By person; when the member chose By team, one line above it says so, with a Compact button. A centred, wrapping group: 8 pt between the line and the button, 16 pt between wrapped rows and below. */
+.pg-std-note{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px 16px;margin:0 0 16px}
+.pg-std-note-tx{margin:0;font-size:.76rem;color:var(--text-secondary);text-align:center}
+.pg-std-note .btn{min-height:44px}
+/* ═══ DEPLOYMENT 1 · LANE B · GAME DAY — END ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* ═══ D1 LANE C — THE SCRIBE PROFILE PANE (FB-006 / UN-468 / PF-468; DI-644…648, 681, 682) ═══════════════════════════════════════════════════════════════
+   Approved mockup: docs/mockups/d1/scribe-profile-admin.html (D-43) plus the lore section and the Replace button. Markup: js/scribe-profile-view.js (pure strings).
+   Tokens only. Spacing is the Breathing Room rule: 8 pt inside a group, 16 pt between groups and to the screen edge, button groups centered, a container `gap` rather than
+   per-element margins. Every control is at least 44 pt. Press feedback is the shared 97% compress; motion reads --motion-* (the pane is a PUSH, --motion-nav; the sheets are
+   --motion-modal); Reduce Motion turns movement off and keeps nothing but opacity. The pane is the League Page's overlay recipe (z 150, inert background, edge swipe-back
+   via --sp-drag-x); its sheets are the shared sheet shell (z 8000, --sp-sheet-drag-y). PARITY-BY-DESIGN: iOS — the edge swipe and haptics (js/app.js, behind isNativeShell());
+   web — the same screens, the visible "SCRIBE" back button and Esc, the browser's own chrome. */
+#scribe-profile-overlay{position:fixed;inset:0;z-index:150;background:var(--bg);display:flex;flex-direction:column;overscroll-behavior:contain;
+  transform:translateX(calc(100% * var(--sp-drag-x,0)));transition:transform var(--motion-nav) ease-out}
+#scribe-profile-overlay[data-dragging="true"]{transition:none}
+@media (prefers-reduced-motion:reduce){#scribe-profile-overlay{transition:none}}
+html:has(#scribe-profile-overlay){overflow:hidden}
+html:has(#scribe-profile-overlay),html:has(#scribe-profile-overlay) body{overscroll-behavior:none}
+
+.sp-nav{flex:0 0 auto;display:grid;grid-template-columns:minmax(44px,1fr) auto minmax(44px,1fr);align-items:center;
+  height:calc(48px + env(safe-area-inset-top,0px));padding:env(safe-area-inset-top,0px) 8px 0;
+  border-bottom:1px solid var(--border);background:var(--bg-card)}
+.sp-title{margin:0;text-align:center;font-family:'Oswald',sans-serif;font-weight:600;font-size:1.02rem;color:var(--text-primary)}
+.sp-title:focus{outline:none}
+.sp-nav-btn{display:inline-flex;align-items:center;justify-content:center;gap:2px;min-width:44px;min-height:44px;padding:0 8px;
+  background:none;border:0;font:inherit;font-weight:600;color:var(--maroon-text);cursor:pointer;-webkit-tap-highlight-color:transparent;
+  transition:transform 120ms ease-out,opacity var(--motion-fast) ease-out}
+.sp-nav-btn:active{transform:scale(.97)}
+.sp-nav-btn svg{width:20px;height:20px;flex:0 0 auto}
+.sp-back{justify-self:start}
+.sp-add{justify-self:end}
+.sp-add svg{width:24px;height:24px}
+.sp-nav-spacer{justify-self:end;width:44px;height:44px}
+
+.sp-scroll{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;display:flex;flex-direction:column;gap:16px;
+  padding:16px 16px calc(16px + env(safe-area-inset-bottom,0px))}
+.sp-scroll>*{width:100%;max-width:560px;margin-left:auto;margin-right:auto;flex:0 0 auto}
+.sp-panel{display:flex;flex-direction:column;gap:16px}
+
+/* the two rows that look like list rows with a chevron: the Comm entry card, the Standards row, the Trainer card's one row */
+.sp-entry,.sp-standards-row{display:flex;align-items:center;gap:8px;width:100%;min-height:44px;text-align:left;font:inherit;color:inherit;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;transition:transform 120ms ease-out}
+.sp-entry:active,.sp-standards-row:active,.sp-trainer-row:active,.sp-player:active,.sp-item-tap:active{transform:scale(.97)}
+.sp-standards-row{padding:16px}
+.sp-entry-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.sp-entry-line{font-size:.92rem;color:var(--text-primary)}
+.sp-chev{flex:0 0 auto;display:inline-flex;color:var(--text-muted)}
+.sp-chev svg{width:18px;height:18px}
+.sp-trainer-row{display:flex;align-items:center;gap:8px;width:100%;min-height:44px;padding:8px 0;text-align:left;font:inherit;font-size:.92rem;color:var(--text-primary);
+  background:none;border:0;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform 120ms ease-out}
+.sp-trainer-row-text{flex:1;min-width:0}
+
+/* segmented control: four equal 44 pt segments */
+.sp-seg{display:flex;gap:2px;padding:2px;border-radius:10px;background:var(--bg-card-alt)}
+.sp-seg-btn{flex:1;min-width:0;min-height:44px;padding:0 4px;border:0;border-radius:8px;background:none;font:inherit;font-size:.8rem;font-weight:600;
+  color:var(--text-secondary);cursor:pointer;-webkit-tap-highlight-color:transparent;transition:background var(--motion-fast) ease-out,color var(--motion-fast) ease-out,transform 120ms ease-out}
+.sp-seg-btn:active{transform:scale(.97)}
+.sp-seg-btn.on{background:var(--bg-card);color:var(--text-primary);font-weight:700;box-shadow:var(--shadow-card)}
+@media (prefers-reduced-motion:reduce){.sp-seg-btn{transition:none}}
+
+/* lists and rows */
+.sp-section{margin:0;font-size:.7rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--gold-text)}
+.sp-list{display:flex;flex-direction:column}
+.sp-item{display:flex;flex-direction:column;gap:8px;padding:16px 0;border-top:1px solid var(--border)}
+.sp-item:first-child{border-top:0;padding-top:0}
+.sp-item:last-child{padding-bottom:0}
+.sp-item-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.sp-item-tap,.sp-player{display:flex;flex-direction:column;gap:8px;width:100%;min-height:44px;padding:0;text-align:left;font:inherit;color:inherit;background:none;border:0;
+  cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform 120ms ease-out}
+.sp-item-tap:disabled{cursor:default;transform:none}
+.sp-player{flex-direction:row;align-items:center;gap:8px;padding:8px 0}
+.sp-player-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.sp-avatar{width:36px;height:36px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;border-radius:50%;
+  background:var(--bg-card-alt);border:1px solid var(--border);font-weight:800;font-size:.8rem;color:var(--text-primary)}
+.sp-body{font-size:.92rem;line-height:1.45;color:var(--text-primary);overflow-wrap:anywhere}
+.sp-body-lg{font-size:1rem}
+.sp-meta{font-size:.75rem;line-height:1.4;color:var(--text-muted);overflow-wrap:anywhere}
+.sp-replaces{font-size:.8rem;line-height:1.4;color:var(--text-secondary);padding:8px;border-radius:8px;background:var(--bg-card-alt)}
+.sp-err{font-size:.8rem;line-height:1.4;color:var(--loss)}
+.sp-foot{margin:0;font-size:.72rem;line-height:1.5;color:var(--text-muted)}
+.sp-help{margin:0}
+.sp-h4{margin:0;font-family:'Oswald',sans-serif;font-size:.78rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted)}
+.sp-ul,.sp-ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px;font-size:.88rem;line-height:1.45;color:var(--text-primary)}
+
+.sp-pill{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;border:1px solid var(--border);font-size:.66rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--text-muted)}
+.sp-pill-count{background:var(--maroon);border-color:var(--maroon);color:var(--on-accent)}
+.sp-pill-hold{background:var(--push-bg);border-color:var(--push);color:var(--text-primary)}
+
+/* actions: centered group, 8 pt between, every control 44 pt */
+.sp-actions{display:flex;justify-content:center;flex-wrap:wrap;gap:8px}
+.sp-actions .sp-btn{flex:1 1 120px}
+.sp-actions-start{justify-content:flex-start}
+.sp-actions-start .sp-btn{flex:0 0 auto}
+.sp-btn{min-height:44px;min-width:44px}
+.sp-actions-sheet .sp-btn{flex:1 1 140px}
+/* Touched-screen audit of the Trainer card (DI-648, 2026-10-07): its three buttons were 34 pt (.btn-sm) and its Export / Reset group sat left; they are Apple's 44 pt now and the group is centered (the Run Trainer button keeps
+   its place beside the caption). Named selectors only, never .btn-sm itself, which would reflow every compact row in the app. */
+#scribe-run-trainer-btn,#scribe-export-learnings-btn,#scribe-reset-learnings-btn{min-height:44px;min-width:44px}
+/* N7 — the Trainer card's glyphs are the icon family now (they were characters): sized like the card's other button icons, never shrunk by the flex row */
+#scribe-run-trainer-btn svg,#scribe-export-learnings-btn svg,#scribe-reset-learnings-btn svg,#scribe-export-do-reset svg,.scribe-learning-toggle svg{width:16px;height:16px;flex:0 0 auto}
+.sp-count{display:block;margin-top:8px;text-align:right;font-size:.72rem;color:var(--text-muted)}
+.sp-textarea{min-height:96px;resize:none}
+
+/* empty and loading: the skeleton is the loading state (cached counts above it stay visible), never a spinner first */
+.sp-empty{display:flex;flex-direction:column;align-items:center;gap:16px;padding:16px;text-align:center;font-size:.9rem;color:var(--text-secondary)}
+.sp-empty p{margin:0}
+.sp-skel-list{display:flex;flex-direction:column;gap:8px}
+.sp-skel{height:52px;border-radius:12px;background:var(--bg-input);opacity:.35;animation:skeleton-shimmer var(--skeleton-shimmer,1400ms) ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){.sp-skel{animation:none}}
+
+/* the sheets: the shared sheet shell, with this pane's own wrap and drag property */
+#scribe-profile-sheet-wrap{position:fixed;inset:0;z-index:8000}
+#scribe-profile-sheet-wrap ~ .modal-overlay{z-index:8100}
+html:has(#scribe-profile-sheet-wrap){overflow:hidden}
+#scribe-profile-sheet-body{overscroll-behavior:contain;display:flex;flex-direction:column;gap:16px;padding:16px}
+#scribe-profile-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--sp-sheet-drag-y,0));transition:opacity var(--motion-nav) ease-out}
+#scribe-profile-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
+#scribe-profile-sheet{transform:translateY(calc(100% * var(--sp-sheet-drag-y,0)));transition:transform var(--motion-modal) var(--ease-native);
+  animation-duration:var(--motion-modal);animation-timing-function:var(--ease-native)}
+#scribe-profile-sheet[data-dragging="true"]{transition:none}
+/* S3 — the exit mirrors the entry: the sheet slides back down on the SAME 300 ms curve (spCloseSheet() -> playDeleteSheetExit drives --sp-sheet-drag-y to 1), the wrap takes no touches while it
+   goes, and Reduce Motion crossfades the whole wrap instead of moving it. */
+#scribe-profile-sheet-wrap[data-closing]{pointer-events:none}
+#scribe-profile-sheet-wrap[data-closing="fade"]{opacity:0;transition:opacity var(--motion-fast) linear}
+body.native-shell #scribe-profile-sheet .chat-sheet-header{position:relative;touch-action:none}
+@media (prefers-reduced-motion:reduce){#scribe-profile-sheet,#scribe-profile-sheet-wrap .chat-sheet-backdrop{transition:none}}
+
+/* N5 — two small motions, both Reduce-Motion-aware. A segment change crossfades its panel in over 150 ms (--motion-fast); a row that LEAVES a list (a confirmed decision or switch) collapses
+   over 200 ms (height, padding, opacity) before the list repaints without it. */
+@keyframes sp-fade{from{opacity:0}to{opacity:1}}
+.sp-fade-in{animation:sp-fade var(--motion-fast) ease-out}
+.sp-item-leaving{overflow:hidden;opacity:0;padding-top:0;padding-bottom:0;border-top-width:0;
+  transition:height 200ms var(--ease-native),padding 200ms var(--ease-native),opacity 150ms linear}
+@media (prefers-reduced-motion:reduce){.sp-fade-in{animation:none}.sp-item-leaving{transition:none}}
+
+/* B1 — the collapsed "Turned off (n)" group: one 44 pt disclosure row, the chevron turns when it is open */
+.sp-group-toggle{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:44px;padding:0 4px;background:none;border:0;font:inherit;
+  font-size:.7rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--gold-text);cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform 120ms ease-out}
+.sp-group-toggle:active{transform:scale(.97)}
+.sp-group-title{flex:1;min-width:0;text-align:left}
+.sp-chev-turn{transition:transform var(--motion-fast) ease-out}
+.sp-group-toggle[aria-expanded="true"] .sp-chev-turn{transform:rotate(90deg)}
+@media (prefers-reduced-motion:reduce){.sp-chev-turn,.sp-group-toggle{transition:none}}
+
+/* B1 — the Turn off toast's Undo: a 44 pt text button inside the toast */
+.toast .sp-toast-undo{flex:0 0 auto;min-width:44px;min-height:44px;margin:-12px -16px -12px auto;padding:0 16px;background:none;border:0;font:inherit;font-weight:700;color:var(--maroon-text);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.toast .sp-toast-undo:active{transform:scale(.97)}
+.toast .sp-toast-text{flex:1;min-width:0}
+.sp-seg-sheet{margin:0}
+
+/* what a plain MEMBER sees (My SCRIBE File): read-only league lore, nothing tappable */
+.sp-member-lore .sp-ul{margin-top:8px}
+/* ═══ END D1 LANE C — SCRIBE PROFILE PANE ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   D1 (v0.30.0, thread 100726-D1, Lane A) — THE MULTISPORT CLIENT: the sport switcher, the league overview sheet, the sport cards, the due dot.
+   Approved layouts: docs/mockups/d1/dashboard-sort-sport.html (switcher incl. "All sports", Drew D-59) and league-overview-sheet.html (Drew D-60). Markup: js/sport-switcher.js,
+   js/league-overview.js. Tokens only (no hardcoded colour); motion reads the shared --motion-* / --ease-native tokens (Interaction Principles: small feedback --motion-fast,
+   sheet --motion-modal, large layout change --motion-large, press scale(.97)); Reduce Motion removes every movement and keeps only what would otherwise pop.
+   Tap targets are 44 pt; 8 pt between controls in a group, 16 pt between groups and from the edges (Breathing Room).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* --- the switcher (DI-521 rev 3): an iOS segmented control. 2 or 3 EQUAL segments; the thumb is the selected fill and slides (WAAPI, js/app.js animateSportSwitch). It sits under the
+       page title and above the week navigator, 16 pt below. */
+.sport-seg-host{margin:0 0 16px}
+.sport-seg{position:relative;display:flex;gap:2px;padding:2px;border-radius:12px;background:var(--bg-input);border:1px solid var(--border)}
+.sport-seg-thumb{position:absolute;top:2px;bottom:2px;left:2px;border-radius:10px;background:var(--maroon);box-shadow:inset 0 0 0 1px var(--maroon-text);
+  width:calc((100% - 4px - (var(--seg-n, 2) - 1) * 2px) / var(--seg-n, 2));transform:translateX(calc(var(--seg-i, 0) * (100% + 2px)));pointer-events:none}
+.sport-seg-btn{position:relative;z-index:1;flex:1 1 0;min-width:0;min-height:44px;padding:4px 8px;display:flex;align-items:center;justify-content:center;border:0;border-radius:10px;
+  background:transparent;color:var(--text-primary);font:600 .9375rem/1.15 'Inter',system-ui,sans-serif;text-align:center;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+  transition:transform var(--motion-fast) var(--ease-native),color var(--motion-fast) var(--ease-native)}
+.sport-seg-btn:active{transform:scale(.97)}
+.sport-seg-btn[aria-checked="true"]{color:var(--on-accent);font-weight:700}
+.sport-seg-btn:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+/* a gold dot on an UNSELECTED segment whose picks are due (the fact is in its accessible name too) */
+.sport-seg-dot{position:absolute;top:8px;right:10px;width:8px;height:8px;border-radius:50%;background:var(--gold)}
+/* the page content fades in over --motion-fast when the sport changes (no navigation, no reload) */
+.sport-swap-in{animation:sportSwapIn var(--motion-fast) var(--ease-native)}
+@keyframes sportSwapIn{from{opacity:.4}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.sport-seg-btn{transition:none}.sport-seg-btn:active{transform:none}.sport-swap-in{animation:none}}
+
+/* --- the header pill's due dot (DI-556): 8 pt gold, LEADING (the pill ellipsizes at its end), never a number. Gold-light on the maroon chrome is the pairing DI-328b measured. */
+.league-pill-badge{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--gold-light);margin-right:6px;vertical-align:middle;flex:none}
+
+/* --- All sports rows (DI-525 rev 3): each compact row's sport tag, the static "This week" block, the per-sport gate */
+.dc-sport-tag{display:inline-flex;align-items:center;margin-left:8px;padding:2px 8px;border-radius:99px;border:1px solid var(--border);background:var(--bg-card-alt);
+  color:var(--text-muted);font-family:'Oswald',sans-serif;font-size:.68rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;vertical-align:middle}
+.all-sports-weeknav .week-heading{display:flex;flex-direction:column;gap:4px;align-items:center}
+.all-sports-count{margin:0 0 8px}
+.all-sports-gate{padding:16px}
+.all-sports-gate .btn{margin-top:16px}
+
+/* --- the league overview (DI-554 / DI-556): a bottom sheet from the league name, built on the shared sheet shell (mountSheetShell: .chat-sheet-backdrop / .chat-sheet / .chat-sheet-header /
+       .chat-sheet-scroll, own ids only, never a fork). One large detent: its top edge 8 pt below the safe-area top so the page peeks above. */
+#league-overview-sheet-wrap{position:fixed;inset:0;z-index:8000}
+#league-overview-sheet-wrap ~ .modal-overlay{z-index:8100}                 /* the rule the other sheets carry: a modal raised while it is up paints ABOVE it */
+html:has(#league-overview-sheet-wrap){overflow:hidden}                     /* the page behind a presented sheet does not move */
+#league-overview-body{overscroll-behavior:contain}
+#league-overview-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--lo-drag-y,0));transition:opacity var(--motion-nav) ease-out}
+#league-overview-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
+#league-overview-sheet{padding:0 0 env(safe-area-inset-bottom,0px);height:calc(100vh - 8px);height:calc(100dvh - 8px - env(safe-area-inset-top,0px));max-height:none;
+  border-radius:20px 20px 0 0;overflow:hidden;transform:translateY(calc(100% * var(--lo-drag-y,0)));
+  animation-duration:var(--motion-modal);animation-timing-function:var(--ease-native);
+  transition:transform var(--motion-modal) var(--ease-native)}
+#league-overview-sheet[data-dragging="true"]{transition:none}
+#league-overview-sheet .chat-sheet-header{display:block;margin:0;padding:0;border-radius:20px 20px 0 0;border-bottom:1px solid var(--border)}
+body.native-shell #league-overview-sheet .chat-sheet-header{position:relative;padding-top:14px;touch-action:none}
+#league-overview-sheet .chat-sheet-scroll{flex:1;min-height:0}
+#league-overview-sheet-wrap[data-closing]{pointer-events:none}
+#league-overview-sheet-wrap[data-closing="fade"]{opacity:0;transition:opacity var(--motion-fast) linear}
+@media (prefers-reduced-motion:reduce){
+  #league-overview-sheet{transition:none;animation:none}
+  #league-overview-sheet-wrap .chat-sheet-backdrop{transition:none}
+}
+/* >= 600px — PARITY-BY-DESIGN (the New League sheet's pattern): a centred 480pt dialog with a visible close instead of a swipe. */
+@media (min-width:600px){
+  #league-overview-sheet{left:50%;right:auto;top:50%;bottom:auto;width:480px;height:auto;max-height:min(86vh,720px);border-radius:14px;
+    transform:translate(-50%,calc(-50% + 100% * var(--lo-drag-y,0)));animation:lo-modal-in var(--motion-modal) var(--ease-native)}
+  @keyframes lo-modal-in{from{opacity:0;transform:translate(-50%,-48%)}to{opacity:1;transform:translate(-50%,-50%)}}
+  #league-overview-sheet .chat-sheet-header{border-radius:14px 14px 0 0}
+  #league-overview-sheet .chat-sheet-scroll{flex:0 1 auto;min-height:0}
+}
+.lo-head{display:flex;align-items:flex-start;gap:8px;padding:16px 16px 8px 16px}   /* W-57 Part 2 (2026-10-08, the app-wide Breathing Room audit): the close is 16 pt from the trailing edge and the top (it was 8 / 8, as drawn); 8 pt stays below it, from the divider */
+.lo-head-text{flex:1;min-width:0}
+.lo-title{margin:0;font-family:'Oswald',sans-serif;font-weight:600;font-size:1.12rem;line-height:1.25;color:var(--text-primary);overflow-wrap:anywhere}
+.lo-title:focus{outline:none}
+.lo-sub{margin:2px 0 0;font-size:.78rem;line-height:1.35;color:var(--text-muted)}
+.lo-close{flex:none;width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;transition:transform var(--motion-fast) var(--ease-native)}
+.lo-close:active{transform:scale(.97)}
+@media (prefers-reduced-motion:reduce){.lo-close{transition:none}.lo-close:active{transform:none}}
+.lo-body{display:flex;flex-direction:column;gap:16px;padding:8px 16px 24px}
+.lo-body--page{padding:0}
+.lo-group{display:flex;flex-direction:column;gap:8px}
+.lo-group .card+.card{margin-top:0}
+.lo-lbl{margin:0;padding:0 4px;font-size:.7rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text-muted)}
+.lo-note{margin:0;padding:0 4px;font-size:.76rem;color:var(--text-muted)}
+/* At a glance: up to two chips, each a 44 pt button */
+.lo-glance{display:flex;flex-wrap:wrap;gap:8px}
+.lo-chip{min-height:44px;padding:0 14px;display:inline-flex;align-items:center;gap:8px;border:0;border-radius:99px;cursor:pointer;
+  font:600 .8rem/1.2 'Inter',system-ui,sans-serif;-webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:transform var(--motion-fast) var(--ease-native)}
+.lo-chip:active{transform:scale(.97)}
+.lo-chip--due{background:var(--gold-pale);color:var(--gold-text)}
+.lo-chip--live{background:var(--live-bg);color:var(--live-text)}
+@media (prefers-reduced-motion:reduce){.lo-chip{transition:none}.lo-chip:active{transform:none}}
+/* The sport card: ONE button (the whole card is the target); the Join card is an article with a button of its own */
+.lo-card{width:100%;text-align:left;display:flex;flex-direction:column;gap:8px;font:inherit;color:inherit;min-height:44px;transition:transform var(--motion-fast) var(--ease-native)}
+button.lo-card{cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+button.lo-card:active{transform:scale(.97)}
+.lo-card--focus{outline:2px solid var(--gold);outline-offset:2px}
+.lo-card-wrap{display:flex;flex-direction:column;gap:8px}
+.lo-card-head{display:flex;align-items:center;gap:8px;min-width:0}
+.lo-card-glyph{display:flex;align-items:center;color:var(--maroon-text)}
+.lo-card-glyph svg{width:20px;height:20px}
+.lo-card-name{flex:1;min-width:0;font-family:'Oswald',sans-serif;font-size:.95rem;font-weight:600;color:var(--text-primary)}
+.lo-card-week{font-size:.76rem;color:var(--text-muted);white-space:nowrap}
+.lo-card-chev{display:flex;align-items:center;color:var(--text-muted)}
+.lo-card-chev svg{width:18px;height:18px}
+.lo-pills{display:flex;flex-wrap:wrap;gap:8px}
+.lo-pill-ic{display:inline-flex}.lo-pill-ic svg{width:12px;height:12px}
+.lo-card .badge-live{animation:none}                                   /* the card is not an animation: the dot is static (DI-237 section 10.4) */
+.badge-due{background:var(--gold-pale);color:var(--gold-text);border:1px solid var(--gold)}
+.lo-line{font-size:.86rem;color:var(--text-primary);line-height:1.35}
+.lo-games{font-size:.76rem;color:var(--text-muted);line-height:1.35}
+.lo-body-text{margin:0;font-size:.86rem;color:var(--text-secondary);line-height:1.45}
+.lo-join-row{display:flex;justify-content:center;padding:8px 16px 0}
+.lo-join-row .btn{min-width:200px;min-height:44px}
+.lo-caption{margin:0;text-align:center;font-size:.76rem;color:var(--text-muted)}
+.lo-error{margin:0;text-align:center;font-size:.84rem;color:var(--loss)}
+.lo-setup{min-height:44px}
+/* grouped rows (the control center's own row vocabulary) */
+.lo-list{border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--bg-card)}
+.lo-row{display:flex;align-items:center;gap:12px;width:100%;min-height:56px;padding:8px 16px;border:0;border-top:1px solid var(--border);background:var(--bg-card);color:var(--text-primary);
+  text-align:left;font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:background-color var(--motion-fast) ease-out}
+.lo-row:first-child{border-top:0}
+.lo-row:active{background:var(--bg-input)}
+.lo-row-tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.lo-row-tx b{font-size:.95rem;font-weight:600}
+.lo-row-tx span{font-size:.78rem;color:var(--text-muted);line-height:1.35}
+.lo-row-right{font-size:.78rem;color:var(--text-muted);white-space:nowrap}
+.lo-row-chev{display:flex;align-items:center;color:var(--text-muted)}
+.lo-row-chev svg{width:18px;height:18px}
+@media (prefers-reduced-motion:reduce){.lo-row{transition:none}}
+
+/* D1 / DI-528 - the sport chip in a Home feed card's eyebrow (only in a league with several sports): the sport's code, outlined, the reason pill's height, pushed to the card's trailing edge. Text
+   is --text-secondary on the card (AA); the chip is never the only carrier of the sport - the card copy names it for week, rank and record cards. */
+.sport-chip{display:inline-flex;align-items:center;min-height:24px;padding:0 8px;margin-left:auto;border-radius:12px;border:1px solid var(--border);color:var(--text-secondary);font-size:.72rem;font-weight:600;letter-spacing:.04em}
+
+/* ═══ D1 LANE C (DI-634 / DI-637, UN-477 / UN-482) — THE ADMIN ROUTING CARD, THE STATUS CARD AND THEIR SHEET ═══════════════════════════════════════════════════════════════
+   The rows REUSE the Control Center row vocabulary (.control-center-row 44 pt, .cc-row-label, .cc-row-secondary, .cc-row-chevron: 97% press, 150 ms) and the radio vocabulary the
+   Heat and Model dials use (.scribe-freq-dial / .scribe-freq-opt). The sheet is the shared sheet shell with its own wrap and drag property, exactly the profile pane's recipe. */
+.scribe-route-list{display:flex;flex-direction:column;gap:0}
+.scribe-route-row{padding-top:8px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.scribe-route-row:last-child{border-bottom:none}
+.scribe-route-main{min-width:0}
+.scribe-route-pill{flex:0 0 auto}
+.scribe-route-pill.is-saving{opacity:.6}
+.scribe-route-row--skeleton{pointer-events:none;border-bottom:none}
+.scribe-route-error{min-height:calc(1.4em);margin:8px 0 0;line-height:1.4}
+/* the two admin AI cards' loss / warning colours as CLASSES, not inline styles (token colours only): error text, a red pill, an amber pill. Defined after .badge / .cc-row-secondary so they win by order.
+   Both pills are TINTED pairs (the --loss-bg / --gold-pale surface with its own text token), the pairing contrastscan reviews in both themes: the solid --loss fill with --on-accent text that the inline style used
+   was 2.77:1 in dark mode (--loss is the brightened TEXT red there), a contrast failure the inline style had hidden from the scan. */
+.admin-ai-loss{color:var(--loss)}
+.badge.admin-ai-pill-loss{background:var(--loss-bg);color:var(--loss);border-color:var(--loss)}
+.badge.admin-ai-pill-amber{background:var(--gold-pale);color:var(--gold-text);border-color:var(--gold)}
+/* the cards' own Retry / Refresh are .btn-sm (34 pt); a tap target is never under 44 (measured: adminairendertest [A]) */
+#scribe-routes-retry-btn,#content-status-retry-btn,#content-status-refresh-btn{min-height:44px;display:inline-flex;align-items:center;justify-content:center}
+.scribe-route-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:16px}
+.scribe-route-sheet .scribe-freq-dial{margin-bottom:8px}
+.scribe-status-runs{margin:0;padding:0 0 0 16px;display:flex;flex-direction:column;gap:8px}
+.scribe-status-row.is-red{border-left:3px solid var(--loss)}
+#admin-ai-sheet-wrap{position:fixed;inset:0;z-index:8000}
+#admin-ai-sheet-wrap ~ .modal-overlay{z-index:8100}
+html:has(#admin-ai-sheet-wrap){overflow:hidden}
+#admin-ai-sheet-body{overscroll-behavior:contain;padding:16px}
+#admin-ai-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--ai-sheet-drag-y,0));transition:opacity var(--motion-nav) ease-out}
+#admin-ai-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
+#admin-ai-sheet{transform:translateY(calc(100% * var(--ai-sheet-drag-y,0)));transition:transform var(--motion-modal) var(--ease-native);
+  animation-duration:var(--motion-modal);animation-timing-function:var(--ease-native)}
+#admin-ai-sheet[data-dragging="true"]{transition:none}
+#admin-ai-sheet-wrap[data-closing]{pointer-events:none}
+#admin-ai-sheet-wrap[data-closing="fade"]{opacity:0;transition:opacity var(--motion-fast) linear}
+body.native-shell #admin-ai-sheet .chat-sheet-header{position:relative;touch-action:none}
+/* the close control is the shared round button PLUS this class (44 pt, 97% press): a class of its own, so the shared .chat-sheet-close rule stays byte-for-byte what it was (lockclienttest [5h4]) */
+.admin-ai-close{width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;transition:transform var(--motion-fast) var(--ease-native)}
+.admin-ai-close:active{transform:scale(.97)}
+@media (prefers-reduced-motion:reduce){
+  #admin-ai-sheet,#admin-ai-sheet-wrap .chat-sheet-backdrop{transition:none}
+  .admin-ai-close{transition:none}
+  .admin-ai-close:active{transform:none}
+}
+/* ═══ D1 LANE C (admin routing + status) — END ═══ */
+
+/* ═══ D1 LANE C (DI-641, UN-466) — THE SOURCE CHIPS UNDER A SCRIBE ANSWER ═══════════════════════════════════════════════════════════════════
+   44 pt tall (the .chat-pill 28 px size history is the reason: a tappable chip is never under 44), wrapping with an 8 pt gap, 97% press over 150 ms, nothing reflows when they arrive (they
+   ship in the message's own markup). Tokens only. */
+.chat-source-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.chat-source-chip{min-height:44px;box-sizing:border-box;padding:0 12px;border:1px solid var(--bg-input);border-radius:999px;background:var(--bg-card);color:var(--text-secondary);font:inherit;font-size:.78rem;font-weight:600;
+  display:inline-flex;align-items:center;max-width:100%;cursor:pointer;transition:transform var(--motion-fast) var(--ease-native)}
+.chat-source-chip:active{transform:scale(.97)}
+@media (prefers-reduced-motion:reduce){.chat-source-chip{transition:none}.chat-source-chip:active{transform:none}}
+/* ═══ D1 LANE C (source chips) — END ═══ */
+
+/* ═══ D1 W-68 / W-69 (2026-10-14) — COMM -> GAMES: ONE GAMES LIST, THE ADD-OR-SWAP SHEETS, THE SWAP PICKER ═══════════════════════════════════════════════════════════════════
+   docs/DESIGN_D1_D.md sections 3 and 4; docs/mockups/d1/swap-picker.html (the picker's layout). Tokens only; every gap is 8 or 16; every control is 44 pt or more (the global .btn-sm is 34, so the
+   row buttons carry their own rule). Motion: 150 ms flip (--motion-fast), 200 ms collapse, the picker's slide on the shell's --motion-nav/--motion-modal; Reduce Motion drops all of it. */
+.games-section .games-summary{margin:0 0 8px;font-size:.84rem;color:var(--text-muted);line-height:1.4}
+.games-segs{margin-bottom:16px}
+.games-controls{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.games-controls:empty{display:none;margin:0}
+.btn.games-ctl,.btn.games-row-btn{min-height:44px;padding:0 16px;font-size:.84rem;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.games-ctl svg{width:16px;height:16px;flex:none}
+.games-filters{margin-bottom:16px}
+.games-filters-summary{min-height:44px;display:flex;align-items:center;cursor:pointer;font-size:.86rem;font-weight:600;color:var(--text-secondary);list-style:none;user-select:none}
+.games-filters-summary::-webkit-details-marker{display:none}
+.games-filters[open] .games-filters-summary{margin-bottom:8px}
+.games-filters .avail-filter-bar{margin-bottom:0}
+.games-notes{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+.games-notes:empty{display:none;margin:0}
+.games-note-budget{display:flex;align-items:center;gap:6px;font-size:.78rem;color:var(--text-muted)}
+.games-note-budget svg{width:14px;height:14px;flex:none}
+.games-count-line{margin-bottom:8px}
+#games-state:empty{display:none}
+#games-state{margin-bottom:8px}
+.games-groups .avail-group-header{min-height:44px}
+.games-groups>.games-row:last-child,.games-groups .avail-group-body>.games-row:last-child{margin-bottom:0}
+.games-row{display:flex;flex-direction:column;gap:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--card-radius);padding:12px 16px;margin-bottom:8px;box-shadow:var(--shadow-card);overflow:hidden}
+.games-row .game-readiness{margin-bottom:0}
+.games-row-incomplete{border-left:3px solid var(--loss)}
+.games-row-warn{border-left:3px solid var(--warning-text)}
+.games-row-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.games-row-matchup{font-family:'Oswald',sans-serif;font-size:.95rem;font-weight:600;flex:1;min-width:0;color:var(--text-primary);overflow-wrap:anywhere}
+.games-row-mark{flex:none;white-space:nowrap;display:inline-flex;align-items:center;gap:4px}
+.games-row-mark svg{width:12px;height:12px}
+.games-row-meta{display:flex;flex-wrap:wrap;gap:4px 8px;font-size:.78rem;color:var(--text-muted)}
+.games-row-src{font-style:normal}
+.games-row-nospread{color:var(--warning-text);font-weight:600}
+.games-row-espn{font-size:.7rem;color:var(--text-muted);background:none;padding:0;overflow-wrap:anywhere}
+.games-row-matchup .dq-badge{margin-left:4px;vertical-align:middle}
+.games-row-chips{display:flex;flex-wrap:wrap;gap:4px 8px}
+.games-row-chip{font-size:.7rem;font-weight:700;color:var(--text-secondary);background:var(--bg-input);border:1px solid var(--border);border-radius:20px;padding:2px 8px;display:inline-flex;align-items:center}
+.games-row-actions{display:flex;flex-wrap:wrap;gap:8px}
+.games-row-btn svg{width:16px;height:16px;flex:none}
+.btn.games-row-btn--danger{color:var(--loss)}
+@keyframes games-row-flip{from{opacity:.35}to{opacity:1}}
+.games-row--flip{animation:games-row-flip var(--motion-fast) ease-out}
+.games-row.is-leaving,.week-wizard-game-item.is-leaving{max-height:0!important;opacity:0;margin-bottom:0;padding-top:0;padding-bottom:0;border-width:0;box-shadow:none;pointer-events:none;
+  transition:max-height 200ms var(--ease-native),opacity 200ms ease-out,margin-bottom 200ms var(--ease-native),padding 200ms var(--ease-native)}
+@media (prefers-reduced-motion:reduce){.games-row--flip{animation:none}.games-row.is-leaving,.week-wizard-game-item.is-leaving{transition:none}}
+/* the Player Requests card's Add: the same 44 pt row button, and the keyed rows it patches */
+.gr-comm-row .gr-add-btn{white-space:nowrap}
+.gr-onslate{display:inline-flex;align-items:center;gap:4px}
+.gr-onslate svg{width:12px;height:12px}
+.games-unlocked-mark{display:inline-flex;align-items:center;gap:4px}
+.games-unlocked-mark svg{width:12px;height:12px}
+/* wizard Step 2: the standing count line and its text button; Step 3: a Remove beside each row (siblings, never a button inside a button) */
+.wiz-slate-count{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-height:44px}
+.btn.wiz-slate-btn,.wiz-review-slate{min-height:44px}
+.week-wizard-game-item{display:flex;align-items:stretch;gap:8px;overflow:hidden}
+.week-wizard-game-item .week-wizard-game-row{flex:1;min-width:0}
+.btn.week-wizard-game-remove{flex:none;min-height:44px;color:var(--loss)}
+/* the shared action sheet with N ordinary actions (actionSheetHTML({ actions })): a divider between them, each >= 54 pt */
+.lc-as-act+.lc-as-act{border-top:1px solid var(--border)}
+/* the swap picker sheet: the Add a sport sheet's recipe, scoped to ITS ids. The sheet and the scrim follow --swap-drag-y (0..1), a live drag drops the transitions, Reduce Motion drops them all;
+   a row is a >= 56 pt radio target with the 97% press over --motion-fast; the footer (picks warning + the one primary button) is fixed under the scrolling list. */
+#swap-picker-sheet-wrap{position:fixed;inset:0;z-index:8000}
+html:has(#swap-picker-sheet-wrap){overflow:hidden}
+#swap-picker-sheet{transform:translateY(calc(100% * var(--swap-drag-y,0)));transition:transform var(--motion-nav) ease-out}
+#swap-picker-sheet[data-dragging="true"]{transition:none}
+#swap-picker-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--swap-drag-y,0));transition:opacity var(--motion-nav) ease-out}
+#swap-picker-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
+body.native-shell #swap-picker-sheet .chat-sheet-header{position:relative;padding-top:14px;touch-action:none}
+#swap-picker-sheet .swap-pk-close{width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;transition:transform var(--motion-fast) var(--ease-native)}
+#swap-picker-sheet .swap-pk-close:active{transform:scale(.97)}
+#swap-picker-body{padding:4px 4px 16px;overscroll-behavior:contain;min-height:0;display:flex;flex-direction:column;gap:16px}
+.swap-pk-adding{display:flex;flex-direction:column;gap:2px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--card-radius);padding:12px 16px}
+.swap-pk-grp{margin:0 0 8px;font-size:.74rem;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted);font-weight:700}
+.swap-pk-adding .swap-pk-grp{margin:0 0 4px}
+.swap-pk-sub{color:var(--text-muted);font-size:.84rem}
+.swap-pk-list{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--card-radius);overflow:hidden}
+.swap-pk-opt{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:56px;padding:8px 16px;background:none;border:none;border-top:1px solid var(--border);text-align:left;font:inherit;color:var(--text-primary);cursor:pointer;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:transform var(--motion-fast) var(--ease-native),background-color var(--motion-fast) ease-out}
+.swap-pk-opt:first-child{border-top:none}
+.swap-pk-opt:active{transform:scale(.97)}
+.swap-pk-opt[aria-checked="true"]{background:color-mix(in srgb,var(--maroon-text) 6%,transparent)}
+.swap-pk-l{display:flex;flex-direction:column;min-width:0}
+.swap-pk-l b{font-weight:600;overflow-wrap:anywhere}
+.swap-pk-r{display:flex;align-items:center;gap:8px;flex:none}
+.swap-pk-picks{font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--push-bg);color:var(--warning-text);border:1px solid color-mix(in srgb,var(--warning-text) 35%,transparent);white-space:nowrap}
+.swap-pk-dot{flex:none;width:22px;height:22px;border-radius:50%;border:2px solid var(--border-strong);box-sizing:border-box;transition:border-color var(--motion-fast) ease-out,background-color var(--motion-fast) ease-out}
+.swap-pk-opt[aria-checked="true"] .swap-pk-dot{border-color:var(--maroon-text);background:radial-gradient(circle,var(--maroon-text) 0 5px,transparent 6px)}
+.swap-pk-footer{flex:none;padding:16px 4px 0;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:8px}
+.swap-pk-warn{display:flex;gap:8px;align-items:flex-start;font-size:.84rem}
+.swap-pk-warn svg{width:16px;height:16px;flex:none;margin-top:2px}
+.btn.swap-pk-go{min-height:50px}
+@media (prefers-reduced-motion:reduce){#swap-picker-sheet,#swap-picker-sheet-wrap .chat-sheet-backdrop,.swap-pk-opt,.swap-pk-dot,#swap-picker-sheet .swap-pk-close{transition:none}.swap-pk-opt:active,#swap-picker-sheet .swap-pk-close:active{transform:none}}
+/* ═══ END D1 W-68 / W-69 ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
 
 /* ═══ SOCIAL PLATFORM v1 HOME — BEGIN (js/home.js: DI-367 card shell · DI-364 Now card · DI-368 native interactions · DI-371 every state) ══════════════════
    The Home feed's card system, appended as ONE banner-delimited block. SEMANTIC TOKENS ONLY — never a colour literal — so it reads correctly in Light, in Dark,
@@ -7802,6 +9163,12 @@ body.native-shell #ls-sheet .chat-sheet-header{position:relative;padding-top:14p
 .feed-nudge{gap:16px;background:var(--gold-pale);border-color:var(--gold)}
 .feed-nudge-label{margin:0;font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--gold-text)}
 
+/* DESIGN_D1_E (DI-E1.3) - the join nudge ("Want in?", js/home.js joinNudgeHTML): the feed's own card with the commissioner nudge's two-level rhythm (the 8 pt .feed-card-text group, a 16 pt gap, a centred
+   .feed-actions group) and none of its gold: a sport the member has not joined owes nothing. Tokens only. The sport chip LEADS this card, as the commissioner nudge's label does (every other card pushes it to
+   the trailing edge, beside its icon). */
+.feed-join{gap:16px}
+.feed-join .sport-chip{margin-left:0}
+
 /* Buttons: the shipped .btn press (scale .97, 160 ms) and 44 pt height; three tones. The group is centred and wraps into a stack that keeps its 8 pt gap. */
 .feed-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
 .feed-action{flex:1 1 140px;min-height:44px;-webkit-tap-highlight-color:transparent}
@@ -7825,6 +9192,33 @@ body.native-shell #ls-sheet .chat-sheet-header{position:relative;padding-top:14p
 .feed-skel-image{height:96px;border-radius:var(--btn-radius);background:var(--border-strong);opacity:.5;animation:feed-skel-pulse var(--skeleton-shimmer,1400ms) ease-in-out infinite}
 @keyframes feed-skel-pulse{0%,100%{opacity:.5}50%{opacity:.9}}
 
+/* ── D1 Lane B additions to the Home feed (2026-10-07) ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   DI-575: a card with a detail is ONE tap target — the shipped card press recipe (scale .97 over --motion-fast), a disclosure chevron at the end of the eyebrow, a focus ring.
+   DI-587: NEW / EARLIER hairlines. DI-586: the windowing sentinel.
+   DI-574: the new-posts pill — a sticky ZERO-height slot (it never pushes the feed) holding one 44 pt button; chevronLeft turned a quarter turn so it points up; a 150 ms fade with a slide of 8 pt or less. */
+.feed-card--tap{cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.feed-card--tap:active{transform:scale(.97)}
+.feed-card--tap:focus-visible{outline:2px solid var(--maroon-text);outline-offset:2px}
+.feed-card-chev{display:inline-flex;flex:0 0 auto;width:16px;height:16px;margin-left:auto;color:var(--text-secondary)}
+.feed-card-chev svg{width:16px;height:16px}
+/* D1 merge (2026-10-08): in a several-sport league a tappable card's eyebrow holds BOTH the sport chip (margin-left:auto, pushed to the trailing edge) and the chevron; the chip takes the free space and the chevron follows it at the 8 pt eyebrow gap, so the two never split the space and the chip never floats mid-row. */
+.sport-chip + .feed-card-chev{margin-left:0}
+
+.feed-divider{display:flex;align-items:center;gap:8px;font-size:.72rem;font-weight:700;letter-spacing:.06em;color:var(--text-secondary)}
+.feed-divider::before,.feed-divider::after{content:'';flex:1 1 auto;height:1px;background:var(--border)}
+.feed-divider--new{color:var(--maroon-text)}
+.feed-divider--new::before{display:none}
+.feed-divider--earlier{color:var(--text-secondary)}
+.feed-sentinel{height:1px}
+
+.home-pill-slot{position:sticky;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:5;display:flex;justify-content:center;height:0;pointer-events:none}
+.home-pill{pointer-events:auto;gap:8px;padding:0 16px;border-radius:22px;background:var(--oxblood);color:var(--oxblood-on);box-shadow:none;font-family:inherit;font-size:.875rem;text-transform:none;letter-spacing:normal;min-height:44px;animation:home-pill-in var(--motion-fast) var(--ease-entrance) both}
+.home-pill-text{min-width:0}
+.home-pill-live{pointer-events:none}   /* the polite VoiceOver announcement (DI-574): an sr-only live region beside the button; it never intercepts a tap */
+.home-pill-glyph{display:inline-flex;width:16px;height:16px;transform:rotate(90deg)}
+.home-pill-glyph svg{width:16px;height:16px}
+@keyframes home-pill-in{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+
 /* A card that was not on screen a render ago fades in (opacity only, 150 ms); the first content paint after a skeleton fades in whole. */
 .feed-item--enter{animation:feed-item-in var(--motion-fast) var(--ease-entrance) both}
 @keyframes feed-item-in{from{opacity:0}to{opacity:1}}
@@ -7835,6 +9229,8 @@ body.native-shell #ls-sheet .chat-sheet-header{position:relative;padding-top:14p
   .feed-item--enter{animation:none}
   .feed-skel-line{animation:none;opacity:.7}
   .feed-skel-image{animation:none;opacity:.7}
+  .feed-card--tap{transition:none}
+  .home-pill{animation:none}
 }
 
 /* >=600px: the same cards, the same copy; only the button group stops stretching (still centred). */

@@ -1,0 +1,18 @@
+{
+  "id": "multisporttest",
+  "script": "multisporttest.mjs",
+  "summary": "strict",
+  "floor": 92,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/multisport-admin.js",
+    "js/sport-seam.js",
+    "js/competition.js",
+    "js/data-model.js",
+    "js/sports/nfl.js"
+  ],
+  "expectedMs": 400,
+  "note": "(D1 combine, 2026-10-08: RAISED from 91 to 92 - the lens forgets a stale local choice [multisporttest 9h2]; resetLensSport() is called once [commsporttest 10e]) - (D1 combine, 2026-10-08: RAISED from 82 to 91 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - D1 / DI-532..534, 536: the commissioner's multisport operations (pure half) and the seam to the client branch - sha256 vs node:crypto, the deterministic competition id, addable sports, archive rule, the all-sports rows, sport entries, wizard helpers."
+}

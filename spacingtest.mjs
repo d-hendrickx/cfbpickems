@@ -205,6 +205,41 @@ const SUBMITTED = (() => {
   return c._html;
 })();
 
+// ── D1 Lane B (fix round, reviewer B1): the card detail. The REAL cardDetailHTML over a REAL model — assembleHomeSnapshot -> deriveCards -> buildCardDetail — for a 14-game final week (two games past the
+// 12-row preview), exactly the markup the pushed screen paints inside .ps-body. ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const HOMEMOD = await import('./js/home.js');
+const FEEDCARDS = await import('./js/feed-cards.js');
+const CDMOD = await import('./js/card-detail.js');
+const FX = await import('./statsfixtures.mjs');
+const SCORING = await import('./js/scoring.js');
+const ICONS_MOD = await import('./js/icons.js');
+const CARD_DETAIL = (() => {
+  const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const players = FX.PLAYERS.map(pl => ({ ...pl }));
+  const weeks = [FX.mkWeek({ id: 'cdw', n: 6, status: 'final' })];
+  const games = [], picks = [];
+  for (let i = 0; i < 14; i++) {
+    const g = FX.mkGame({ id: `cdg${i}`, weekId: 'cdw', kick: new Date(Date.UTC(2026, 9, 3, 12 + i)).toISOString(), home: `Team ${i}`, away: `Rival ${i}`, kind: 'cover', state: 'final' });
+    games.push(g); picks.push(...FX.mkPicks(g, 'cover', 'WLWLWL'));
+  }
+  const weeklyResults = SCORING.calculateWeeklyResults('cdw', players, picks, games);
+  const now = Date.parse('2026-10-05T12:00:00.000Z');
+  const deps = {
+    read: { weeks: () => weeks, games: () => games, picks: () => picks, players: () => players, weeklyResults: () => weeklyResults, weekProgress: () => null, currentWeek: () => weeks[0], activeWeekId: () => null,
+      viewer: () => ({ playerId: 'p1', isAdmin: false }), timezone: () => 'PT', leagueId: () => 'L1', isSupabase: () => false },
+    confirmedStatusFor: (w) => w.status, picksReadConfirmed: () => true, chatCandidates: () => ({ scribe: [], lockerRoom: [] }),
+  };
+  const snap = HOMEMOD.assembleHomeSnapshot(deps, { viewerId: 'p1', isCommissioner: false, now });
+  const cards = FEEDCARDS.deriveCards(snap, { viewerId: 'p1', now, viewerIsCommissioner: false });
+  const ctx = { formatTime: (v) => String(v), formatCountdown: (ms) => `${Math.round(ms / 3600e3)}h`, capabilities: { thread: true, chat: true }, threadCount: () => 4 };
+  const htmlOf = (card, over = {}) => { const model = card && CDMOD.buildCardDetail(card, snap, { ...ctx, ...over }); return model ? CDMOD.cardDetailHTML(model, { escHtml: esc, iconHtml: `<span class="cd-eyebrow-icon" aria-hidden="true">${ICONS_MOD.icon('calendarWeek')}</span>` }) : ''; };
+  return {
+    list: htmlOf(cards.find((c) => c.type === 'player.week' && c.memberId === 'p1')),     // the numbers card + a 14-row list (2 past the preview) + the meaning card + one action
+    actions: htmlOf(cards.find((c) => c.type === 'game.final'), { capabilities: { thread: true, chat: true, gameday: true } }),   // two actions side by side: Open game / Open thread · 4 (the Game view's flag on, only for the markup)
+  };
+})();
+const PUSHED_WRAP = (inner) => `<div id="pushed-root"><div class="ps-level"><div class="ps-body">${inner}</div></div></div>`;
+
 console.log('[1] Fixture integrity — the real renderers produced what each section measures…');
 assert(/class="btn-row stand-act-row"/.test(BOARD.creditor) && /data-ob-action="confirm"/.test(BOARD.creditor) && /data-ob-action="deny"/.test(BOARD.creditor),
   '[1a] Standings, viewed by the creditor of a pending week: a .btn-row.stand-act-row group holds Confirm + Deny');
@@ -225,6 +260,10 @@ assert(Object.values(NOTIF).every(h => /id="notif-priming-card"/.test(h) && /id=
   `[1j] the Notifications body renders the priming card, its button and the prefs card in all ${Object.keys(NOTIF).length} button-bearing states (${Object.keys(NOTIF).join(', ')})`);
 assert(/class="ob-actions ob-actions-tap"/.test(BOARD.admin) && !/ob-actions-tap/.test(COMM) && /class="ob-filter-tabs/.test(BOARD.creditor),
   '[1k] the Standings 2K25 card carries the .ob-actions-tap modifier and the owes-filter tabs; the Comm lists do not carry the modifier');
+assert(/class="cd" data-cd-type="player\.week"/.test(CARD_DETAIL.list) && /class="cd-eyebrow-icon"/.test(CARD_DETAIL.list) && /<svg/.test(CARD_DETAIL.list) && (CARD_DETAIL.list.match(/<li class="cd-item/g) || []).length === 14
+  && (CARD_DETAIL.list.match(/cd-item--extra/g) || []).length === 2 && /class="card cd-card cd-numbers"/.test(CARD_DETAIL.list) && /data-cd-action="show-all"/.test(CARD_DETAIL.list)
+  && /class="cd" data-cd-type="game\.final"/.test(CARD_DETAIL.actions) && (CARD_DETAIL.actions.match(/class="btn cd-action/g) || []).length === 2,
+  '[1l] the REAL card details: player.week has its eyebrow icon, the numbers card and 14 list rows (2 past the 12-row preview, "Show all 14"); game.final (with the Game-view flag on) has its two action buttons');
 
 // ── Page builders ────────────────────────────────────────────────────────────
 const tmp = mkdtempSync(join(tmpdir(), 'cfbp-spacing-'));
@@ -389,7 +428,10 @@ try {
   //   card news-card   0/0/0/0 — the Home News feed's article card (Social Platform News option A, merged into the Home wiring window 2026-10-01): the 16:9 picture bleeds to the card's edges,
   //                     so the padding lives on `.news-card__body` (16 pt on every side, gap 8), measured by [2i] below. Pinned by EXACT class list like the ls-cards.
   const CARD_PINNED = { 'notif-prefs-card': '8/16/8/16', 'scribe-mem-row': '10/12/10/12' };
-  const CARD_PINNED_EXACT = { 'card ls-card': '0/0/0/0', 'card ls-card ls-facts': '0/0/0/0', 'card news-card': '0/0/0/0' };
+  //   card news-card news-card--grouped   0/0/0/0 — D1 Lane C DI-672's grouped coverage card: the SAME full-bleed shell as `card news-card` (picture to the edges,
+  //                     `.news-card__body` 16 on every side) plus an "Also from" row whose own padding is the 16 inset (`.news-card__also-row` 0 16 16). Pinned by exact
+  //                     list and measured by [2k] below (body >= 16 every side; the row >= 16 left, right and bottom). Builder pin 2026-10-08, flagged for the reviewer.
+  const CARD_PINNED_EXACT = { 'card ls-card': '0/0/0/0', 'card ls-card ls-facts': '0/0/0/0', 'card news-card': '0/0/0/0', 'card news-card news-card--grouped': '0/0/0/0' };
   const cardClassPads = () => [...document.querySelectorAll('[data-card-i]')].map(e => { const s = getComputedStyle(e); return [s.paddingTop, s.paddingRight, s.paddingBottom, s.paddingLeft].map(parseFloat).join('/'); });
   const cardPage = (css, attrs) => page(mainWrap(CARD_CLASS_LISTS.map((c, i) => `<div class="${c}" data-card-i="${i}"><p>x</p></div>`).join('')), { css, attrs });
   const cardVerdicts = pads => CARD_CLASS_LISTS.map((c, i) => {
@@ -457,6 +499,22 @@ try {
     const pads = await measure(newsPage(old, MODES[0].attrs), newsBodyPads, { w: 375 });
     assert(pads.length === 1 && pads[0].join('/') === '8/12/8/12',
       `[2j] anti-vacuity: with .news-card__body{padding:8px 12px} re-added, the SAME detector reads 8/12/8/12 (got ${pads.map(p => p.join('/')).join(', ')}) — so [2i] is a measurement`);
+  }
+
+  // [2k] The grouped news card (D1 Lane C, DI-672) is pinned at 0/0/0/0 ONLY because its body and its "Also from" row carry the 16 pt inset themselves.
+  const groupedPads = () => [...document.querySelectorAll('.news-card--grouped .news-card__body, .news-card--grouped .news-card__also-row')].map(e => { const s = getComputedStyle(e); return [s.paddingTop, s.paddingRight, s.paddingBottom, s.paddingLeft].map(parseFloat); });
+  const groupedPage = (css, attrs) => page(mainWrap('<div class="card news-card news-card--grouped"><div class="news-card__main" role="link" tabindex="0"><img class="news-card__image" alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><div class="news-card__body"><p class="news-card__headline">x</p></div></div><div class="news-card__also-row"><button type="button" class="news-card__also">Also from CBS Sports</button></div></div>'), { css, attrs });
+  const groupedOk = p => p.length === 2 && p[0].every(v => v >= 16) && p[1][1] >= 16 && p[1][2] >= 16 && p[1][3] >= 16;
+  for (const [mode, w] of [[MODES[0], 320], [MODES[0], 375], [MODES[0], 430], [MODES[0], 600], [MODES[1], 375]]) {
+    const pads = await measure(groupedPage(CSS_HREF, mode.attrs), groupedPads, { w });
+    assert(groupedOk(pads),
+      `[2k] ${mode.name}, ${w} wide: the grouped news card's body keeps >= 16 on every side and its "Also from" row >= 16 left, right and bottom — the insets that pin 'card news-card news-card--grouped' at 0/0/0/0 (got ${pads.map(p => p.join('/')).join(' | ') || 'nothing'})`);
+  }
+  {
+    const old = sheet(c => c + '\n.news-card__also-row{padding:0 12px 12px}\n');
+    const pads = await measure(groupedPage(old, MODES[0].attrs), groupedPads, { w: 375 });
+    assert(!groupedOk(pads) && pads.length === 2 && pads[1].join('/') === '0/12/12/12',
+      `[2l] anti-vacuity: with .news-card__also-row{padding:0 12px 12px} re-added, the SAME detector reads 0/12/12/12 on the row and fails (got ${pads.map(p => p.join('/')).join(' | ')}) — so [2k] is a measurement`);
   }
 
   // ── [3] OBLIGATION GROUPS ──────────────────────────────────────────────────
@@ -762,7 +820,7 @@ try {
     assert(!/btn-sm ml-sm/.test(APP_SRC.slice(APP_SRC.indexOf('function obligationButtonsHTML'), APP_SRC.indexOf('export function obligationBadgeAndActions'))),
       '[8c] obligationButtonsHTML() emits no .ml-sm on any button');
     const gapRules = [['.gap-sm', 8], ['.chat-accent-row', 12], ['.rules-list', 8], ['.player-admin-field.player-admin-actions', 8], ['.pin-field', 8], ['.scribe-freq-dial', 8], ['.lc-footer', 8],
-      ['.chat-header-actions', 8], ['.chat-sheet-header-actions', 8], ['.chat-search-row', 8], ['.chat-pills-scroll', 8], ['.chat-mention-menu', 8], ['.btn-row', 8]];
+      ['.chat-header-actions', 8], ['.chat-sheet-header-actions', 8], ['.chat-search-row', 8], ['.chat-pills-scroll', 8], ['.chat-sport-pills', 8], ['.chat-mention-menu', 8], ['.btn-row', 8]];   // D1 (DI-553): the Locker Room's sport row keeps the same 8 pt between pills
     for (const [sel, min] of gapRules) {
       const re = new RegExp('(?:^|[}\\s])' + sel.replace(/[.*+?^${}()|[\]\\>]/g, '\\$&') + '\\s*\\{([^}]*)\\}', 'g');
       const bodies = [...body.matchAll(re)].map(m => m[1]);
@@ -807,6 +865,78 @@ try {
     assert(oldBare !== html, '[9e-fixture] the pre-sweep markup (a bare button under the paragraph) was reconstructed from the real card');
     const mb = await measure(page(drawerWrap(oldBare)), primeMeasure, { w: 375 });
     assert(mb.above < 8 && Math.abs(mb.off) > 8 && !mb.inGroup, `[9f] anti-vacuity: the OLD bare button reads ${mb.above} pt under the paragraph and ${mb.off} pt off-centre (the reviewer measured 0 / 16)`);
+  }
+
+  // ── [10] D1 LANE B — THE CARD DETAIL (reviewer B1) ──────────────────────────────────────────────────────────────────────────────────────────────────
+  console.log('\n[10] The card detail, in a real engine: no unsized icon, the numbers as label | value, no bullets, rows past 12 hidden until "Show all", actions 8 pt apart and 44 pt tall…');
+  const cdListMeasure = () => {
+    const q = (sel) => [...document.querySelectorAll(sel)];
+    const svgs = q('.cd svg').map(R);
+    const items = q('.cd-item'), extra = q('.cd-item--extra'), list = document.querySelector('.cd-list');
+    const hiddenBefore = visible(extra).length, shownBefore = visible(items).length;
+    list.setAttribute('data-expanded', 'true');
+    const extraAfter = visible(extra).length;
+    list.setAttribute('data-expanded', 'false');
+    const row0 = document.querySelector('.cd-row'), dt = R(row0.querySelector('dt')), dd = R(row0.querySelector('dd')), rr = R(row0);
+    const first = items[0], t = R(first.querySelector('.cd-item-title')), sub = R(first.querySelector('.cd-item-sub'));
+    const cards = visible(q('.cd > .card')).map(R).sort((a, b) => a.t - b.t);
+    let cardGap = Infinity; for (let i = 1; i < cards.length; i++) cardGap = Math.min(cardGap, cards[i].t - cards[i - 1].b);
+    const more = document.querySelector('.cd-more');
+    return {
+      maxSvg: Math.max(0, ...svgs.map((r) => Math.max(r.w, r.h))), minSvg: svgs.length ? Math.min(...svgs.map((r) => Math.min(r.w, r.h))) : 0, svgCount: svgs.length,
+      shownBefore, hiddenBefore, extraAfter, extraCount: extra.length, moreH: more ? R(more).h : 0,
+      overflowX: document.documentElement.scrollWidth > innerWidth + 1,
+      listStyle: getComputedStyle(document.querySelector('.cd-items')).listStyleType,
+      subBelowTitle: sub.t >= t.b - 0.5,
+      labelLeft: Math.abs(dt.l - rr.l) < 1.5, valueRight: Math.abs(dd.r - rr.r) < 1.5, valueAfterLabel: dd.l >= dt.r, tabular: getComputedStyle(row0.querySelector('dd')).fontVariantNumeric.includes('tabular-nums'),
+      cardGap: cardGap === Infinity ? null : +cardGap.toFixed(2),
+    };
+  };
+  const cdActionsMeasure = () => {
+    const acts = [...document.querySelectorAll('.cd-action')], rects = visible(acts).map(R);
+    const group = document.querySelector('.cd-actions'), g = R(group);
+    return {
+      count: rects.length, gap: minPair(acts), minH: rects.length ? Math.min(...rects.map((r) => r.h)) : 0,
+      inside: rects.every((r) => r.l >= g.l - 0.5 && r.r <= g.r + 0.5), overflowX: document.documentElement.scrollWidth > innerWidth + 1,
+      lines: acts.map((b) => { const g = document.createRange(); g.selectNodeContents(b); return new Set([...g.getClientRects()].filter((q) => q.width > 0).map((q) => Math.round(q.top))).size; }),
+      stacked: rects.length === 2 ? rects[1].t >= rects[0].b - 0.5 : null,
+      bg: acts.map((a) => getComputedStyle(a).backgroundColor), svgMax: Math.max(0, ...[...document.querySelectorAll('.cd svg')].map((e) => Math.max(R(e).w, R(e).h))),
+    };
+  };
+  const listOk = (m) => m.svgCount >= 1 && m.maxSvg <= 24 && m.minSvg >= 12 && m.shownBefore === 12 && m.hiddenBefore === 0 && m.extraAfter === m.extraCount && m.extraCount === 2 && m.moreH >= 44
+    && !m.overflowX && m.listStyle === 'none' && m.subBelowTitle && m.labelLeft && m.valueRight && m.valueAfterLabel && m.tabular && m.cardGap >= 16;
+  const actOk = (m) => m.count === 2 && m.gap >= 8 && m.minH >= 44 && m.inside && !m.overflowX && m.svgMax <= 24 && m.bg[0] !== m.bg[1] && m.lines.every((n) => n === 1);
+  for (const mode of MODES) {
+    for (const [w, scale] of [[320, 1], [375, 1], [430, 1], [375, 2]]) {
+      const m = await measure(page(PUSHED_WRAP(CARD_DETAIL.list), { attrs: mode.attrs }), cdListMeasure, { w, scale });
+      assert(listOk(m), `[10a] ${mode.name} ${w}px ${scale}x text: every icon 12 to 24 px (${m.minSvg} to ${m.maxSvg}), 12 of 14 rows shown and the extra 2 hidden (${m.shownBefore}/${m.hiddenBefore}) then opened by "Show all" (${m.extraAfter}), "Show all" ${m.moreH} pt tall, no bullets (${m.listStyle}), the subtitle under the title, label left / value right in tabular numerals, ${m.cardGap} pt between cards, no sideways overflow`);
+      const a = await measure(page(PUSHED_WRAP(CARD_DETAIL.actions), { attrs: mode.attrs }), cdActionsMeasure, { w, scale });
+      assert(actOk(a), `[10b] ${mode.name} ${w}px ${scale}x text: (${a.count} actions) the two actions are ${a.gap} pt apart (>= 8), ${a.minH} pt tall (>= 44), inside their group, primary and secondary read as different fills, no label wraps (${a.lines.join('/')} line(s), ${a.stacked === null ? '' : a.stacked ? 'stacked' : 'side by side'}), no overflow`);
+    }
+  }
+  {
+    const old = sheet((c) => c.replace(/\/\* DI-575 \/ DI-576 — the card detail[\s\S]*?(?=\/\* ═══ DEPLOYMENT 1 · LANE B — END)/, ''));
+    const mo = await measure(page(PUSHED_WRAP(CARD_DETAIL.list), { css: old }), cdListMeasure, { w: 375 });
+    assert(!listOk(mo) && mo.maxSvg > 100 && mo.hiddenBefore > 0 && mo.listStyle !== 'none' && !mo.subBelowTitle,
+      `[10c] anti-vacuity: with the card-detail rules removed the SAME detector fails — the icon fills the card (${mo.maxSvg} px), the extra rows show (${mo.hiddenBefore}), bullets return (${mo.listStyle}), the subtitle shares the title's line (${mo.subBelowTitle})`);
+    const noHide = sheet((c) => c.replace('.cd-item--extra{display:none}', ''));
+    const mh = await measure(page(PUSHED_WRAP(CARD_DETAIL.list), { css: noHide }), cdListMeasure, { w: 375 });
+    assert(!listOk(mh) && mh.hiddenBefore === 2, `[10d] anti-vacuity: deleting only the "hide past 12" rule shows both extra rows before "Show all" (${mh.hiddenBefore}) and the detector goes red`);
+    const noOpen = sheet((c) => c.replace('.cd-list[data-expanded="true"] .cd-item--extra{display:flex}', ''));
+    const mn = await measure(page(PUSHED_WRAP(CARD_DETAIL.list), { css: noOpen }), cdListMeasure, { w: 375 });
+    assert(!listOk(mn) && mn.extraAfter === 0, `[10e] anti-vacuity: deleting only the "Show all opens them" rule leaves the extra rows hidden after expanding (${mn.extraAfter} shown) — "Show all" would do nothing — and the detector goes red`);
+    const bare = sheet((c) => c.replace('.cd-eyebrow-icon{display:inline-flex;flex:0 0 auto;width:16px;height:16px;color:var(--maroon-text)}', '').replace('.cd-eyebrow-icon svg{width:16px;height:16px}', ''));
+    const mb2 = await measure(page(PUSHED_WRAP(CARD_DETAIL.list), { css: bare }), cdListMeasure, { w: 375 });
+    assert(!listOk(mb2) && (mb2.maxSvg > 24 || mb2.minSvg < 12), `[10f] anti-vacuity: deleting the icon's two sizing rules (its wrapper and its svg) leaves the icon the wrong size (${mb2.minSvg} to ${mb2.maxSvg} px; it must be 12 to 24) and the detector goes red`);
+    const tight = sheet((c) => c.replace('.cd-actions{display:flex;flex-wrap:wrap;gap:8px;', '.cd-actions{display:flex;flex-wrap:wrap;gap:0;'));
+    const mt = await measure(page(PUSHED_WRAP(CARD_DETAIL.actions), { css: tight }), cdActionsMeasure, { w: 375 });
+    assert(!actOk(mt) && mt.gap < 8, `[10g] anti-vacuity: with the actions' gap removed they touch (${mt.gap} pt) and the detector goes red`);
+    const wrap = sheet((c) => c.replace('.cd-action{flex:1 1 140px;white-space:nowrap}', '.cd-action{flex:1 1 140px}'));
+    const mw = await measure(page(PUSHED_WRAP(CARD_DETAIL.actions), { css: wrap }), cdActionsMeasure, { w: 320 });
+    assert(!actOk(mw) && mw.lines.some((n) => n > 1), `[10i] anti-vacuity: without \`white-space:nowrap\` a label wraps inside its button at 320 pt (${mw.lines.join('/')} line(s) — "OPEN THREAD · 4" breaking in two) and the detector goes red`);
+    const short = sheet((c) => c.replace('.cd-action,.cd-more{min-height:44px;', '.cd-action,.cd-more{min-height:0;'));
+    const ms = await measure(page(PUSHED_WRAP(CARD_DETAIL.actions), { css: short }), cdActionsMeasure, { w: 375 });
+    assert(ms.minH >= 0, `[10h] (the shipped .btn already floors at 46 pt, so dropping the detail's own 44 pt rule alone changes nothing: ${ms.minH} pt — the 44 pt floor holds twice)`);
   }
 } catch (e) {
   fail++;

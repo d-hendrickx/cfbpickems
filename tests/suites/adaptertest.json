@@ -1,0 +1,12 @@
+{
+  "id": "adaptertest",
+  "script": "adaptertest.mjs",
+  "label": "73e",
+  "summary": "loose-skips",
+  "floor": 1201,
+  "tags": [
+    "smoke"
+  ],
+  "expectedMs": 400,
+  "note": "(D1 combine, 2026-10-08: RAISED from 1160 to 1192 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - (D1 DI-531, 2026-10-08: RAISED from 1095 to 1126 \u2014 [A-CM] competition_members through the real planner: the read, a member's own Join (no id and no joined_at on the wire), ownership, never a PATCH, the delete, and the source pins; [A-MS] asserts a competitions insert carries no `extra`) \u2014 (SP-54, 2026-10-01: RAISED from 1018 \u2014 [A-SNAP] the lockedAlmaByPlayer projection restore/never-emit proofs and [A-RECALC] the shared-league Recalculate refusal and the finalize_week descriptor payload; the earlier history follows) \u2014 raised from 1008 by SB-01 pass 3 (2026-09-27 \u2026"
+}

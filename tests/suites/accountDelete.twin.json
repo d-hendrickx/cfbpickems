@@ -1,0 +1,12 @@
+{
+  "id": "accountDelete.twin",
+  "script": "supabase/tests/functions/accountDelete.twin.mjs",
+  "label": "81t",
+  "summary": "loose",
+  "floor": 81,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 200,
+  "note": "D1 Lane A review (2026-10-08): RAISED to 81 by PUSH-13..13d (the removal covers 25 seats + the alias; a longer set answers partial). Before that: D1 Lane A (2026-10-08, S-2 G4): RAISED to 78 by G4-1..G4-9 (every deadline of handle() driven: alias read, seat read, OneSignal removal, RPC, Admin API; the unread-ids answer is never \"none\"). Before that: D1 Lane A security round (2026-10-08): RAISED to 69 by PUSH-19 (no active seat, existing alias: still removed) and PUSH-20 (only the non-minting read and the Admin API call). Before that: D1 Lane A (2026-10-08, DI-548/549/545/546): RAISED 46 -> 67 to the measured count. Before that: DI-340 — account deletion: requireUser() gate ordering, the audit_log stamp before the Admin API call, the last_commissioner-typed refusal, and the residual check that the raw response text never contains the uid it acted on (8-2). Floor at the first count — the ratchet only …"
+}

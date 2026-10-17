@@ -1,0 +1,20 @@
+{
+  "id": "hometest",
+  "script": "hometest.mjs",
+  "label": "128",
+  "summary": "strict",
+  "floor": 397,
+  "forbid": [
+    {
+      "regex": "ERR_MODULE_NOT_FOUND",
+      "flags": "",
+      "label": "hometest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)"
+    }
+  ],
+  "tags": [
+    "smoke",
+    "tz"
+  ],
+  "expectedMs": 6100,
+  "note": "MERGED int/v0.30.0 (c81d93c9, 0045) into feat/d1-gameday 2026-10-14: floor = the measured merged count (Lane B's 388 + 0045's 9: C15g, C15h, M73-M76). | (D1 0045 P-10 close, 2026-10-08: RAISED from 408 to 411 - C15h (a valid-shape lock notice with a hostile body shows the app's fixed copy, candidate and end to end incl. the detail) and M76) - (D1 0045 security F-2, 2026-10-08: RAISED from 402 to 408 - C15g (the lock notice only under the app's own id for a real, locked week; three checks) and M73-M75; the chat fixtures file each default SCRIBE row under its own week's real id) - (D1 combine, 2026-10-08: RAISED from 395 to 402 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - RAISED from 318 at the v0.29.0 batch-4 integration (2026-10-01): the security note on chatCandidates' provenance switch — C11e (a MISSING `supabase` is supabase mode) and C11f (a non-boolean one is too), and mutants 12-53/54/55 (the false default, the `=== true` read, and the … || Lane B: MERGED int/v0.30.0 (d6e8ac5a) into feat/d1-gameday 2026-10-08: 388 measured = Lane B's 381 + int's 7 sports checks (395 -> 402); nothing removed by the merge. | LOWERED from 395 to 381 by D1 Lane B Game Day (2026-10-08). The Live Peek is RETIRED (DI-582 -> DI-603: Home's Now card is the Game Day card), so 17 assertions about it are REMOVED, not weakened: L4, L4b, L5, L5b, L5c (the peek's cap of three, the exact total, 'Showing 3 of N', no silent omission), N8c (the compact markup spliced verbatim), N8d (See the full slate as the primary action), N9, N9b, N9c (the compact dashboard's rows gated …"
+}

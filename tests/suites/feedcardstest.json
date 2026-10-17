@@ -1,0 +1,19 @@
+{
+  "id": "feedcardstest",
+  "script": "feedcardstest.mjs",
+  "label": "121",
+  "summary": "strict",
+  "floor": 421,
+  "forbid": [
+    {
+      "regex": "ERR_MODULE_NOT_FOUND",
+      "flags": "",
+      "label": "feedcardstest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)"
+    }
+  ],
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 1100,
+  "note": "RAISED from 392 on 2026-10-01 for SB-22: year.ago's denominator is the week's real 2025 slate size or none (7-12 YA1-YA4 on the real SEASON_2025, 7-13 YF1-YF6 on a fixture dataset with 8- and 12-game weeks, and mutants 11-30..35: the hard-coded 10, every week assumed 10, the …"
+}

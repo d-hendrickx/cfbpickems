@@ -492,6 +492,30 @@ backend.setDataMode('sheets');
 storage.clearSession();
 resetLedger();
 
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[S3] D1 — the sweeps cover EVERY sport\'s current week, one post per call…');
+{
+  const CFB_C = 'aaaaaaaa-0000-0000-0000-000000000001', NFL_C = 'bbbbbbbb-0000-0000-0000-000000000002';
+  const gatesOpen = () => { storage.saveSetting('chatEnabled', true); backend.setDataMode('supabase'); freshRoom(); resetLedger(); signIn(); };
+  const sweep = (n) => { const out = []; for (let i = 0; i < n; i++) { const b = outbox(); checkLifecyclePostDue(); if (outbox() - b) out.push(`${lastPost().meta.event}:${lastPost().meta.weekId}`); } return out; };
+  gatesOpen();
+  storage.saveCompetition({ id: CFB_C, sport: 'cfb', isDefault: true, enrollment: 'all', kind: 'season' });
+  storage.saveCompetition({ id: NFL_C, sport: 'nfl', isDefault: false, enrollment: 'opt_in', kind: 'season', activeWeekId: 'lc_nfl' });
+  storage.saveWeek(week('lc_cfb', 6, 'locked', { competitionId: CFB_C }));
+  storage.saveWeek(week('lc_nfl', 6, 'locked', { competitionId: NFL_C }));
+  storage.setActiveWeekId('lc_cfb');
+  const seen = sweep(6);
+  assert(seen.join() === 'PICKS_OPENED:lc_cfb,PICKS_LOCKED:lc_cfb,PICKS_OPENED:lc_nfl,PICKS_LOCKED:lc_nfl', `S3-1: with two sports the sweep catches up BOTH current weeks, ONE post per call, default sport first and open before lock (got ${seen.join()})`);
+  assert(sweep(2).length === 0, 'S3-2: ...and then nothing more (the ledger holds both weeks)');
+  // the control: no competitions at all sweeps the single current week exactly as before
+  gatesOpen();
+  localStorage.removeItem('cfbp_competitions');
+  storage.saveWeek(week('lc_one', 7, 'locked'));
+  storage.setActiveWeekId('lc_one');
+  const seen2 = sweep(4);
+  assert(seen2.join() === 'PICKS_OPENED:lc_one,PICKS_LOCKED:lc_one', `S3-3: a one-sport league sweeps its single current week exactly as before (got ${seen2.join()})`);
+}
+
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
 // `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS

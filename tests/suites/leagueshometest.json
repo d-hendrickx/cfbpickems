@@ -1,0 +1,12 @@
+{
+  "id": "leagueshometest",
+  "script": "leagueshometest.mjs",
+  "label": "102",
+  "summary": "loose",
+  "floor": 115,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "RAISED from 107 by SP-53's UI wiring (2026-10-01): the League Settings row, last in the body, for every member, escaped in its aria-label; before that, floor 107 — RAISED from 103 by round 3 (Opus, feat/control-center-v0272, 2026-09-29): round-2 additions confirmed on this run …"
+}

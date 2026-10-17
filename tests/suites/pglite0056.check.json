@@ -1,0 +1,14 @@
+{
+  "id": "pglite0056.check",
+  "script": "supabase/tests/pglite0056.check.mjs",
+  "summary": "loose",
+  "floor": 1,
+  "tags": [],
+  "deps": [
+    "supabase/migrations/0056_scribe_scan_jobs.sql",
+    "supabase/migrations/0044_pick_status_submit_line.sql",
+    "supabase/migrations/0043_pf1_server_lock.sql"
+  ],
+  "expectedMs": 6000,
+  "note": "D1 Lane C 0056 EXECUTED in PGlite over 0044's real helper: 38 attacker-shaped assertions when PGlite is installed (PGLITE_DIR), else a printed SKIP counted as the one assertion (floor 1, the 0044/0045/0051 precedent). --kit runs the 26-mutant kit. A green run WITHOUT PGlite proves nothing about the SQL; read the SKIP line."
+}

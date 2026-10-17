@@ -1,0 +1,19 @@
+{
+  "id": "statstest",
+  "script": "statstest.mjs",
+  "label": "120",
+  "summary": "strict",
+  "floor": 169,
+  "forbid": [
+    {
+      "regex": "ERR_MODULE_NOT_FOUND",
+      "flags": "",
+      "label": "statstest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)"
+    }
+  ],
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 200,
+  "note": "RAISED from 167 at the v0.29.0 batch-3 integration (2026-10-01): M16 re-derived after SB-12 (dcc81c6) made getAlmaMaterMatch() itself safe for an inherited-property school — M16 now removes BOTH layers (stats.js's try/catch and data-model.js's ownGet()), with a fixture check …"
+}

@@ -50,6 +50,7 @@ function assert(cond, label) {
 console.log('\n[1] ICONS entries — structural validity, shared convention…');
 {
   const names = Object.keys(ICONS);
+  const BRAND_MARKS = ['home'];   // D1 DI-584: the Home tab's filled Munera mark is the ONE brand-mark exception to the stroked family (pinned in [1b20]-[1b21c])
   assert(names.length > 0, '[1a] ICONS is non-empty');
   assert(names.includes('bell') && names.includes('almaMater') && names.includes('settings'),
     '[1b] Phase 1 set present: bell, almaMater, settings');
@@ -91,17 +92,39 @@ console.log('\n[1] ICONS entries — structural validity, shared convention…')
   // SP-52's branch read 34 -> 36 and labelled its checks [1b12]/[1b13], which are the Home set's and SP-57's here, so they are [1b16]/[1b17].
   // Raised 40 -> 42, the Home wiring window (2026-10-01; DESIGN_NEEDS_HOME Amendment 3 A3.5/A3.6) — `home` (the center tab's mark: ICONS.munera's shapes with class="home-roof" on the pediment, so CSS can
   // fill the roof when Home is selected) and `menu` (the header button's three strokes, replacing the Munera mark in #control-center-trigger).
-  assert(names.length === 42, `[1b6] ICONS carries exactly 42 entries this pass (found ${names.length}: ${names.join(', ')}) — a raised count here is a deliberate signal to re-check this assertion, not a floor to silently exceed`);
+  // Raised 42 -> 43, D1 / DI-510 (2026-10-07) — `clock`, the lock countdown's glyph (replaces the emoji hourglass in chrome; ICONS.clock is the DI's named addition).
+  // D1 Lane C (N7, 2026-10-07): +1 — `power`, the Trainer card's on/off glyph (it was a character), so 44 with DI-510's `clock`.
+  // Raised 44 -> 45 at the Game Day merge of int/v0.30.0 (2026-10-08) — D1 Lane B / DI-607: `sort`, the Dashboard Sort button's glyph (two opposed arrows), joins Lane C's `power`.
+  assert(names.length === 45, `[1b6] ICONS carries exactly 45 entries this pass (found ${names.length}: ${names.join(', ')}) — a raised count here is a deliberate signal to re-check this assertion, not a floor to silently exceed`);
+  assert(names.includes('sort') && (ICONS.sort.match(/<polyline\b/g) || []).length === 4 && /fill="none" stroke="currentColor" stroke-width="2"/.test(ICONS.sort) && !/<(path|circle|rect|line)\b/.test(ICONS.sort),
+    '[1b22] D1 / DI-607: `sort` is present — four polylines (a down arrow and an up arrow, opposed), the family\'s fill none / currentColor / stroke 2 shape, and nothing else drawn');
+  assert(names.includes('clock') && (ICONS.clock.match(/<circle\b/g) || []).length === 1 && (ICONS.clock.match(/<polyline\b/g) || []).length === 1 && /fill="none" stroke="currentColor" stroke-width="2"/.test(ICONS.clock),
+    '[1b19] D1 / DI-510: `clock` is present — one circle and one polyline (the two hands), the family\'s fill none / currentColor / stroke 2 shape');
   assert(names.includes('home') && names.includes('menu'), '[1b18] Home wiring set present: home (the center tab\'s mark) and menu (the header menu button)');
   {
     const MUNERA_SHIPPED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9 12 4.5 20.5 9Z"/><line x1="7" y1="12" x2="7" y2="16"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="17" y1="12" x2="17" y2="16"/><line x1="4" y1="19.5" x2="20" y2="19.5"/></svg>';
-    assert(ICONS.munera === MUNERA_SHIPPED, '[1b19] ICONS.munera is BYTE-UNCHANGED (the sign-in gate and brand surfaces still draw it; Home is its own entry)');
-    assert(ICONS.home === MUNERA_SHIPPED.replace('<path d="M3.5 9 12 4.5 20.5 9Z"/>', '<path class="home-roof" d="M3.5 9 12 4.5 20.5 9Z"/>') && (ICONS.home.match(/class="home-roof"/g) || []).length === 1,
-      '[1b20] ICONS.home is the Munera mark with class="home-roof" on the pediment and nothing else changed (one SVG, the roof filled by CSS when Home is selected: no second asset)');
-    for (const n of ['home', 'menu']) {
-      assert(/^<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">/.test(ICONS[n]) && !/#[0-9a-fA-F]{3,8}\b|rgb\(|hsl\(/.test(ICONS[n]),
-        `[1b21] ICONS.${n} is the stroked family (fill="none" stroke="currentColor", 24 viewBox, width 2, round caps and joins) and carries no hex or rgb colour`);
-    }
+    assert(ICONS.munera === MUNERA_SHIPPED, '[1b19b] ICONS.munera is BYTE-UNCHANGED (the sign-in gate and brand surfaces still draw it; Home is its own entry)');
+    // D1 DI-584 (Drew chose mark B, D-56): ICONS.home is the FULL filled Munera temple — the ONE named brand-mark exception to the stroked family (like GOOGLE_G_MARK_SVG, AD-55). It is pinned
+    // here more tightly than any family member: the exact literal, the same six shapes as brand.js's getGateMarkSVG(), no stroke, no class, no colour of its own.
+    const HOME_MARK = '<svg viewBox="205 250 614 495" fill="currentColor"><path d="M 212 393 L 499.25 262.78 Q 512 257 524.75 262.78 L 812 393 L 812 401 Q 812 417 796 417 L 228 417 Q 212 417 212 401 L 212 393 Z"/><rect x="296" y="445.57" width="78" height="154.29"/><rect x="473" y="445.57" width="78" height="154.29"/><rect x="650" y="445.57" width="78" height="154.29"/><rect x="260" y="599.86" width="504" height="51.43" rx="7.71"/><rect x="212" y="679.86" width="600" height="57.14" rx="22.86"/></svg>';
+    assert(ICONS.home === HOME_MARK, '[1b20] ICONS.home is EXACTLY the filled mark literal (viewBox 205 250 614 495, fill="currentColor", the six shapes of the home-screen icon)');
+    const shapesOf = (svg) => (svg.match(/<(path|rect)\b[^>]*\/>/g) || []).map((t) => t.replace(/\s+/g, ' '));
+    const gate = (await import('./js/brand.js')).getGateMarkSVG();
+    assert(shapesOf(ICONS.home).length === 6 && JSON.stringify(shapesOf(ICONS.home)) === JSON.stringify(shapesOf(gate)) && /viewBox="205 250 614 495"/.test(gate),
+      '[1b20b] the six shapes are BYTE-IDENTICAL to brand.js getGateMarkSVG() (the sign-in gate\'s mark): one asset, not a lookalike');
+    assert(!/stroke/.test(ICONS.home) && !/class=/.test(ICONS.home) && !/#[0-9a-fA-F]{3,8}\b|rgb\(|hsl\(/.test(ICONS.home) && (ICONS.home.match(/fill="/g) || []).length === 1 && /^<svg viewBox="205 250 614 495" fill="currentColor">/.test(ICONS.home),
+      '[1b21] ICONS.home carries no stroke, no class (the retired roof), no hex / rgb colour, and exactly one fill: "currentColor" (the disc supplies the colour)');
+    assert(/stroke="currentColor"/.test(ICONS.menu) && /fill="none"/.test(ICONS.menu), '[1b21b] ICONS.menu stays in the stroked family');
+    // The pins have teeth: each way of breaking the mark turns the predicate RED (the real literal is the positive control).
+    const markOk = (svg) => svg === HOME_MARK && JSON.stringify(shapesOf(svg)) === JSON.stringify(shapesOf(gate)) && !/stroke|class=/.test(svg);
+    assert(markOk(ICONS.home) === true, '[1b21d] POSITIVE CONTROL: the real ICONS.home satisfies the mark predicate');
+    assert(markOk(HOME_MARK.replace('<path d=', '<path class="home-roof" d=')) === false, '[1b21e] MUTATION — the retired home-roof class returns on the pediment: RED');
+    assert(markOk(HOME_MARK.replace('fill="currentColor"', 'fill="currentColor" stroke="currentColor" stroke-width="2"')) === false, '[1b21f] MUTATION — a stroke is added back (the retired outline treatment): RED');
+    assert(markOk(HOME_MARK.replace('x="473" y="445.57"', 'x="473" y="446.57"')) === false, '[1b21g] MUTATION — one column nudged a pixel (a lookalike, not the home-screen icon\'s mark): RED');
+    assert(markOk(HOME_MARK.replace('<rect x="650" y="445.57" width="78" height="154.29"/>', '')) === false, '[1b21h] MUTATION — a column dropped (five shapes, not six): RED');
+    assert(markOk('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path class="home-roof" d="M3.5 9 12 4.5 20.5 9Z"/><line x1="7" y1="12" x2="7" y2="16"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="17" y1="12" x2="17" y2="16"/><line x1="4" y1="19.5" x2="20" y2="19.5"/></svg>') === false, '[1b21i] MUTATION — the old stroked outline comes back: RED');
+    // THE EXCEPTION IS EXACTLY ONE NAME: any other icon that drops the stroked family fails the loop below
+    assert(JSON.stringify(BRAND_MARKS) === '["home"]' && names.filter((n) => !BRAND_MARKS.includes(n)).length === names.length - 1, `[1b21c] the brand-mark exception list is exactly ["home"] — the other ${names.length - 1} icons are held to the stroked family (derived from the count, so a new icon neither needs this line touched nor can join the exception)`);
     assert(ICONS.menu === '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>',
       '[1b22] ICONS.menu is exactly three horizontal strokes (y = 7, 12, 17; x = 4 to 20)');
   }
@@ -129,6 +152,11 @@ console.log('\n[1] ICONS entries — structural validity, shared convention…')
     const svg = ICONS[name];
     assert(typeof svg === 'string' && svg.startsWith('<svg ') && svg.trim().endsWith('</svg>'),
       `[1c/${name}] well-formed <svg>...</svg> string`);
+    if (BRAND_MARKS.includes(name)) {
+      const o = (svg.match(/<(svg|path|rect)\b/g) || []).length, c = (svg.match(/<\/svg>/g) || []).length + (svg.match(/\/>/g) || []).length;
+      assert(o > 0 && c >= o, `[1i/${name}] tag-balance smoke test (brand mark: opens=${o}, closes-or-self-closed=${c}); the family rules [1d]-[1h] do not apply — pinned in [1b20]-[1b21c]`);
+      continue;
+    }
     assert(svg.includes('viewBox="0 0 24 24"'), `[1d/${name}] viewBox="0 0 24 24"`);
     assert(svg.includes('stroke="currentColor"'), `[1e/${name}] stroke="currentColor"`);
     assert(svg.includes('stroke-width="2"'), `[1f/${name}] stroke-width="2"`);
@@ -217,21 +245,25 @@ console.log('\n[1k] DI-443 — alma mater = the games crossed swords: one consta
 
   // Every alma-mater render path. The keys reach the screen only through icon() (js/icons.js).
   const appSrc = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+  // RE-DERIVED 2026-10-14 (D1 W-69): the two Games-tab alma badges (the slate row and the games-admin card) were ONE badge drawn in two lists; the lists are one now, so js/games-list.js draws it ONCE,
+  // through its injected `ctx.icon`. app.js keeps the five decorative sites beside visible words. Seven sites became six: five here + one there.
+  const glSrc = await readFile(new URL('./js/games-list.js', import.meta.url), 'utf8');
   const sites = [...appSrc.matchAll(/icon\('almaMater'(?:, \{ label: '([^']*)' \})?\)/g)];
-  assert(sites.length === 7, `[1k-10] js/app.js renders the alma-mater glyph at exactly 7 sites, all via icon('almaMater'…) (found ${sites.length}) — the game-card badge, Alma Mater Watch, Alma Mater Rankings, Alma maters & home teams, the Comm → Games filter chip, and the two Games-tab badges`);
-  assert(!/alma-mater-badge[^`]*`[^`]*⭐/.test(appSrc) && !appSrc.includes('M12 21V5'),
-    '[1k-11] js/app.js carries no emoji or hand-drawn alma-mater glyph of its own — every site is the shared key');
-  // The two ICON-ONLY badges (nothing but the glyph inside the span) carry an aria-label; the text-bearing sites do not need one.
-  const iconOnly = [...appSrc.matchAll(/<span class="alma-mater-badge[^"]*">\$\{icon\('almaMater'([^)]*)\)\}<\/span>/g)];
-  assert(iconOnly.length === 2, `[1k-12] exactly two icon-only alma-mater badges exist in app.js (found ${iconOnly.length}: the Games-tab slate row and the games-admin card)`);
+  const glSites = [...glSrc.matchAll(/ctx\.icon\('almaMater'(?:, \{ label: '([^']*)' \})?\)/g)];
+  assert(sites.length === 5 && glSites.length === 1, `[1k-10] the alma-mater glyph is drawn at exactly 6 sites, all via icon('almaMater'…): 5 in js/app.js (the game-card badge, Alma Mater Watch, Alma Mater Rankings, Alma maters & home teams, the Comm → Games filter chip) + 1 in js/games-list.js (the Games row) (found ${sites.length} + ${glSites.length})`);
+  assert(!/alma-mater-badge[^`]*`[^`]*⭐/.test(appSrc) && !appSrc.includes('M12 21V5') && !/⭐/.test(glSrc.replace(/\/\/.*$/gm, '')),
+    '[1k-11] js/app.js and js/games-list.js carry no emoji or hand-drawn alma-mater glyph of their own — every site is the shared key');
+  // The ICON-ONLY badge (nothing but the glyph inside the span) carries an aria-label; the text-bearing sites do not need one.
+  const iconOnly = [...glSrc.matchAll(/<span class="alma-mater-badge[^"]*">\$\{ctx\.icon\('almaMater'([^)]*)\)\}<\/span>/g)];
+  assert(iconOnly.length === 1 && !/<span class="alma-mater-badge[^"]*">\$\{icon\('almaMater'([^)]*)\)\}<\/span>/.test(appSrc), `[1k-12] exactly one icon-only alma-mater badge exists, in the ONE Games row (found ${iconOnly.length}; none left in app.js)`);
   assert(iconOnly.every(m => m[1].trim() === ", { label: 'Alma mater game' }"),
-    `[1k-13] BOTH icon-only badges carry {label:'Alma mater game'} so VoiceOver names them (a title does not fire on touch): ${JSON.stringify(iconOnly.map(m => m[1]))}`);
+    `[1k-13] the icon-only badge carries {label:'Alma mater game'} so VoiceOver names it (a title does not fire on touch): ${JSON.stringify(iconOnly.map(m => m[1]))}`);
   const rendered = icon('almaMater', { label: 'Alma mater game' });
   assert(rendered.includes('role="img"') && rendered.includes('aria-label="Alma mater game"') && !rendered.includes('aria-hidden') && rendered.includes('x1="18.5" y1="3"'),
     '[1k-14] icon(\'almaMater\', { label }) renders role="img" + the label + the swords (and is not aria-hidden)');
   const textSites = sites.filter(m => m[1] === undefined).length;
-  assert(textSites === 5 && sites.length - textSites === 2,
-    `[1k-15] the other five sites keep the decorative default (aria-hidden — each sits beside visible text, e.g. "Alma Mater", "Alma Mater Watch"): ${textSites} decorative + ${sites.length - textSites} labelled`);
+  assert(textSites === 5 && sites.length - textSites === 0,
+    `[1k-15] the five sites in app.js keep the decorative default (aria-hidden — each sits beside visible text, e.g. "Alma Mater", "Alma Mater Watch"): ${textSites} decorative + ${sites.length - textSites} labelled`);
   assert(/<span class="alma-mater-badge">\$\{icon\('almaMater'\)\} Alma Mater<\/span>/.test(appSrc),
     '[1k-16] the game-card badge stays glyph + the visible words "Alma Mater" (the ambiguity with the games glyph is resolved by its label)');
 
@@ -404,14 +436,21 @@ console.log('\n[6] BLOCK 4 — renderSourceBadge()/National TV call sites use ic
   assert(["calendarWeek", "clipboard", "pin", "warning"].every(n => fnBody.includes(`icon('${n}'`)),
     "[6c] renderSourceBadge() calls icon('calendarWeek'/'clipboard'/'pin'/'warning', ...) for its four badges");
 
-  const tvSites = [...appSrc.matchAll(/national-tv-badge[^`]*`/g)].map(m => m[0]);
+  // RE-DERIVED 2026-10-14 (D1 W-69): the two national-tv-badge template sites (Available Games, Selected Slate) are ONE site in the ONE Games row (js/games-list.js, through ctx.icon).
+  const glSrc6 = await readFile(new URL('./js/games-list.js', import.meta.url), 'utf8');
+  const tvSites = [...appSrc.matchAll(/national-tv-badge[^`]*`/g), ...glSrc6.matchAll(/national-tv-badge[^`]*`/g)].map(m => m[0]);
   const tvChipLine = appSrc.split('\n').find(l => l.includes('On National TV'));
-  assert(tvSites.length === 2, `[6d] fixture: found 2 national-tv-badge template sites (got ${tvSites.length})`);
+  assert(tvSites.length === 1 && !/national-tv-badge[^`]*`/.test(appSrc), `[6d] fixture: found 1 national-tv-badge template site, in js/games-list.js (got ${tvSites.length})`);
   assert(!!tvChipLine, '[6e] fixture: found the "On National TV" filter-chip line');
   for (const site of [...tvSites, tvChipLine]) {
-    assert(site.includes("icon('tv')"), `[6f] site uses icon('tv') — ${JSON.stringify(site.slice(0, 60))}…`);
+    assert(/icon\('tv'\)/.test(site), `[6f] site uses icon('tv') — ${JSON.stringify(site.slice(0, 60))}…`);
     assert(!BANNED.some(g => site.includes(g)), `[6g] site carries no banned emoji — ${JSON.stringify(site.slice(0, 60))}…`);
   }
+  // D1 W-68 / W-69 (2026-10-14): the Games row's chrome (the On slate check, Lock / Unlock, Add a game, Refresh Scores) and the swap picker's warning come from the ONE icon family - every name is a real ICONS key.
+  const slateAddSrc = await readFile(new URL('./js/slate-add.js', import.meta.url), 'utf8');
+  const chromeNames = [...glSrc6.matchAll(/icon\('([A-Za-z]+)'/g), ...slateAddSrc.matchAll(/icon\('([A-Za-z]+)'/g)].map(m => m[1]);
+  assert(chromeNames.length >= 6 && chromeNames.every(n => ICONS[n]), `[6h] every icon() name in the Games row and the swap picker footer is a real ICONS key (${[...new Set(chromeNames)].join(', ')})`);
+  assert(['check', 'lock', 'unlock', 'plus', 'refresh', 'warning'].every(n => chromeNames.includes(n)), '[6i] …and the six glyphs the new surfaces use (check, lock, unlock, plus, refresh, warning) are all drawn through icon(), not typed as characters');
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────

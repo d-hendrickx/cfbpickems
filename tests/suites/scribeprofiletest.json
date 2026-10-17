@@ -1,0 +1,19 @@
+{
+  "id": "scribeprofiletest",
+  "script": "scribeprofiletest.mjs",
+  "summary": "strict",
+  "floor": 286,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "css/styles.css",
+    "service-worker.js",
+    "loadtest.mjs",
+    "js/nav-gestures.js",
+    "js/control-center.js",
+    "supabase/functions/_shared/scribe-persona.mjs"
+  ],
+  "expectedMs": 3000,
+  "note": "D1 Lane C (FB-006 / UN-468 / PF-468; DI-644...648, 681, 682, D-51): the SCRIBE profile pane. Rules, markup escaping and row states, the one function call (no identity in the body), the v3.2 standards digest, and the pane end to end (fake DOM + real adapter + fake scribe-profile server): a decision moves a row only after the server confirms, a refused save stays Pending, Replace re-hydrates the mirror, add/correct/facts/lore bodies, Esc and close, member read-only lore; plus the wiring scans (gesture lists, precache, CSS classes, 44 pt, tokens, Reduce Motion)."
+}

@@ -1,0 +1,12 @@
+{
+  "id": "contrastscan",
+  "script": "contrastscan.mjs",
+  "label": "112c",
+  "summary": "strict-combined",
+  "floor": 41,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "MERGED int/v0.30.0 (d6e8ac5a) into feat/d1-gameday 2026-10-08: floor = the higher side's (40 / 41), to be re-measured on the merged tree. | RAISED from 39 by D1 Lane B (2026-10-08): the Sort sheet's radio dot is checked in every look. | (D1 combine, 2026-10-08: RAISED from 39 to 41 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - contrastscan.mjs (live) actually ran its full set (got , floor 39 — RAISED from 25 by SP-52 THEMES (2026-10-01) (DI-456): the token maps come from themeresolve.mjs's real cascade, and [2a] scans EACH of the ten looks on both sides (3,070 rule-checks) with 'no look is worse than …"
+}

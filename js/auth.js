@@ -3030,7 +3030,14 @@ export async function superSetPlatformKv(key, value) {
  * in 0034). `pushAliasModeLive` reads TRUE only when the row is exactly `true`. It changes nothing the player sees; the SERVER (super_set_platform_kv) is what refuses to open the
  * door while it is false — the card merely shows it.
  *
- * @returns {{maintenanceBanner: string, signupsOpen: boolean, leagueCreationOpen: boolean, offeredSports: string[], pushAliasModeLive: boolean}}
+ * Review (2026-10-08) - a fifth key rides the same read for the same card: `push_nonpilot_alias_only` (0049, seeded FALSE): after Part D of the creation flip the door is satisfied by EITHER marker, so the Super Admin
+ * card must recognise both or it would keep saying "not marked live" over an open interlock. `pushNonpilotAliasOnly` reads TRUE only when the row is exactly `true`.
+ *
+ * DI-550 (RP-1, D-44) - a fourth key rides the same read: `league_creation_scope` ('admins' | 'everyone', seeded 'admins' by migration 0050). `leagueCreationScope` reads 'everyone' only when the row
+ * is exactly that string; unread, missing or malformed it reads 'admins', the fail-closed direction (the same direction as `leagueCreationOpen`). The SERVER (create_league) is what refuses a non-super-admin
+ * while it is 'admins'; this value only decides whether the New League card is SHOWN.
+ *
+ * @returns {{maintenanceBanner: string, signupsOpen: boolean, leagueCreationOpen: boolean, leagueCreationScope: 'admins'|'everyone', offeredSports: string[], pushAliasModeLive: boolean, pushNonpilotAliasOnly: boolean}}
  */
 export async function getPlatformKv() {
   const client = ensureClient();
@@ -3043,13 +3050,57 @@ export async function getPlatformKv() {
   const creationRaw = byKey.get('league_creation_open');
   const offeredRaw = byKey.get('offered_sports');
   const aliasRaw = byKey.get('push_alias_mode_live');
+  const nonpilotRaw = byKey.get('push_nonpilot_alias_only');
+  const scopeRaw = byKey.get('league_creation_scope');
   return {
     maintenanceBanner: typeof bannerRaw === 'string' ? bannerRaw : '',
     signupsOpen: signupsRaw === false ? false : true,
     leagueCreationOpen: creationRaw === true,
     offeredSports: Array.isArray(offeredRaw) ? offeredRaw.filter((c) => typeof c === 'string') : [],
     pushAliasModeLive: aliasRaw === true,
+    pushNonpilotAliasOnly: nonpilotRaw === true,   // review (2026-10-08): 0049's second marker; either one satisfies the door interlock
+    // DI-550 (RP-1, 2026-10-08) - who may create a league: 'everyone' ONLY when the row is exactly the string 'everyone'; a missing, unread or malformed row reads 'admins' (the fail-closed direction).
+    leagueCreationScope: scopeRaw === 'everyone' ? 'everyone' : 'admins',
   };
+}
+
+/**
+ * D1 Lane C (DI-634 / DI-642, UN-477) — THE ROUTING ROWS, for the Admin routing card. Three `platform_kv` keys ride one read: `scribe_model_routes` (the per-class routes, or null when
+ * the row is absent: every class on its default), `scribe_class_caps_usd` (the split of the $25, or null) and `scribe_search` ('on' | 'off', or null). `platform_kv` carries a
+ * `using (true)` SELECT policy, so any signed-in account can read these (a model id is not a secret); WRITING them is `superSetPlatformKv()` below, which the server gates on
+ * `is_super_admin()` and (migration 0049) admits per key. The raw jsonb is returned as stored: `js/scribe-routing.js` parses it, and a malformed value is shown as such, not repaired.
+ * @returns {{routes:any, caps:any, search:any}}
+ */
+export async function getScribeRoutingKv() {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { data, error } = await client.from('platform_kv').select('key, value').in('key', ['scribe_model_routes', 'scribe_class_caps_usd', 'scribe_search']);
+  if (error) throw error;
+  const byKey = new Map((data || []).map((r) => [r.key, r.value]));
+  return {
+    routes: byKey.has('scribe_model_routes') ? byKey.get('scribe_model_routes') : null,
+    caps: byKey.has('scribe_class_caps_usd') ? byKey.get('scribe_class_caps_usd') : null,
+    search: byKey.has('scribe_search') ? byKey.get('scribe_search') : null,
+  };
+}
+
+/**
+ * D1 Lane C (DI-637, UN-482) — `content_status()`: the operator's read of what stopped (news publishers, sports data, Home-card synthesis, routes, lookup, call-outs, scan). ONE RPC,
+ * aggregates and fixed codes only (`js/content-status-card.js` documents the shape the function must return and normalizes it). It is created by a later migration (0056); until
+ * then the RPC does not exist and this resolves `{ unavailable: true }`, which the card shows as "The status service isn't installed on this project yet." rather than as an empty
+ * list. Any other failure throws (the card shows the calm retry state).
+ * @returns {Promise<{unavailable:boolean, data:any}>}
+ */
+export async function getContentStatus() {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { data, error } = await client.rpc('content_status');
+  if (error) {
+    const code = String(error.code || '');
+    if (code === 'PGRST202' || code === '42883' || /could not find the function|does not exist/i.test(String(error.message || ''))) return { unavailable: true, data: null };
+    throw error;
+  }
+  return { unavailable: false, data };
 }
 
 /**
@@ -3085,6 +3136,8 @@ let _signupsOpenCache = true;
 // N1 (DI-433, 2026-09-30) — THE RELEASE GATE'S CACHE, and it defaults FALSE, DELIBERATELY THE OPPOSITE OF `_signupsOpenCache` ABOVE: a device that has not read
 // the flag yet (or whose read failed) must never show an open "Create new league" door, so unread means CLOSED. It rides the same fetch as the banner.
 let _leagueCreationOpenCache = false;
+// DI-550 - who may create: unread means 'admins' (the card stays absent for everyone but the super admin), the same fail-closed direction as the gate above.
+let _leagueCreationScopeCache = 'admins';
 // The R1 codes the New League picker may offer (`platform_kv.offered_sports`). Unread means [] (offer nothing), the same fail-closed direction.
 let _offeredSportsCache = [];
 
@@ -3105,6 +3158,10 @@ export function getCachedSignupsOpen() {
 /** N1 (DI-433) — synchronous, cached, never a network call. `false` (CLOSED) is the default-when-missing answer — see `_leagueCreationOpenCache`. */
 export function getCachedLeagueCreationOpen() {
   return _leagueCreationOpenCache;
+}
+/** DI-550 - synchronous, cached, never a network call. 'admins' (only the super admin may create) is the default-when-missing answer. */
+export function getCachedLeagueCreationScope() {
+  return _leagueCreationScopeCache;
 }
 /** N1 (DI-431 §1) — the R1 codes the picker may offer; `[]` before the first read. A COPY, so a caller cannot mutate the cache. */
 export function getCachedOfferedSports() {
@@ -3202,6 +3259,7 @@ export async function refreshMaintenanceBannerCache() {
     _maintenanceBannerCache = kv.maintenanceBanner || '';
     _signupsOpenCache = kv.signupsOpen !== false;
     _leagueCreationOpenCache = kv.leagueCreationOpen === true;
+    _leagueCreationScopeCache = kv.leagueCreationScope === 'everyone' ? 'everyone' : 'admins';
     _offeredSportsCache = Array.isArray(kv.offeredSports) ? [...kv.offeredSports] : [];
   } catch (e) {
     console.warn('[auth] maintenance banner read failed — keeping the last-known value', e);
@@ -3210,11 +3268,15 @@ export async function refreshMaintenanceBannerCache() {
   }
 }
 
+/** For tests only (D1, commsporttest): prime `platform_kv.offered_sports` as the Super Admin card / the first read would. Production never calls this. */
+export function _setOfferedSportsForTest(list) { _offeredSportsCache = Array.isArray(list) ? list.filter((c) => typeof c === 'string') : []; }
+
 /** For authtest only — production never calls this. */
 export function _resetMaintenanceBannerCacheForTest() {
   _maintenanceBannerCache = '';
   _signupsOpenCache = true;
   _leagueCreationOpenCache = false;
+  _leagueCreationScopeCache = 'admins';
   _offeredSportsCache = [];
   _maintenanceBannerLoading = false;
   _maintenanceBannerAttempted = false;
@@ -3243,6 +3305,7 @@ export function clearMaintenanceBannerCacheOnIdentityChange() {
   _maintenanceBannerCache = '';
   _signupsOpenCache = true;
   _leagueCreationOpenCache = false;   // N1 — an identity change re-arms the CLOSED default, never leaves the previous account's open door showing
+  _leagueCreationScopeCache = 'admins';   // DI-550 - and the narrow scope, so a previous account's 'everyone' never shows the card to the next one
   _offeredSportsCache = [];
   _maintenanceBannerAttempted = false;
 }

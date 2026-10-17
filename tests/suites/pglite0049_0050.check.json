@@ -1,0 +1,14 @@
+{
+  "id": "pglite0049_0050.check",
+  "script": "supabase/tests/pglite0049_0050.check.mjs",
+  "summary": "loose",
+  "floor": 1,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "supabase/migrations/*.sql",
+    "supabase/tests/pglite-common.mjs"
+  ],
+  "note": "D1 Lane A (DI-546): the migration 0049 + 0050 (push readiness marker + creation scope) run end to end in an in-process Postgres (PGlite) over stubs - S49/S50 offline: setter allowlist and either-marker interlock, create_league gates push_not_ready and creation_admins_only. Offline evidence only, never server evidence; SKIPS and passes with ONE assertion when PGlite is not installed (set PGLITE_DIR), so the floor is 1."
+}

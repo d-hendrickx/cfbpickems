@@ -66,7 +66,7 @@ try {
   console.warn('[service-worker] OneSignal SDK import failed — push unavailable, cache-shell unaffected:', err);
 }
 
-const CACHE_NAME = 'cfb-pickems-v29-0';
+const CACHE_NAME = 'cfb-pickems-v30-0';
 
 const STATIC_ASSETS = [
   './',
@@ -86,6 +86,11 @@ const STATIC_ASSETS = [
   './js/chatTransport.js',
   './js/history-2025.js',
   './js/chat-ui.js',
+  // D1 (DI-553 / DI-530, 2026-10-08) — the Locker Room's sport pills: js/sport-tag.js (the closed set of sport tags; a leaf with no imports, imported STATICALLY by chat.js and
+  // supabase-projection.js) and js/chat-sport-pills.js (the pure row builder; imports icons.js and sport-tag.js, imported STATICALLY by chat-ui.js). Both are boot-critical for the same
+  // reason as every entry above: a shell cache one module short serves a graph that cannot resolve (RG-03's blank app, arriving through the cache). notifytest [25e]. No CACHE_NAME bump here.
+  './js/sport-tag.js',
+  './js/chat-sport-pills.js',
   './js/scribeLines.js',
   './js/scribeAgent.js',     // statically imported by app.js/chat-ui.js — boot-critical (reviewer N1, 2026-09-10)
   './js/scribeFeedback.js',  // same — omitted from the shell cache after the Build 1 merge
@@ -105,6 +110,13 @@ const STATIC_ASSETS = [
   // blank app on a cold PWA boot rather than a missing feature. It imports nothing
   // at all, so precaching it pulls in no further graph.
   './js/scribe-scoring.js',
+  // D1 Lane C (DI-633 / DI-634 / DI-637, 2026-10-08) — the model catalog's pure routing helpers (`js/app.js` imports `tierCostRatio` from it STATICALLY, for the chat-model card's cost
+  // sentence) and the two Admin cards' pure render modules. All three are statically imported by app.js, so a shell cache without them serves a graph that cannot resolve (notifytest [25e]).
+  './js/scribe-routing.js',
+  './js/scribe-routes-card.js',
+  './js/content-status-card.js',
+  './js/source-chips.js',    // D1 Lane C (DI-641): statically imported by js/chat-ui.js
+  './js/source-labels.js',   // D1 Lane C (DI-641, security F-1): the chip label derived from the validated host; statically imported by js/source-chips.js
   './js/extra-point.js',
   './js/recap.js',
   // Phase III Step 3a (reviewer N3 / SEC F6). js/auth.js is statically imported
@@ -172,6 +184,10 @@ const STATIC_ASSETS = [
   './js/control-center.js',
   './js/admin-panel.js',
   './js/comm-panel-layout.js',
+  './js/spread-fallback.js',     // W-71 (2026-10-14): Find spreads - the pure half, its wiring and the one call into odds-lookup, all imported statically by app.js (boot-critical, as every entry above)
+  './js/spread-find-ui.js',
+  './js/odds-lookup-client.js',
+  './js/wizard-nav.js',   // W-70 (2026-10-14): the wizard's swipe decisions, imported statically by app.js (boot-critical, as every entry above)
   // N1 league creation (2026-09-30). Five new modules that app.js (directly or through leagues-home.js / recap.js /
   // control-center.js) now imports STATICALLY — the New League flow (league-create.js, its twin league-defaults.js), the pilot-only
   // registry (pilot-only.js) and the sport registry the picker is built from (sports/index.js and the two profiles it imports) —
@@ -193,6 +209,12 @@ const STATIC_ASSETS = [
   // SP-57 (2026-10-01) — the long-press section-drag engine, imported STATICALLY by app.js (the Dashboard and Standings renderers call it on every paint): boot-critical for the same
   // reason as every entry above — a shell cache one module short serves a graph that cannot resolve (RG-03/RG-236's blank app, arriving through the cache). notifytest [25e] is the guard.
   './js/section-drag.js',
+  // D1 Lane C (FB-006 / UN-468, 2026-10-07) — the SCRIBE profile pane's four modules, imported STATICALLY by app.js: boot-critical for the same reason as every entry above (a shell cache one
+  // module short serves a graph that cannot resolve, RG-03/RG-236's blank app arriving through the cache). notifytest [25e] is the guard.
+  './js/scribe-profile-rules.js',
+  './js/scribe-profile-view.js',
+  './js/scribe-profile-client.js',
+  './js/scribe-standards.js',
   // SB-08 (2026-09-30) — the status-bar glyph tracker, imported STATICALLY by app.js: boot-critical for the same reason (a shell cache one
   // module short serves a graph that cannot resolve). It imports nothing. notifytest [25e] is the guard.
   './js/status-bar.js',
@@ -218,11 +240,71 @@ const STATIC_ASSETS = [
   './js/newsTransport.js',
   './js/newsFeed.js',
   './js/newsSettings.js',
+  // D1 Lane C (DI-668, 2026-10-08): newsRank's one static import (the shared team matcher). Boot-critical for the same reason as the six above.
+  './js/team-match.js',
+  './js/feed-relevance.js',
+  './js/content-card.js',
   // SP-54 (2026-10-01) — the weekly tie-break's key builder (js/tie-context.js: leaf module, imports data-model/scoring/extra-point only) and the competition read
   // API (js/competition.js), which app.js now imports STATICALLY for the sport-profile check that decides whether the alma mater step applies to a week (a claimed
   // "Miami" must never match "Miami Dolphins"). Boot-critical for the same reason as every entry above (RG-03's blank app, arriving through the cache). notifytest [25e].
   './js/tie-context.js',
   './js/competition.js',
+  // Deployment 1, Lane B (2026-10-07) — the game-state model and the viewer's game order (imported STATICALLY by app.js and home.js), the pushed-screen shell (app.js) and the Home card detail
+  // (home.js). Boot-critical for the same reason as every entry above: a shell cache one module short serves a graph that cannot resolve (RG-03/RG-236's blank app, through the cache).
+  './js/game-state.js',
+  './js/game-order.js',
+  './js/pushed-screen.js',
+  './js/card-detail.js',
+  // D1 Lane B Game Day (2026-10-08) — the red card at the top of Home (js/gameday.js: model + collapsed markup; js/gameday-sheet.js: the open body; js/gameday-dom.js: the in-place grow and the keyed patch), the Game view's markup
+  // (js/game-view.js), the keyed-list leaf they patch with (js/keyed-list.js), the gate and the By person / By team renderer (js/pick-chips.js, js/pick-groups.js). All are imported STATICALLY (home.js, app.js): boot-critical for
+  // the same reason as every entry above (a shell cache one module short serves a graph that cannot resolve — RG-03/RG-236's blank app, through the cache). notifytest [25e] is the guard.
+  './js/keyed-list.js',
+  './js/pick-chips.js',
+  './js/pick-groups.js',
+  './js/gameday.js',
+  './js/gameday-sheet.js',
+  './js/gameday-dom.js',
+  './js/game-view.js',
+  // D1 Lane B Game Day fix round 2 (DI-599): "What's next" — js/next-up.js, a pure leaf home.js imports STATICALLY (Game Day's Final card and the Game view's What's next).
+  './js/next-up.js',
+  // D1 Lane B (DI-597, 2026-10-08): Share to chat — js/chat-share.js, a pure leaf imported STATICALLY by app.js, home.js, chat-ui.js and card-detail.js (the reference's one gate, the body, the meta).
+  './js/chat-share.js',
+  // D1 Lane B (DI-607 / DI-581): the Dashboard's Sort words and markup (js/game-sort.js) and the hold-and-drag Custom arrange (js/game-arrange.js): both imported STATICALLY by app.js.
+  './js/game-sort.js',
+  './js/game-arrange.js',
+  // D1 (W-68 / W-69, 2026-10-14) - Comm -> Games' one list and the add-or-swap rule: js/games-list.js and js/slate-add.js (pure leaves; app.js imports both STATICALLY) and js/keyed-list.js (listed ONCE, above, with Game Day's modules - merge condition I-1: a duplicate makes cache.addAll reject; the
+  // keyed reconciler, imported by app.js for the first time). A shell cache one module short serves a graph that cannot resolve (RG-03's blank app, through the cache; notifytest [25e]). No CACHE_NAME bump here.
+  './js/games-list.js',
+  './js/slate-add.js',
+  // D1 (2026-10-07) — FB-001 / DI-509: the one week-lock state every lock surface reads (js/week-lock.js: leaf module, imports scoring/data-model only) and FB-002 / DI-515: the live
+  // alma-mater tiebreaker (js/live-tiebreak.js: leaf module, imports data-model only). app.js imports both STATICALLY, so a missing precache entry is RG-03's blank app arriving through the cache (notifytest [25e]).
+  './js/week-lock.js',
+  './js/live-tiebreak.js',
+  // UN-412 / DI-500…502 ("Who's in", 2026-10-01) — the pure pick-status model / copy / markup / patcher / throttle, imported STATICALLY by app.js: boot-critical for the same
+  // reason as every entry above (a shell cache one module short serves a graph that cannot resolve — RG-03's blank app arriving through the cache). notifytest [25e] is the guard
+  // that reported it missing. No CACHE_NAME bump here: that is the release stamp, Drew's.
+  './js/pick-status.js',
+  // D1 (2026-10-07) — Lane A's commissioner multisport operations: js/multisport-admin.js (pure: copy, the deterministic competition id, addable sports, the archive rule, the all-sports rows, a
+  // sport's entries, the wizard helpers) and js/sport-seam.js (the seam to the client branch's participation + pointer API). Both are LEAF modules app.js imports STATICALLY, so a missing
+  // precache entry is RG-03's blank app arriving through the cache (notifytest [25e]). No CACHE_NAME bump here: that is the release stamp, Drew's.
+  './js/multisport-admin.js',
+  './js/sport-seam.js',
+  // D1 (DI-536) — js/sport-rules.js (pure: which sports' cards the Rules page shows and the NFL card's words), imported STATICALLY by app.js, so it is precached for the same reason.
+  './js/sport-rules.js',
+  // D1 Lane B (DI-595 / DI-596, history, 2026-10-08) — the member comparison (js/compare.js) and the week detail (js/week-detail.js): pure leaf modules app.js imports STATICALLY, so a missing precache entry is
+  // RG-03's blank app arriving through the cache (notifytest [25e]).
+  './js/compare.js',
+  './js/week-detail.js',
+  // D1 (2026-10-08) - the multisport client's four leaf modules (DI-520..DI-527, DI-554): sport-status.js (the status / lock / due words), league-overview.js (the overview sheet and the League Page
+  // Sports region), sport-switcher.js (the segmented control) and all-sports.js (the Dashboard's combined-slate model). app.js imports them STATICALLY (notifytest [25e]).
+  './js/sport-status.js',
+  './js/league-overview.js',
+  './js/sport-switcher.js',
+  './js/all-sports.js',
+  // D1 DI-528 - the Home feed's per-sport merge (js/home-sports.js: a pure leaf; js/home.js imports it STATICALLY).
+  './js/home-sports.js',
+  // D1 (DI-557) - the stall banner's pure half (which rows, in whose words, the markup): js/sport-stall.js, a leaf app.js imports STATICALLY (notifytest [25e]).
+  './js/sport-stall.js',
   './vendor/supabase-js-2.116.0.js',
   './manifest.json',
   'https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap',

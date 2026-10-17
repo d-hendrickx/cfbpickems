@@ -1,0 +1,12 @@
+{
+  "id": "bgjobscardtest",
+  "script": "bgjobscardtest.mjs",
+  "label": "112b",
+  "summary": "strict-combined",
+  "floor": 42,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "(25 -> 29 by [4b], an OK row with a failed bucket renders the class in words), 2026-09-26 — RG-253 and the ESPN-CLASS DI note). Raise the floor when the suite grows; the ratchet only tightens"
+}

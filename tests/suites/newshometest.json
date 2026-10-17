@@ -1,0 +1,19 @@
+{
+  "id": "newshometest",
+  "script": "newshometest.mjs",
+  "label": "133b",
+  "summary": "strict",
+  "floor": 78,
+  "forbid": [
+    {
+      "regex": "ERR_MODULE_NOT_FOUND",
+      "flags": "",
+      "label": "newshometest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)"
+    }
+  ],
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 300,
+  "note": "RAISED from 54 by the v0.29.0 Home wiring window (2026-10-01): [7] A's late answer must not reset a slot already committed for the current viewer, with a mutant (+5), 6-4b/6-5's second defence (+1), and [8] [BET-KEEP] through the REAL Home renderer with a card-level and a …"
+}

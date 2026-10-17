@@ -1,0 +1,12 @@
+{
+  "id": "deeplinktest",
+  "script": "deeplinktest.mjs",
+  "label": "110",
+  "summary": "loose",
+  "floor": 88,
+  "tags": [
+    "smoke"
+  ],
+  "expectedMs": 1300,
+  "note": "RAISED 50 -> 88 by UN-315 / DI-436 (2026-09-30): routeToLeague, the banked league deep link and the switch-cover fade (sport routing is NOT covered: it stays an open seam until CORE DI-221/224); earlier note: floor 50, 10/10 mutants caught — RG-245: a single-slot …"
+}

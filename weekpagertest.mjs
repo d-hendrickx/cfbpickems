@@ -109,10 +109,16 @@ if (ROOT !== here) console.log(`  (WEEKPAGER_ROOT — serving ${ROOT})`);
 // ── the app server: the real tree, local-mode config, no service worker ─────
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
   '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json' };
+let configDelayMs = 0, configServed = false;
 const server = createServer(async (req, res) => {
   let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (p.endsWith('/')) p += 'index.html';
-  if (p === '/config.json') { res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end('{}'); return; }
+  if (p === '/config.json') {   // W-22: `configDelayMs` holds the answer back (the boot-race guard); `configServed` says it has gone out
+    const send = () => { res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end('{}'); configServed = true; };
+    configServed = false;
+    if (configDelayMs) setTimeout(send, configDelayMs); else send();
+    return;
+  }
   if (p === '/service-worker.js') { res.writeHead(404); res.end(); return; }
   // App files only: no dot-segments, no dotfiles (.env*, .git…), nothing
   // under /supabase/ (tests/.env* live there).
@@ -200,10 +206,25 @@ try {
 
   // Real touches, hit-tested (and scrolled) by the engine. Each move waits a
   // frame so a read after it sees what the move did.
+  const LEAD_PX = 20;
   const touch = {
     async down(x, y) { await pg.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] }); },
     async move(x, y) { await pg.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] }); await sleep(16); await evaluate('new Promise(r => requestAnimationFrame(() => r(true)))'); },
     async up() { await pg.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); },
+    // W-22 — a drag's finger LANDS together with its leading moves: the
+    // landing and every point up to and including the first one LEAD_PX from
+    // it are queued before the harness awaits anything. Chrome holds back
+    // each touchmove still inside its touch slop (measured: 10 and 15 px never
+    // reach the page, 20 px does), so until that point the page sees a still
+    // finger — and a CDP latency spike there (machine load) held it still
+    // past 350 ms, a pick pill's reorder press. Returns how many points went.
+    async land(x0, y0, pts) {
+      const lead = Math.max(1, pts.findIndex(([x, y]) => Math.hypot(x - x0, y - y0) >= LEAD_PX) + 1 || pts.length);
+      await Promise.all([pg.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y: y0 }] }),
+        ...pts.slice(0, lead).map(([x, y]) => pg.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] }))]);
+      await sleep(16); await evaluate('new Promise(r => requestAnimationFrame(() => r(true)))');
+      return lead;
+    },
   };
 
   // Page-side helpers, installed after the load (installHelpers):
@@ -252,6 +273,85 @@ try {
         if (performance.now() - t0 < ms) requestAnimationFrame(loop); })();
       return true;
     };
+    // W-22 (integration review N2) — __startFrames on a DETERMINISTIC 60 Hz
+    // animation clock, for a spring too short to sample on the machine's own
+    // frames: in [C] the incoming week's text is on screen for only ~45 ms of
+    // the 150 ms spring, two frames at 60 Hz, so ONE frame lost to machine
+    // load left one sample and turned C-1 red. Here every animation the
+    // release STARTS on the page (whatever it is: a CSS transition today) is
+    // paused, and each RENDERED frame shows it exactly one 60 Hz frame
+    // (1000/60 ms) further on, until it ends — so a late frame shows the next
+    // pose instead of skipping one. Every sample is still a real rendered
+    // frame of the real page (a layer dropped at the release, in a later
+    // frame or by a timer is seen exactly as before); only the animation's
+    // clock no longer depends on how busy the machine is. An unloaded 60 Hz
+    // run already shows these poses, so the bars mean what they always meant.
+    // Runs until the release's animations end (or \`ms\` passes without one),
+    // then sets __springDone.
+    window.__springFrames = (pageId, n, ms) => {
+      window.__frames = []; window.__springDone = false;
+      const root = document.getElementById(pageId), FRAME = 1000 / 60, t0 = performance.now();
+      const before = new Set(document.getAnimations());
+      let anims = null, k = 0;
+      (function loop() {
+        if (!anims) {
+          // (W-22 review N5: finite ones only — an infinite one, a pulsing badge in the page, never ends and would hold the loop to its cap.)
+          const fresh = document.getAnimations().filter(a => !before.has(a) && a.effect?.target && root.contains(a.effect.target) && Number.isFinite(a.effect.getComputedTiming().endTime) && a.playState !== 'finished');
+          if (fresh.length) { anims = fresh; anims.forEach(a => a.pause()); }
+        }
+        let pose = null;
+        if (anims) {
+          anims = anims.filter(a => a.playState !== 'idle');   // one the page itself cancelled is no longer the clock's
+          pose = k++ * FRAME;
+          for (const a of anims) { if (pose >= a.effect.getComputedTiming().endTime) a.finish(); else a.currentTime = pose; }
+          anims = anims.filter(a => a.playState !== 'finished');
+        }
+        const s = window.__painted(pageId, n); s.t = Math.round(performance.now() - t0); s.pose = pose === null ? null : Math.round(pose); s.dom = window.__weekText(n);
+        window.__frames.push(s);
+        const going = anims ? anims.length > 0 : performance.now() - t0 < ms;
+        if (going && performance.now() - t0 < 5000) requestAnimationFrame(loop);
+        else { (anims || []).forEach(a => { try { a.finish(); } catch { a.play(); } }); window.__springDone = true; }
+      })();
+      return true;
+    };
+    // W-22 (integration review N2) — [B]'s COMMIT slide on the 60 Hz
+    // animation clock, for its frame counts (B-7 >= 8 frames, B-8b >= 4 slide
+    // frames, and Picks' B-10 / B-11b), which a loaded machine starved. Every
+    // finite animation the release starts ANYWHERE (the page, and the
+    // outgoing clone, its sibling), from the frame the page's own transform
+    // starts moving, is paused and stepped one 60 Hz frame per
+    // RENDERED frame across the slide's whole span on that clock, so the real
+    // frames recorded cover the slide whatever the frame rate; then \`ms\` of
+    // wall-clock frames as before. And at the slide's first frame every pose
+    // (each 1000/60 ms) is also read in that one task, into __poses: the
+    // slide's DOM at each pose, which no app timer can interleave with (the
+    // app's 320 ms safety timer otherwise ended the 'commit' state under a
+    // long hitch, leaving two frames to look at). Sets __slideDone.
+    window.__slideFrames = (pageId, n, ms) => {
+      window.__frames = []; window.__poses = []; window.__slideDone = false;
+      const FRAME = 1000 / 60, t0 = performance.now(), before = new Set(document.getAnimations()), root = document.getElementById(pageId);
+      const endOf = (a) => a.effect.getComputedTiming().endTime;
+      const shot = (pose) => { const s = window.__painted(pageId, n); s.t = Math.round(performance.now() - t0); s.pose = pose === null ? null : Math.round(pose); s.dom = window.__weekText(n); return s; };
+      let anims = null, endAt = 0, k = 0;
+      const seek = (p) => { for (const a of anims) if (a.playState !== 'idle') a.currentTime = Math.min(p, endOf(a)); };
+      (function loop() {
+        if (!anims) {
+          const fresh = document.getAnimations().filter(a => !before.has(a) && a.effect && Number.isFinite(endOf(a)) && a.playState !== 'finished');
+          if (fresh.some(a => a.effect.target === root)) {   // the slide has started: the page's own transform is moving
+            anims = fresh; anims.forEach(a => a.pause()); endAt = Math.max(...anims.map(endOf));
+            for (let p = 0; p < endAt; p += FRAME) { seek(p); window.__poses.push(shot(p)); }
+            seek(0);
+          }
+        }
+        let pose = null;
+        if (anims && k * FRAME <= endAt + FRAME) { pose = Math.min(k++ * FRAME, endAt); seek(pose); }
+        window.__frames.push(shot(pose));
+        const stepping = anims && k * FRAME <= endAt + FRAME;
+        if ((stepping || performance.now() - t0 < ms) && performance.now() - t0 < 8000) requestAnimationFrame(loop);
+        else { (anims || []).forEach(a => { try { if (a.playState !== 'idle') a.finish(); } catch { a.play(); } }); window.__slideDone = true; }
+      })();
+      return true;
+    };
     window.__lock = () => { const h = getComputedStyle(document.documentElement), b = getComputedStyle(document.body);
       return { oy: h.overflowY, hob: h.overscrollBehaviorY, bob: b.overscrollBehaviorY }; };
     // (Hidden tabs keep their last render in the DOM — a page that is not the
@@ -279,6 +379,15 @@ try {
   })()`);
   const painted = (pageId, n) => evaluate(`window.__painted('${pageId}', ${n})`);
   const frames = async (ms) => { await sleep(ms + 120); return evaluate('window.__frames'); };
+  const springFrames = async () => { await waitFor('window.__springDone', 6000); return evaluate('window.__frames'); };   // W-22: __springFrames' own end, not a fixed sleep
+  // [B]'s release sampler: the frames of the commit slide, and (W-22) every pose of it.
+  const sampleRelease = async (pageId, n, ms = 520, beforeUp = null) => {
+    await evaluate(`window.__slideFrames('${pageId}', ${n}, ${ms})`);
+    if (beforeUp) await beforeUp();
+    await touch.up();
+    await waitFor('window.__slideDone', 10000);
+    return { fr: await evaluate('window.__frames'), poses: await evaluate('window.__poses') };
+  };
   const settleIdle = async (id) => {
     await waitFor(`!document.querySelector('.week-swipe-exit-layer') && !document.getElementById('${id}').dataset.weekSwipeAnimating`, 3000);
     await sleep(120);
@@ -287,18 +396,27 @@ try {
   // upward finger drift per step; every move sampled.
   const steepDrag = async (pageId, n, x0, y0, steps, rise) => {
     const out = [];
-    await touch.down(x0, y0);
+    const pts = range(1, steps, 1).map(i => [x0 - i * 10, y0 - Math.round(i * rise)]);
+    const lead = await touch.land(x0, y0, pts);
     for (let i = 1; i <= steps; i++) {
-      await touch.move(x0 - i * 10, y0 - Math.round(i * rise));
+      if (i > lead) await touch.move(...pts[i - 1]);
       out.push({ dx: -i * 10, ...(await painted(pageId, n)) });
     }
     return out;
   };
   // A flat drag from x0 by `dxs` (a list of offsets from x0), sampled.
-  const flatDrag = async (pageId, n, x0, y, dxs) => {
+  // `stallMs` (the injected-latency guard only) holds the harness up at its
+  // first yield after the finger lands — what a CDP latency spike does. The
+  // landing and its leading moves go out together (touch.land), so that
+  // yield comes after the first move the page can see.
+  const flatDrag = async (pageId, n, x0, y, dxs, { stallMs = 0 } = {}) => {
     const out = [];
-    await touch.down(x0, y);
-    for (const dx of dxs) { await touch.move(x0 + dx, y); out.push({ dx, ...(await painted(pageId, n)) }); }
+    const lead = await touch.land(x0, y, dxs.map(dx => [x0 + dx, y]));
+    for (const [i, dx] of dxs.entries()) {
+      if (i >= lead) await touch.move(x0 + dx, y);
+      out.push({ dx, ...(await painted(pageId, n)) });
+      if (i === lead - 1 && stallMs) await sleep(stallMs);
+    }
     return out;
   };
   const range = (from, to, step) => { const a = []; for (let v = from; step > 0 ? v <= to : v >= to; v += step) a.push(v); return a; };
@@ -372,12 +490,37 @@ try {
   })()`);
   assert(seeded.players === 6 && seeded.weeks === 5 && seeded.picks === 6 * 8 * 3 + 6 + 5 * 8,
     `1-1: fixture — 6 players, 4 final weeks (Week 1 a one-game week) + 1 open week, ${6 * 8 * 3 + 6 + 5 * 8} picks seeded through the app's own storage.js (got ${JSON.stringify(seeded)})`);
+  // The boot, then the Dashboard. W-22 (2026-10-08) — in local mode the boot's own last step is navigateTo(bootDefaultTab()), i.e. Home,
+  // after an async config fetch (js/app.js); waiting only for window.navigateTo let a loaded machine land that navigation AFTER the
+  // harness's navigateTo('dashboard'), and every case after it ran on Home. Wait for the boot's own landing first (bounded), then go.
+  // The landing is Home's first RENDER: index.html ships #page-home already active, holding a loading skeleton marked
+  // aria-busy="true" ("Loading Home"), which the boot's navigateTo('home') replaces — measured: it goes the moment the config
+  // answer arrives, however late; window.navigateTo exists from the first milliseconds.
+  // Returns whether the boot landed; a boot that never does within 10 s is LOGGED and FAILS its caller's assertion (review note, 2026-10-08).
+  const bootThenDashboard = async () => {
+    const landed = await waitFor(`document.querySelector('#page-home.active') && !document.querySelector('#home-root .home-feed[aria-busy="true"]')`, 10000);
+    if (!landed) console.log('  (W-22: the boot never landed — no first Home render within 10 s; navigating to the Dashboard anyway, and the fixture fails)');
+    await evaluate(`window.navigateTo('dashboard')`);
+    return landed;
+  };
+  // W-22 — the boot race, made permanent: the config answer held back 1.5 s, so the boot's own landing (local mode: Home, after the async
+  // config fetch) comes after the harness is ready to navigate. Load did this on a gate run; the harness must still end on the Dashboard.
+  configDelayMs = 1500;
+  await navigate();
+  await waitFor(`!document.getElementById('site-gate-overlay') && window.navigateTo`);
+  const bootedLate = await bootThenDashboard();
+  for (let t = 0; t < 6000 && !configServed; t += 50) await sleep(50);
+  await sleep(400);                                         // the boot's chain after the answer (this only delays the guard's own look)
+  configDelayMs = 0;
+  const raced = await evaluate(`({ dash: !!document.querySelector('#page-dashboard.active'), home: !!document.querySelector('#page-home.active') })`);
+  assert(bootedLate && configServed && raced.dash && !raced.home,
+    `1-2b: with the boot's config answer held back 1.5 s (machine load), the harness still ends on the Dashboard once the boot has landed — not on the boot's own Home (boot landed ${bootedLate}; Dashboard active ${raced.dash}, Home active ${raced.home})`);
   await navigate();
   assert(await waitFor(`!document.getElementById('site-gate-overlay') && window.navigateTo`),
     '1-2: fixture — after reload the app is past the site gate with a verified player session');
-  await evaluate(`window.navigateTo('dashboard')`);
-  assert(await waitFor(`document.querySelector('#page-dashboard.active .picks-week-nav-label')`),
-    '1-3: fixture — navigateTo("dashboard") (the real path that binds the week swipe) rendered the week card');
+  const booted = await bootThenDashboard();
+  assert(booted && await waitFor(`document.querySelector('#page-dashboard.active .picks-week-nav-label')`),
+    `1-3: fixture — the boot landed (its first Home render, within 10 s: ${booted}) and navigateTo("dashboard") (the real path that binds the week swipe) rendered the week card`);
   await installHelpers();
 
   // ═════════════════════════════════════════════════════════════════════════
@@ -410,9 +553,8 @@ try {
   assert(!!moved && Math.abs((moved.to - moved.from) - -40) <= 1.5,
     `B-2: THE BUG (Dashboard) — the incoming week moves WITH the finger: the same Week 3 line shifts −40 px between dx −80 and dx −120 (${moved ? `${moved.from} → ${moved.to}` : 'never on screen at both'})`);
   const refD = inStrip(d120)[0] || null;
-  await evaluate(`window.__startFrames('page-dashboard', 3, 520)`);
-  await touch.up();
-  let fr = await frames(520);
+  const relD = await sampleRelease('page-dashboard', 3);
+  let fr = relD.fr;
   await settleIdle('page-dashboard');
   const dLanded = await painted('page-dashboard', 3);
   assert(dLanded.label === 'Week 3', `B-3: fixture — the release lands on Week 3 (got "${dLanded.label}")`);
@@ -422,7 +564,7 @@ try {
   assert(!!refD && dupD.length === 0,
     `B-8: the incoming week is painted ONCE through the release — never a second copy riding out with the outgoing week ("${refD?.text}" doubled in ${dupD.length} frames)`);
   const domD = await evaluate('window.__weekText(3)');
-  const slideD = fr.filter(f => f.anim === 'commit');
+  const slideD = [...relD.poses, ...fr].filter(f => f.anim === 'commit');
   assert(slideD.length >= 4 && slideD.every(f => f.dom === domD),
     `B-8b: …and it EXISTS once: no hidden copy rides out inside the outgoing layer either (Week 3 text nodes per slide frame ${[...new Set(slideD.map(f => f.dom))].join(',')}; landed page ${domD}; ${slideD.length} slide frames)`);
   const landD = refD ? nearest(dLanded.visible, refD.text, refD.top) : null;
@@ -452,9 +594,8 @@ try {
   assert(!!pMoved && Math.abs((pMoved.to - pMoved.from) - -40) <= 1.5,
     `B-5: THE BUG (Picks) — the incoming week moves WITH the finger (${pMoved ? `${pMoved.from} → ${pMoved.to}` : 'never on screen at both'})`);
   const refP = inStrip(p120).sort((a, b) => a.top - b.top)[0] || null;
-  await evaluate(`window.__startFrames('page-picks', 3, 520)`);
-  await touch.up();
-  fr = await frames(520);
+  const relP = await sampleRelease('page-picks', 3);
+  fr = relP.fr;
   await settleIdle('page-picks');
   const pLanded = await painted('page-picks', 3);
   assert(pLanded.label === 'Week 3', `B-6: fixture — the release lands on Week 3 (got "${pLanded.label}")`);
@@ -464,13 +605,47 @@ try {
   const dupP = refP ? fr.filter(f => f.visible.filter(v => v.text === refP.text).length > 1 && f.visible.filter(v => v.text === refP.text && v.visR > 0).length > 1) : [];
   assert(!!refP && dupP.length === 0, `B-11: Picks — the incoming week is painted once through the release ("${refP?.text}" doubled in ${dupP.length} frames)`);
   const domP = await evaluate('window.__weekText(3)');
-  const slideP = fr.filter(f => f.anim === 'commit');
+  const slideP = [...relP.poses, ...fr].filter(f => f.anim === 'commit');
   assert(slideP.length >= 4 && slideP.every(f => f.dom === domP),
     `B-11b: Picks — the incoming week exists once through the release (Week 3 text nodes per slide frame ${[...new Set(slideP.map(f => f.dom))].join(',')}; landed page ${domP})`);
   const landP = refP ? nearest(pLanded.visible, refP.text, refP.top) : null;
   const wantLeftP = refP ? REST + (refP.left - p120.rootRight) : null;
   assert(!!landP && pLanded.scrollY === 0 && Math.abs(landP.top - refP.top) <= 1.5 && Math.abs(landP.left - wantLeftP) <= 1.5,
     `B-12: Picks — the preview showed Week 3 from ITS TOP, so it lands exactly where it was shown: "${refP?.text}" previewed at top ${refP?.top}, landed at top ${landP?.top} with scrollY ${pLanded.scrollY}; left ${landP?.left} (want ${wantLeftP})`);
+  // W-22 — [B]'s frame counts under LOAD, made permanent: the same commit
+  // with the main thread held up 450 ms in the slide's second frame (a
+  // loaded machine measured "every one of 5 frames" for B-7 and "2 slide
+  // frames" for B-8b on 2026-10-07). Machine load is not the page moving
+  // vertically or a copy riding out, so it must not change B-7, B-8b, B-10
+  // or B-11b.
+  const hitchCommit = async (tab, pageId, yStart) => {
+    await evaluate(`window.navigateTo('${tab}')`);
+    await waitFor(`document.querySelector('#${pageId}.active .picks-week-nav-label')`);
+    await toWeek(pageId, 'Week 2');
+    await evaluate(`window.scrollTo({ top: ${yStart}, behavior: 'instant' })`);
+    await sleep(150);
+    const y = await evaluate('Math.round(scrollY)');
+    await steepDrag(pageId, 3, 320, 560, 12, 9);
+    await evaluate(`(() => { window.__hitch = null; let seen = 0; const root = document.getElementById('${pageId}');
+      (function w() { if (root.dataset.weekSwipeAnimating === 'commit' && ++seen === 2) { const t = performance.now(); while (performance.now() - t < 450) {} window.__hitch = Math.round(performance.now() - t); }
+        else requestAnimationFrame(w); })(); return true; })()`);
+    const rel = await sampleRelease(pageId, 3);
+    await settleIdle(pageId);
+    return { ...rel, y, hitch: await evaluate('window.__hitch'), landed: await painted(pageId, 3), dom: await evaluate('window.__weekText(3)') };
+  };
+  const hD = await hitchCommit('dashboard', 'page-dashboard', 300);
+  assert(hD.hitch >= 450 && hD.landed.label === 'Week 3' && hD.fr.length >= 8 && hD.fr.every(f => Math.abs(f.scrollY - hD.y) <= 0.5),
+    `B-7b: …and a ${hD.hitch} ms main-thread hitch in the slide's second frame (machine load) does not change B-7: every one of ${hD.fr.length} frames reads scrollY ${hD.y} (${[...new Set(hD.fr.map(f => f.scrollY))].join(', ')}; landed "${hD.landed.label}")`);
+  const hDs = [...hD.poses, ...hD.fr].filter(f => f.anim === 'commit');
+  assert(hDs.length >= 4 && hDs.every(f => f.dom === hD.dom),
+    `B-8c: …nor B-8b: the incoming week exists once through the slide (Week 3 text nodes per slide frame ${[...new Set(hDs.map(f => f.dom))].join(',')}; landed page ${hD.dom}; ${hDs.length} slide frames)`);
+  const hP = await hitchCommit('picks', 'page-picks', 500);
+  const hPr = hP.fr.slice(Math.max(0, hP.fr.findIndex(f => Math.abs(f.scrollY - hP.y) > 0.5)));
+  assert(hP.hitch >= 450 && hP.landed.label === 'Week 3' && hPr.length >= 6 && hPr.every(f => f.scrollY === 0) && hPr.some(f => f.anim === 'commit'),
+    `B-10b: …and on Picks the same hitch does not change B-10: it lands at its top in one step (scrollY per frame: ${[...new Set(hP.fr.map(f => f.scrollY))].join(' → ')}; ${hPr.length} frames after the release, ${hPr.filter(f => f.anim === 'commit').length} mid-slide)`);
+  const hPs = [...hP.poses, ...hP.fr].filter(f => f.anim === 'commit');
+  assert(hPs.length >= 4 && hPs.every(f => f.dom === hP.dom),
+    `B-11c: …nor B-11b: on Picks the incoming week exists once through the slide (Week 3 text nodes per slide frame ${[...new Set(hPs.map(f => f.dom))].join(',')}; landed page ${hP.dom}; ${hPs.length} slide frames)`);
 
   // ═════════════════════════════════════════════════════════════════════════
   console.log('\n[C] Cancel — a short release springs back; the incoming week slides out with the page, then is gone…');
@@ -486,12 +661,15 @@ try {
     `C-0: fixture — 30 px into a next-week drag the page follows the finger (${c30.rootLeft - REST}) with Week 4 beside it (${inStrip(c30).length} lines)`);
   await sleep(160);   // the finger rests before lifting: a short release, not a flick
   const c30x = inStrip(c30)[0]?.left;
-  await evaluate(`window.__startFrames('page-dashboard', 4, 320)`);
+  // W-22 — sampled on the 60 Hz animation clock (__springFrames): the spring
+  // shows Week 4 for ~45 ms, so the machine's own frame rate decided this.
+  await evaluate(`window.__springFrames('page-dashboard', 4, 320)`);
   await touch.up();
-  fr = await frames(320);
+  fr = await springFrames();
   const outFrames = fr.filter(f => inStrip(f).length && inStrip(f)[0].left > c30x + 1 && f.rootLeft < REST - 0.5);
+  const poses = (list) => list.slice(0, 10).map(f => `${inStrip(f)[0]?.left ?? '-'}${f.pose === null ? '' : '@' + f.pose + 'ms'}`).join(', ');
   assert(outFrames.length >= 2,
-    `C-1: the incoming week slides back OUT with the page — ${outFrames.length} frames with Week 4 still beside it, both moving right (Week 4 left per frame: ${fr.map(f => inStrip(f)[0]?.left ?? '-').slice(0, 10).join(', ')})`);
+    `C-1: the incoming week slides back OUT with the page — ${outFrames.length} frames with Week 4 still beside it, both moving right (Week 4 left per frame @ spring time: ${poses(fr)})`);
   await settleIdle('page-dashboard');
   const c1 = await evaluate(`({ ...window.__painted('page-dashboard', 4), any: window.__weekText(4) })`);
   assert(c1.label === 'Week 3' && Math.abs(c1.rootLeft - REST) <= 0.5 && c1.any === 0,
@@ -501,6 +679,110 @@ try {
   const c3 = await painted('page-dashboard', 3);
   assert(c3.label === 'Week 3',
     `C-3: the preview left the shared week field alone — a repaint after the cancelled swipe still paints Week 3 (got "${c3.label}")`);
+  // W-22 (integration review N2) — C-1 under LOAD, made permanent. The same
+  // cancel, with the spring's SECOND frame held up 40 ms on the main thread
+  // (the one-lost-vsync hitch the packed release gate produced twice on
+  // 2026-10-07: "376, 376, 376, 376, 386.2, -"). A load hitch is not the
+  // app sliding the week out wrong, so it must not change C-1's verdict.
+  await evaluate(`window.scrollTo({ top: 300, behavior: 'instant' })`);
+  await sleep(150);
+  drag = await flatDrag('page-dashboard', 4, 320, 500, [-10, -20, -30]);
+  await sleep(160);
+  const c30hx = inStrip(drag.at(-1))[0]?.left;
+  await evaluate(`(() => { window.__hitch = null; let seen = 0; const root = document.getElementById('page-dashboard');
+    (function w() { if (root.dataset.weekSwipeAnimating === 'bounce' && ++seen === 2) { const t = performance.now(); while (performance.now() - t < 40) {} window.__hitch = Math.round(performance.now() - t); }
+      else requestAnimationFrame(w); })(); return true; })()`);
+  await evaluate(`window.__springFrames('page-dashboard', 4, 320)`);
+  await touch.up();
+  fr = await springFrames();
+  const hitch = await evaluate('window.__hitch');
+  const outHitch = fr.filter(f => inStrip(f).length && inStrip(f)[0].left > c30hx + 1 && f.rootLeft < REST - 0.5);
+  assert(hitch >= 40 && outHitch.length >= 2,
+    `C-1b: …and a ${hitch} ms main-thread hitch in the spring's second frame (one lost 60 Hz frame — machine load, not the app) does not change that: ${outHitch.length} frames with Week 4 still beside it, moving right (Week 4 left per frame @ spring time: ${poses(fr)})`);
+  await settleIdle('page-dashboard');
+  // W-22 app defect (b) — the phone BUSY as the finger lifts: the main thread
+  // held up 200 ms right after the release's own handler. The spring starts
+  // at the first frame after that, so its safety timer must count from there,
+  // not from the release: armed at the release it fired ~10 ms into the slide
+  // and dropped the incoming week while the page was still 30 px out.
+  await evaluate(`window.scrollTo({ top: 300, behavior: 'instant' })`);
+  await sleep(150);
+  drag = await flatDrag('page-dashboard', 4, 320, 500, [-10, -20, -30]);
+  await sleep(160);
+  const c30sx = inStrip(drag.at(-1))[0]?.left;
+  await evaluate(`(() => { window.__relStall = 0; window.addEventListener('touchend', function h() { window.removeEventListener('touchend', h);
+    const t = performance.now(); while (performance.now() - t < 200) {} window.__relStall = Math.round(performance.now() - t); }); return true; })()`);
+  await evaluate(`window.__springFrames('page-dashboard', 4, 320)`);
+  await touch.up();
+  fr = await springFrames();
+  const relStall = await evaluate('window.__relStall');
+  const outStall = fr.filter(f => inStrip(f).length && inStrip(f)[0].left > c30sx + 1 && f.rootLeft < REST - 0.5);
+  assert(relStall >= 200 && outStall.length >= 2,
+    `C-1c: …and a ${relStall} ms main-thread stall AT the release (the phone busy as the finger lifts) does not cut the spring short: ${outStall.length} frames with Week 4 still beside it, moving right (Week 4 left per frame @ spring time: ${poses(fr)})`);
+  await settleIdle('page-dashboard');
+  // W-22 — the HARNESS under load: a CDP latency spike between the finger
+  // landing and its first move. Started on a pick pill (Chrome's touch
+  // adjustment snaps (120, 500) onto one), a finger that sits 350 ms is —
+  // correctly — the compact Dashboard's long-press reorder (RG-TBD-A2), so a
+  // spike there turned the swipe under test into a reorder press. The first
+  // move goes out with the landing; a spike after that cannot.
+  await evaluate(`window.scrollTo({ top: 300, behavior: 'instant' })`);
+  await sleep(150);
+  drag = await flatDrag('page-dashboard', 4, 120, 500, [-10, -20, -30], { stallMs: 600 });
+  const lat = drag.at(-1);
+  const latClaim = await evaluate(`import('./js/nav-gestures.js').then(m => m.touchClaimedBy())`);
+  assert(latClaim === 'week-swipe' && Math.abs(lat.rootLeft - REST - -30) <= 1.5 && inStrip(lat).length >= 1,
+    `C-4: a 600 ms harness stall right after the finger lands (on a pick pill) does not turn the swipe into a reorder press — the week swipe owns the touch ("${latClaim}"), the page follows the finger (${lat.rootLeft - REST}) and Week 4 is beside it (${inStrip(lat).length} lines)`);
+  await sleep(160);
+  await touch.up();
+  await settleIdle('page-dashboard');
+  // W-22 review B1 — a SECOND gesture that lands while the first one's cancel
+  // spring-back still slides: the lift and the whole next gesture queued at
+  // once, nothing awaited in between, so it always lands inside the spring.
+  // The new touch cuts the spring short (the page at rest, the layers gone;
+  // no transitionend ever comes), and the spring's repaint hold went with it
+  // only at its fallback: the new gesture's own preview and commit repaint
+  // were parked behind it — an empty incoming week, and a commit that left
+  // the old week on screen.
+  const queueTouches = (...evs) => Promise.all(evs.map(([type, pts]) => pg.send('Input.dispatchTouchEvent', { type, touchPoints: pts })));
+  const lastRelease = () => evaluate(`import('./js/nav-gestures.js').then(m => { const r = m._weekSwipeLastRelease(); return r ? { go: r.go, dx: r.dx } : null; })`);
+  await evaluate(`window.scrollTo({ top: 300, behavior: 'instant' })`);
+  await sleep(150);
+  await flatDrag('page-dashboard', 4, 320, 500, [-10, -20, -30]);
+  await sleep(160);                                   // at rest: this lift is a cancel
+  await queueTouches(['touchEnd', []], ['touchStart', [{ x: 320, y: 500 }]], ...[295, 250, 190, 130].map(x => ['touchMove', [{ x, y: 500 }]]), ['touchEnd', []]);
+  const rsGo = await lastRelease();
+  await settleIdle('page-dashboard');
+  await sleep(150);
+  const rs1 = await evaluate(`({ ...window.__painted('page-dashboard', 4), any: window.__weekText(4) })`);
+  assert(rsGo?.go === true && rs1.label === 'Week 4' && rs1.any > 0 && rs1.visible.length > 0 && Math.abs(rs1.rootLeft - REST) <= 0.5,
+    `C-5: a cancel, then AT ONCE a flick to the next week (lands inside the spring-back): the flick commits AND the page shows the week it went to — "${rs1.label}", ${rs1.visible.length} Week 4 lines painted (${rs1.any} in the page; second release go=${rsGo?.go})`);
+  assert(await toWeek('page-dashboard', 'Week 3'), 'C-5-post: fixture — the Dashboard back on Week 3');
+  await evaluate(`window.scrollTo({ top: 300, behavior: 'instant' })`);
+  await sleep(150);
+  await flatDrag('page-dashboard', 4, 320, 500, [-10, -20, -30]);
+  await sleep(160);
+  // The READ is taken IN THE PAGE, driven by the arrival of the drag's LAST queued move (clientX 180): its capture listener schedules
+  // one requestAnimationFrame, and that frame records what is painted (the page's offset and the incoming week) into __c6Read. Chrome
+  // can hand queued touchmoves to the page over more than one frame (a loaded run read the third, -100) — that late delivery is the
+  // harness's, and it no longer matters; neither does any wall-clock delay in the harness afterwards (a slow poll gave the app 267 ms
+  // and let a lagging page read -140): the harness only collects the result the page recorded one frame after the move landed.
+  await evaluate(`(() => { window.__c6Read = null; const h = (e) => { const t = e.touches && e.touches[0]; if (!t || Math.round(t.clientX) !== 180) return;
+    document.removeEventListener('touchmove', h, true); const at = performance.now();
+    requestAnimationFrame(() => { window.__c6Read = { ...window.__painted('page-dashboard', 4), afterMoveMs: Math.round(performance.now() - at) }; }); };
+    document.addEventListener('touchmove', h, { capture: true, passive: true }); return true; })()`);
+  await queueTouches(['touchEnd', []], ['touchStart', [{ x: 320, y: 500 }]], ...[295, 260, 220, 180].map(x => ['touchMove', [{ x, y: 500 }]]));
+  const c6Arrived = await waitFor('window.__c6Read !== null', 3000);
+  if (process.env.C6_HARNESS_DELAY_MS) await sleep(Number(process.env.C6_HARNESS_DELAY_MS));   // proof hook: harness delay cannot reach the read
+  const rs2 = c6Arrived ? await evaluate('window.__c6Read') : await painted('page-dashboard', 4);
+  for (const x of [260, 300]) await touch.move(x, 500);
+  await sleep(160);
+  await touch.up();                                   // back at 20 px and at rest: a cancel
+  await settleIdle('page-dashboard');
+  const rs2after = await painted('page-dashboard', 3);
+  assert(c6Arrived && inStrip(rs2).length >= 1 && Math.abs(rs2.rootLeft - REST - -140) <= 1.5 && rs2after.label === 'Week 3', !c6Arrived
+    ? `C-6: HARNESS FAILURE, not an app result — the drag's last queued move never reached the page within 3 s`
+    : `C-6: a cancel, then AT ONCE a slow drag 140 px toward the next week: one frame after its last move reached the page (read in the page, ${rs2.afterMoveMs} ms after it), the page follows (${rs2.rootLeft - REST}) and the incoming week is beside it (${inStrip(rs2).length} Week 4 lines) — its preview is not parked behind the spring it cut short; then still "${rs2after.label}"`);
 
   // ═════════════════════════════════════════════════════════════════════════
   console.log('\n[D] Vertical-first — a drag that starts vertical scrolls natively and never becomes a swipe…');
@@ -509,9 +791,10 @@ try {
   await sleep(150);
   const yD = await evaluate('Math.round(scrollY)');
   const vd = [];
-  await touch.down(250, 600);
+  const dPts = range(1, 8, 1).map(i => [250 + i * 3, 600 - i * 12]);
+  const dLead = await touch.land(250, 600, dPts);
   for (let i = 1; i <= 8; i++) {
-    await touch.move(250 + i * 3, 600 - i * 12);
+    if (i > dLead) await touch.move(...dPts[i - 1]);
     vd.push({ ...(await painted('page-dashboard', 4)), lock: await evaluate('window.__lock().oy') });
   }
   const vRenders = await evaluate('window.__renders');
@@ -563,8 +846,8 @@ try {
   assert(stale === 'hidden' && staleNext === 'visible',
     `E-5: a lock left behind by a lost release is lifted at the very next touch's start (stale ${stale} → at touchstart ${staleNext})`);
   const yE0 = await evaluate('Math.round(scrollY)');
-  await touch.down(250, 600);
-  for (let i = 1; i <= 6; i++) await touch.move(250, 600 - i * 12);
+  const ePts = range(1, 6, 1).map(i => [250, 600 - i * 12]);
+  for (let i = await touch.land(250, 600, ePts); i < ePts.length; i++) await touch.move(...ePts[i]);
   await touch.up();
   await sleep(300);
   const yE1 = await evaluate('Math.round(scrollY)');
@@ -607,18 +890,56 @@ try {
   assert(Math.abs(g120.rootLeft - REST - -120) <= 1.5 && inStrip(g120).length >= 1,
     `G-1: Reduce Motion — direct manipulation is not animation: the page follows the finger and Week 4 is beside it (offset ${g120.rootLeft - REST}, ${inStrip(g120).length} Week 4 lines)`);
   const refG = inStrip(g120)[0];
-  await evaluate(`window.__startFrames('page-dashboard', 4, 360)`);
-  await touch.up();
-  fr = await frames(360);
+  // The Reduce Motion release, sampled: its real frames and (W-22) every pose of the cross-fade, on the
+  // fade's own 60 Hz clock (__slideFrames: the fade is the page root's own animation, 150 ms). A loaded
+  // machine left G-2 too few frames after the release and G-3 no frame part-way through the fade; the
+  // stepped real frames span the whole fade, and its poses (each 1000/60 ms) are read where nothing can
+  // interleave. G-2 and G-3 read the poses AND the real frames; bars unchanged.
+  const sampleFade = (beforeUp = null) => sampleRelease('page-dashboard', 4, 360, beforeUp);
+  const afterRelOf = (rel) => [...rel.poses, ...rel.fr.slice(Math.max(0, rel.fr.findIndex(f => f.anim === 'fade' || f.label === 'Week 4')))];
+  const relG = await sampleFade();
+  fr = relG.fr;
   await settleIdle('page-dashboard');
   const gLanded = await painted('page-dashboard', 4);
   const landG = nearest(gLanded.visible, refG?.text, refG?.top);
-  const afterRel = fr.slice(Math.max(0, fr.findIndex(f => f.anim === 'fade' || f.label === 'Week 4')));
+  const afterRel = afterRelOf(relG);
   const strayG = afterRel.filter(f => f.visible.some(v => v.text === refG?.text && Math.abs(v.top - refG.top) <= 2 && Math.abs(v.left - landG?.left) > 1));
   assert(gLanded.label === 'Week 4' && afterRel.length >= 4 && strayG.length === 0,
     `G-2: Reduce Motion commit — from the release on, Week 4 is only ever painted AT REST (no frame part-way: ${strayG.length} found in ${afterRel.length}); it cross-fades in place (landed "${gLanded.label}")`);
   assert(afterRel.some(f => f.opacity > 0.05 && f.opacity < 0.95),
     `G-3: …and it is a cross-fade, not a cut (page opacity per frame: ${[...new Set(afterRel.map(f => Math.round(f.opacity * 100) / 100))].slice(0, 8).join(', ')})`);
+  // W-22 — G-2 / G-3 under LOAD, made permanent: the same Reduce Motion commit
+  // under the two ways a loaded machine starves the fade's samples. FEWER
+  // frames: the main thread held up 400 ms in the fade's first frame. Frames
+  // too FAR APART on the fade's own clock: one 16 ms frame
+  // worth 320 ms of fade (CDP Animation.setPlaybackRate 20) — what a 320 ms
+  // gap between frames does to a sampler on the machine's frames. (A stall
+  // inside the page cannot open that gap: Blink starts the fade's clock at
+  // the commit of the frame that created it and renders the next frame one
+  // vsync later, before any queued task.) Machine load is not the page
+  // sliding or cutting.
+  assert(await toWeek('page-dashboard', 'Week 3'), 'G-3b-pre: fixture — Reduce Motion, the Dashboard back on Week 3');
+  await evaluate(`window.scrollTo({ top: 300, behavior: 'instant' })`);
+  await sleep(120);
+  drag = await flatDrag('page-dashboard', 4, 320, 500, range(-10, -120, -10));
+  const refGh = inStrip(drag.at(-1))[0];
+  await pg.send('Animation.enable');
+  await pg.send('Animation.setPlaybackRate', { playbackRate: 20 });
+  const relGh = await sampleFade(() => evaluate(`(() => { window.__hitch = null; const root = document.getElementById('page-dashboard');
+    (function w() { if (root.dataset.weekSwipeAnimating === 'fade') { const t = performance.now(); while (performance.now() - t < 400) {} window.__hitch = Math.round(performance.now() - t); }
+      else requestAnimationFrame(w); })(); return true; })()`));
+  await pg.send('Animation.setPlaybackRate', { playbackRate: 1 });
+  await pg.send('Animation.disable');
+  await settleIdle('page-dashboard');
+  const ghHitch = await evaluate('window.__hitch');
+  const ghLanded = await painted('page-dashboard', 4);
+  const ghLand = nearest(ghLanded.visible, refGh?.text, refGh?.top);
+  const ghAfter = afterRelOf(relGh);
+  const ghStray = ghAfter.filter(f => f.visible.some(v => v.text === refGh?.text && Math.abs(v.top - refGh.top) <= 2 && Math.abs(v.left - ghLand?.left) > 1));
+  assert(ghHitch >= 400 && ghLanded.label === 'Week 4' && ghAfter.length >= 4 && ghStray.length === 0,
+    `G-2b: …and a ${ghHitch} ms main-thread hitch in the fade's first frame, with frames 320 ms of fade apart (machine load) does not change G-2: Week 4 only ever painted at rest (${ghStray.length} part-way in ${ghAfter.length}; landed "${ghLanded.label}")`);
+  assert(ghAfter.some(f => f.opacity > 0.05 && f.opacity < 0.95),
+    `G-3b: …nor G-3: it is still seen to cross-fade (page opacity per frame: ${[...new Set(ghAfter.map(f => Math.round(f.opacity * 100) / 100))].slice(0, 8).join(', ')})`);
   drag = await flatDrag('page-dashboard', 3, 120, 500, [10, 30, 60, 120, 180, 250]);
   assert(inStripLeft(drag.at(-1)).length >= 1, `G-4-pre: fixture — Reduce Motion, 250 px toward the previous week, Week 3 is beside the page (${inStripLeft(drag.at(-1)).length} lines)`);
   for (const dx of [180, 120, 60, 30]) await touch.move(120 + dx, 500);
@@ -649,9 +970,10 @@ try {
   assert(h0.label === 'Week 4', `H-pre: fixture — the Dashboard shows Week 4 (got "${h0.label}")`);
   await evaluate('window.__renders = 0');
   const hd = [];
-  await touch.down(40, 500);
-  for (let x = 50; x <= 240; x += 10) {
-    await touch.move(x, 500);
+  const hPts = range(50, 240, 10).map(x => [x, 500]);
+  const hLead = await touch.land(40, 500, hPts);
+  for (const [i, [x]] of hPts.entries()) {
+    if (i >= hLead) await touch.move(x, 500);
     hd.push(await evaluate(`({ ...window.__painted('page-dashboard', 3), open: document.querySelector('#control-center')?.dataset.open === 'true' })`));
   }
   const hRenders = await evaluate('window.__renders');
@@ -665,8 +987,8 @@ try {
   await evaluate(`window.scrollTo({ top: 0, behavior: 'instant' })`);
   await sleep(150);
   await evaluate(`document.querySelector('#page-dashboard .dc-game, #page-dashboard .card').dataset.probe = 'ptr'`);
-  await touch.down(250, 300);
-  for (let y = 312; y <= 460; y += 12) await touch.move(250, y);
+  const pPts = range(312, 460, 12).map(y => [250, y]);
+  for (let i = await touch.land(250, 300, pPts); i < pPts.length; i++) await touch.move(...pPts[i]);
   await touch.up();
   const ptr = await waitFor(`!document.querySelector('#page-dashboard [data-probe="ptr"]')`, 3000);
   const hAfter = await painted('page-dashboard', 3);
@@ -693,6 +1015,51 @@ try {
   const iAfter = await evaluate(`(async () => ({ ...window.__painted('page-dashboard', 3), parked: (await import('./js/nav-gestures.js'))._deferredRenderCount(), any: window.__weekText(3) }))()`);
   assert(iAfter.parked === 0 && iAfter.label === 'Week 4' && iAfter.any === 0 && Math.abs(iAfter.rootLeft - REST) <= 0.5,
     `I-2: …and on the (cancelled) release the parked repaint runs, the page rests on Week 4 and the incoming week is gone (parked ${iAfter.parked}, "${iAfter.label}", Week 3 text nodes ${iAfter.any})`);
+  // W-22 app defect (a) — I-2 is the END state; this is the spring itself.
+  // A short NEXT-week cancel (its incoming text is on screen for the spring's
+  // first ~16 px, as in [C]) with a live repaint parked mid-drag: run at the
+  // release, the repaint rebuilt the page under the incoming week and the
+  // strip the page uncovered went BLANK for the whole spring. The repaint
+  // waits for the spring, as it waits for the finger.
+  assert(await toWeek('page-dashboard', 'Week 3'), 'I-3-pre: fixture — the Dashboard shows Week 3');
+  await evaluate(`window.scrollTo({ top: 300, behavior: 'instant' })`);
+  await sleep(150);
+  drag = await flatDrag('page-dashboard', 4, 320, 500, [-10, -20, -30]);
+  await evaluate(`window.navigateTo('dashboard')`);   // the live-score / Realtime repaint, mid-drag
+  const parkedI3 = await evaluate(`import('./js/nav-gestures.js').then(m => m._deferredRenderCount())`);
+  await sleep(160);
+  const i30x = inStrip(drag.at(-1))[0]?.left;
+  const rendersI3 = await evaluate('window.__renders');
+  await evaluate(`window.__springFrames('page-dashboard', 4, 320)`);
+  await touch.up();
+  fr = await springFrames();
+  const outI3 = fr.filter(f => inStrip(f).length && inStrip(f)[0].left > i30x + 1 && f.rootLeft < REST - 0.5);
+  assert(parkedI3 === 1 && outI3.length >= 2,
+    `I-3: a repaint parked during a short drag that is then CANCELLED never blanks the strip — the incoming Week 4 still slides back out with the page (parked ${parkedI3}; ${outI3.length} frames with Week 4 beside it, moving right; Week 4 left per frame @ spring time: ${poses(fr)})`);
+  await settleIdle('page-dashboard');
+  const i4 = await evaluate(`(async () => ({ ...window.__painted('page-dashboard', 4), parked: (await import('./js/nav-gestures.js'))._deferredRenderCount(), any: window.__weekText(4), renders: window.__renders }))()`);
+  assert(i4.parked === 0 && i4.renders > rendersI3 && i4.label === 'Week 3' && i4.any === 0 && Math.abs(i4.rootLeft - REST) <= 0.5,
+    `I-4: …and the parked repaint still RUNS once the spring has ended (parked ${i4.parked}; page renders ${rendersI3} → ${i4.renders}), on Week 3 at rest with no Week 4 left (offset ${i4.rootLeft - REST}, Week 4 text nodes ${i4.any})`);
+  // …and a live repaint that lands just AFTER the release (the finger is up,
+  // nothing owns the touch, the spring is sliding) waits for it too.
+  await evaluate(`window.scrollTo({ top: 300, behavior: 'instant' })`);
+  await sleep(150);
+  drag = await flatDrag('page-dashboard', 4, 320, 500, [-10, -20, -30]);
+  await sleep(160);
+  const i50x = inStrip(drag.at(-1))[0]?.left;
+  const rendersI5 = await evaluate('window.__renders');
+  await evaluate(`(() => { window.__tickAt = null; window.addEventListener('touchend', function h() { window.removeEventListener('touchend', h);
+    setTimeout(() => { window.__tickAt = performance.now(); window.navigateTo('dashboard'); }, 0); }); return true; })()`);
+  await evaluate(`window.__springFrames('page-dashboard', 4, 320)`);
+  await touch.up();
+  fr = await springFrames();
+  const tickRan = await evaluate('window.__tickAt !== null');
+  const outI5 = fr.filter(f => inStrip(f).length && inStrip(f)[0].left > i50x + 1 && f.rootLeft < REST - 0.5);
+  await settleIdle('page-dashboard');
+  const i5 = await evaluate(`(async () => ({ ...window.__painted('page-dashboard', 4), parked: (await import('./js/nav-gestures.js'))._deferredRenderCount(), any: window.__weekText(4), renders: window.__renders }))()`);
+  assert(tickRan && outI5.length >= 2 && i5.parked === 0 && i5.renders > rendersI5 && i5.label === 'Week 3' && i5.any === 0,
+    `I-5: a live repaint landing just AFTER a cancel release (mid-spring, no touch owner) waits for the spring too: Week 4 slides back out on ${outI5.length} frames (Week 4 left per frame @ spring time: ${poses(fr)}), then the repaint runs (parked ${i5.parked}; page renders ${rendersI5} → ${i5.renders}; "${i5.label}", Week 4 text nodes ${i5.any})`);
+  assert(await toWeek('page-dashboard', 'Week 4'), 'I-4-post: fixture — back on Week 4 for [J]');
 
   // ═════════════════════════════════════════════════════════════════════════
   console.log('\n[J] Blind rule — the preview of an OPEN week shows exactly what that week\'s page shows, never one pick more…');

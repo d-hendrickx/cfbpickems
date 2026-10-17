@@ -161,7 +161,11 @@ function seedWeek({ weekId, weekNumber, status, slots, picksFor, shuffle }) {
   storage.saveWeek({
     weekId, weekNumber, seasonYear: 2026, name: `Week ${weekNumber}`, status,
     startDate: '2026-09-03', endDate: '2026-09-07', dataSourceMode: 'live',
-    picksOpenAt: null, picksLockAt: null,
+    // PF-1 / DI-495(a) (2026-10-01) — RE-DERIVED, NOT WEAKENED. These fixtures are OPEN weeks whose kickoffs are fixed in early September 2026, i.e. already past, and canPlayerSubmitPicks() now
+    // closes an open week at its lock instant (first kickoff minus the offset) exactly as the server's guard does (migration 0043), so the editable list would render as a LOCKED page and
+    // every ordering assertion below would read an empty list. An open week gets an explicit picksLockAt in the far future, which the client and the server both honour exactly (a commissioner's
+    // chosen time): the editable list renders as before and every assertion still proves what it names. Non-open weeks keep null.
+    picksOpenAt: null, picksLockAt: status === 'open' ? '2099-01-01T00:00:00Z' : null,
     tiebreakerQuestion: 'Total points in the last game?',
     actualTiebreakerValue: null, showInHistory: true, blurb: null,
   });

@@ -1,0 +1,23 @@
+{
+  "id": "chatsportkitapplytest",
+  "script": "chatsportkitapplytest.mjs",
+  "summary": "strict",
+  "floor": 124,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "tests/kits/w57-mutants.json",
+    "tests/kits/w57-mutate.mjs",
+    "js/chat.js",
+    "js/chat-ui.js",
+    "js/chat-sport-pills.js",
+    "js/sport-tag.js",
+    "js/chatTransport.js",
+    "js/supabase-projection.js",
+    "css/styles.css",
+    "supabase/functions/notify-fanout/index.js",
+    "supabase/functions/_shared/competition-passes.mjs"
+  ],
+  "note": "S-3: the W-57 mutation kit (tests/kits/w57-mutants.json, run by tests/kits/w57-mutate.mjs) still lands: every mutant's old text matches exactly once in the live tree, its suites exist, and it names the RED it produces."
+}

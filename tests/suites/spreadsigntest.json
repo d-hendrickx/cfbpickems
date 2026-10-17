@@ -1,0 +1,11 @@
+{
+  "id": "spreadsigntest",
+  "script": "spreadsigntest.mjs",
+  "summary": "loose",
+  "floor": 29,
+  "tags": [
+    "smoke"
+  ],
+  "expectedMs": 200,
+  "note": "D1 W-68 / W-69 (2026-10-14): RAISED 26 -> 29: the Games list is a new render path for the signed-spread display; Favorite + Margin entry is untouched and pinned. Item SS: the spread-sign structural scan (deny-by-default) — game.spread / lockedSpread stay SIGNED home-perspective numbers at every write site. Registered 2026-10-07 (W-11). \"loose\" because its failure line reads \"❌ N FAILED — …\", which the strict pattern would not parse."
+}

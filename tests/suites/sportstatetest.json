@@ -1,0 +1,12 @@
+{
+  "id": "sportstatetest",
+  "script": "sportstatetest.mjs",
+  "summary": "strict",
+  "floor": 71,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 6000,
+  "note": "D1 (v0.30.0) DI-527 / DI-538: the T1..T10 state-isolation matrix through the real app.js - a draft, tiebreaker and Extra Point per sport (and the page paints them), a submit clears only its own week, the viewed week per sport, a CFB score update leaves the NFL Dashboard byte-identical, the Realtime predicate in every branch plus its wiring, scroll per (tab, sport), sign-out through the REAL identity chokepoint, per-league pointers, a deep link, a reload; four in-memory mutants"
+}

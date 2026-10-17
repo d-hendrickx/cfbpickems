@@ -364,7 +364,18 @@ export function renderCreateLeagueStubCard({ escHtml, icon = defaultIcon, open =
 /** DI-316 — commissioner-only; the caller decides visibility (`isCommissioner`
  *  in `renderLeaguePage()`) and simply does not call this when false, per the
  *  DI's "absent entirely, not disabled" rule. */
-export function renderAddSportStubCard({ escHtml } = {}) {
+export function renderAddSportStubCard({ escHtml, icon = defaultIcon, open = null } = {}) {
+  // D1 (DI-532, 2026-10-07): `open` true is the REAL entry (a sport can be added: `data-action="add-sport"`, opens the Add a sport sheet); `open` false means the platform has no sport left
+  // to add to this league, and the card is ABSENT (never a dead stub). `open` null - every call that does not say - is the coming-soon stub, byte for byte as before.
+  if (open === true) {
+    requireEscHtml(escHtml, 'renderAddSportStubCard');
+    // `coming-soon-card` is the shared tappable-stub-card STYLING (full width, left-aligned, inherited font and colour, a 97% press); the action is NOT the coming-soon one.
+    return `<button type="button" class="card coming-soon-card add-sport-card" data-action="add-sport">
+      <span class="coming-soon-card-title">${escHtml('+ Add a sport')}</span>
+      <span class="coming-soon-card-subtitle text-muted">${escHtml('Add another sport to this league')}</span>
+    </button>`;
+  }
+  if (open === false) return '';
   return renderComingSoonCard({
     title: '+ Add new sport',
     copy: COMING_SOON_COPY.addSport,
@@ -445,6 +456,9 @@ export function leaguePageBackAffordances({ isNativeShell = false } = {}) {
 }
 
 /**
+ * D1 (v0.30.0, DI-522 / DI-554) — `sportsHTML`: in a league with SEVERAL sports the caller hands in the league overview's own sport cards (js/league-overview.js leaguePageSportsHTML(), the very
+ * function the overview sheet uses, so the two cannot disagree). When it is null — every league with ONE sport — the markup below is byte-identical to what it was (leagueshometest).
+ *
  * SP-53 / DI-457 (2026-10-01) — ONE new row, LAST in `.league-page-body` (after League Standings, the empty-state card and the commissioner's "Add new sport" stub): "League Settings",
  * the same row vocabulary as League Standings (`.league-standings-row`), shown to EVERY member. It pushes the overlay's third view; the Sports block above it is untouched.
  *
@@ -461,7 +475,9 @@ export function renderLeaguePage(league, {
   isCommissioner = false,
   hasSportChoice = null, // eslint-disable-line no-unused-vars -- accepted, not required; see doc comment
   sports = null,
+  sportsHTML = null,
   slateEmpty = null,
+  addSportOpen = null,
   escHtml,
   icon = defaultIcon,
 } = {}) {
@@ -503,13 +519,13 @@ export function renderLeaguePage(league, {
     </div>
     <div class="league-page-body">
       <div class="admin-section-title">Sports</div>
-      ${sportCards}
+      ${typeof sportsHTML === 'string' && sportsHTML ? sportsHTML : sportCards}
       <button type="button" class="league-standings-row" data-action="open-league-standings" data-league-id="${escHtml(lg.leagueId || '')}">
         <span>League Standings</span>
         <span aria-hidden="true">${icon('chevronRight')}</span>
       </button>
       ${emptyState}
-      ${isCommissioner ? renderAddSportStubCard({ escHtml }) : ''}
+      ${isCommissioner ? renderAddSportStubCard({ escHtml, icon, open: addSportOpen }) : ''}
       <button type="button" class="league-standings-row" data-action="open-league-settings" data-league-id="${escHtml(lg.leagueId || '')}" aria-label="Open League Settings for ${escHtml(lg.leagueName || lg.name || 'this league')}">
         <span>League Settings</span>
         <span aria-hidden="true">${icon('chevronRight')}</span>

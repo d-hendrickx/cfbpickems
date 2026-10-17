@@ -1,0 +1,15 @@
+{
+  "id": "relayedtest",
+  "script": "relayedtest.mjs",
+  "summary": "strict",
+  "floor": 38,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/chatTransport.js",
+    "js/source-chips.js"
+  ],
+  "expectedMs": 1500,
+  "note": "D1 / W-54 / DI-680 / 0045, the client half: messages.relayed selected, mapped top-level only as a real boolean (never from meta, never defaulted), stripped from the importer's hash shape, kept by the chat fold, never presentable by a local send; [5] the F-1 integration negative (row -> rowToMessage -> chat.ingest -> Home's candidate source: a member relay forging meta.relayed gives zero cards); [6] the chip half (the same row -> validChipSources: zero chips, the server's row one); a thirteen-mutant kit (data: URL copies) turns each named check RED."
+}

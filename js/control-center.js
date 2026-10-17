@@ -611,6 +611,18 @@ function isBlockedByOtherSurface() {
   if (document.getElementById?.('leagues-home-overlay')) return true;
   // UN-389 / DI-446 (2026-09-30) — the Delete Account sheet left `.modal-overlay` for the shared sheet shell; the drawer's edge swipe must not arm under it (one owner per touch).
   if (document.getElementById?.('pwacct-delete-overlay')) return true;
+  // D1 Lane B / DI-571 (2026-10-07) — the pushed-screen shell (`#pushed-root`) has its OWN left-edge swipe-back; a swipe from the 28 px edge band must not arm this drawer too (one owner per touch).
+  if (document.getElementById?.('pushed-root')) return true;
+  // D1 Lane C (DI-644) — the SCRIBE profile pane owns the left-edge swipe (its back) and its sheets own the touch; the drawer's edge swipe must not arm under either (one owner per touch).
+  if (document.getElementById?.('scribe-profile-overlay')) return true;
+  if (document.getElementById?.('scribe-profile-sheet-wrap')) return true;
+  // PF-1 / Amendment 1 (2026-10-01) — the Late Entry sheet is the sixth sheet of this shape; the drawer's edge swipe must not arm under it (one owner per touch).
+  if (document.getElementById?.('late-entry-sheet-wrap')) return true;
+  // D1 Lane B / DI-607 and DI-581 (2026-10-08) — the Dashboard's Sort sheet, and the Custom arrange (the rows own the touch): the drawer's edge swipe must not arm under either (one owner per touch).
+  if (document.getElementById?.('sort-sheet-wrap')) return true;
+  if (document.querySelector?.('[data-games-arranging="true"]')) return true;
+  // D1 (W-68, DI-W68.3; W-70, DI-W70.4) - the swap picker sheet is one more body-appended sheet of this shape and owns the touch: the drawer's edge swipe must not arm under it (one owner per touch).
+  if (document.getElementById?.('swap-picker-sheet-wrap')) return true;
   return false;
 }
 
@@ -1127,6 +1139,45 @@ function teamLogosBodyHTML(ctx) {
     <div class="cc-row-helper text-muted">Show team logos instead of names on Picks and the compact dashboard.</div>`;
 }
 
+/**
+ * D1 Lane B / DI-613 (2026-10-08, PF-457, Drew D-64) — "Show picks": BY PERSON or BY TEAM, chosen separately for the Dashboard and for Game Day. Two labelled segmented controls reusing the
+ * `.cc-quick-seg` radio idiom (the drawer's own roving-tabindex arrow keys already drive any `.cc-quick-track`), one helper line, and a muted summary on the collapsed row. The values are an
+ * ALLOW-LIST here (person | team; dashboard | gameday): a forged data attribute writes nothing. The row exists only for a signed-in member (`ctx.picksView` is null otherwise).
+ */
+const PV_PLACES = Object.freeze([['dashboard', 'On the Dashboard', 'Show picks on the Dashboard'], ['gameday', 'In Game Day', 'Show picks in Game Day']]);
+const PV_VALUES = Object.freeze([['person', 'By person'], ['team', 'By team']]);
+const PV_HELPER = 'By person lists each member’s pick beside their initials. By team groups the initials under the team they picked. Picks stay hidden until kickoff either way.';
+export function picksViewSummary(pv) {
+  const word = (v, d) => (PV_VALUES.find(([k]) => k === v) || PV_VALUES.find(([k]) => k === d))[1];
+  return `Dashboard: ${word(pv && pv.dashboard, 'person')} · Game Day: ${word(pv && pv.gameday, 'team')}`;
+}
+function pvSegHTML(esc, pvPlace, pvValue, text, pvOn) {
+  return `<button type="button" role="radio" class="cc-quick-seg cc-pv-seg" data-action="cc-set-picks-view" data-place="${pvPlace}" data-value="${pvValue}" aria-checked="${pvOn}" tabindex="${pvOn ? 0 : -1}"><span>${esc(text)}</span></button>`;
+}
+function pvGroupHTML(esc, pvPlace, label, aria, cur) {
+  return `<div class="cc-pv-group" data-pv-place="${pvPlace}"><span class="cc-pv-label">${esc(label)}</span><div class="cc-quick-track" role="radiogroup" aria-label="${esc(aria)}">${pvSegHTML(esc, pvPlace, 'person', 'By person', cur === 'person')}${pvSegHTML(esc, pvPlace, 'team', 'By team', cur === 'team')}</div></div>`;
+}
+function picksViewBodyHTML(ctx) {
+  const esc = requireFn(ctx.escHtml, 'escHtml', 'picksViewBodyHTML');
+  const pv = ctx.picksView || {};
+  const cur = (place, dflt) => (PV_VALUES.some(([k]) => k === pv[place]) ? pv[place] : dflt);
+  return `${pvGroupHTML(esc, 'dashboard', 'On the Dashboard', 'Show picks on the Dashboard', cur('dashboard', 'person'))}${pvGroupHTML(esc, 'gameday', 'In Game Day', 'Show picks in Game Day', cur('gameday', 'team'))}<div class="cc-row-helper text-muted">${esc(PV_HELPER)}</div>`;
+}
+/** Update the Show picks row IN PLACE (the quick row's rule: no innerHTML, so the tapped segment keeps VoiceOver focus): aria-checked / tabindex per segment and the collapsed row's summary. */
+export function patchPicksView(rootEl, ctx) {
+  const wrap = rootEl?.querySelector?.('[data-row="picks-view"]');
+  if (!wrap) return false;
+  const pv = ctx.picksView || {};
+  [...(wrap.querySelectorAll?.('.cc-pv-seg') || [])].forEach((seg) => {
+    const on = pv[seg.dataset?.place] === seg.dataset?.value;
+    seg.setAttribute('aria-checked', String(on));
+    seg.setAttribute('tabindex', on ? '0' : '-1');
+  });
+  const sec = wrap.querySelector?.('.cc-row-secondary');
+  if (sec) sec.textContent = picksViewSummary(pv);
+  return true;
+}
+
 /** SP-52 (DI-447, 2026-10-01) — the Appearance row is ONE live
  *  `<select data-field="colorScheme">` (System / Light / Dark) under EVERY
  *  Theme. It used to be disabled under a school theme with the caption "Night
@@ -1184,6 +1235,11 @@ export function renderSettingsAccordion(ctx, state) {
       group: 'settings', rowId: 'logo-view', label: 'Team logos', openRowValue: openRow,
       bodyHTML: teamLogosBodyHTML(ctx),
     }),
+    // D1 Lane B / DI-613 — "Show picks", directly after Team logos (both are how things are drawn); absent for a signed-out viewer (settings are for members).
+    ...(ctx.picksView ? [accordionRow(ctx, state, {
+      group: 'settings', rowId: 'picks-view', label: 'Show picks', openRowValue: openRow,
+      secondary: picksViewSummary(ctx.picksView), bodyHTML: picksViewBodyHTML(ctx),
+    })] : []),
     accordionRow(ctx, state, {
       group: 'settings', rowId: 'theme', label: 'Theme', openRowValue: openRow,
       bodyHTML: selectBody(ctx, { field: 'theme', options: themes, current: currentTheme }),
@@ -1478,11 +1534,22 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
     if (key) { stampFieldOwner(mainContentEl, key); stampFieldOwner(profileContentEl, key); stampFieldOwner(newsContentEl, key); }
   }
 
+  // W-66 (2026-10-14; review N2) — every main-pane repaint (opening a row, or update()) rebuilds every open row's body, and a rebuilt
+  // body replayed its 220 ms opening (cc-row-body-in: collapse to nothing, fade back). Only the row being opened animates: a row that
+  // was already open holds still, and one still opening (Notifications resolves ~2 ms after its tap) keeps its place. Same task as
+  // the paint, so no frame shows a replay.
   function paintMainContent() {
     if (!mainContentEl) return;
     const key = ownerKey();
     const snap = key ? captureDirtyFields(mainContentEl, key) : null;
+    const wasOpen = new Map();
+    mainContentEl.querySelectorAll('.control-center-row-body').forEach((b) => { const a = b.getAnimations?.()[0]; wasOpen.set(b.id, a ? a.currentTime : null); });
     mainContentEl.innerHTML = renderMainPaneInnerHTML(ctx, state);
+    mainContentEl.querySelectorAll('.control-center-row-body').forEach((b) => {
+      if (!wasOpen.has(b.id)) return;                                     // the row being opened animates
+      const t = wasOpen.get(b.id), a = t === null ? null : b.getAnimations?.()[0];
+      if (a) a.currentTime = t; else if (b.style) b.style.animation = 'none';
+    });
     if (key) { restoreDirtyFields(snap, mainContentEl, key); stampFieldOwner(mainContentEl, key); }
   }
   function paintProfileContent() {
@@ -1532,7 +1599,13 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
     const note = newsContentEl.querySelector('#cc-news-team-note');
     const max = Number.isInteger(ctx.news.maxTeams) && ctx.news.maxTeams > 0 ? ctx.news.maxTeams : 20;
     const full = Array.isArray(ctx.news.teams) && ctx.news.teams.length >= max;
-    if (note && !full && typeof note.textContent === 'string' && note.textContent) ctx = { ...ctx, bodies: { ...(ctx.bodies || {}), almaMaterNoteText: note.textContent } };
+    // W-66 review N3 (2026-10-14): copy the bodies by DESCRIPTOR — a spread would read app.js's live gameRequestHTML getter once and
+    // freeze it, so the Request a game row would reopen on the card as it was at this News change.
+    if (note && !full && typeof note.textContent === 'string' && note.textContent) {
+      const bodies = Object.defineProperties({}, Object.getOwnPropertyDescriptors(ctx.bodies || {}));
+      Object.defineProperty(bodies, 'almaMaterNoteText', { value: note.textContent, writable: true, enumerable: true, configurable: true });
+      ctx = { ...ctx, bodies };
+    }
   }
   /** Reviewer F5: after a chip is removed (or one is added) the node the player was on is gone — put keyboard and VoiceOver focus back on something real: the chip that took its
    *  place, else the last chip, else the picker. */
@@ -1747,6 +1820,15 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
         ctx.callbacks?.onSetLogoView?.(!(ctx.logoView === true));
         haptic('selection');
         break;
+      // D1 Lane B / DI-613 — Show picks: one write per CHANGE through the callback (the allow-list is checked here AND in storage.js), a selection haptic (native only), an IN-PLACE patch, no toast.
+      case 'cc-set-picks-view': {
+        const place = el.dataset.place, value = el.dataset.value;
+        if (!PV_PLACES.some(([k]) => k === place) || !PV_VALUES.some(([k]) => k === value) || !ctx.picksView) break;
+        if (ctx.picksView[place] === value) break;                          // a tap on the chosen segment: no write, no haptic
+        const r = ctx.callbacks?.onSetPicksView?.(place, value);
+        if (r && r.changed) { haptic('selection'); ctx = { ...ctx, picksView: { ...ctx.picksView, [place]: r.value } }; patchPicksView(mainContentEl, ctx); }
+        break;
+      }
       // ══ SP-52 / DI-452 (2026-10-01) — THE QUICK LIGHT/DARK TOGGLE ═══════════════════════════════════════════
       // One write path (the callback -> applyColorSchemeChoice), then an IN-PLACE patch: no innerHTML, no pane
       // repaint (so the tapped node and VoiceOver focus survive). A selection haptic on every state CHANGE

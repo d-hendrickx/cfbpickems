@@ -1,0 +1,18 @@
+{
+  "id": "gameviewstyletest",
+  "script": "gameviewstyletest.mjs",
+  "summary": "strict",
+  "floor": 54,
+  "tags": [
+    "browser"
+  ],
+  "deps": [
+    "js/**",
+    "css/styles.css",
+    "index.html",
+    "minidom.mjs",
+    "statsfixtures.mjs"
+  ],
+  "expectedMs": 6000,
+  "note": "RAISED from 46 by the D1 Game Day consolidated round (2026-10-08): [6] the DI-592 thread sheet and [7] the DI-597 Share sheet and attachment, measured in Chromium (web and native, both text sizes), with anti-vacuity 5k-5n. | RAISED from 37 by D1 Game Day fix round 2, review round 3 (2026-10-08): 1n the status chip's cross-fade stacks old and new in one cell (no jump, ghost aria-hidden, untouchable); 2c a leaving pill computes to opacity 0 / pointer-events none and keeps its box. | RAISED from 33 by D1 Game Day fix round 2, review round 3 (2026-10-08): 0b-2, 1k-1m What's next's computed geometry (one and two buttons, both text sizes). | RAISED from 30 by D1 Game Day fix round 2 (2026-10-08): 1i/1j P-3 for the prev / next cross-fade — the ghost covers the body exactly, takes no touches, and a NEW tap during the fade reaches the real control (elementFromPoint); 5j anti-vacuity. | D1 Lane B Game Day fix round 2 (P-8 / TP 233, 2026-10-08): the new surfaces' styling proven by COMPUTED GEOMETRY in a real Chromium over the markup the real app.js paints (minidom from the real index.html) and the real css/styles.css, at 375 pt, default and 1.35x text: the Game view (prev / next 44 x 44 and 8 pt apart, every action-group button >= 44 pt, centred, 8 pt apart, cards 16 pt apart, no horizontal overflow, Related cards laid out full width 8 pt apart, score lockups 48 x 48), Game Day's open-card row lockups (24 x 24, rows >= 44, no overflow), the Standard matrix's By team note (Compact >= 44 pt, 16 pt above the matrix, centred) and Chat's Back chip (>= 44 pt, 16 pt in, a long label ellipsizes inside it, 8 pt above the pills); anti-vacuity sheets for every detector. Registered 2026-10-08."
+}

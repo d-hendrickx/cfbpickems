@@ -1,0 +1,25 @@
+{
+  "id": "gamedaybudgettest",
+  "script": "gamedaybudgettest.mjs",
+  "summary": "strict",
+  "floor": 61,
+  "tags": [
+    "browser",
+    "tz"
+  ],
+  "deps": [
+    "js/home.js",
+    "js/gameday.js",
+    "js/gameday-sheet.js",
+    "js/gameday-dom.js",
+    "js/pick-groups.js",
+    "js/pick-chips.js",
+    "css/styles.css",
+    "index.html",
+    "d1homeenv.mjs",
+    "gamedayenv.mjs",
+    "statsfixtures.mjs"
+  ],
+  "expectedMs": 7000,
+  "note": "RAISED from 52 by DESIGN_D1_E (2026-10-15, Drew D-88, W-85): [1m] the Open card of a sport the member has NOT joined ('In 2h 10m · you're not in NFL picks yet' beside a 'Join NFL picks' button, and the same with the longest plausible code, NCAAFB) through the real Home, 16 measurements at both phones, both text sizes, Light and Dark: inside the 33% cap, the first feed card's title above the tab bar, 44 pt, nothing clipped, the clause folding at the largest text; [4j] without the fold rule the card reads 35.1%; [4k] an engine without container queries (iOS 15) folds the clause at every size and stays inside the cap. | RAISED from 50 by D1 Game Day review round 3 note N2 (2026-10-08): [4h] with container queries unavailable (iOS 15, simulated) the Final card with its longest Next line stays within 33% on both phones at both text sizes (the short phone folds it); [4i] anti-vacuity: no container query and no fallback reads 35.1%. | RAISED from 49 by D1 Game Day fix round 2, review round 3 (2026-10-08): [2i] the open Final card's full What's next note, laid out inside the card on both phones and text sizes. | RAISED from 47 by D1 Game Day fix round 2 (DI-599 / D-54, 2026-10-08): the Final card with its 'Next: …' line joins [1] (finalNext, finalNextDue: 96 measurements); [1l] the short form shows at default text and folds away at 1.35x on the 667 pt phone (the open card carries it in full); [4g] anti-vacuity: without the fold rule the longest line reads 35.1% > 33%. | RAISED from 39 by D1 Game Day fix round 1 (B3, 2026-10-08): [3k]-[3r] in the real engine: the card's node, its focus and its rail's scrollLeft survive a feed change around it (anti-vacuity: the old whole-feed rewrite loses all three), and the open body's fade runs only while data-gd-moving. | D1 Lane B (DI-603 / DI-605 rev 3 / DI-609): the Game Day card's SIZE BUDGET and its IN-PLACE MOTION, measured in a real Chromium over the real css, the real index.html shell and the markup Home itself renders: every collapsed state at 375x812 and 375x667, default and 1.35x text, Light and Dark (height <= 33% of the content window, the first feed card's title above the tab bar, no tap target under 44 pt, no two buttons within 8 pt, no clipped pill, a pill only for a LIVE game), the open card (at most five rows, no inner scroller, a centered 44 pt footer 8 pt apart), the 300 ms height with no overshoot, the card's top edge and the scroll offset unchanged, instant under Reduce Motion; anti-vacuity mutants. Registered 2026-10-08."
+}

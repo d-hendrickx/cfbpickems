@@ -1,0 +1,20 @@
+{
+  "id": "headermetatest",
+  "script": "headermetatest.mjs",
+  "label": "112d",
+  "summary": {
+    "regex": "^(\\d+) passed, (\\d+) failed$",
+    "flags": "m",
+    "passed": 1,
+    "failed": 2,
+    "verdict": null,
+    "skipped": null
+  },
+  "floor": 217,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 200,
+  "note": "RAISED from 189 by SP-56 (2026-09-30, feat/sp56-standings-fit: [compact-a..l] formatWeekLabelParts compact:true — same month, two months, across a year, one date, start==end, no dates, demo, unparseable, name untouched, precedence over collapseYear, and every non-compact caller …"
+}

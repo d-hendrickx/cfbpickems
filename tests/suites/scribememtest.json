@@ -1,0 +1,12 @@
+{
+  "id": "scribememtest",
+  "script": "scribememtest.mjs",
+  "label": "95",
+  "summary": "loose",
+  "floor": 38,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "UN-237/238 / DI-258-260 — the client half of SCRIBE memory on Supabase: the four adapter calls and their wire shape, loud-fail on every refusal the server has (including the POLICY-FILTERED DELETE, which PostgREST answers with an empty set and NO error), the whole chain from …"
+}

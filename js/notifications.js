@@ -286,6 +286,13 @@ export const SERVER_JOB_NAMES = Object.freeze([
   // `js/scribeAgent.js`'s `scribeReactRemote()` has one boolean to read, and
   // so the two readers stay the same decision.
   'scribeReact',
+  // `feedBuild` (D1 Lane C, DI-659) — the Home content builder. No client relay to suppress; on this list so the Background Jobs card renders its switch
+  // and the two readers stay the same decision (notifytest 28-9 compares this list with the server's, in order).
+  'feedBuild',
+  // D1 Lane C (DI-656) — `scribe-scan`'s two switches. No client relay to suppress; on this list so the Background Jobs card renders them and the two
+  // readers stay the same decision (notifytest [28-9] compares the lists element for element).
+  'scribeCallout',
+  'scribeScan',
 ]);
 
 /** The pure decision, over a settings blob that has already been read. Exported
@@ -398,6 +405,28 @@ let _pushAdapter = null;
 export function registerPushAdapter(adapter) { _pushAdapter = adapter; }
 export function hasPushAdapter() { return !!_pushAdapter; }
 export function _clearPushAdapterForTest() { _pushAdapter = null; }
+
+// ══════════════════════════════════════════════════════════════════════════
+// SECURITY N-1 (0045 delta, 2026-10-08) — WHO MAY SEND THE ONE PUSH NOBODY CAN
+// SILENCE. A COMMISSIONER_ANNOUNCEMENT skips every category switch (D3), and its
+// `meta` is member-writable, so the chat relay below grants that exemption only
+// when the row's AUTHOR is a confirmed, active commissioner of the row's league.
+// This module does not import the adapter (authtest [44h]: three modules do, each
+// for a stated reason), so app.js hands it the role reader once at boot:
+//   setMemberRoleSource((leagueId, memberId) => sb.getConfirmedMemberRole(leagueId, memberId))
+// Until then, and in any mode where the reader answers null, every announcement
+// is an ordinary chat push: FAILS CLOSED, never open. The server half is
+// notify-fanout's `pushCategoryFor(record, { authorIsCommissioner })`, and
+// migration 0045 refuses the forged row itself (reserved_announcement).
+// ══════════════════════════════════════════════════════════════════════════
+const _NO_ROLE = () => null;
+let _memberRoleOf = _NO_ROLE;
+export function setMemberRoleSource(fn) { _memberRoleOf = typeof fn === 'function' ? fn : _NO_ROLE; }
+function _announcementFromCommissioner(m) {
+  if (!m || typeof m.author !== 'string' || !m.author) return false;
+  try { return _memberRoleOf(typeof m.leagueId === 'string' ? m.leagueId : '', m.author) === 'commissioner'; }
+  catch { return false; }
+}
 
 /** Provider isolation (§8): `deliverPush` failing or being absent must NEVER
  *  block `createInAppNotification`. Always resolves — never throws. */
@@ -1104,7 +1133,13 @@ function _scanNewChatMessages() {
     // preference on the device. A known event still resolves to its own
     // category (COMMISSIONER_ANNOUNCEMENT's entry IS null, and that null is
     // read from the table, which is where the exemption belongs).
-    const categoryOverride = lifecycle ? CATEGORY_OF_EVENT[lifecycle.event] : undefined;
+    // SECURITY N-1 (0045 delta, 2026-10-08) — …but `meta` is member-writable, so
+    // the table's null is granted only when the AUTHOR is a confirmed active
+    // commissioner of the row's league (_announcementFromCommissioner). Any other
+    // announcement-shaped row is an ordinary chat push (`undefined` -> 'chat').
+    const categoryOverride = !lifecycle ? undefined
+      : lifecycle.event === LIFECYCLE_EVENTS.COMMISSIONER_ANNOUNCEMENT ? (_announcementFromCommissioner(m) ? null : undefined)
+      : CATEGORY_OF_EVENT[lifecycle.event];
     const senderId = m.author;
     const preview = (m.body || '').slice(0, 60);
     for (const p of players) {

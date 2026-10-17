@@ -1,0 +1,21 @@
+{
+  "id": "chatsporttest",
+  "script": "chatsporttest.mjs",
+  "summary": "strict",
+  "floor": 205,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/chat.js",
+    "js/chat-ui.js",
+    "js/chat-sport-pills.js",
+    "js/sport-tag.js",
+    "js/chatTransport.js",
+    "js/supabase-projection.js",
+    "js/competition.js",
+    "js/sports/*.js",
+    "supabase/migrations/0033_multisport_core.sql"
+  ],
+  "note": "RAISED from 200 by the D1 Game Day consolidated round (2026-10-08): [8c2] a sport pill is a chat filter pill — a change ends the Back chip (onFilterChange), the same pill does not, a throwing hook never stops it (red first on the unmodified onSportPillTap). | D1 DI-553 / DI-530 (W-57): the sportTag plumbing (closed set pinned to 0033's CHECK, column-only read, no key when untagged) and the Locker Room sport pills (DI-553's table, subset-only filter, per-pill unread and the sport: cursor namespace, XSS, composer rule, system-row stamps, a target is never hidden, per-account/league filter, single-sport byte-identity)."
+}

@@ -280,6 +280,9 @@ export const CARD_OPERABILITY = Object.freeze({
   // which the round-1 comments here and in js/admin-panel.js misattributed.
   // Corrected by reviewer round 2, 2026-09-25.
   'scribe-model':                            { scope: 'commissioner' },
+  // D1 Lane C (DI-634) — READ by platform admins; the WRITE is Super Admin only and is gated in the card itself (it renders no chevron and opens no sheet for anyone else) and, for real,
+  // by `super_set_platform_kv`'s `is_super_admin()` check on the server (migration 0049 admits the key).
+  'scribe-routes':                           { scope: 'admin' },
   'pilot-league-flag':                       { scope: 'admin' },        // read-only display
   // Data
   'export-data':                               { scope: 'admin' },     // see note above
@@ -289,6 +292,7 @@ export const CARD_OPERABILITY = Object.freeze({
   'recalculate-finalized-weeks':                       { scope: 'commissioner' },
   'obligation-corrections':                              { scope: 'commissioner' },
   'scribe-training':                                       { scope: 'commissioner', pilotGated: true },
+  'content-ai-status':                                       { scope: 'admin' },     // D1 Lane C (DI-637) — read-only display, aggregates and fixed codes only
   'background-jobs':                                         { scope: 'admin' },     // read-only display
   'feedback-bug-reports':                                      { scope: 'admin' },   // see note above
   // DI-425 (UN-380, coordinator addendum, 2026-09-28) — moved from Comm→SCRIBE.

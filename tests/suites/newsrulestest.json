@@ -1,0 +1,20 @@
+{
+  "id": "newsrulestest",
+  "script": "newsrulestest.mjs",
+  "summary": "strict",
+  "floor": 206,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "supabase/functions/_shared/news-rules.mjs",
+    "supabase/functions/_shared/news-fetch.js",
+    "supabase/functions/_shared/news-teams.mjs",
+    "js/newsRules.js",
+    "js/team-match.js",
+    "supabase/news/news-sources-d1.json",
+    "supabase/news/fixtures/feeds"
+  ],
+  "expectedMs": 9000,
+  "note": "D1 Lane C (DI-670…672; the news design's DI-480 / DI-481 with Amendment 1 SC-N3…SC-N8, narrowed for D1; 2026-10-08): the collector's PURE rules against hostile vectors and the recorded 2026-10-08 publisher feeds — entities (one pass), the scanner (DOCTYPE subsets / <!ENTITY refused, block caps, skipped bodies, prototype pollution, attribute bomb, the budget inside the loop), dates (local_civil, offsets, the 100-byte cap, the clamp), S-C1 URL vectors per source host list, SC-N4 patterns and the denylist, SC-N3(d) secret keys, pictures (S-C6 / SC-N5), dedupe and DI-672 grouping, the via guard, robots (groups, longest match, `*`/`$`, 401/403, caps, the ops budget), the sport ladder, team matching (the DI-481 7.4 pairs), processFeed over all 13 publishers, regex discipline, and a 2,200-mutation fuzz with linear-time bounds (bars widen with the load average and say so). KIT_MUTANTS: 23, all RED (tests/kits/lane-c-news-kit.mjs server)."
+}

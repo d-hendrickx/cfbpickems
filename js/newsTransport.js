@@ -1,4 +1,24 @@
 /**
+ * CFB Pickems — js/newsTransport.js (News: the transport — option A 2026-10-01; the D1 SERVER path 2026-10-08, DI-673 / DI-671)
+ * ==============================================================================================================================
+ * ── D1 (DI-673): THE DEFAULT PATH IS THE SERVER ─────────────────────────────────────────────────────────────────────────
+ * `fetchNews()` reads the publisher headlines the collector (`news-ingest`) stored, through ONE typed RPC on our own backend:
+ *   client.rpc('news_feed', { p_sports, p_limit, p_slate_keys })  — a POST (never `{ get: true }`), keyset-paged, clamped server-side, RLS-scoped to the
+ *   caller (pilot-only sources reach pilot-league members only), with pictures nulled server-side unless `news_images` is exactly true (SC-N17).
+ * NO ARGUMENT IS DERIVED FROM A PICK OR A TEAM THE VIEWER CHOSE (DI-673, S-C2-N): `p_sports` is the viewer's sports, `p_slate_keys` is the league's PUBLISHED
+ * slate (every game of the current week, home and away, sorted, at most 60: identical for every member). The viewer's own picks only RANK on the device.
+ * The link and picture hosts each item may use come from `news_sources_for` (cached 24 h per id); an item whose source is unknown, whose URL fails the source's
+ * own host list, or whose source is not `cleared` in a NON-pilot league (the client mirror of the pilot rule, `isPilotOnlyAllowed('newsPilotSources')`) is
+ * dropped — fail closed. The platform levers (`news_enabled`, `news_images`) are read in ONE two-key select, together with the articles, so the picture decision is
+ * known before the first card paints (no pop-in). The client never reads `news_articles` directly and never contacts a publisher for a headline.
+ * The Supabase client is INJECTED (`installNewsTransport({ getClient })`, called by app.js at boot).
+ *
+ * ── THE CONTINGENCY (DI-671, C20) ──────────────────────────────────────────────────────────────────────────────────────
+ * The option-A phone-side ESPN fetch below (`fetchEspnNews`) survives ONLY behind `NEWS_CLIENT_ESPN_FALLBACK` (false). It may be turned on only after Drew checks
+ * the privacy wording (the approved paragraph says OUR SERVERS collect the headlines). Until then, if the server path is unavailable, News shows its calm
+ * "temporarily unavailable" state. Its code and its tests (newstest [5]) are kept so the contingency is a reviewed one-line flip, never a rewrite.
+ *
+ * ══ OPTION A (2026-10-01), NOW THE CONTINGENCY PATH ════════════════════════════════════════════════════════════════════
  * CFB Pickems — js/newsTransport.js (Social Platform News, option A: ESPN headlines only; DI-375 / DI-381, 2026-10-01)
  * ===================================================================================================================
  * The ONLY module that talks to ESPN for news: fetch, normalize, filter, dedupe, cache. CLIENT-SIDE, like the scoreboard — no table, no
@@ -37,9 +57,17 @@
 import { logoOk } from './data-provider.js';
 import { getIdentityEpoch, getActiveLeagueId } from './auth.js';
 import { parseArticleUrl, isAllowedNewsImageUrl } from './newsCard.js';
-import { stripControlAndBidi } from './newsRules.js';
+import { stripControlAndBidi, parseArticleUrl as parseArticleUrlFor, isAllowedImageUrl } from './newsRules.js';
+import { isPilotOnlyAllowed } from './pilot-only.js';
 
 export const NEWS_FEATURE_ENABLED = true;                  // the code-level kill switch (DI-381): flip and ship to disable news app-wide
+/** C20: the phone-side ESPN fetch (option A) is the CONTINGENCY only. Turning it on needs Drew's wording check of the privacy paragraph first (DI-671 / DI-683). */
+export const NEWS_CLIENT_ESPN_FALLBACK = false;
+/** The server path's request bounds (the RPC clamps them again: p_limit 1..100, at most 60 slate keys). */
+export const NEWS_SERVER_LIMIT = 100;
+export const NEWS_SLATE_KEYS_MAX = 60;
+export const NEWS_LEVERS_TTL_MS = 10 * 60 * 1000;
+export const NEWS_SOURCES_TTL_MS = 24 * 60 * 60 * 1000;
 export const NEWS_CACHE_TTL_MS = 15 * 60 * 1000;
 export const NEWS_MAX_RESPONSE_BYTES = 500000;             // generous for a 20-article payload (~100 KB live), refuses anything absurd
 export const NEWS_ARTICLE_LIMIT = 20;
@@ -307,11 +335,15 @@ async function fetchEspnNewsJson(sport, timeoutMs) {
 
 // ─── cache + in-flight ──────────────────────────────────────────────────────────────────────────────────────────────────
 
+const _serverCache = new Map(); // query signature -> { items, fetchedAt, epoch, leagueId, off }   (the D1 server path)
+const _serverInFlight = new Map();
+const _sourceCache = new Map(); // source id -> { row, at }   (news_sources_for, 24 h)
+let _levers = null;             // { newsEnabled, newsImages, at, epoch, leagueId }
 const _cache = new Map();       // sport -> { items, fetchedAt, epoch, leagueId }
 const _inFlight = new Map();    // `${epoch}|${leagueId}|${sport}` -> Promise<{ items, stats }>
 
-/** Clears the cache (and forgets in-flight requests). Wired into applyIdentityDeltaIfChanged() by the Home wiring window; also called by tests. */
-export function clearNewsCache() { _cache.clear(); _inFlight.clear(); }
+/** Clears every cache (and forgets in-flight requests): the ESPN contingency's AND the server path's. Wired into applyIdentityDeltaIfChanged() by the Home wiring; also called by tests. */
+export function clearNewsCache() { _cache.clear(); _inFlight.clear(); _serverCache.clear(); _serverInFlight.clear(); _sourceCache.clear(); _levers = null; _contentCache.clear(); _contentInFlight.clear(); }
 export const _resetNewsTransportForTest = clearNewsCache;
 export function _newsCacheSizeForTest() { return _cache.size; }
 
@@ -355,7 +387,7 @@ async function loadSport(sport, { force, timeoutMs, nowMs, token }) {
  * serve instead (or the identity moved). ZERO fetch calls when the code kill switch is off or no sport is requested (S-C8). A partial failure
  * returns the sports that succeeded and records the failed one in `errors` (the player still sees news; a 1-of-5 hiccup is not a message).
  */
-export async function fetchNews({ sports = [], force = false, timeoutMs = 6000, now = Date.now() } = {}) {
+export async function fetchEspnNews({ sports = [], force = false, timeoutMs = 6000, now = Date.now() } = {}) {
   const list = [];
   for (const s of Array.isArray(sports) ? sports : []) { if (typeof s === 'string' && list.indexOf(s) < 0 && list.length < 10) list.push(s); }
   const stats = emptyStats();
@@ -381,3 +413,336 @@ export async function fetchNews({ sports = [], force = false, timeoutMs = 6000, 
   if (perSport.every((r) => !r)) throw new NewsUnavailableError(list, 'fetch');
   return { items, errors, stats };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// D1 (DI-673): THE SERVER PATH — the default.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+const _deps = { getClient: null };
+/** Called once by app.js at boot with the app's Supabase client getter (auth.js getSupabaseClient). Tests install a fake. Nothing else is injected. */
+export function installNewsTransport({ getClient } = {}) { _deps.getClient = typeof getClient === 'function' ? getClient : null; }
+
+const SOURCE_ID_RE = /^[a-z0-9][a-z0-9_-]{2,63}$/;
+const KEY_RE = /^[a-z0-9 ]{2,80}$/;
+const asList = (v) => (Array.isArray(v) ? v : []);
+
+/**
+ * The slate keys sent to the server: the normalized names of every team in the league's PUBLISHED slate (SC-N13(b): every game of the active week, whatever its
+ * status), unique, SORTED, then truncated at 60 — so the truncation can never depend on who picked what (SC-N13(a)). Pure.
+ */
+export function slateKeysFor(teamNames, norm) {
+  const out = new Set();
+  for (const n of asList(teamNames)) { if (typeof n !== 'string') continue; const k = norm(n); if (KEY_RE.test(k)) out.add(k); }
+  return Array.from(out).sort().slice(0, NEWS_SLATE_KEYS_MAX);
+}
+
+/** The two platform levers, in ONE select, cached 10 minutes per identity. A row that is unread or not exactly a boolean reads: newsEnabled ON (missing = on), newsImages OFF. */
+async function readLevers(client, token, nowMs) {
+  if (_levers && _levers.epoch === token.epoch && _levers.leagueId === token.leagueId && nowMs - _levers.at < NEWS_LEVERS_TTL_MS && nowMs >= _levers.at) return _levers;
+  let newsEnabled = true, newsImages = false;
+  try {
+    const { data, error } = await client.from('platform_kv').select('key,value').in('key', ['news_enabled', 'news_images']);
+    if (!error && Array.isArray(data)) {
+      for (const row of data) {
+        if (!row || typeof row !== 'object') continue;
+        if (row.key === 'news_enabled') newsEnabled = row.value !== false;           // only an exact false turns News off (a missing row is on)
+        if (row.key === 'news_images') newsImages = row.value === true;              // only an exact true shows pictures (fail closed)
+      }
+    }
+  } catch { newsImages = false; }
+  _levers = { newsEnabled, newsImages, at: nowMs, epoch: token.epoch, leagueId: token.leagueId };
+  return _levers;
+}
+
+/** The registry rows for these source ids (news_sources_for: visible sources only), cached 24 h per id. A failure for NEW ids leaves them unknown (their items drop). */
+async function sourcesFor(client, ids, nowMs) {
+  const need = ids.filter((id) => { const c = _sourceCache.get(id); return !c || nowMs - c.at > NEWS_SOURCES_TTL_MS || nowMs < c.at; }).slice(0, 100);
+  if (need.length) {
+    try {
+      const { data, error } = await client.rpc('news_sources_for', { p_ids: need });
+      if (!error && Array.isArray(data)) {
+        for (const r of data) {
+          if (!r || typeof r !== 'object' || typeof r.id !== 'string' || !SOURCE_ID_RE.test(r.id)) continue;
+          _sourceCache.set(r.id, { at: nowMs, row: Object.freeze({
+            id: r.id, publisher: typeof r.publisher === 'string' ? stripControlAndBidi(r.publisher).slice(0, 80) : '',
+            paywall: ['none', 'metered', 'hard'].indexOf(r.paywall) >= 0 ? r.paywall : 'none',
+            rank: Number.isFinite(Number(r.rank)) ? Number(r.rank) : 50,
+            legalStatus: r.legal_status === 'cleared' ? 'cleared' : r.legal_status === 'blocked' ? 'blocked' : 'pilot',
+            linkHosts: Object.freeze(asList(r.link_hosts).filter((h) => typeof h === 'string').slice(0, 12)),
+            imageHosts: Object.freeze(asList(r.image_hosts).filter((h) => typeof h === 'string').slice(0, 12)),
+          }) });
+        }
+      }
+    } catch { /* unknown ids stay unknown: their items drop (fail closed) */ }
+  }
+  const out = new Map();
+  for (const id of ids) { const c = _sourceCache.get(id); if (c && c.row.publisher) out.set(id, c.row); }
+  return out;
+}
+
+/**
+ * One `news_feed` row -> one frozen NewsItem, or null. Rows are "untrusted-ish" (the collector could have a bug): every field is type-checked and capped; the URL
+ * is re-validated against THE SOURCE'S OWN link hosts; a picture is kept only when the lever is on and its host is pinned on that source.
+ */
+export function normalizeServerRow(row, source, { picturesOn = false } = {}) {
+  if (!row || typeof row !== 'object' || !source) return null;
+  const idNum = typeof row.id === 'number' ? row.id : Number(row.id);
+  if (!Number.isSafeInteger(idNum) || idNum < 1) return null;
+  if (typeof row.headline !== 'string') return null;
+  const headline = stripControlAndBidi(row.headline.slice(0, 600)).slice(0, NEWS_HEADLINE_MAX).trim();
+  if (!headline) return null;
+  const url = parseArticleUrlFor(row.url, source.linkHosts);
+  if (!url) return null;
+  const ms = Date.parse(row.published_at);
+  if (!Number.isFinite(ms)) return null;
+  const upd = typeof row.updated_at === 'string' ? Date.parse(row.updated_at) : NaN;
+  const sport = typeof row.sport === 'string' && Object.prototype.hasOwnProperty.call(NEWS_SPORT_PATHS, row.sport) ? row.sport : null;
+  if (!sport) return null;
+  const via = typeof row.via === 'string' && /^[A-Za-z0-9 .,'&-]{2,60}$/.test(row.via) ? row.via : null;
+  const imageUrl = picturesOn && typeof row.image_url === 'string' ? isAllowedImageUrl(row.image_url, source.imageHosts) : null;
+  const teamKeys = asList(row.team_keys).filter((k) => typeof k === 'string' && KEY_RE.test(k)).slice(0, 40);
+  const teamNames = asList(row.team_names).filter((n) => typeof n === 'string').map((n) => stripControlAndBidi(n).slice(0, 80)).filter(Boolean).slice(0, 4);
+  return Object.freeze({
+    id: 'news_' + String(idNum),
+    url,
+    source: source.publisher,                                                                    // the REGISTRY's publisher (never feed text)
+    publisher: source.publisher,
+    via,
+    sourceId: source.id,
+    paywall: source.paywall,
+    rank: source.rank,
+    headline,
+    imageUrl,
+    publishedAt: new Date(ms).toISOString(),
+    updatedAt: Number.isFinite(upd) ? new Date(upd).toISOString() : null,
+    sport,
+    teamIds: Object.freeze(teamKeys.slice()),
+    teamKeys: Object.freeze(teamKeys),
+    teamNames: Object.freeze(teamNames),
+    teamShortNames: Object.freeze([]),
+    dedupeKey: typeof row.dedupe_key === 'string' && /^[0-9a-f]{1,40}$/.test(row.dedupe_key) ? row.dedupe_key : null,
+    linkHosts: source.linkHosts,
+    imageHosts: source.imageHosts,
+    reason: null,
+    relevanceTier: null,
+    description: null,
+  });
+}
+
+/**
+ * THE SERVER PATH. Resolves `{ items, errors:{}, stats, off }`; `off: 'platform'` when news_enabled is exactly false (no article is returned). ZERO network when
+ * the code switch is off or no sport is asked for (S-C8). Throws NewsUnavailableError when the feed read failed and nothing fresh is cached, or the identity moved.
+ */
+export async function fetchServerNews({ sports = [], slateKeys = [], force = false, now = Date.now(), league = null } = {}) {
+  const list = [];
+  for (const s0 of Array.isArray(sports) ? sports : []) { if (typeof s0 === 'string' && Object.prototype.hasOwnProperty.call(NEWS_SPORT_PATHS, s0) && list.indexOf(s0) < 0) list.push(s0); }
+  const stats = { droppedSource: 0, droppedShape: 0, droppedPilot: 0 };
+  if (!NEWS_FEATURE_ENABLED || list.length === 0) return { items: [], errors: {}, stats, off: false };
+  const client = _deps.getClient ? (() => { try { return _deps.getClient(); } catch { return null; } })() : null;
+  if (!client || typeof client.rpc !== 'function') throw new NewsUnavailableError(list, 'no_client');
+  const keys = asList(slateKeys).filter((k) => typeof k === 'string' && KEY_RE.test(k)).slice(0, NEWS_SLATE_KEYS_MAX);
+  const token = newsToken();
+  const sig = `${list.slice().sort().join(',')}|${keys.join(',')}`;
+  const hit = _serverCache.get(sig);
+  const hitUsable = !!hit && sameIdentity(hit, token) && isFresh(hit, now);
+  if (hitUsable && !force) return { items: hit.items, errors: {}, stats, off: hit.off };
+  const jobKey = `${token.epoch}|${token.leagueId}|${sig}`;
+  let job = _serverInFlight.get(jobKey);
+  if (!job) {
+    job = (async () => {
+      try {
+        // the levers and the feed TOGETHER: the picture decision is known before the first card paints
+        const [levers, feed] = await Promise.all([
+          readLevers(client, token, now),
+          (async () => { try { return await client.rpc('news_feed', { p_sports: list, p_limit: NEWS_SERVER_LIMIT, p_slate_keys: keys }); } catch { return { data: null, error: { code: 'thrown' } }; } })(),
+        ]);
+        if (levers.newsEnabled === false) return { items: [], off: 'platform' };
+        if (!feed || feed.error || !Array.isArray(feed.data)) throw new NewsUnavailableError(list, 'fetch');
+        const rows = feed.data.filter((r) => r && typeof r === 'object' && typeof r.source_id === 'string' && SOURCE_ID_RE.test(r.source_id));
+        const srcMap = await sourcesFor(client, Array.from(new Set(rows.map((r) => r.source_id))), now);
+        // the client MIRROR of the server's pilot-only rule (belt and braces over RLS). No league passed = the installed resolver answers for the ACTIVE league
+        // (app.js installs it at boot); passing `null` explicitly would read as "no league" and hide every pilot source from the pilot league itself.
+        const pilot = league ? isPilotOnlyAllowed('newsPilotSources', league) : isPilotOnlyAllowed('newsPilotSources');
+        const items = [];
+        const seen = new Set();
+        for (const r of rows) {
+          const src = srcMap.get(r.source_id);
+          if (!src) { stats.droppedSource++; continue; }
+          if (src.legalStatus === 'blocked' || (!pilot && src.legalStatus !== 'cleared')) { stats.droppedPilot++; continue; }
+          const it = normalizeServerRow(r, src, { picturesOn: levers.newsImages === true });
+          if (!it) { stats.droppedShape++; continue; }
+          if (seen.has(it.id)) continue;
+          seen.add(it.id);
+          items.push(it);
+        }
+        return { items, off: false };
+      } finally {
+        if (_serverInFlight.get(jobKey) === job) _serverInFlight.delete(jobKey);
+      }
+    })();
+    _serverInFlight.set(jobKey, job);
+  }
+  let result;
+  try { result = await job; }
+  catch (e) {
+    if (hitUsable) return { items: hit.items, errors: {}, stats, off: hit.off };
+    throw e instanceof NewsUnavailableError ? e : new NewsUnavailableError(list, 'fetch');
+  }
+  if (newsTokenMoved(token)) {
+    console.warn('[news] discarding a result that resolved after the identity moved');
+    throw new NewsUnavailableError(list, 'identity');
+  }
+  _serverCache.set(sig, { items: result.items, off: result.off, fetchedAt: now, epoch: token.epoch, leagueId: token.leagueId });
+  return { items: result.items, errors: {}, stats, off: result.off };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// D1 Lane C (DI-660 / DI-668): THE HOME CONTENT LEG — matchup, player and spotlight cards from 0055's feed_content_list.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+/** Review B4 (2026-10-14): ask for the RPC's maximum (60) and let the device keep 40 by tier, then unseen, then newest (feed-relevance.js); asking for 40 would make the
+ *  server's newest 40 the cut, and relevance could never reach an older "Your pick" card. */
+export const CONTENT_LIMIT = 60;
+export const CONTENT_TTL_MS = 5 * 60 * 1000;
+export const CONTENT_SPOTLIGHT_MS = 72 * 60 * 60 * 1000;
+const CONTENT_KIND_SET = Object.freeze(['matchup.preview', 'player.preview', 'spotlight']);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const _contentCache = new Map();     // sports signature -> { items, fetchedAt, epoch, leagueId }
+const _contentInFlight = new Map();
+
+export class ContentUnavailableError extends Error {
+  constructor(reason) { super('content unavailable'); this.name = 'ContentUnavailableError'; this.reason = reason || 'fetch'; }
+}
+
+const cleanStr = (v, max) => (typeof v === 'string' ? stripControlAndBidi(v).replace(/\s+/g, ' ').trim().slice(0, max) : '');
+const cleanList = (v, max, n) => asList(v).map((x) => cleanStr(x, max)).filter(Boolean).slice(0, n);
+function cleanCard(card, kind) {
+  const c = card && typeof card === 'object' && !Array.isArray(card) ? card : {};
+  const team = (t) => (t && typeof t === 'object' ? { name: cleanStr(t.name, 60), record: /^\d{1,2}-\d{1,2}(-\d{1,2})?$/.test(String(t.record || '')) ? String(t.record) : null, rank: Number.isInteger(t.rank) && t.rank >= 1 && t.rank <= 25 ? t.rank : null } : null);
+  const out = { headline: cleanStr(c.headline, 120) };
+  if (kind === 'matchup.preview') Object.assign(out, { away: team(c.away), home: team(c.home), kickoff: Number.isFinite(Date.parse(c.kickoff)) ? new Date(Date.parse(c.kickoff)).toISOString() : null, venue: cleanStr(c.venue, 80) || null, tv: cleanList(c.tv, 30, 3) });
+  if (kind === 'player.preview') Object.assign(out, { name: cleanStr(c.name, 60), team: cleanStr(c.team, 60), opponent: cleanStr(c.opponent, 60), position: c.position === 'QB' ? 'QB' : 'WR/TE', label: cleanStr(c.label, 80), seasonLine: cleanStr(c.seasonLine, 200) || null, last3Line: cleanStr(c.last3Line, 200) || null, trend: ['up', 'down', 'steady'].indexOf(c.trend) >= 0 ? c.trend : null, injury: cleanStr(c.injury, 120) || null, kickoff: Number.isFinite(Date.parse(c.kickoff)) ? new Date(Date.parse(c.kickoff)).toISOString() : null });
+  if (kind === 'spotlight') {
+    const r = c.rationale && typeof c.rationale === 'object' ? c.rationale : {};
+    Object.assign(out, { name: cleanStr(c.name, 60), team: cleanStr(c.team, 60), opponent: cleanStr(c.opponent, 60), score: /^\d{1,3}-\d{1,3}$/.test(String(c.score || '')) ? String(c.score) : null, result: ['won', 'lost', 'tied'].indexOf(c.result) >= 0 ? c.result : null,
+      date: /^\d{4}-\d{2}-\d{2}$/.test(String(c.date || '')) ? String(c.date) : null, lines: cleanList(c.lines, 160, 3), why: cleanStr(c.why, 300),
+      rationale: Object.freeze({ standardVersion: cleanStr(String(r.standardVersion || ''), 4), rule: cleanStr(r.rule, 80), rank: Number.isInteger(r.rank) ? r.rank : null, ofCandidates: Number.isInteger(r.ofCandidates) ? r.ofCandidates : null }) });
+  }
+  return Object.freeze(out);
+}
+
+/** One feed_content_list / feed_content_get row -> one frozen content item, or null. Untrusted-ish: every field is typed and capped; no reason is read from the server. */
+export function normalizeContentRow(row) {
+  if (!row || typeof row !== 'object') return null;
+  const id = typeof row.id === 'string' && UUID_RE.test(row.id) ? row.id : null;
+  const kind = CONTENT_KIND_SET.indexOf(row.kind) >= 0 ? row.kind : null;
+  const sport = row.sport === 'cfb' || row.sport === 'nfl' ? row.sport : null;
+  const pub = Date.parse(row.published_at), fresh = Date.parse(row.fresh_as_of), exp = Date.parse(row.expires_at);
+  if (!id || !kind || !sport || !Number.isFinite(pub) || !Number.isFinite(fresh) || !Number.isFinite(exp)) return null;
+  const card = cleanCard(row.card, kind);
+  if (!card.headline) return null;
+  const status = row.synthesis_status === 'ok' ? 'ok' : 'structured';
+  const facts = asList(row.facts).filter((f) => f && typeof f === 'object' && typeof f.id === 'string').slice(0, 30).map((f) => Object.freeze({
+    id: cleanStr(f.id, 120), text: cleanStr(f.text, 400), window: cleanStr(f.window, 80) || null,
+    source: f.source && typeof f.source === 'object' ? Object.freeze({ label: cleanStr(f.source.label, 60), publishedAt: /^\d{4}-\d{2}-\d{2}$/.test(String(f.source.publishedAt || '')) ? String(f.source.publishedAt) : null }) : null,
+  })).filter((f) => f.text);
+  const eligibleUntil = kind === 'spotlight' ? Math.min(exp, pub + CONTENT_SPOTLIGHT_MS) : exp;
+  return Object.freeze({
+    id: 'content_' + id, contentId: id, cardKind: kind, sport,
+    eventRef: typeof row.event_ref === 'string' && /^espn:event:\d{1,20}$/.test(row.event_ref) ? row.event_ref : null,
+    teamKeys: Object.freeze(asList(row.team_keys).filter((k) => typeof k === 'string' && KEY_RE.test(k)).slice(0, 40)),
+    publishedAt: new Date(pub).toISOString(), freshAsOf: new Date(fresh).toISOString(), eligibleUntil: new Date(eligibleUntil).toISOString(),
+    card,
+    summary: status === 'ok' ? cleanStr(row.summary, 220) || null : null,
+    watch: Object.freeze(status === 'ok' ? asList(row.watch).map((w) => Object.freeze({ text: cleanStr(w && w.text, 140) })).filter((w) => w.text).slice(0, 2) : []),
+    talk: status === 'ok' && row.talk && typeof row.talk === 'object' && cleanStr(row.talk.text, 140) ? Object.freeze({ text: cleanStr(row.talk.text, 140) }) : null,
+    facts: Object.freeze(facts),
+    gaps: Object.freeze(asList(row.gaps).map((g) => cleanStr(g, 200)).filter(Boolean).slice(0, 20)),
+    sources: Object.freeze(asList(row.sources).map((x) => Object.freeze({ label: cleanStr(x && x.label, 60), publishedAt: /^\d{4}-\d{2}-\d{2}$/.test(String(x && x.publishedAt || '')) ? String(x.publishedAt) : null })).filter((x) => x.label).slice(0, 8)),
+    synthesisStatus: status,
+    version: Number.isInteger(row.version) ? row.version : 1,
+    reason: null, relevanceTier: null,
+  });
+}
+
+/**
+ * The content leg: `{ items }` from feed_content_list (the caller's followed sports; no pick, team or league argument, DI-668). Cached 5 minutes per identity.
+ * Throws ContentUnavailableError('no_client' | 'fetch' | 'identity'). Zero network when the code switch is off or no sport is asked for.
+ */
+export async function fetchContent({ sports = [], force = false, now = Date.now() } = {}) {
+  const list = (Array.isArray(sports) ? sports : []).filter((s, i, a) => (s === 'cfb' || s === 'nfl') && a.indexOf(s) === i).sort();
+  if (!NEWS_FEATURE_ENABLED || !list.length) return { items: [] };
+  const client = _deps.getClient ? (() => { try { return _deps.getClient(); } catch { return null; } })() : null;
+  if (!client || typeof client.rpc !== 'function') throw new ContentUnavailableError('no_client');
+  const token = newsToken();
+  const sig = list.join(',');
+  const hit = _contentCache.get(sig);
+  if (hit && !force && sameIdentity(hit, token) && now - hit.fetchedAt < CONTENT_TTL_MS && now >= hit.fetchedAt) return { items: hit.items };
+  const key = `${token.epoch}|${token.leagueId}|${sig}`;
+  let job = _contentInFlight.get(key);
+  if (!job) {
+    job = (async () => {
+      try {
+        let res;
+        try { res = await client.rpc('feed_content_list', { p_sports: list, p_limit: CONTENT_LIMIT }); } catch { res = { data: null, error: { code: 'thrown' } }; }
+        if (!res || res.error || !Array.isArray(res.data)) throw new ContentUnavailableError('fetch');
+        const seen = new Set();
+        const items = [];
+        for (const r of res.data) { const it = normalizeContentRow(r); if (it && !seen.has(it.id)) { seen.add(it.id); items.push(it); } }
+        return items;
+      } finally { if (_contentInFlight.get(key) === job) _contentInFlight.delete(key); }
+    })();
+    _contentInFlight.set(key, job);
+  }
+  let items;
+  try { items = await job; }
+  catch (e) {
+    if (hit && sameIdentity(hit, token)) return { items: hit.items, stale: true };
+    throw e instanceof ContentUnavailableError ? e : new ContentUnavailableError('fetch');
+  }
+  if (newsTokenMoved(token)) throw new ContentUnavailableError('identity');
+  _contentCache.set(sig, { items, fetchedAt: now, epoch: token.epoch, leagueId: token.leagueId });
+  return { items };
+}
+
+/** One card's detail (feed_content_get). Resolves the normalized item or null (gone / not visible); throws ContentUnavailableError on a failed read. */
+export async function fetchContentDetail(contentId) {
+  if (typeof contentId !== 'string' || !UUID_RE.test(contentId)) return null;
+  const client = _deps.getClient ? (() => { try { return _deps.getClient(); } catch { return null; } })() : null;
+  if (!client || typeof client.rpc !== 'function') throw new ContentUnavailableError('no_client');
+  const token = newsToken();
+  let res;
+  try { res = await client.rpc('feed_content_get', { p_id: contentId }); } catch { res = { data: null, error: { code: 'thrown' } }; }
+  if (!res || res.error) throw new ContentUnavailableError('fetch');
+  if (newsTokenMoved(token)) throw new ContentUnavailableError('identity');
+  const row = Array.isArray(res.data) ? res.data[0] : res.data;
+  return row ? normalizeContentRow(row) : null;
+}
+
+/**
+ * DI-667: the league's callback analysis for one week (league_insight_get: membership is checked FIRST, server-side). Resolves `{ status: 'ok'|'none', read, createdAt }`;
+ * 'none' = no analysis row, or one without model text (the detail then says "Analysis isn't available right now."). Throws ContentUnavailableError on a failed read.
+ */
+export async function fetchLeagueInsight({ leagueId, weekRef } = {}) {
+  if (typeof leagueId !== 'string' || !UUID_RE.test(leagueId) || typeof weekRef !== 'string' || !/^[0-9]{4}:(cfb|nfl):[0-9]{1,2}$/.test(weekRef)) return { status: 'none', read: null, createdAt: null };
+  const client = _deps.getClient ? (() => { try { return _deps.getClient(); } catch { return null; } })() : null;
+  if (!client || typeof client.rpc !== 'function') throw new ContentUnavailableError('no_client');
+  const token = newsToken();
+  let res;
+  try { res = await client.rpc('league_insight_get', { p_league: leagueId, p_week_ref: weekRef }); } catch { res = { data: null, error: { code: 'thrown' } }; }
+  if (!res || res.error) throw new ContentUnavailableError('fetch');
+  if (newsTokenMoved(token)) throw new ContentUnavailableError('identity');
+  const row = Array.isArray(res.data) ? res.data[0] : res.data;
+  const read = row && row.synthesis_status === 'ok' && row.synthesis && typeof row.synthesis.read === 'string' ? cleanStr(row.synthesis.read, 700) : '';
+  const created = row ? Date.parse(row.created_at) : NaN;
+  return read ? { status: 'ok', read, createdAt: Number.isFinite(created) ? new Date(created).toISOString() : null } : { status: 'none', read: null, createdAt: null };
+}
+
+/**
+ * THE ONE ENTRY POINT Home and the adapter call: the server path, unless the C20-gated contingency is on.
+ * @returns {Promise<{ items: object[], errors: object, stats: object, off?: false|'platform' }>}
+ */
+export async function fetchNews(opts = {}) {
+  if (NEWS_CLIENT_ESPN_FALLBACK) return fetchEspnNews(opts);
+  return fetchServerNews(opts);
+}
+export const fetchLatest = fetchNews;

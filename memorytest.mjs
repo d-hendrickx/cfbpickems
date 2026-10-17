@@ -1048,8 +1048,10 @@ console.log('\n[15] F6 — the SIGNAL_POINTS twin agrees with the client, and th
   // difference for the next reader to rediscover.
   const added = Object.keys(client).filter((k) => !(k in server));
   // N8 (2026-09-29) — `liveUpset` joins Package D's two (Code.gs never had a live-upset call-out either).
-  assert(JSON.stringify(added.sort()) === JSON.stringify(['heatedExchange', 'liveUpset', 'roastOfScribe']),
-    `…and the live client's ONLY signals beyond the archive are Package D's two and N8's liveUpset, named here so the gap is a decision rather than drift (got ${JSON.stringify(added)})`);
+  // D1 Lane C (DI-652/653, 2026-10-08) — the scan's three triggers join them: `nonParticipationPicks`,
+  // `nonParticipationChat` and `historyCallback`. The archive never had a scan, so none has a replay to protect.
+  assert(JSON.stringify(added.sort()) === JSON.stringify(['heatedExchange', 'historyCallback', 'liveUpset', 'nonParticipationChat', 'nonParticipationPicks', 'roastOfScribe']),
+    `…and the live client's ONLY signals beyond the archive are Package D's two, N8's liveUpset and the D1 scan's three, named here so the gap is a decision rather than drift (got ${JSON.stringify(added)})`);
 
   const sig = [{ signal: 'unanimous' }, { signal: 'drinkDebt' }];
   assert(env.gs.scribeScoreOpportunity_(sig) === 32.5,

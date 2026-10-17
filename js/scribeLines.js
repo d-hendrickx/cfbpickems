@@ -70,7 +70,7 @@ import {
 // WHICH voice pool generated the line it's rating, months later. Deliberately
 // NOT tied to APP_VERSION itself — SCRIBE's voice can change independently of
 // an app release. Carried on every SCRIBE post via scribeTrigger() below.
-export const SCRIBE_VERSION = '3.1';
+export const SCRIBE_VERSION = '3.2';
 
 const LEDGER_KEY = 'cfbp_scribe_ledger';   // { lineHash: lastUsedMs }
 const LAST_POST_KEY = 'cfbp_scribe_lastpost'; // { rateKey: lastMs } ('' = main room, gameId = per-game)
@@ -686,7 +686,11 @@ export function scribeTrigger(trigger, { gameTag = '', subject = '', vars = {}, 
   // cooldown, so the `rateLimited()` check three lines below drops this
   // tier-0 line by the existing, unmodified mechanism — one event, one SCRIBE
   // message, the better line. See considerAutonomous's own note.
-  considerAutonomous(trigger, { subject, gameTag });
+  // FB-008 (2026-10-07) — `triggerMessageId` RIDES ALONG. It was dropped here, and the server's
+  // verifiers for the two message-driven triggers that pass one (drinkDebt, verbosity) refuse without
+  // it — so a candidate that cleared the dial reserved the cooldown (dropping the canned line below)
+  // and was then refused: silence. Event-driven callers pass none, and none is sent for them.
+  considerAutonomous(trigger, { subject, gameTag, triggerMessageId: triggerMessageId || '' });
   // Direct-mention replies bypass the rate limit (spec); everything else is
   // rationed — the restraint IS the character.
   const direct = trigger === 'mention';
@@ -965,7 +969,12 @@ export const SIGNAL_POINTS = {
   // are pinned equal, key order included, by loadtest [89-3] and interacttest.
   liveUpset: 55,
   chartLeadChange: 45,
+  // D1 Lane C (DI-654) — non-participation, and the history callback. SCAN-ONLY on the server (js/scribe-scoring.js SCAN_ONLY_TRIGGERS): no detector in this file
+  // raises them; they are here because the two tables are pinned equal, key order included (interacttest [1], loadtest [89b-3]).
+  nonParticipationPicks: 45,
+  nonParticipationChat: 45,
   milestone: 40,
+  historyCallback: 35,
   streak: 35,
   loneWolfWin: 30,
   unanimous: 25,

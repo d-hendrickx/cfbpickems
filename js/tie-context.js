@@ -116,18 +116,15 @@ export const TIE_COPY = Object.freeze({
     'tb-missing-draw': "This week has a tie in correct picks and no tiebreaker value entered, and as it stands it would end at the week's draw.",
     'ep-missing': 'This tie would be settled by the Extra Point, and no longest field goal is entered yet.',
   }),
+  // FB-027 / DI-518 (2026-10-07) — the guided Step 4's inline box is the ONE place the notice is shown, so `wizard` is the only suffix table. The
+  // `confirm` / `confirmShared` tables (the browser dialog behind the manual Finalize button, Cancel/OK wording) are REMOVED with that dialog: every
+  // Finalize now opens the guided flow. The step names below are the steps' titles (js/week-wizard.js FINALIZE_STEPS; tiebreaktest [T27] pins the match).
+  // Review round 1, R2 — `ep` no longer offers "or the week's draw decides": Step 4 refuses to finalize while the contest's yards are missing (DI-519),
+  // so the only true instruction is to enter them.
   finalizeSuffix: Object.freeze({
-    confirm: Object.freeze({
-      tb: ' Enter the tiebreaker first (Cancel), or finalize anyway and fix it later; entering the tiebreaker or the Extra Point afterward recalculates the week (OK).',
-      ep: " Enter it first (Cancel), or finalize anyway and let the week's draw decide; entering it afterward recalculates the week (OK).",
-    }),
-    confirmShared: Object.freeze({
-      tb: ' Enter the tiebreaker first (Cancel), or finalize anyway (OK). A value entered later is applied by moving the week back to live and finalizing it again.',
-      ep: " Enter it first (Cancel), or finalize anyway and let the week's draw decide (OK). To apply it later, move the week back to live and finalize it again.",
-    }),
     wizard: Object.freeze({
       tb: ' Enter it in Confirm Tiebreaker, then continue to Finalize.',
-      ep: " Enter it in Confirm Extra Point, or the week's draw decides.",
+      ep: ' Enter it in Longest field goal (Extra Point) to finalize.',
     }),
   }),
 });
@@ -481,17 +478,13 @@ export function tieNoteLines(winner, loser, nameOf) {
  *   tb-missing-draw   the same, and the preview DOES reach the draw
  *   ep-missing        a tiebreaker value is on file, the tie would still reach the draw, the Extra Point is enabled and has no result
  *   (silent)          a tie that ends at the draw with the Extra Point entered or disabled is a true dead heat: nothing is actionable
- * `variant` is 'confirm' (the browser dialog) or 'wizard' (the guided Step 4 inline box); `shared` is a shared league, where
- * re-finalizing a FINAL week is refused (N-1) and the "recalculates" suffix would be false.
+ * The text is the guided Finalize flow's Step 4 inline box, its one surface since FB-027 / DI-518 (2026-10-07) retired the browser-dialog variant
+ * (and with it the shared-league dialog wording: the inline box never promised a recalculation).
  * @returns {{show:boolean, kind:string|null, text:string}}
  */
-export function composeFinalizeTieNotice({ legacyTrigger, winnerStage, loserStage, epEnabled, epUsable, variant = 'confirm', shared = false }) {
+export function composeFinalizeTieNotice({ legacyTrigger, winnerStage, loserStage, epEnabled, epUsable }) {
   const drawReached = winnerStage === 'draw' || loserStage === 'draw';
-  const note = (kind) => {
-    const group = kind === 'ep-missing' ? 'ep' : 'tb';
-    const table = variant === 'wizard' ? TIE_COPY.finalizeSuffix.wizard : (shared ? TIE_COPY.finalizeSuffix.confirmShared : TIE_COPY.finalizeSuffix.confirm);
-    return { show: true, kind, text: TIE_COPY.finalizeBody[kind] + table[group] };
-  };
+  const note = (kind) => ({ show: true, kind, text: TIE_COPY.finalizeBody[kind] + TIE_COPY.finalizeSuffix.wizard[kind === 'ep-missing' ? 'ep' : 'tb'] });
   if (legacyTrigger && !drawReached) return note('tb-missing');
   if (legacyTrigger && drawReached) return note('tb-missing-draw');
   if (!legacyTrigger && drawReached && epEnabled && !epUsable) return note('ep-missing');

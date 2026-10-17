@@ -1,0 +1,12 @@
+{
+  "id": "rolestest",
+  "script": "rolestest.mjs",
+  "label": "105",
+  "summary": "strict",
+  "floor": 507,
+  "tags": [
+    "smoke"
+  ],
+  "expectedMs": 1000,
+  "note": "MERGE int/v0.30.0 into feat/d1-creation-integrity (2026-10-08): floor re-measured on the merged tree = 507. D1 Lane A (2026-10-08): RAISED to 499 — the R-c/0042 boundary scan of leave_league + anonymize_own_account is now a loop over 0042 AND 0048 (the latest bodies), and the armers census gains the two 0048 functions. Before that: floor ; ratchet history in the comments above. Original note, wiring-pass-1 close: this file is concurrently owned by two other threads this same window (group B roles/panels, group G T-35), so its count moved several times DURING this pass alone (292 -> 315 -> 319 -> 332 -> 363 … MERGE OF int/v0.30.0 (2026-10-08): floor ; ratchet history in the comments above. Original note, wiring-pass-1 close: this file is concurrently owned by two other threads this same window (group B roles/panels, group G T-35), so its count moved several times DURING this pass alone (292 -> 315 -> 319 -> 332 -> 363 …"
+}

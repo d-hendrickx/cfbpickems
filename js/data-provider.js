@@ -118,6 +118,36 @@ export function buildEspnUrl(params = {}) {
   return `${ESPN_API_ROOT}/${path}/scoreboard${qs ? '?' + qs : ''}`;
 }
 
+/**
+ * D1 (DI-533 #3) - a sport value (a dbCode or an ESPN key) to the ESPN key `ESPN_SPORT_ENDPOINTS` is keyed by, or null when it is
+ * neither. Own-property lookups only ('constructor' / '__proto__' are unknown), and nothing here defaults: the caller that wants
+ * "college football when absent" says so itself.
+ */
+const DB_CODE_TO_ESPN_KEY = Object.freeze({ cfb: 'college-football', nfl: 'nfl' });
+export function espnKeyForSport(sport) {
+  if (typeof sport !== 'string') return null;
+  const v = sport.trim();
+  if (Object.prototype.hasOwnProperty.call(DB_CODE_TO_ESPN_KEY, v)) return DB_CODE_TO_ESPN_KEY[v];
+  if (Object.prototype.hasOwnProperty.call(ESPN_SPORT_ENDPOINTS, v)) return v;
+  return null;
+}
+
+/** D1 - which ESPN sport a scoreboard URL is for ('nfl' or 'college-football'), from its path. */
+function espnKeyFromUrl(url) {
+  return /\/football\/nfl\//.test(String(url || '')) ? 'nfl' : 'college-football';
+}
+
+/**
+ * D1 (DI-533 #3) - the name stored as a team's `homeTeam` / `awayTeam`. College football keeps ESPN's `location` ("Texas A&M"), unchanged.
+ * The NFL uses ESPN's `displayName` ("New York Jets"), because `location` is NOT unique in the NFL ("New York" is both the Giants and the Jets,
+ * "Los Angeles" both the Rams and the Chargers), and a pick is stored as the team NAME: a Jets-Giants game would offer the same name twice.
+ * The abbreviation map (`teamAbbr` in js/sports/nfl.js) is keyed by these names.
+ */
+function teamNameFor(sportKey, team) {
+  if (sportKey === 'nfl') return team?.displayName || team?.name || team?.location || team?.shortDisplayName || '';
+  return team?.location || team?.shortDisplayName || team?.displayName || team?.name || '';
+}
+
 // ─── PUBLIC: FETCH ENTRY POINTS ───────────────────────────────────────────────
 
 /**
@@ -129,10 +159,19 @@ export function buildEspnUrl(params = {}) {
  *  - If multi-day: fetch each day separately and merge (ESPN's ?dates= is single-day).
  *  - Games outside the requested date range are filtered out.
  *  - season parameter is optional context only; dates are the source of truth.
+ *  - D1 (DI-533 #3, 2026-10-07) `sport` (optional) picks the scoreboard: a dbCode ('cfb', 'nfl') or its ESPN key
+ *    ('college-football', 'nfl'). ABSENT is college football and the URL is byte-identical to before. An UNKNOWN value
+ *    is REFUSED with a named error, never mapped to college football (a wrong-sport slate fetched silently is the
+ *    failure this guards). An NFL game parsed here is stamped `espnSport: 'nfl'` (see parseAndReport) so the score
+ *    refresh, client and server, polls the NFL scoreboard for it instead of looking it up as college football.
  */
-export async function fetchByDateRange({ startDate, endDate, season, almaMaters = getAlmaMaters() } = {}) {
+export async function fetchByDateRange({ startDate, endDate, season, almaMaters = getAlmaMaters(), sport } = {}) {
   if (!startDate) {
     return { games: [], error: 'No start date specified.', usingDemo: false, espnUrl: null };
+  }
+  const espnKey = sport === undefined || sport === null || sport === '' ? 'college-football' : espnKeyForSport(sport);
+  if (!espnKey) {
+    return { games: [], error: `Unknown sport "${String(sport).slice(0, 40)}" - nothing was fetched.`, usingDemo: false, espnUrl: null };
   }
 
   _state.lastRequestedRange = { startDate, endDate: endDate || startDate };
@@ -147,6 +186,7 @@ export async function fetchByDateRange({ startDate, endDate, season, almaMaters 
   for (const date of dates) {
     const params = { dates: toEspnDate(date) };
     if (season) params.season = season;
+    if (espnKey !== 'college-football') params.sport = espnKey;     // the college-football URL stays byte-identical
     const espnUrl = buildEspnUrl(params);
     lastEspnUrl   = espnUrl;
     _state.lastFetchUrl = espnUrl;
@@ -195,6 +235,23 @@ export async function fetchCurrentCFBGames(almaMaters = getAlmaMaters()) {
   const espnUrl = buildEspnUrl({});
   _state.lastFetchUrl = espnUrl;
   return resilientFetch(espnUrl, almaMaters);
+}
+
+/** FB-010 (D1 batch H) — does this ESPN read change the stored row's score / status / winner? The same columns, and the same equality
+ *  (null and undefined equal; 7 and "7" equal), as the server job's no-op rule (supabase/functions/_shared/job-rules.mjs `sameCell`
+ *  over GAMES_PATCH_COMPARE_COLS, minus ats_winner, which this client path never writes). Proven through refreshScoresByEventIds by refreshtest [10]. */
+function gameRowChanged(stored, fresh) {
+  const same = (a, b) => {
+    const x = a === undefined ? null : a, y = b === undefined ? null : b;
+    if (x === null || y === null) return x === y;
+    if (typeof x === 'number' || typeof y === 'number') {
+      const nx = Number(x), ny = Number(y);
+      if (Number.isFinite(nx) && Number.isFinite(ny)) return nx === ny;
+    }
+    return String(x) === String(y);
+  };
+  const s = stored || {}, f = fresh || {};
+  return !(same(s.homeScore, f.homeScore) && same(s.awayScore, f.awayScore) && same(s.status, f.status) && same(s.actualWinner, f.actualWinner));
 }
 
 /**
@@ -250,7 +307,12 @@ export async function refreshScoresByEventIds(espnEventIds = [], storedGames = [
   // attached to an `updated` entry itself (that entry's shape is spread
   // toward saveGame()'s allow-list in app.js; see the comment there).
   const liveStatusByEventId = new Map();
+  // D1 (DI-557 / DI-535 #4) - what each ESPN bucket's fetch REACHED, as a SIBLING of `updated` and `errors` (nothing about them changes): 'ok' (events came back), 'empty' (ESPN answered with a
+  // scoreboard of zero events - reached, so a success for the stall banner even though `errors` lists it) or 'failed' (nothing usable came back: HTTP error, timeout, every proxy down). A bucket
+  // this call never fetched has no entry. `rawEventCount` is set only on a response that reached ESPN (finalise()), so a total failure is told from an empty board without reading a message.
+  const bucketOutcomes = new Map();
   for (const { sport, result } of settled) {
+    bucketOutcomes.set(sport, result.error ? (result.rawEventCount === 0 ? 'empty' : 'failed') : 'ok');
     if (result.error) { errors.push(`${sport}: ${result.error}`); continue; }
     if (!result.games?.length) continue;
     if (result._liveStatusByEventId) {
@@ -308,7 +370,12 @@ export async function refreshScoresByEventIds(espnEventIds = [], storedGames = [
         // needed here.
         ...(stored.homeLogo == null && liveGame.homeLogo != null ? { homeLogo: liveGame.homeLogo } : {}),
         ...(stored.awayLogo == null && liveGame.awayLogo != null ? { awayLogo: liveGame.awayLogo } : {}),
-        lastUpdated: new Date().toISOString(),
+        // FB-010 (D1 batch H, 2026-10-07) — lastUpdated means "when this game last CHANGED", the meaning the server job already keeps
+        // (supabase/functions/_shared/job-rules.mjs GAMES_PATCH_COMPARE_COLS, S2: "no change, no write"). It used to be stamped on EVERY
+        // poll of every game, so a game that ended hours ago looked new again each minute and the Home feed's game.final card (sorted by
+        // this field) never left the top. A poll that changes no score / status / winner keeps the stored time; a real change — the poll
+        // on which a game goes final, a stat correction — stamps now. A row with no time yet is stamped once.
+        lastUpdated: (gameRowChanged(stored, liveGame) || !stored.lastUpdated) ? new Date().toISOString() : stored.lastUpdated,
         // Item 2 remediation — live status is NOT attached here. It rides
         // the sibling `liveStatusByEventId` map returned below, keyed by
         // `espnEventId` (present on this very entry, two lines up) so
@@ -317,7 +384,7 @@ export async function refreshScoresByEventIds(espnEventIds = [], storedGames = [
     }
   }
   _state.lastScoreRefresh = new Date().toISOString();
-  return { updated, errors, timestamp: _state.lastScoreRefresh, liveStatusByEventId };
+  return { updated, errors, timestamp: _state.lastScoreRefresh, liveStatusByEventId, bucketOutcomes };
 }
 
 export function getProviderState() { return { ..._state }; }
@@ -553,6 +620,7 @@ export function darkLogoUrl(u) {
  * startDate/endDate: filter games outside requested range.
  */
 function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters = getAlmaMaters()) {
+  const sportKey = espnKeyFromUrl(espnUrl);          // D1: 'nfl' when the scoreboard URL is the NFL's, else college football (unchanged)
   let withValidKickoff=0, withConfirmedTime=0, withFinalScores=0;
   let withSpread=0, withoutSpread=0, withUnknownTeam=0, outsideRange=0;
   // Item 2 remediation — keyed by event.id, returned on the wrapper (never
@@ -579,10 +647,12 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
     //   team.displayName      = "Texas A&M Aggies"    (full name)
     // We store the school name as homeTeam/awayTeam (clean, matches alma mater patterns)
     // and mascot as homeMascot/awayMascot for "School (Mascot)" display.
-    const homeSchool = home.team?.location || home.team?.shortDisplayName || home.team?.displayName || home.team?.name || '';
-    const awaySchool = away.team?.location || away.team?.shortDisplayName || away.team?.displayName || away.team?.name || '';
-    const homeMascot = home.team?.name || '';
-    const awayMascot = away.team?.name || '';
+    const homeSchool = teamNameFor(sportKey, home.team);
+    const awaySchool = teamNameFor(sportKey, away.team);
+    // The NFL stores the team's FULL name ("Detroit Lions", teamNameFor above), which already ends in the mascot: a stored "Lions" mascot would draw it twice ("Detroit Lions (Lions)", S9). College football
+    // keeps the school + mascot pair exactly as before.
+    const homeMascot = sportKey === 'nfl' ? '' : (home.team?.name || '');
+    const awayMascot = sportKey === 'nfl' ? '' : (away.team?.name || '');
 
     const homeTeam = homeSchool;
     const awayTeam = awaySchool;
@@ -773,6 +843,10 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
       venueDisplay,
       neutralSite: neutral,
       lastUpdated: new Date().toISOString(),
+      // D1 (DI-533 #3) - LOAD-BEARING: data-provider.js refreshScoresByEventIds() and the server's job-rules.mjs treat a game with no
+      // `espnSport` as college football, so an unstamped NFL game would be looked up on the college scoreboard and its scores would
+      // never refresh, silently. A college-football game keeps the null it has always had.
+      ...(sportKey === 'nfl' ? { espnSport: 'nfl' } : {}),
     });
 
     // Item 2 (in-game quarter+clock), Pass A/B remediation — ESPN's raw
@@ -903,7 +977,10 @@ function safeRank(raw) {
   return n >= 1 && n <= 25 ? n : null;
 }
 
-function normalizeStatus(name) {
+// FB-003 (2026-10-07) — EXPORTED, unchanged: `supabase/functions/_shared/scribe-tools.mjs`'s
+// `get_current_score` kept its own copy of this map, which had drifted (no END_PERIOD), so SCRIBE read
+// ESPN's between-quarters status as "scheduled". One map, imported, never re-typed.
+export function normalizeStatus(name) {
   if (!name) return GAME_STATUS.SCHEDULED;
   if (name.includes('FINAL')) return GAME_STATUS.FINAL;
   if (name === 'STATUS_IN_PROGRESS' || name.includes('HALFTIME') || name.includes('END_PERIOD')) return GAME_STATUS.LIVE;

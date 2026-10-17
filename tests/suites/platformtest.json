@@ -1,0 +1,15 @@
+{
+  "id": "platformtest",
+  "script": "platformtest.mjs",
+  "label": "89",
+  "summary": "strict",
+  "floor": 15,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "**"
+  ],
+  "expectedMs": 100,
+  "note": "— a near-zero count would mean the guard is vacuous)"
+}

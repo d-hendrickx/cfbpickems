@@ -619,6 +619,10 @@ export function analyze(cssSrc, appSrc) {
   const tableFn = appSrc.slice(appSrc.indexOf('export function renderDashboardTable('), appSrc.indexOf('// ─── EMOJI REACTIONS'));
   const compactFn = appSrc.slice(appSrc.indexOf('export function renderDashboardCompact('), appSrc.indexOf('// ─── LEADERBOARD / STANDINGS'));
   const hdrFn = appSrc.slice(appSrc.indexOf('function matrixGameHeaderHTML('), appSrc.indexOf('function renderGameBadges('));
+  // D1 Lane B (2026-10-08, DI-612): the compact row's member chips moved VERBATIM from renderDashboardCompact into js/pick-chips.js's gamePickChipsHTML (the harness appends that file after app.js),
+  // so the inline-colour scan reads it too: the markup is the same, only the file changed.
+  const chipAt = appSrc.indexOf('export function gamePickChipsHTML(');
+  const chipFn = chipAt >= 0 ? appSrc.slice(chipAt) : '';
   const atsMatch = tableFn.match(/<span style="([^"]*)">ATS:/);
   const atsStyle = Object.fromEntries((atsMatch ? atsMatch[1] : '').split(';').filter(Boolean).map((d) => d.split(':').map((s) => s.trim())));
 
@@ -687,7 +691,7 @@ export function analyze(cssSrc, appSrc) {
   }
 
   // [3] inline colours in the dashboard renderers
-  const inlineColours = [tableFn, compactFn, hdrFn].flatMap((src) => [...src.matchAll(/style="[^"]*(?<![a-z-])color:([^;"]+)/g)].map((m) => m[1].trim()));
+  const inlineColours = [tableFn, compactFn, hdrFn, chipFn].flatMap((src) => [...src.matchAll(/style="[^"]*(?<![a-z-])color:([^;"]+)/g)].map((m) => m[1].trim()));
   // [3b] the SB-06 defect CLASS, deny-by-default: the two light-mode live
   // text hexes may never again be a rule's own `color:` (they live on only as
   // token VALUES — --win's light value and --live-trail-text's light value).
@@ -695,7 +699,7 @@ export function analyze(cssSrc, appSrc) {
 
   return {
     themes, themeKeys, mediaDarkCount, manualDarkCount, rules, kf,
-    located: !!atsMatch && tableFn.length > 2000 && compactFn.length > 2000 && hdrFn.length > 200,
+    located: !!atsMatch && tableFn.length > 2000 && compactFn.length > 1000 && hdrFn.length > 200 && chipFn.length > 1000,
     table, unexplainedByTheme, sb06Dark,
     logoClassNames, imgClasses, logoOffenders, logoResolvedBad, inlineColours, hardcodedLive,
   };
@@ -712,7 +716,7 @@ if (isMain) {
   const appArg = process.argv.indexOf('--app');
   const appPath = appArg > -1 ? path.resolve(process.argv[appArg + 1]) : path.join(root, 'js', 'app.js');
   const cssSrc = await readFile(cssPath, 'utf8');
-  const appSrc = await readFile(appPath, 'utf8');
+  const appSrc = (await readFile(appPath, 'utf8')) + '\n' + (await readFile(path.join(root, 'js', 'pick-chips.js'), 'utf8'));   // + the chip module (D1 Lane B: the member chips moved there)
   const dmSrc = await readFile(path.join(root, 'js', 'data-model.js'), 'utf8');
 
   console.log(`\n[dashcontrasttest] ${path.relative(root, cssPath)} + ${path.relative(root, appPath)}`);

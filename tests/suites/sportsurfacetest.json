@@ -1,0 +1,12 @@
+{
+  "id": "sportsurfacetest",
+  "script": "sportsurfacetest.mjs",
+  "summary": "strict",
+  "floor": 121,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 6000,
+  "note": "v0.30.0 release stamps (2026-10-14): RAISED 119 -> 121, the measured count under TZ=UTC, Asia/Tokyo and America/Los_Angeles - [2g2] the What's New card exemption is real and bounded (the card is on Picks only, says NFL, and cutting it shortens the page) and [2g3] an NFL word anywhere else still fails; the seven one-sport PICKS goldens were re-pinned (the Picks page prints the What's New card; the 41 differing lines per page are the card, evidence/stamps). Before that: D1 third pass items 3+4 (2026-10-08): RAISED 94 -> 119 - [H-m..H-o4] the lock-flip timer's ARMED state after real paints, switches and presses (P-2); [L-*] DI-534 REV 5 (separate lens: commissioner-only, ends on join / archive / role loss, Comm-only caption, player screens byte-identical) with mutants [L-m1..m3]; [S-b1h] the navigator's in-page form beside the header's; [L-c3]/[L-c4] the separate lens ends only when the pointer really holds the sport. (D1 combine, 2026-10-08: RAISED from 60 to 94 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - D1 (v0.30.0) DI-520/521/523/524/526/555: the multisport surfaces through the real app.js renderers on sportenv.mjs - 21 one-sport renders hash to what the unmodified v0.29.0 tree printed (TZ-independent), the plays-both / CFB-only / neither matrix over Picks, Dashboard and Standings (no switcher, no NFL word, no Join for a CFB-only member), each sport's page its own, forged pointers and scopes ignored, Home / push / link routing for played and unplayed sports, and in-memory mutants (golden sensitivity, DI-555, A4/A5)"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "newsregistrytest",
+  "script": "newsregistrytest.mjs",
+  "summary": "strict",
+  "floor": 64,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "supabase/news/news-registry.mjs",
+    "supabase/news/news-sources-d1.json",
+    "supabase/news/build-news-teams.mjs",
+    "supabase/news/fixtures/espn-teams-d1.json",
+    "supabase/functions/_shared/news-teams.mjs",
+    "supabase/migrations/0053_news_sources_and_articles.sql",
+    "supabase/migrations/0054_news_seed_d1.sql",
+    "js/newsRules.js"
+  ],
+  "expectedMs": 600,
+  "note": "D1 Lane C (DI-670/671; the news design's DI-477 3.3/3.4 with SC-N1, SC-N3(d), SC-N4, SC-N5; 2026-10-08): the 13-row D1 registry validates; 0054 and news-teams.mjs are byte-for-byte what their generators write; SC-N1 (one quoting function, exactly one INSERT even with \"'); drop table …\" in every row, a byte-for-byte round trip, NUL refused without printing the value, a generator lint); every V-rule with a failing fixture; the D-40 facts (Fox News a disabled reserve, PFT at its final URL, no seeded picture host, no 'cleared'); drift between the JS host rules and 0053's SQL helper."
+}

@@ -1,0 +1,30 @@
+{
+  "id": "feedBuild.twin",
+  "script": "supabase/tests/functions/feedBuild.twin.mjs",
+  "summary": "loose",
+  "floor": 67,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "supabase/functions/feed-build/index.js",
+    "supabase/functions/_shared/sports-evidence.mjs",
+    "supabase/functions/_shared/spotlight-standard.mjs",
+    "supabase/functions/_shared/feed-prompts.mjs",
+    "supabase/functions/_shared/callback-evidence.mjs",
+    "supabase/functions/_shared/grounding.mjs",
+    "supabase/functions/_shared/evidence-packets.mjs",
+    "supabase/functions/_shared/synthesis-limits.mjs",
+    "supabase/functions/_shared/scribe-routing.mjs",
+    "supabase/functions/_shared/scribe-rate.js",
+    "supabase/functions/_shared/anthropic.js",
+    "supabase/feed/fixtures/espn",
+    "supabase/tests/functions/mutant-loader.mjs",
+    "js/history-2025.js",
+    "js/team-match.js",
+    "js/scribe-routing.js",
+    "js/data-model.js"
+  ],
+  "expectedMs": 4000,
+  "note": "D1 Lane C (DI-657…664, DI-667; C3, C19, DI-636; 2026-10-08): the Home content builder driven end to end against recorded ESPN responses (clock pinned to 2026-10-08) — auth first, the closed mode, default off with no job_runs row, single-flight; the honest agent to the two allowed hosts with no redirect followed; matchup and player cards published pending with sourced, dated facts, expiring at kickoff; the NFL QB1 on the injury report is 'Starter not confirmed'; TTL caching; a privacy grep of every packet (no league, member, pick, tiebreaker or chat); spotlights only for a finished slate day, structured, with the v2 rationale; the platform reservation BEFORE the Haiku call, the static prompt and facts-only user content, grounding with one retry naming the planted token, structured fallback, quiet at the cap, fail closed on a ledger error, the DI-636 retry gate; callbacks from the 2025 record and FINAL weeks only (a planted open-week result is absent), the league's analysis budget reserved and metered; C19; the closed payload. KIT_MUTANTS: 16, all RED (tests/kits/lane-c-news-kit.mjs server). W-58 (2026-10-14): [11] special-teams spotlights end to end (a kicker on recorded CFB and NFL games; a game-winning field goal, a punter and a returner planted into a recorded game reach the card through the handler) and the three wiring mutants; the rules themselves are proven in spotlighttest.mjs."
+}

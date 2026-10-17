@@ -1,0 +1,21 @@
+{
+  "id": "sportstalltest",
+  "script": "sportstalltest.mjs",
+  "summary": "strict",
+  "floor": 215,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/competition.js",
+    "js/storage.js",
+    "js/data-provider.js",
+    "js/sport-stall.js",
+    "css/styles.css",
+    "index.html"
+  ],
+  "expectedMs": 6000,
+  "note": "D1 (2026-10-14) DI-557 / DI-535 #4: the stall banner - js/sport-stall.js (the four sentences verbatim, the per-competition consecutive-poll record, the server's 6 h window, the rows by trigger / audience / page scope, the key, the markup and its escaping, a leaf) and its wiring in the real js/app.js over a real element tree: three real failed polls raise one row, one success clears it, neutral polls never count, red wins, one banner in the order maintenance / paused / stall, the in-place paint armed by a real poll and a parked repaint that never blocks a touch. Mutation kit: tests/kits/d1-stall-mutants.mjs."
+}

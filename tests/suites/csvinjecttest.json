@@ -1,0 +1,13 @@
+{
+  "id": "csvinjecttest",
+  "script": "csvinjecttest.mjs",
+  "label": "119",
+  "summary": "strict",
+  "floor": 269,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 4600,
+  "note": "RAISED from 264 by the SB-13 round 3 mutation pass (2026-10-01): five cases pin that non-ASCII whitespace (U+FEFF, NBSP, ideographic space) is crossed after a separator and at the lead, after a run narrowed to ASCII survived; floor 264 was RAISED from 217 by SB-13 round 3 …"
+}

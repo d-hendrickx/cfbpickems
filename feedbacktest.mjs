@@ -1679,30 +1679,55 @@ console.log('\n[28c] Finding #1/#2 — feedback popover hosts on the ROW contain
   // Every value below is parsed out of the stylesheet, not hardcoded here, so
   // a CSS change that reopens the overflow makes this arithmetic go red.
   const num = (re, label) => { const m = re.exec(cssSrc); assert(m !== null, `(e) fixture check: ${label} found in styles.css`); return m ? Number(m[1]) : NaN; };
-  const pagePad    = num(/@media \(max-width: 480px\) \{\s*\n\s*:root \{ --page-pad: (\d+)px; \}/, '--page-pad at ≤480px');
+  // RE-MEASURED 2026-10-08 (W-57 Part 2, the app-wide Breathing Room audit): the phone page inset is 16 pt on every tab, so there is NO ≤480 override of the token any more — the phone value IS the base
+  // `--page-pad` in :root (and the test asserts no phone override has crept back, or this arithmetic would be measuring the wrong number). The numbers the reviewer first measured (62 / 304 / 326 / 256) were taken at the
+  // old 14 pt inset; at 16 the column starts 2 pt further in and is 4 pt narrower (a pad on each side).
+  const pagePad    = num(/--gap:\d+px;--page-pad:(\d+)px;--max-width/, 'the base --page-pad (the phone value: no ≤480 override)');
+  assert(!/@media \(max-width: 480px\) \{[^}]*?:root \{ --page-pad:/.test(cssSrc), '(e) no phone-tier override of --page-pad exists (the inset is one token on every phone width)');
   const scrollPad  = num(/\.chat-scroll\{[^}]*?padding:(\d+)px/, '.chat-scroll padding');
   const avatarW    = num(/\.chat-avatar\{flex:0 0 (\d+)px/, '.chat-avatar width');
   const msgGap     = num(/\.chat-msg\{display:flex;gap:(\d+)px/, '.chat-msg gap');
   const starMinW   = num(/\.chat-fb-star\{[\s\S]*?min-width:(\d+)px/, '.chat-fb-star min-width');
-  const gridCol    = num(/\.feedback-picker-grid\{display:grid;grid-template-columns:repeat\(2,(\d+)px\)/, '.feedback-picker-grid column width');
+  const gridW      = num(/\.feedback-picker-grid\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\);\s*gap:\d+px;width:min\((\d+)px,calc\(100vw - \d+px\)\)/, '.feedback-picker-grid natural width (min(Npx, 100vw - Mpx))');
+  const gridCapOff = num(/\.feedback-picker-grid\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\);\s*gap:\d+px;width:min\(\d+px,calc\(100vw - (\d+)px\)\)/, '.feedback-picker-grid width cap (100vw - Mpx)');
   const gridGap    = num(/\.feedback-picker-grid\{[\s\S]*?gap:(\d+)px/, '.feedback-picker-grid gap');
   const wrapPad    = num(/\.feedback-picker-wrap\{[^}]*?padding:(\d+)px\}/, '.feedback-picker-wrap padding');
+  // N4 (W-57 follow-up, 2026-10-08): the grid's width is `min(306px, 100vw - 96px)` so the popover keeps Breathing Room from the screen edge; the reason row carries the SAME expression (one width, before and after a rating).
+  const reasonW    = (cssSrc.match(/\.feedback-reason\{width:(min\(\d+px,calc\(100vw - \d+px\)\));/) || [])[1];
+  const gridWExpr  = (cssSrc.match(/\.feedback-picker-grid\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\);\s*gap:\d+px;width:(min\(\d+px,calc\(100vw - \d+px\)\));/) || [])[1];
   const pickBorder = num(/\.reaction-picker\{[\s\S]*?border:(\d+)px solid/, '.reaction-picker border width');
 
   const VIEWPORT = 390;                                                   // iPhone 14/15 logical width
   const colLeft  = pagePad + scrollPad + avatarW + msgGap;                // left edge of .chat-bubble-col
   const colWidth = VIEWPORT - colLeft - scrollPad - pagePad;              // it is flex:1 in the remaining space
-  const popoverW = gridCol * 2 + gridGap + wrapPad * 2 + pickBorder * 2;  // .feedback-picker-wrap's border box
+  const gridCol  = (gridW - gridGap) / 2;                                 // each of the two natural columns
+  const popoverW = gridW + wrapPad * 2 + pickBorder * 2;                  // .feedback-picker-wrap's border box (natural)
   const starLeft = colLeft + colWidth - starMinW;                         // margin-left:auto pins it to the right edge
 
-  assert(colLeft === 62, `(e) bubble-column left edge computes to 62px at 390px (got ${colLeft}) — matches the reviewer's measurement`);
-  assert(colWidth === 304, `(e) bubble-column width computes to 304px (got ${colWidth}) — matches the reviewer's measurement`);
-  assert(popoverW === 320, `(e) the popover is 320px wide (got ${popoverW}) — matches the reviewer's measurement`);
-  assert(starLeft === 326, `(e) the right-aligned ⭐ sits at x≈326 (got ${starLeft}) — matches the reviewer's measurement`);
+  assert(pagePad === 16, `(e) the phone page inset is 16 (got ${pagePad})`);
+  assert(colLeft === 64, `(e) bubble-column left edge computes to 64px at 390px (got ${colLeft}) — the reviewer's 62 at the old 14 pt inset, plus the 2 pt the inset grew`);
+  assert(colWidth === 300, `(e) bubble-column width computes to 300px (got ${colWidth}) — the reviewer's 304, less 2 pt a side`);
+  assert(popoverW === 320, `(e) the popover is 320px wide (got ${popoverW}) — unchanged by the inset`);
+  assert(starLeft === 324, `(e) the right-aligned ⭐ sits at x≈324 (got ${starLeft}) — the reviewer's 326, 2 pt in`);
   assert(colLeft + popoverW <= VIEWPORT,
-    `(e) ROW-anchored: 62 + 320 = ${colLeft + popoverW} ≤ ${VIEWPORT} — the popover fits inside the viewport with ${VIEWPORT - colLeft - popoverW}px to spare`);
-  assert(starLeft + popoverW - VIEWPORT === 256,
-    `(e) BUTTON-anchored (the defect) would have overflowed by exactly 256px (got ${starLeft + popoverW - VIEWPORT}) — the number the reviewer reported, reproduced from the stylesheet`);
+    `(e) ROW-anchored, NATURAL width: 64 + 320 = ${colLeft + popoverW} ≤ ${VIEWPORT} — the uncapped popover fits inside the viewport, but with only ${VIEWPORT - colLeft - popoverW}px to spare (6; it was 8 at the 14 pt inset): that is the N4 finding`);
+  // N4 — BREATHING ROOM. The wrapper is capped at 100vw - capOffset, so from 385 pt up to the point the natural 320 fits, the popover gives back width instead of crowding the screen edge. The long-press .chat-actions path
+  // opens 1 pt further right than the ROW path (measured: left 65 vs 64), so it is checked too. A phone below 385 pt uses the single-column popover (180 px + the wrapper's padding and border).
+  const usedAt = (vw) => (vw <= 384 ? 180 + wrapPad * 2 + pickBorder * 2 : Math.min(gridW, vw - gridCapOff) + wrapPad * 2 + pickBorder * 2);
+  const worst = [];
+  for (let vw = 320; vw <= 440; vw += 1) {
+    for (const [path, left] of [['row', colLeft], ['actions', colLeft + 1]]) {
+      const gap = vw - (left + usedAt(vw));
+      if (gap < 16) worst.push(`${vw}pt/${path}: ${gap}`);
+    }
+  }
+  assert(worst.length === 0, `(e) N4: from 320 to 440 pt wide the popover keeps >= 16 pt from the screen edge on BOTH entry points (the row at x=${colLeft}, the long-press bar at x=${colLeft + 1})${worst.length ? ' - TOO CLOSE: ' + worst.slice(0, 4).join(', ') : ''}`);
+  const at390 = VIEWPORT - (colLeft + usedAt(390));
+  assert(at390 >= 16 && usedAt(390) < popoverW, `(e) N4: at 390 pt the popover is ${usedAt(390)} wide (capped, down from ${popoverW}) and sits ${at390} pt from the edge (it was 6)`);
+  assert(gridCol === 150 && usedAt(430) === popoverW && usedAt(402) === popoverW && usedAt(401) < popoverW, `(e) N4: on a wide phone (402 and up, 430 included) the cap does not bite - the popover is still its natural ${popoverW} (two ${gridCol} pt columns) - and it starts to give width back at 401`);
+  assert(!!reasonW && reasonW === gridWExpr, `(e) N4: the reason row carries the SAME width expression as the grid (${reasonW} vs ${gridWExpr}), so the popover is one width before and after a rating is chosen`);
+  assert(starLeft + popoverW - VIEWPORT === 254,
+    `(e) BUTTON-anchored (the defect) would have overflowed by exactly 254px (got ${starLeft + popoverW - VIEWPORT}) — the reviewer's 256 at the old inset, reproduced from the stylesheet`);
 
   // ── (f) The CSS mechanism that makes (e) true: left:0 against a positioned
   // ROW, and nothing pushing the picker rightward.

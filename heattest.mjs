@@ -467,13 +467,16 @@ console.log('\n[10] SCRIBE_VERSION — the hosts still agree…');
   // post about a live game on a real trigger, and comment on a live game's PUBLIC picks) is a persona change,
   // so the number moves with it. Every host moved together: docs/SCRIBE.md (header, changelog, footer),
   // _shared/scribe-persona.mjs and js/scribeLines.js.
-  assert(SCRIBE_VERSION === '3.1',
-    `10-1: the Edge runtime's persona is v3.1 — the rule 6/9 clarification is a persona change, so the number moves with it (got ${SCRIBE_VERSION})`);
+  // AMENDED 3.1 -> 3.2 (DI-684 / C12, 2026-10-07): the deadline-step and non-participation triggers and the live-score
+  // permission are a persona change, so the number moves again on every host (docs/SCRIBE.md, scribe-persona.mjs,
+  // scribe-persona-generic.mjs, js/scribeLines.js).
+  assert(SCRIBE_VERSION === '3.2',
+    `10-1: the Edge runtime's persona is v3.2 — the deadline-step / non-participation triggers and the live-score permission are a persona change, so the number moves with it (got ${SCRIBE_VERSION})`);
   assert(SCRIBE_VERSION_CLIENT === SCRIBE_VERSION,
     `10-2: …and js/scribeLines.js's exported SCRIBE_VERSION agrees, which is what every tier-0 post stamps into meta.scribeVersion (got ${SCRIBE_VERSION_CLIENT})`);
   assert(SCRIBE_PERSONA_TEXT.includes(`SCRIBE_VERSION: ${SCRIBE_VERSION}`),
     '10-3: …and the snapshot\'s own stamp matches. The docs/SCRIBE.md half of that chain is `scribePersonaDrift.check.mjs`\'s, which reads the real file');
-  assert(SCRIBE_PERSONA_TEXT.includes('**Version:** 3.1'),
+  assert(SCRIBE_PERSONA_TEXT.includes('**Version:** 3.2'),
     '10-4: …including the header the document leads with, not only the trailer nobody scrolls to');
 }
 
@@ -489,22 +492,24 @@ console.log('\n[10] SCRIBE_VERSION — the hosts still agree…');
 // will refuse, or a model being billed at another model's rates against the
 // shared $25 ceiling.
 //
-// THE RATE CARD IS ALLOWED TO BE LARGER, and is: it carries
-// `claude-haiku-4-5`, which `scribe-classify` uses and no commissioner chooses.
+// THE RATE CARD IS ALLOWED TO BE LARGER, and is: it carries the Haiku tier,
+// which `scribe-classify` uses and no commissioner chooses.
 // The containment therefore runs one way, deliberately, and is asserted as a
 // direction rather than as equality.
 // ═══════════════════════════════════════════════════════════════════════════
 console.log('\n[11] DI-282 — the two model ids the card offers are ids the server can price…');
 {
-  const { SCRIBE_MODEL_CHOICES } = await import('./js/data-model.js');
+  const { SCRIBE_MODEL_CHOICES, SCRIBE_MODEL_CATALOG } = await import('./js/data-model.js');
   const { SCRIBE_MODEL_RATES_USD_PER_MTOK, rateSettings } =
     await import('./supabase/functions/_shared/scribe-rate.js');
   const { SCRIBE_MODEL_DEFAULT } = await import('./supabase/functions/_shared/anthropic.js');
 
   assert(Object.isFrozen(SCRIBE_MODEL_CHOICES) && SCRIBE_MODEL_CHOICES.length === 2,
     `11-1: exactly two choices, frozen — it is an ALLOW-LIST enforced at the write boundary, and a list that can be pushed to at runtime is not one (got ${JSON.stringify(SCRIBE_MODEL_CHOICES)})`);
-  assert(JSON.stringify(SCRIBE_MODEL_CHOICES) === JSON.stringify(['claude-sonnet-5', 'claude-opus-5']),
-    '11-2: …and they are Drew\'s two, in cheap-to-expensive order. [0] is the default, the same way SCRIBE_HEAT_ORDER[1] is the heat default — order carries meaning in both');
+  // D1 Lane C (DI-633) — ONE SOURCE NOW: the choices are the catalog's Sonnet and Opus ids (verified, D-32), in cheap-to-expensive order. The old two-file parity assertion
+  // (the card's list against the rate card's keys) becomes a one-source check: the rate card is DERIVED from the catalog, so they cannot disagree.
+  assert(JSON.stringify(SCRIBE_MODEL_CHOICES) === JSON.stringify([SCRIBE_MODEL_CATALOG.sonnet.id, SCRIBE_MODEL_CATALOG.opus.id]),
+    '11-2: …and they are Drew\'s two (the catalog\'s Sonnet and Opus), in cheap-to-expensive order. [0] is the default, the same way SCRIBE_HEAT_ORDER[1] is the heat default — order carries meaning in both');
   assert(SCRIBE_MODEL_CHOICES[0] === SCRIBE_MODEL_DEFAULT,
     `11-3: THE CLIENT'S DEFAULT IS THE SERVER'S DEFAULT. An unset settings.scribe.model resolves to SCRIBE_MODEL_CHOICES[0] on the card and to SCRIBE_MODEL_DEFAULT in all three Edge Functions; if those two strings ever diverged the card would say Sonnet while the server sent something else, and nobody would be able to tell from either end (got ${SCRIBE_MODEL_CHOICES[0]} vs ${SCRIBE_MODEL_DEFAULT})`);
   for (const id of SCRIBE_MODEL_CHOICES) {
@@ -514,21 +519,28 @@ console.log('\n[11] DI-282 — the two model ids the card offers are ids the ser
     assert(Number(rates.input) > 0 && Number(rates.output) > 0,
       `11-4b (${id}): …at real, non-zero rates in both directions — a zero would meter every call at $0 and the budget guard would never fire`);
   }
-  const sonnet = SCRIBE_MODEL_RATES_USD_PER_MTOK['claude-sonnet-5'];
-  const opus = SCRIBE_MODEL_RATES_USD_PER_MTOK['claude-opus-5'];
-  assert(opus.input / sonnet.input === 2.5 && opus.output / sonnet.output === 2.5,
-    `11-5: THE CARD'S "about 2.5×" IS THE ARITHMETIC, not a slogan. Input and output both divide out to exactly 2.5, so the sentence a commissioner reads before spending his own money is derived from the same table that spends it (got ${opus.input / sonnet.input} / ${opus.output / sonnet.output})`);
+  const sonnet = SCRIBE_MODEL_RATES_USD_PER_MTOK[SCRIBE_MODEL_CATALOG.sonnet.id];
+  const opus = SCRIBE_MODEL_RATES_USD_PER_MTOK[SCRIBE_MODEL_CATALOG.opus.id];
+  assert(opus.input / sonnet.input === 2 && opus.output / sonnet.output === 2,
+    `11-5: THE CARD'S "about 2×" IS THE ARITHMETIC, not a slogan. On the verified prices ($4/$20 over $2/$10) input and output both divide out to exactly 2, so the sentence a commissioner reads before spending his own money is derived from the same table that spends it (got ${opus.input / sonnet.input} / ${opus.output / sonnet.output})`);
+  // One source, proven: every rate-card row is a catalog row or a legacy id priced as the tier that replaced it — nothing on the card is typed a second time.
+  assert(Object.keys(SCRIBE_MODEL_RATES_USD_PER_MTOK).length === 3 + 4
+    && ['haiku', 'sonnet', 'opus'].every((t) => SCRIBE_MODEL_RATES_USD_PER_MTOK[SCRIBE_MODEL_CATALOG[t].id].input === SCRIBE_MODEL_CATALOG[t].input
+      && SCRIBE_MODEL_RATES_USD_PER_MTOK[SCRIBE_MODEL_CATALOG[t].id].output === SCRIBE_MODEL_CATALOG[t].output),
+    '11-5b: the rate card is DERIVED from the catalog (three catalog ids plus the four legacy ids: sonnet-5, opus-5 and the two Haiku 4.5 spellings), price for price — "we can send it" and "we can price it" are one question by construction (F-3)');
 
   // ── F-3, at the seam the three handlers actually read. ──
-  assert(rateSettings({ scribe: { model: 'claude-opus-5' } }).model === 'claude-opus-5',
+  assert(rateSettings({ scribe: { model: SCRIBE_MODEL_CATALOG.opus.id } }).model === SCRIBE_MODEL_CATALOG.opus.id,
     '11-6: rateSettings() passes a CARD MODEL through — the toggle reaches the wire, which is the whole point of DI-282');
+  assert(rateSettings({ scribe: { model: 'claude-opus-5' } }).model === SCRIBE_MODEL_CATALOG.opus.id,
+    '11-6b: …and a STORED LEGACY id (claude-opus-5) reads back as the id that replaced it, so a caller that still reads this field sends, prices and meters the same string (CONVENTIONS #10)');
   for (const bad of ['claude-opus-4-1', 'gpt-5', 'constructor', '__proto__', 'toString', '', 42, null, {}]) {
     assert(rateSettings({ scribe: { model: bad } }).model === null,
       `11-7 (${JSON.stringify(bad)}): …and an OFF-CARD model resolves to null, so every caller's \`|| SCRIBE_MODEL_DEFAULT\` sends the default instead. It used to be passed straight through: a typo became a live 400 (RG-222's shape) and a real-but-unpriced id became a call metered at the wrong price`);
   }
   assert(rateSettings({}).model === null && rateSettings({ scribe: {} }).model === null,
     '11-8: an absent bag and an absent field both read as null — the default-when-missing story is the same one the default-when-garbage story is (CONVENTIONS #10)');
-  assert(rateSettings({ scribe: { model: 'claude-opus-5', monthlyBudgetUsd: 0 } }).monthlyBudgetUsd === 0,
+  assert(rateSettings({ scribe: { model: SCRIBE_MODEL_CATALOG.opus.id, monthlyBudgetUsd: 0 } }).monthlyBudgetUsd === 0,
     '11-9: …and validating the model did not disturb the other four fields — S-F2\'s "0 means stop all spend" still survives a bag that also carries a model');
 }
 

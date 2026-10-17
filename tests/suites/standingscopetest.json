@@ -1,0 +1,13 @@
+{
+  "id": "standingscopetest",
+  "script": "standingscopetest.mjs",
+  "label": "129",
+  "summary": "strict-combined",
+  "floor": 86,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 300,
+  "note": "RAISED from 78 on 2026-10-02 for the v0.29.0 release review's N2: [4c](iv) +6 — a final single-part week whose stored winner or loser has left is named as Weekly History names it, \"(left)\" included; an unfinalized or hidden week keeps its computed lines; earlier: floor 78 …"
+}

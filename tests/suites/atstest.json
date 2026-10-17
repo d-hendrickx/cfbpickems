@@ -1,0 +1,15 @@
+{
+  "id": "atstest",
+  "script": "atstest.mjs",
+  "summary": "strict",
+  "floor": 248,
+  "tags": [
+    "smoke"
+  ],
+  "deps": [
+    "js/scoring.js",
+    "js/data-model.js"
+  ],
+  "expectedMs": 100,
+  "note": "calculateAtsWinner(): who covered, and therefore who owes whom (signed home-perspective spread, PK, pushes, multipliers). Registered 2026-10-07 (W-11)."
+}

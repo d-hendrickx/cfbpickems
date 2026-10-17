@@ -1,0 +1,11 @@
+{
+  "id": "homesportstest",
+  "script": "homesportstest.mjs",
+  "summary": "strict",
+  "floor": 97,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 500,
+  "note": "(D1 combine, 2026-10-08: RAISED from 91 to 97 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - D1 (v0.30.0) DI-528: the Home feed combines every sport and names each card's sport - js/home-sports.js (per-sport slices, the merge), the snapshot / counts / cardHTML edits in js/home.js, the sport naming in feed-cards cardCopy. The single-sport rule (derive called once, golden markup), nothing merges (combined = CFB-only + NFL-only, entrants as players), C4 counts, the blind rule per sport with positive controls, year-ago, chat once, hostile text, and 13 in-memory mutation proofs"
+}

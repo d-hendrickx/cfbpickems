@@ -1,0 +1,12 @@
+{
+  "id": "schoolthemetest",
+  "script": "schoolthemetest.mjs",
+  "label": "104b",
+  "summary": "strict-combined",
+  "floor": 297,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "(+1 SP-52 THEMES (2026-10-01): [F1] re-derived to the school entries of THEMES + [F1b] the four non-school looks), earlier floor 296, 2026-10-01 — SB-10 / RG-273: [R] resolver self-test, [F] fixtures, [1] six schools x three Light contexts, [2] Munera unchanged, [3] no stale …"
+}

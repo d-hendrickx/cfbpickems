@@ -206,6 +206,78 @@ console.log('\n[6] …and only an INTEGER status in [100,599] is ever rendered�
   }
 }
 
+console.log('\n[7] D1 Lane C (DI-656) — the scan\'s two switches are two rows of THIS card, worded like every other job…');
+{
+  app._setBgJobsCacheForTest({ leagueId: 'L-x', rows: [], fetchedAt: NOW, loading: false, error: null });
+  storage.saveSetting('serverJobs', {});
+  storage.saveSetting('serverJobsFlippedAt', {});
+  const off = render();
+  const co = statusOf(rowOf(off, 'SCRIBE deadline call-outs'));
+  const sc = statusOf(rowOf(off, 'SCRIBE moment scan'));
+  assert(co.text === "Off — the app's own path is handling this." || co.text === 'Off — the app&#39;s own path is handling this.',
+    `7-1: the call-out row exists and, off, says the existing off sentence (got ${JSON.stringify(co.text)})`);
+  assert(sc.text === co.text, `7-2: …and so does the moment-scan row (got ${JSON.stringify(sc.text)})`);
+  const inputOf = (html, job) => (new RegExp(`<input type="checkbox" class="server-job-toggle" data-job="${job}"[^>]*>`).exec(html) || [''])[0];
+  const okInput = (tag) => tag !== '' && !/\bchecked\b/.test(tag) && !/\bdisabled\b/.test(tag);
+  assert(okInput(inputOf(off, 'scribeCallout')) && okInput(inputOf(off, 'scribeScan')),
+    '7-3: both rows carry the existing toggle (class server-job-toggle, their switch name), enabled because both are built, unchecked while off');
+
+  storage.saveSetting('serverJobs', { scribeCallout: true, scribeScan: true });
+  storage.saveSetting('serverJobsFlippedAt', { scribeCallout: ago(40), scribeScan: ago(40) });
+  const dead = render();
+  const coD = statusOf(rowOf(dead, 'SCRIBE deadline call-outs'));
+  const scD = statusOf(rowOf(dead, 'SCRIBE moment scan'));
+  assert(/expected every 5 min\. This job may be dead\./.test(coD.text) && isRed(coD),
+    `7-4: switched on 40 min ago with no run, the 5-minute call-out escalates (got ${JSON.stringify(coD.text)})`);
+  assert(/expected every 10 min\. This job may be dead\./.test(scD.text) && isRed(scD),
+    `7-5: …and so does the 10-minute scan (got ${JSON.stringify(scD.text)})`);
+
+  app._setBgJobsCacheForTest({ leagueId: 'L-x', fetchedAt: NOW, loading: false, error: null, rows: [
+    { job: 'scribe-callout', runId: 'co_1', actor: 'cron', ok: true, skipped: 'nothing_to_do', error: null, payload: { outcome: 'too_early' }, startedAt: ago(3), finishedAt: ago(2) },
+  ] });
+  const fresh = render();
+  const coF = statusOf(rowOf(fresh, 'SCRIBE deadline call-outs'));
+  const scF = statusOf(rowOf(fresh, 'SCRIBE moment scan'));
+  assert(coF.text === 'Last ran 2 min ago · nothing to do' && !isRed(coF),
+    `7-6: a scribe-callout run row lands on the call-out row as an ordinary quiet tick (got ${JSON.stringify(coF.text)})`);
+  assert(/This job may be dead\./.test(scF.text),
+    `7-7: …and NOT on the moment-scan row, which reads its own run name, scribe-scan (got ${JSON.stringify(scF.text)})`);
+}
+
+console.log('\n[8] D1 Lane C (DI-656) — the two new rows, TAPPED through the real binder (bindCommEventListeners), write a strict boolean through the seam…');
+{
+  storage.saveSetting('serverJobs', { reminders: true });
+  storage.saveSetting('serverJobsFlippedAt', {});
+  const listeners = [];
+  const fakeToggle = (job) => {
+    const el = { dataset: { job }, checked: false };
+    el.addEventListener = (type, fn) => { listeners.push({ job, type, fn, el }); };
+    return el;
+  };
+  const toggles = [fakeToggle('scribeCallout'), fakeToggle('scribeScan')];
+  const origQSA = document.querySelectorAll;
+  document.querySelectorAll = (sel) => (sel === '.server-job-toggle' ? toggles : []);
+  let bindErr = null;
+  try { app.bindCommEventListeners(null, [], [], [], storage.getSettings(), [], [], null); } catch (e) { bindErr = e; }
+  document.querySelectorAll = origQSA;
+  assert(bindErr === null, `8-0: fixture check — the real binder ran over the stub DOM (${bindErr && bindErr.message})`);
+  const tap = (job, checked) => {
+    const l = listeners.find((x) => x.job === job && x.type === 'change');
+    if (!l) return false;
+    l.el.checked = checked;
+    l.fn();
+    return true;
+  };
+  assert(tap('scribeCallout', true), '8-1: the call-out row\'s checkbox has a change listener from the real binder');
+  let jobs = storage.getSettings().serverJobs;
+  assert(jobs.scribeCallout === true && jobs.reminders === true && !('scribeScan' in jobs),
+    `8-2: tapping it ON writes serverJobs.scribeCallout = true (the literal boolean the fan-in reads), leaving the other switches alone (got ${JSON.stringify(jobs)})`);
+  assert(typeof storage.getSettings().serverJobsFlippedAt.scribeCallout === 'string', '8-3: …and stamps its flip time in the sibling map');
+  assert(tap('scribeScan', true) && storage.getSettings().serverJobs.scribeScan === true, '8-4: the moment-scan row does the same for serverJobs.scribeScan');
+  assert(tap('scribeCallout', false) && storage.getSettings().serverJobs.scribeCallout === false && storage.getSettings().serverJobs.scribeScan === true,
+    '8-5: tapping the call-out OFF writes false and leaves the scan on (two independent rollbacks)');
+}
+
 app._setBgJobsCacheForTest({});
 storage.saveSetting('serverJobs', {});
 storage.saveSetting('serverJobsFlippedAt', {});

@@ -1,0 +1,9 @@
+{
+  "id": "allsportstest",
+  "script": "allsportstest.mjs",
+  "summary": "strict",
+  "floor": 36,
+  "tags": ["quick"],
+  "expectedMs": 300,
+  "note": "D1 (v0.30.0) DI-525 rev 3 (Drew D-59): js/all-sports.js — the pure model of the Dashboard's All sports: the union of the sports' games, the sort across sports, each row gated on its OWN week (C2), the per-sport gate, hidden weeks, the This week header"
+}

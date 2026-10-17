@@ -6,7 +6,7 @@
  * looping animation that ignored Reduce Motion.
  *
  * (a) SB-18 — THE COMMISSIONER'S READINESS CHIPS ARE UNREADABLE IN NIGHT MODE.
- *     renderAdminGamesList() (js/app.js; Comm -> Games -> Selected Slate) puts a chip on every game that is not ready:
+ *     the Games row (js/games-list.js gameRowHTML(); Comm -> Games; until D1 W-69 it was renderAdminGamesList() in the Selected Slate card) puts a chip on every game that is not ready:
  *       .game-readiness-warn        color:#8a5a00   "⚠️ Pending confirmation"
  *       .game-readiness-incomplete  color:#9a1c1c   "⛔ Incomplete — hidden from players"
  *     SP-52 (A1.8) already declares --readiness-warn-text / --readiness-incomplete-text in every theme block; the two rules
@@ -23,7 +23,7 @@
  *     main feed's first unread message) paints its label and its two hairlines with a hardcoded #B02A37: 2.48:1 on the
  *     lifted Dark card #25201B and 2.62:1 on Graphite Dark's #1C1C1E (2.90:1 / 2.63:1 on the pre-SP-52 surfaces).
  *
- * METHOD: SP-52's 20-sided resolver (themeresolve.mjs), never a copy of it. The real markup (renderAdminGamesList(),
+ * METHOD: SP-52's 20-sided resolver (themeresolve.mjs), never a copy of it. The real markup (the Games row via app._gamesRowsHTMLForTest(),
  * renderGameCard(), chat-ui's messageHTML() and pillsHTML(), and the literal templates in js/app.js / js/chat-ui.js, each
  * checked to exist) is parsed into a node tree mounted where the app mounts it, and every colour, surface, animation and
  * opacity comes out of the real cascade on that tree. Contrast: 10 looks x Light/Dark x BOTH triggers (System with the OS
@@ -189,9 +189,10 @@ const page = (id, attrs = {}) => [N('div', ['page-wrapper']), N('main', ['main-c
 // index.html: body > .page-wrapper > main.main-content > section.page-section#page-* (the app adds .active); the header is
 // body > .page-wrapper > header.app-header > .app-header-inner > #header-meta.header-meta > #header-meta-week.
 const SHELL = {
-  // js/app.js renderCommPage(): `<div class="admin-section" data-comm-tab="games"> … <div id="admin-games-list">${renderAdminGamesList(…)}`,
-  // mounted by `c.innerHTML = sections.join('\n')` into #page-commissioner, which carries data-comm-active.
-  comm: [...page('page-commissioner', { 'data-comm-active': 'games' }), N('div', ['admin-section'], { 'data-comm-tab': 'games' }), N('div', [], { id: 'admin-games-list' })],
+  // RE-DERIVED 2026-10-14 (D1 W-69): js/app.js gamesSectionHTML(): `<div class="admin-section games-section" data-comm-tab="games" id="games-section"> … <div id="games-groups" class="games-groups">` holds the Games rows
+  // (flat, as the 'no grouping' view lays them; a date group wraps the same rows in .avail-group > .avail-group-body, a paper root of its own), mounted by `c.innerHTML = sections.join('\n')` into #page-commissioner,
+  // which carries data-comm-active.
+  comm: [...page('page-commissioner', { 'data-comm-active': 'games' }), N('div', ['admin-section', 'games-section'], { 'data-comm-tab': 'games', id: 'games-section' }), N('div', ['games-groups'], { id: 'games-groups' })],
   submitted: [...page('page-picks'), N('div', [], { id: 'submitted-games' })],
   draft: [...page('page-picks'), N('div', [], { id: 'games-list' })],
   picksPage: page('page-picks'),
@@ -231,7 +232,7 @@ const label = (n) => { const p = []; for (let x = n; x && x.tag !== 'html'; x = 
 // ─── Contexts: the twenty sides, Dark AND Light once per trigger ─────────────
 const CONTEXTS = ALL_THEME_KEYS.flatMap((key) => ['L', 'D'].flatMap((side) => ['system', 'pinned'].map((trigger) => ({ key, side, trigger, id: `${key}:${side} (${trigger})` }))));
 const SIDES20 = ALL_THEME_KEYS.flatMap((key) => ['L', 'D'].map((side) => ({ key, side, id: `${key}:${side}` })));
-// Paper Dark paints LIGHT paper cards (J1): a chip inside .game-admin-card (a paper root) reads the LIGHT pair there (A1.8).
+// Paper Dark paints LIGHT paper cards (J1): a chip inside .games-row (a paper root; it replaced .game-admin-card in the Games list, D1 W-69) reads the LIGHT pair there (A1.8).
 const darkSurface = (c) => c.side === 'D' && c.key !== 'paper';
 
 /** The effective text colour of `n` against every surface painted under it — themetest [T11]'s method. */
@@ -287,8 +288,8 @@ async function renderFixtures() {
   return {
     readiness: dm.gameDataReadiness,
     fixtures: { warn, inc, ok, live },
-    admin: app.renderAdminGamesList([warn, inc, ok, live], week, {}),
-    adminOkOnly: app.renderAdminGamesList([ok], week, {}),
+    admin: app._gamesRowsHTMLForTest({ week, slate: [warn, inc, ok, live], pool: [] }),
+    adminOkOnly: app._gamesRowsHTMLForTest({ week, slate: [ok], pool: [] }),
     covering: app.renderGameCard(g, g.homeTeam, PICK_RESULT.LIVE, true, true),
     trailing: app.renderGameCard(g, g.awayTeam, PICK_RESULT.LIVE, true, true),
     coveringAlma: app.renderGameCard(ga, ga.homeTeam, PICK_RESULT.LIVE, true, true),
@@ -308,7 +309,8 @@ const TEMPLATE_HTML = {
   history: '<span class="hist-pick badge-live">Texas A&amp;M </span>',
   faq: '<div class="faq-stage"><span class="badge badge-live">LIVE</span></div>',
   chatViewHeader: '<div class="chat-view-header"><div><strong>LSU @ Texas A&amp;M</strong> <span class="text-muted text-xs">A&amp;M -3.5</span></div><div><span class="live-pulse"></span> LIVE 7–14</div></div>',
-  chatSheet: '<div class="chat-sheet"><div class="chat-sheet-header"><div><div class="chat-sheet-title">LSU @ Texas A&amp;M</div><div class="chat-sheet-sub">A&amp;M -3.5 · <span class="live-pulse"></span> LIVE 7–14</div></div></div></div>',
+  // D1 Lane B Game Day (DI-592, 2026-10-08): the thread sheet's header shows the STATIC live dot (chat surfaces never pulse), not .live-pulse.
+  chatSheet: '<div class="chat-sheet" id="chat-thread-sheet"><div class="chat-sheet-header"><div class="chat-sheet-head-text"><div class="chat-sheet-title">LSU @ Texas A&amp;M</div><div class="chat-sheet-sub">A&amp;M -3.5 · <span class="live-dot live-dot-static" aria-hidden="true"></span>LIVE 7–14</div><div class="chat-sheet-sub chat-sheet-lens">Also appears in the Locker Room</div></div></div></div>',
 };
 
 /** Every live indicator, at every place it renders. `sb18` roles must hold animation:none AND full opacity under Reduce
@@ -337,7 +339,8 @@ const MOTION_ROLES = [
   { id: '.score-status — FINAL card "FINAL" line (never loops, A1.10)', rule: '.score-status-final', kind: 'still', fx: 'finalCard', shell: 'submitted', pick: (h) => findAll(h, (n) => hasC(n, 'score-status'))[0] },
   { id: '.live-pulse — Chat game pill (live game)', rule: '.live-pulse', kind: 'sb18', fx: 'pills', shell: 'chatSticky', pick: (h) => findAll(h, (n) => hasC(n, 'live-pulse'))[0] },
   { id: '.live-pulse — Chat game-thread header (main page)', rule: '.live-pulse', kind: 'sb18', tpl: 'chatViewHeader', shell: 'chatSticky', pick: (h) => findAll(h, (n) => hasC(n, 'live-pulse'))[0] },
-  { id: '.live-pulse — game-thread bottom sheet header', rule: '.live-pulse', kind: 'sb18', tpl: 'chatSheet', shell: 'chatSheet', pick: (h) => findAll(h, (n) => hasC(n, 'live-pulse'))[0] },
+  // DI-592 (2026-10-08): the game-thread sheet's header dot is the STATIC one — it never loops, motion allowed or not
+  { id: '.live-dot.live-dot-static — game-thread bottom sheet header (never loops, DI-592)', rule: '.live-dot-static', kind: 'still', tpl: 'chatSheet', shell: 'chatSheet', pick: (h) => findAll(h, (n) => hasC(n, 'live-dot-static'))[0] },
   // regression: the dashboard twins that already had the pattern (SB-06's chains, imported; the animated element is the chip itself)
   { id: '.pick-cell.pick-live-covering — matrix (regression)', rule: '.pick-cell.pick-live-covering', kind: 'regression', dash: 'pick cell — live covering' },
   { id: '.pick-cell.pick-live-trailing — matrix (regression)', rule: '.pick-cell.pick-live-trailing', kind: 'regression', dash: 'pick cell — live trailing' },
@@ -394,7 +397,7 @@ export function analyze(cssSrc, F, { debt = KNOWN_MOTION_DEBT, exempt = MOTION_E
       const syncHost = mount(r.body, SHELL.chatPage, '<span id="chat-sync-badge" class="sync-badge sync-syncing">Syncing…</span>');
       for (const level of ['warn', 'incomplete']) {
         const chip = findAll(admin, (n) => hasC(n, 'game-readiness') && hasC(n, `game-readiness-${level}`))[0];
-        const card = chip ? (() => { for (let x = chip.parent; x; x = x.parent) if (hasC(x, 'game-admin-card')) return x; return null; })() : null;
+        const card = chip ? (() => { for (let x = chip.parent; x; x = x.parent) if (hasC(x, 'games-row')) return x; return null; })() : null;
         table.push({ ctx: c, role: level, ...worstIn(sheet, chip, r.ctx), cardBg: card ? (R.paintedSurfaces(sheet, card, r.ctx) || []).map(R.hex)[0] : null, chip });
       }
       const div = findAll(feed, (n) => hasC(n, 'chat-new-divider'))[0];
@@ -540,17 +543,19 @@ if (isMain) {
   for (const level of ['warn', 'incomplete']) {
     const x = A.at(level, 'neutral:L (system)');
     const chip = x && x.chip;
-    const card = chip && (() => { for (let y = chip.parent; y; y = y.parent) if (hasC(y, 'game-admin-card')) return y; return null; })();
-    assert(!!(card && hasC(card, `game-admin-card-${level}`) && card.parent && card.parent.attrs.id === 'admin-games-list'),
-      `0-4: renderAdminGamesList() really renders the ${level} chip inside .game-admin-card.game-admin-card-${level} under #admin-games-list (${chip ? label(chip) : 'NOT RENDERED'})`);
+    const card = chip && (() => { for (let y = chip.parent; y; y = y.parent) if (hasC(y, 'games-row')) return y; return null; })();
+    assert(!!(card && hasC(card, `games-row-${level}`) && card.parent && card.parent.attrs.id === 'games-groups'),
+      `0-4: the Games row really renders the ${level} chip inside .games-row.games-row-${level} under #games-groups (${chip ? label(chip) : 'NOT RENDERED'})`);
   }
   assert(!/game-readiness/.test(F.adminOkOnly), '0-5: a ready game renders no readiness chip (the fixtures are what make the chip appear)');
-  assert(/<div class="admin-section" data-comm-tab="games">[\s\S]{0,600}?<div id="admin-games-list">\$\{renderAdminGamesList\(/.test(appSrc) &&
+  assert(/<div class="admin-section games-section" data-comm-tab="games" id="games-section">[\s\S]{0,3500}?<div id="games-groups" class="games-groups"/.test(appSrc) &&
     /c\.innerHTML = sections\.join\('\\n'\)/.test(appSrc) && /c\.setAttribute\('data-comm-active'/.test(appSrc),
-    '0-6: the chip mount is the real one: #page-commissioner (data-comm-active) > .admin-section[data-comm-tab="games"] > #admin-games-list');
+    '0-6: the chip mount is the real one: #page-commissioner (data-comm-active) > .admin-section.games-section[data-comm-tab="games"] > #games-groups');
   const templates = {
-    header: /<span class="week-heading-name"><strong>\$\{escHtml\(wl\.name\)\}<\/strong><span class="badge badge-\$\{escHtml\(week\.status\)\} ml-sm">/,
-    weekNav: /<div class="week-heading">\s*<span class="picks-week-nav-label">[^\n]*<span class="badge badge-\$\{escHtml\(viewWeek\.status\)\}">/,
+    // D1 / DI-510 (2026-10-07): both badges read the ONE week-lock state (weekBadgePhase), so a week past its lock instant reads LOCKED; the class prefix and the escaping are unchanged.
+    // RE-DERIVED 2026-10-08 (D1 Part 2 item 1): the strong's text carries the sport code in a several-sport league (`hw.code ? hw.code + ' ' + wl.name : wl.name`); the badge half - class prefix, escaping, ml-sm - is unchanged.
+    header: /<span class="week-heading-name"><strong>\$\{escHtml\(hw\.code \? hw\.code \+ ' ' \+ wl\.name : wl\.name\)\}<\/strong><span class="badge badge-\$\{escHtml\(headBadge\.phase\)\}\$\{lockFlipClass\(\)\} ml-sm">/,
+    weekNav: /<div class="week-heading">\s*<span class="picks-week-nav-label">[^\n]*<span class="badge badge-\$\{escHtml\(statusBadge\.phase\)\}\$\{lockFlipClass\(\)\}">/,
     history: /class="hist-pick \$\{getResultBadgeClass\(res\)\}"/.test(appSrc) && /live:'badge-live'/.test(appSrc) ? /./ : /$^/,
     faq: /<div class="faq-stage"><span class="badge badge-live">LIVE<\/span>/,
     header_id: /getElementById\('header-meta-week'\)/,
@@ -560,13 +565,13 @@ if (isMain) {
     `0-7: every .badge-live template this suite models exists in js/app.js — header week badge, week nav, History (getResultBadgeClass live -> badge-live), Rules FAQ (${missingTpl.length ? 'MISSING: ' + missingTpl.join(', ') : 'all found'})`);
   const chatTpl = {
     viewHeader: /<div class="chat-view-header\$\{headerCls\}">[\s\S]{0,400}?<div>\$\{g\.status === GAME_STATUS\.LIVE \? `<span class="live-pulse"><\/span> LIVE/,
-    sheet: /<div class="chat-sheet-sub">[^\n]*\n\s*\$\{g\?\.status === GAME_STATUS\.LIVE \? ` · <span class="live-pulse"><\/span> LIVE/,
+    sheet: /const status = g\?\.status === GAME_STATUS\.LIVE \? ` · <span class="live-dot live-dot-static" aria-hidden="true"><\/span>LIVE \$\{score\}`[\s\S]{0,1400}?<div class="chat-sheet-sub">[^\n]*\$\{status\}<\/div>/,
     sheetWrap: /wrap\.id = 'chat-sheet-wrap';/,
     sticky: /<div class="chat-sticky-stack">[\s\S]{0,700}?\$\{U\.searchOpen \? searchBarHTML\(\) : pillsHTML\(\)\}\s*\$\{viewHeader\}/,
   };
   const missingChat = Object.entries(chatTpl).filter(([, re]) => !re.test(chatSrc)).map(([k]) => k);
   assert(missingChat.length === 0,
-    `0-8: every .live-pulse template this suite models exists in js/chat-ui.js — the pills and a game view's header inside .chat-sticky-stack, the sheet header's sub-line in #chat-sheet-wrap (${missingChat.length ? 'MISSING: ' + missingChat.join(', ') : 'all found'})`);
+    `0-8: every live-indicator template this suite models exists in js/chat-ui.js — the pills and a game view's header (.live-pulse) inside .chat-sticky-stack, the sheet header's STATIC dot in #chat-sheet-wrap (${missingChat.length ? 'MISSING: ' + missingChat.join(', ') : 'all found'})`);
   assert(/class="chat-pill[^"]*chat-pill-live[^"]*"[^>]*>\s*<span class="live-pulse"><\/span>/.test(F.pills),
     '0-9: chat-ui pillsHTML() really renders a .chat-pill.chat-pill-live with its .live-pulse dot for a LIVE game on the current week (written through the storage seam)');
   assert(/<div class="score-status">🔴 LIVE<\/div>/.test(F.covering) && /<div class="score-status\$\{noPulseCls\}">/.test(appSrc) && /' score-status-no-pulse'/.test(appSrc),
@@ -730,8 +735,14 @@ if (isMain) {
   }
   {
     const m = runM(mutate(cssSrc, '@media (prefers-reduced-motion:reduce){.live-pulse{animation:none}}', '', '.live-pulse reduced-motion override removed'));
-    assert(!!m && m.rmBroken('.live-pulse') && m.motionTable.filter((x) => x.role.rule === '.live-pulse').length === 3 && m.unlisted.some((x) => x.sel === '.live-pulse'),
-      '5-15: .live-pulse override removed → [4-rm] RED at all three Chat sites (game pill, thread header, sheet header) and [4-net] RED');
+    assert(!!m && m.rmBroken('.live-pulse') && m.motionTable.filter((x) => x.role.rule === '.live-pulse').length === 2 && m.unlisted.some((x) => x.sel === '.live-pulse'),
+      '5-15: .live-pulse override removed → [4-rm] RED at both Chat sites that pulse (game pill, thread header; the sheet header\'s dot is static since DI-592) and [4-net] RED');
+  }
+  {
+    // DI-592 (2026-10-08): the static dot must beat .live-dot's pulse by WEIGHT, not by order — one class (the pre-fix selector) loses to `.live-dot` defined further down and the sheet's dot loops
+    const m = runM(mutate(cssSrc, '.live-dot.live-dot-static{animation:none;opacity:1;transform:none}', '.live-dot-static{animation:none;opacity:1;transform:none}', 'the static dot back to one class'));
+    const row = m && m.motionTable.find((x) => x.role.rule === '.live-dot-static');
+    assert(!!row && (row.runBad || (row.rmBad && row.rmBad.length > 0) || /pulse/.test(String(row.anim || row.run || ''))) , `5-15b: the static dot written with ONE class (the pre-fix selector) loops again under .live-dot's later rule — so the sheet header's "never loops" row can fail (${row ? JSON.stringify({ runBad: row.runBad, rm: row.rmBad && row.rmBad.length }) : 'no row'})`);
   }
   {
     const removed = cssSrc.split('@media (prefers-reduced-motion:reduce){.live-pulse{animation:none}}').join('');

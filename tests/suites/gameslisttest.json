@@ -1,0 +1,17 @@
+{
+  "id": "gameslisttest",
+  "script": "gameslisttest.mjs",
+  "summary": "strict",
+  "floor": 170,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "deps": [
+    "js/**",
+    "css/styles.css",
+    "index.html",
+    "tests/kits/w68-w69-mutants.json"
+  ],
+  "note": "D1 W-68 / W-69 (2026-10-14, MERGE int a6ee12a5 into feat/d1-slate): floor re-measured on the merged tree = 170 (the alma chip cases 2-16..2-16b). D1 W-68 / W-69 review round 1 (2026-10-14): RAISED 156 -> 167: F-4 the data-quality chip and ESPN id on rows, F-5 Next during the last Remove's collapse, F-2 the Step 3 variant. D1 W-69 (2026-10-14): ONE games list. Red-first (each game once, Remove in the app's sheet, Step 3 Remove), the join and union, rows by week status, Remove flipping/collapsing in place, segments/filters/groups/empty states, Suggested attributes, More, Edit with the Favorite+Margin block pinned, Player Requests rows, wizard Step 3, the hold under a new touch (virtual clock)."
+}

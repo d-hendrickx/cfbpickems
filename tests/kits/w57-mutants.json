@@ -1,0 +1,1704 @@
+[
+ {
+  "id": "R-M1 honor forged tag",
+  "why": "the reviewer's own mutant, ported: honor forged tag",
+  "file": "js/chat.js",
+  "old": "if (own && memo.live.has(own)) return { kind: 'sport', sport: own };",
+  "new": "if (own) return { kind: 'sport', sport: own };",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[3c] forgedArchived: All shows, CFB shows, NFL shows"
+  }
+ },
+ {
+  "id": "R-M2 archived shows under pills",
+  "why": "the reviewer's own mutant, ported: archived shows under pills",
+  "file": "js/chat.js",
+  "old": "if (c.kind === 'archived') return false;",
+  "new": "if (c.kind === 'archived') return true;",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[3c] archivedThread: All shows, CFB hides, NFL hides"
+  }
+ },
+ {
+  "id": "R-M3 resolver throw propagates",
+  "why": "the reviewer's own mutant, ported: resolver throw propagates",
+  "file": "js/chat.js",
+  "old": "try { code = validSportTag(resolver(key)); } catch { code = ''; }",
+  "new": "code = validSportTag(resolver(key));",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "(the suite exited 1 without a failing assertion: const broken = { sports: ['cfb', 'nfl'], sportOfGame() { throw new Error('lookup failed');)"
+  }
+ },
+ {
+  "id": "R-M4 markSeen accepts sport:",
+  "why": "the reviewer's own mutant, ported: markSeen accepts sport:",
+  "file": "js/chat.js",
+  "old": "  if (isSportCursorTag(tag)) return;\n  _advanceCursor(tag);",
+  "new": "  _advanceCursor(tag);",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[0g] markSeen() refuses a `sport:` tag on its first line"
+  }
+ },
+ {
+  "id": "R-M5 target-visible never resets",
+  "why": "the reviewer's own mutant, ported: target-visible never resets",
+  "file": "js/chat-ui.js",
+  "old": "  U.sportFilter = 'all'; U.sportFilterOwner = '';                                  // hidden",
+  "new": "  return false; U.sportFilter = 'all'; U.sportFilterOwner = '';                                  // hidden",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[8a] a push/link to an NFL thread message while CFB is selected resets the filter to All first"
+  }
+ },
+ {
+  "id": "R-M6 reveal unstamped",
+  "why": "the reviewer's own mutant, ported: reveal unstamped",
+  "file": "js/chat-ui.js",
+  "old": "    ...systemSportFields({ weekId: week.weekId }),   // D1 (DI-553): files the reveal under this sport's pill.",
+  "new": "    // removed: files the reveal under this sport's pill.",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7f] the reveal post of the NFL week (sys_reveal_w_nfl) carries sportTag nfl"
+  }
+ },
+ {
+  "id": "R-M7 extra point unstamped",
+  "why": "the reviewer's own mutant, ported: extra point unstamped",
+  "file": "js/chat-ui.js",
+  "old": "    ...systemSportFields({ weekId }),   // D1 (DI-553)\n    body: `🎯",
+  "new": "    body: `🎯",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7f] the extra point post of the NFL week (sys_ep_w_nfl) carries sportTag nfl"
+  }
+ },
+ {
+  "id": "R-M8 owner check removed",
+  "why": "the reviewer's own mutant, ported: owner check removed",
+  "file": "js/chat-ui.js",
+  "old": "const owned = U.sportFilterOwner === sportFilterOwnerKey();",
+  "new": "const owned = true;",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[8d] another ACCOUNT never inherits the selection"
+  }
+ },
+ {
+  "id": "R-M9 thread-of-other heal removed",
+  "why": "the reviewer's own mutant, ported: thread-of-other heal removed",
+  "file": "js/chat-ui.js",
+  "old": "if (!owned || !offered || threadOfOther)",
+  "new": "if (!owned || !offered)",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[8b] opening an NFL game thread while CFB is selected resets the filter to All (a thread is never hidden behind a pill)"
+  }
+ },
+ {
+  "id": "R-M10 composer tags by pill",
+  "why": "the reviewer's own mutant, ported: composer tags by pill",
+  "file": "js/chat-ui.js",
+  "old": "function currentComposerSportTag(gameTag) {\n  if (!gameTag) return '';",
+  "new": "function currentComposerSportTag(gameTag) {\n  if (!gameTag) return (U.sportFilter !== 'all' ? U.sportFilter : '');",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7e] a plain Locker Room message is untagged — even with the NFL pill selected (a viewer's filter never tags what they send)"
+  }
+ },
+ {
+  "id": "R-M11 unread sport uses room predicate",
+  "why": "the reviewer's own mutant, ported: unread sport uses room predicate",
+  "file": "js/chat.js",
+  "old": "    if (sportView) { if (!appearsUnderSport(m, sportView.sport, sportView.ctx)) return; }\n    else if (tag !== 'all' && (m.gameTag || '') !== tag) return;\n    if (isUnreadFor(m, selfId, after, cutoff, league)) n++;",
+  "new": "    if (isUnreadFor(m, selfId, after, cutoff, league)) n++;",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[4d] unread under CFB counts only the CFB thread (the epoch-hidden plain row is not counted): 2"
+  }
+ },
+ {
+  "id": "R-M12 pack sends empty tag always",
+  "why": "the reviewer's own mutant, ported: pack sends empty tag always",
+  "file": "js/chatTransport.js",
+  "old": "...(sportTag ? { sportTag } : {}),",
+  "new": "sportTag,",
+  "suites": [
+   "transporttest.mjs"
+  ],
+  "red": {
+   "suite": "transporttest.mjs",
+   "label": "[18a] an UNTAGGED event has NO sportTag key at all (a one-sport league's wire payload is byte-identical to before)"
+  }
+ },
+ {
+  "id": "R-M13 rowToMessage camel fallback",
+  "why": "the reviewer's own mutant, ported: rowToMessage camel fallback",
+  "file": "js/supabase-projection.js",
+  "old": "const sportTag = validSportTag(row.sport_tag);",
+  "new": "const sportTag = validSportTag(row.sport_tag || row.sportTag || (row.meta && row.meta.sportTag));",
+  "suites": [
+   "chatsporttest.mjs",
+   "transporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[1d] the tag is read from the sport_tag COLUMN only: a camelCase twin, meta.sportTag or a look-alike game_tag never becomes a tag"
+  }
+ },
+ {
+  "id": "R-M14 SB_MESSAGE_COLS drops sport_tag",
+  "why": "the reviewer's own mutant, ported: SB_MESSAGE_COLS drops sport_tag",
+  "file": "js/chatTransport.js",
+  "old": "const SB_MESSAGE_COLS = 'league_id,id,seq,ts,type,author,game_tag,sport_tag,body,target_id,reply_to,notify,meta,relayed';",
+  "new": "const SB_MESSAGE_COLS = 'league_id,id,seq,ts,type,author,game_tag,body,target_id,reply_to,notify,meta,relayed';",
+  "suites": [
+   "transporttest.mjs"
+  ],
+  "red": {
+   "suite": "transporttest.mjs",
+   "label": "S2/A2: the select names FOURTEEN columns explicitly (the twelve wire fields, D1 DI-553's sport_tag — a column `authenticated` may SELECT since 0033 — and 0045's server-set `relayed`) — never `*`, and never emitted_by"
+  }
+ },
+ {
+  "id": "R-M15 game pill narrowing removed",
+  "why": "the reviewer's own mutant, ported: game pill narrowing removed",
+  "file": "js/chat-ui.js",
+  "old": "[...tags.keys()].forEach(id => { if (ctx.sportOfGame(id) !== selected) tags.delete(id); });",
+  "new": "void ctx;",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7d] the NFL pill: only NFL games (got [\"gC\",\"gN\",\"gN2\"])"
+  }
+ },
+ {
+  "id": "R-M16 sheet composer unstamped",
+  "why": "the reviewer's own mutant, ported: sheet composer unstamped",
+  "file": "js/chat-ui.js",
+  "old": "sendMessage({ body, gameTag: gameId, sportTag: currentComposerSportTag(gameId),",
+  "new": "sendMessage({ body, gameTag: gameId,",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7e] ALL THREE player send paths (the room composer, the game sheet composer and the 📎 callout) send through it"
+  }
+ },
+ {
+  "id": "R-M17 system meta.weekId read for players too",
+  "why": "the reviewer's own mutant, ported: system meta.weekId read for players too",
+  "file": "js/chat.js",
+  "old": "if (SYSTEM_AUTHORS.includes(String(m.author || '')) && m.meta && typeof m.meta === 'object') {",
+  "new": "if (m.meta && typeof m.meta === 'object') {",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[3c] playerMetaWeek: All shows, CFB shows, NFL shows"
+  }
+ },
+ {
+  "id": "R-M18 readThroughSeq sport passthrough",
+  "why": "the reviewer's own mutant, ported: readThroughSeq sport passthrough",
+  "file": "js/chat.js",
+  "old": "return Number(readCursorFor(getLastSeen(), isSportCursorTag(tag) ? 'all' : tag)) || 0;",
+  "new": "return Number(readCursorFor(getLastSeen(), tag)) || 0;",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[5l] readThroughSeq('sport:…') is the room cursor"
+  }
+ },
+ {
+  "id": "R-B1 deepLinkTo no reset",
+  "why": "the reviewer's own mutant, ported: deepLinkTo no reset",
+  "file": "js/app.js",
+  "old": "  if (destination.tab === 'chat' && destination.params?.messageId) { try { ensureChatTargetVisible(",
+  "new": "  if (false && destination.tab === 'chat' && destination.params?.messageId) { try { ensureChatTargetVisible(",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "6-2c: a push/notification deep link to a message the CFB pill would hide opens it (the filter was reset first) and flashes it"
+  }
+ },
+ {
+  "id": "R-B2 showChatMessage no reset",
+  "why": "the reviewer's own mutant, ported: showChatMessage no reset",
+  "file": "js/chat-ui.js",
+  "old": "  ensureChatTargetVisible({ messageId: id });   // D1 (DI-553): a sport pill",
+  "new": "  // ensureChatTargetVisible({ messageId: id });   // D1 (DI-553): a sport pill",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "6-1: \"Open in chat\" for a message the CFB pill would hide resets the filter to All first and the message is on screen (opened false)"
+  }
+ },
+ {
+  "id": "R-B3 mark-read marks room",
+  "why": "the reviewer's own mutant, ported: mark-read marks room",
+  "file": "js/chat-ui.js",
+  "old": "if (sportSel !== 'all' && (U.filter === 'all' || U.filter === 'records')) markSportSeen(sportSel, chatSportCtx(lockerRoomSportList()));",
+  "new": "if (sportSel !== 'all' && (U.filter === 'all' || U.filter === 'records')) markSeen('all');",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "4-4: reading the NFL pill clears NFL; All drops 4 -> 3 (the room cursor follows, held below the unread CFB-thread row); CFB is still 2 — each pill clears only w"
+  }
+ },
+ {
+  "id": "R-B4 pill 40px",
+  "why": "the reviewer's own mutant, ported: pill 40px",
+  "file": "css/styles.css",
+  "old": "min-height:44px;box-sizing:border-box;font-size:.78rem",
+  "new": "min-height:40px;box-sizing:border-box;font-size:.78rem",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "2-390-a: every sport pill is >= 44 pt tall (40/40/40)"
+  }
+ },
+ {
+  "id": "R-B5 no fade",
+  "why": "the reviewer's own mutant, ported: no fade",
+  "file": "js/chat-ui.js",
+  "old": "      runChatListFade(scroll);   // D1",
+  "new": "      // runChatListFade(scroll);   // D1",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "5-5: right after a pill tap the new list fades in over 150 ms ({\"has\":false,\"anim\":\"none\",\"dur\":\"0s\"})"
+  }
+ },
+ {
+  "id": "R-B6 haptic before early return",
+  "why": "the reviewer's own mutant, ported: haptic before early return",
+  "file": "js/chat-ui.js",
+  "old": "  if (next === currentSportFilter(sports)) return;\n  haptic('selection');",
+  "new": "  haptic('selection');\n  if (next === currentSportFilter(sports)) return;",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[8c] the selection haptic fires after the same-pill early return and before the state change"
+  }
+ },
+ {
+  "id": "R-B7 no newest landing",
+  "why": "the reviewer's own mutant, ported: no newest landing",
+  "file": "js/chat-ui.js",
+  "old": "const chatViewKey = `${U.filter}|${sportSel}`;",
+  "new": "const chatViewKey = `${U.filter}`;",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "3-15c: a pill tap from the top of a long list lands on the NEWEST message of the filtered view"
+  }
+ },
+ {
+  "id": "N1a bound-ignored",
+  "why": "the reviewer's own mutant, ported: bound-ignored",
+  "file": "js/chat.js",
+  "old": "  return Math.min(S.head, oldestHiddenUnread === Infinity ? S.head : oldestHiddenUnread - 1);",
+  "new": "  return S.head;",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[5n-a] the room cursor advanced to seq 1 — the row BEFORE the oldest unread row the NFL pill hides (c1, seq 2) — and not one step further (got 4)"
+  }
+ },
+ {
+  "id": "N1b off-by-one",
+  "why": "the reviewer's own mutant, ported: off-by-one",
+  "file": "js/chat.js",
+  "old": "oldestHiddenUnread === Infinity ? S.head : oldestHiddenUnread - 1);",
+  "new": "oldestHiddenUnread === Infinity ? S.head : oldestHiddenUnread);",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[5n-a] the room cursor advanced to seq 1 — the row BEFORE the oldest unread row the NFL pill hides (c1, seq 2) — and not one step further (got 2)"
+  }
+ },
+ {
+  "id": "N1c other-pills-not-fixed",
+  "why": "the reviewer's own mutant, ported: other-pills-not-fixed",
+  "file": "js/chat.js",
+  "old": "ls.byTag[k] = before;",
+  "new": "void before;",
+  "suites": [
+   "chatsporttest.mjs",
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[5n-a] the CFB pill is NOT cleared by reading NFL: its own cursor was fixed where it stood, so p1 c1 p2 still count (got 2) — DI-553: each pill clears only when"
+  }
+ },
+ {
+  "id": "N1d read-hidden-bounds",
+  "why": "the reviewer's own mutant, ported: read-hidden-bounds",
+  "file": "js/chat.js",
+  "old": "    if (!isUnreadFor(m, self, ls.seq, cutoff, league)) return;                    // already read (or never counts): holds nothing back\n",
+  "new": "",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[5n-d] the read CFB row c0 does not bound the advance; the unread CFB row c2 (seq 3) does: cursor 1 (All 3)"
+  }
+ },
+ {
+  "id": "N1e own-rows-bound",
+  "why": "the reviewer's own mutant, ported: own-rows-bound",
+  "file": "js/chat.js",
+  "old": "    if (!isUnreadFor(m, self, ls.seq, cutoff, league)) return;                    // already read",
+  "new": "    if (!isUnreadFor(m, null, ls.seq, cutoff, league)) return;                    // already read",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[5n-e] my own CFB-thread message hides from NFL but is not unread, so it does not hold the cursor back (cursor 1)"
+  }
+ },
+ {
+  "id": "N1f no-ctx-advances-room",
+  "why": "the reviewer's own mutant, ported: no-ctx-advances-room",
+  "file": "js/chat.js",
+  "old": "  _advanceCursor(tag, sportViewOf({ sport, ctx }));\n}",
+  "new": "  _advanceCursor(tag, sportViewOf({ sport, ctx }) || { sport, ctx: { sports: [sport], sportOfGame: () => '', sportOfWeek: () => '' } });\n}",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[0g] _advanceCursor() has exactly its definition and its two callers: markSeen (after the refusal) and markSportSeen (closed set only)"
+  }
+ },
+ {
+  "id": "N1g threads-not-followed",
+  "why": "the reviewer's own mutant, ported: threads-not-followed",
+  "file": "js/chat.js",
+  "old": "        Object.keys(ls.byTag).forEach(t => { if (!isSportCursorTag(t)) ls.byTag[t] = Math.max(Number(ls.byTag[t]) || 0, bound); });\n",
+  "new": "",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[5n-g] a game-thread cursor advances with the room to the same bound (room 1, gX 0)"
+  }
+ },
+ {
+  "id": "N1h room-not-advanced-by-ui",
+  "why": "the reviewer's own mutant, ported: room-not-advanced-by-ui",
+  "file": "js/chat-ui.js",
+  "old": "markSportSeen(sportSel, chatSportCtx(lockerRoomSportList()));",
+  "new": "markSportSeen(sportSel);",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "4-4: reading the NFL pill clears NFL; All drops 4 -> 3 (the room cursor follows, held below the unread CFB-thread row); CFB is still 2 — each pill clears only w"
+  }
+ },
+ {
+  "id": "N2 tag-first-order",
+  "why": "the reviewer's own mutant, ported: tag-first-order",
+  "file": "js/chat.js",
+  "old": "  const viaGame = resolveSportVia(memo.game, ctx.sportOfGame, m.gameTag || '');\n  if (viaGame) return memo.live.has(viaGame) ? { kind: 'sport', sport: viaGame } : SPORT_ARCHIVED;\n  const own = validSportTag(m.sportTag);\n  if (own && memo.live.has(own)) return { kind: 'sport', sport: own };\n",
+  "new": "  const own = validSportTag(m.sportTag);\n  if (own && memo.live.has(own)) return { kind: 'sport', sport: own };\n  const viaGame = resolveSportVia(memo.game, ctx.sportOfGame, m.gameTag || '');\n  if (viaGame) return memo.live.has(viaGame) ? { kind: 'sport', sport: viaGame } : SPORT_ARCHIVED;\n",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[3c] gameBeatsTag: All shows, CFB shows, NFL hides"
+  }
+ },
+ {
+  "id": "N2b tag-wins-over-archived-game",
+  "why": "the reviewer's own mutant, ported: tag-wins-over-archived-game",
+  "file": "js/chat.js",
+  "old": "  if (viaGame) return memo.live.has(viaGame) ? { kind: 'sport', sport: viaGame } : SPORT_ARCHIVED;",
+  "new": "  if (viaGame && memo.live.has(viaGame)) return { kind: 'sport', sport: viaGame };",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[3c] archivedThread: All shows, CFB hides, NFL hides"
+  }
+ },
+ {
+  "id": "N3 epoch-dropped",
+  "why": "the reviewer's own mutant, ported: epoch-dropped",
+  "file": "js/chat-ui.js",
+  "old": "const sportFilterOwnerKey = () => `${me() || ''}|${getActiveLeagueId() || ''}|${getIdentityEpoch()}`;",
+  "new": "const sportFilterOwnerKey = () => `${me() || ''}|${getActiveLeagueId() || ''}`;",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[8d2] N3: after sign-out → sign-in as the SAME account in the SAME league the pill is back at All (it was dropped by the identity change, not carried across it)"
+  }
+ },
+ {
+  "id": "N6a label-short",
+  "why": "the reviewer's own mutant, ported: label-short",
+  "file": "js/chat-ui.js",
+  "old": "  if (!sports.length || !game) return gameShort(game, week);",
+  "new": "  if (true) return gameShort(game, week);",
+  "suites": [
+   "chatsporttest.mjs",
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7d2] N6: game pills are labelled \"{code} · {away} @ {home}\" in a multi-sport league (got {\"gC\":\"OSU/MICH\",\"gN\":\"DETR/GB\",\"gE\":\"Indiana/Purdue\",\"gN2\":\"SEAT/DALL"
+  }
+ },
+ {
+  "id": "N6c sheet-lead-gone",
+  "why": "the reviewer's own mutant, ported: sheet-lead-gone",
+  "file": "js/chat-ui.js",
+  "old": "  return sport ? `${esc(sport.code)} · ` : '';",
+  "new": "  return '';",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "1-6c: N6 — the game thread sheet's header names the sport in a two-sport league ([\"Green Bay -2.5 · LIVE\",\"Michigan -3.5 · LIVE\"])"
+  }
+ },
+ {
+  "id": "N6d sheet-lead-single-sport",
+  "why": "the reviewer's own mutant, ported: sheet-lead-single-sport",
+  "file": "js/chat-ui.js",
+  "old": "  if (!sports.length || !week) return '';\n  const code = chatSportCtx(sports).sportOfWeek(week.weekId);",
+  "new": "  if (!week) return '';\n  const code = (chatSportCtx(sports) || { sportOfWeek: () => 'cfb' }).sportOfWeek(week.weekId);\n  if (!sports.length) return 'CFB · ';",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "7-2f: …and its thread sheet header does not name a sport"
+  }
+ },
+ {
+  "id": "R1 pills-top-2",
+  "why": "the reviewer's own mutant, ported: pills-top-2",
+  "file": "css/styles.css",
+  "old": "padding:8px 0 8px;/* W-57 review R1 (2026-10-08): top 2 -> 8",
+  "new": "padding:2px 0 8px;/* W-57 review R1 (2026-10-08): top 2 -> 8",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "2-390-e: R1 — >= 16 pt between the sport row's pills and the next row's: 8 below the one + 8 above the other (10.0)"
+  }
+ },
+ {
+  "id": "R1b search-top-2",
+  "why": "the reviewer's own mutant, ported: search-top-2",
+  "file": "css/styles.css",
+  "old": ".chat-search-row{display:flex;align-items:center;gap:8px;padding:8px 0 8px}",
+  "new": ".chat-search-row{display:flex;align-items:center;gap:8px;padding:2px 0 8px}",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "7-2d: opening search swaps the pills row for the search row in a slot of the SAME height (60 / 54) — the 44 pt pills and the 8 pt divider gap did not make the p"
+  }
+ },
+ {
+  "id": "R1c search-input-40",
+  "why": "the reviewer's own mutant, ported: search-input-40",
+  "file": "css/styles.css",
+  "old": ".chat-search-input{flex:1;min-height:44px;box-sizing:border-box}",
+  "new": ".chat-search-input{flex:1;min-height:40px;box-sizing:border-box}",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "7-2d: opening search swaps the pills row for the search row in a slot of the SAME height (60 / 60) — the 44 pt pills and the 8 pt divider gap did not make the p"
+  }
+ },
+ {
+  "id": "R3 callout-untagged",
+  "why": "the reviewer's own mutant, ported: callout-untagged",
+  "file": "js/chat-ui.js",
+  "old": "gameTag: msg.gameTag, sportTag: currentComposerSportTag(msg.gameTag), notify: true,",
+  "new": "gameTag: msg.gameTag, notify: true,",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7e] ALL THREE player send paths (the room composer, the game sheet composer and the 📎 callout) send through it"
+  }
+ },
+ {
+  "id": "R2a lock-unstamped",
+  "why": "the reviewer's own mutant, ported: lock-unstamped",
+  "file": "js/chat-ui.js",
+  "old": "    ...systemSportFields({ weekId }),   // D1 (DI-553): a system row carries its week's sport (two or more sports only)\n",
+  "new": "",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7f] the lock post of the NFL week (sys_lock_w_nfl_mKevin) carries sportTag nfl"
+  }
+ },
+ {
+  "id": "R2c kickoff-unstamped",
+  "why": "the reviewer's own mutant, ported: kickoff-unstamped",
+  "file": "js/chat-ui.js",
+  "old": "gameTag: game.gameId, ...systemSportFields({ weekId: game.weekId, gameId: game.gameId }),   // D1 (DI-553)\n    body: `🏈 Kickoff",
+  "new": "gameTag: game.gameId,\n    body: `🏈 Kickoff",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7f] the kickoff post of the NFL week (sys_kick_gN) carries sportTag nfl"
+  }
+ },
+ {
+  "id": "R2d final-unstamped",
+  "why": "the reviewer's own mutant, ported: final-unstamped",
+  "file": "js/chat-ui.js",
+  "old": "gameTag: game.gameId, ...systemSportFields({ weekId: game.weekId, gameId: game.gameId }),   // D1 (DI-553)\n    body: `FINAL:",
+  "new": "gameTag: game.gameId,\n    body: `FINAL:",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7f] the final post of the NFL week (sys_final_gN) carries sportTag nfl"
+  }
+ },
+ {
+  "id": "R2f weekfinal-unstamped",
+  "why": "the reviewer's own mutant, ported: weekfinal-unstamped",
+  "file": "js/chat-ui.js",
+  "old": "    ...systemSportFields({ weekId: week.weekId }),   // D1 (DI-553)\n    body: `📊",
+  "new": "    body: `📊",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7f] the week final post of the NFL week (sys_weekfinal_w_nfl) carries sportTag nfl"
+  }
+ },
+ {
+  "id": "R2g stamp-uses-wrong-sport",
+  "why": "the reviewer's own mutant, ported: stamp-uses-wrong-sport",
+  "file": "js/chat-ui.js",
+  "old": "    const code = validSportTag((weekId && ctx.sportOfWeek(weekId)) || (gameId && ctx.sportOfGame(gameId)) || '');\n    return code && ctx.sports.includes(code) ? { sportTag: code } : {};",
+  "new": "    const code = validSportTag(ctx.sports[0]);\n    return code && ctx.sports.includes(code) ? { sportTag: code } : {};",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7f] the lock post of the NFL week (sys_lock_w_nfl_mKevin) carries sportTag nfl"
+  }
+ },
+ {
+  "id": "F2a client-codes-drift",
+  "why": "the reviewer's own mutant, ported: client-codes-drift",
+  "file": "js/sport-tag.js",
+  "old": "Object.freeze(['cfb', 'nfl', 'nba', 'cbb', 'mm', 'nhl', 'wjc'])",
+  "new": "Object.freeze(['cfb', 'nfl', 'nba', 'cbb', 'mm', 'nhl', 'xfl'])",
+  "suites": [
+   "supabase/tests/static.check.mjs",
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "F2 — js/sport-tag.js SPORT_TAG_CODES equals the effective CHECK (minus '') — the client never believes a code the server would refuse, nor omits one it admits —"
+  }
+ },
+ {
+  "id": "F2b transport-codes-drift",
+  "why": "the reviewer's own mutant, ported: transport-codes-drift",
+  "file": "js/chatTransport.js",
+  "old": "new Set(['cfb', 'nfl', 'nba', 'cbb', 'mm', 'nhl', 'wjc'])",
+  "new": "new Set(['cfb', 'nfl', 'nba', 'cbb', 'mm', 'nhl'])",
+  "suites": [
+   "supabase/tests/static.check.mjs",
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "F2 — chatTransport.js SB_SPORT_TAGS (its own copy) equals the effective CHECK too — [\"cfb\",\"nfl\",\"nba\",\"cbb\",\"mm\",\"nhl\"]"
+  }
+ },
+ {
+  "id": "F2c server-check-tightened",
+  "why": "the reviewer's own mutant, ported: server-check-tightened",
+  "file": "supabase/migrations/0033_multisport_core.sql",
+  "old": "check (sport_tag in ('', 'cfb', 'nfl', 'nba', 'cbb', 'mm', 'nhl', 'wjc'));",
+  "new": "check (sport_tag in ('', 'cfb', 'nfl', 'nba', 'cbb', 'mm', 'nhl'));",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "0033 / DI-236 — messages.sport_tag is `text not null default ''` with the server-side CHECK on R1's SET ('', cfb, nfl, nba, cbb, mm, nhl, wjc — review 2026-09-3"
+  }
+ },
+ {
+  "id": "W1-M1 blind-bypass",
+  "why": "with a sport filter set, skip the epoch hide (a visibility bypass threaded through getMessages)",
+  "file": "js/chat.js",
+  "old": "    if (isHiddenByEpoch(m)) return;\n    if (filter.respectRetention && isHiddenByRetention(m)) return;",
+  "new": "    if (!sportView && isHiddenByEpoch(m)) return;\n    if (filter.respectRetention && isHiddenByRetention(m)) return;",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[4b] under the cfb pill, every shown row is a row `All` shows (a SUBSET — the pill adds nothing), got [\"visible-plain\",\"cfb-thread\",\"sys_test_ababababababababab"
+  }
+ },
+ {
+  "id": "W1-M1b blind-bypass-retention",
+  "why": "with a sport filter set, skip the retention hide",
+  "file": "js/chat.js",
+  "old": "    if (filter.respectRetention && isHiddenByRetention(m)) return;",
+  "new": "    if (!sportView && filter.respectRetention && isHiddenByRetention(m)) return;",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[4b] under the cfb pill, every shown row is a row `All` shows (a SUBSET — the pill adds nothing), got [\"old-plain\",\"cfb-thread\",\"sys_test_ababababababababababab"
+  }
+ },
+ {
+  "id": "W1-M2 filter-ignored",
+  "why": "appearsUnderSport always true",
+  "file": "js/chat.js",
+  "old": "  if (c.kind === 'sport') return c.sport === sport;\n  if (c.kind === 'archived') return false;\n  return true;",
+  "new": "  return true;",
+  "suites": [
+   "chatsporttest.mjs",
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[3c] cfbThread: All shows, CFB shows, NFL hides"
+  }
+ },
+ {
+  "id": "W1-M3 agnostic-hidden",
+  "why": "a plain (untagged) message vanishes under a sport pill",
+  "file": "js/chat.js",
+  "old": "  if (c.kind === 'archived') return false;\n  return true;\n}",
+  "new": "  if (c.kind === 'archived') return false;\n  return false;\n}",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[3c] plain: All shows, CFB shows, NFL shows"
+  }
+ },
+ {
+  "id": "W1-M3b archived-shown",
+  "why": "a row of an archived sport appears under another sport",
+  "file": "js/chat.js",
+  "old": "  if (c.kind === 'archived') return false;",
+  "new": "  if (c.kind === 'archived') return true;",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[3c] archivedThread: All shows, CFB hides, NFL hides"
+  }
+ },
+ {
+  "id": "W1-M8 forged-tag-honored",
+  "why": "messageSport honors a tag naming a sport that is not live in this league",
+  "file": "js/chat.js",
+  "old": "  if (own && memo.live.has(own)) return { kind: 'sport', sport: own };",
+  "new": "  if (own) return { kind: 'sport', sport: own };",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[3c] forgedArchived: All shows, CFB shows, NFL shows"
+  }
+ },
+ {
+  "id": "W1-M9 pack-unvalidated",
+  "why": "sbPackEvent sends whatever sportTag it is handed",
+  "file": "js/chatTransport.js",
+  "old": "  const sportTag = sbSportTag(ev.sportTag);",
+  "new": "  const sportTag = ev.sportTag;",
+  "suites": [
+   "transporttest.mjs"
+  ],
+  "red": {
+   "suite": "transporttest.mjs",
+   "label": "(the suite exited 1 without a failing assertion: [chatTransport] the dataMode predicate THREW after being installed — treating chat as INTE)"
+  }
+ },
+ {
+  "id": "W1-M9b send-unvalidated",
+  "why": "sendEvent queues whatever sportTag it is handed",
+  "file": "js/chat.js",
+  "old": "    ...(validSportTag(ev.sportTag) ? { sportTag: ev.sportTag } : {}),\n    body: (ev.body || '').slice(0, 1000),",
+  "new": "    ...(ev.sportTag ? { sportTag: ev.sportTag } : {}),\n    body: (ev.body || '').slice(0, 1000),",
+  "suites": [
+   "chatsporttest.mjs",
+   "transporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[2a] an untagged send — and a send with an out-of-set tag — queues an event with NO sportTag key"
+  }
+ },
+ {
+  "id": "W1-M5b rowToMessage-reads-meta",
+  "why": "the adapter also believes meta.sportTag",
+  "file": "js/supabase-projection.js",
+  "old": "  const sportTag = validSportTag(row.sport_tag);",
+  "new": "  const sportTag = validSportTag(row.sport_tag) || validSportTag(row.meta && row.meta.sportTag);",
+  "suites": [
+   "chatsporttest.mjs",
+   "transporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[1d] the tag is read from the sport_tag COLUMN only: a camelCase twin, meta.sportTag or a look-alike game_tag never becomes a tag"
+  }
+ },
+ {
+  "id": "W1-M5 rowToMessage-always-keyed",
+  "why": "every mapped row carries sportTag (even '')",
+  "file": "js/supabase-projection.js",
+  "old": "    ...(sportTag ? { sportTag } : {}),\n    body: row.body || '',",
+  "new": "    sportTag,\n    body: row.body || '',",
+  "suites": [
+   "chatsporttest.mjs",
+   "transporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[1a] an untagged row and a row with no column at all map to the SAME event, with no sportTag key"
+  }
+ },
+ {
+  "id": "W1-M4b pack-always-keyed",
+  "why": "sbPackEvent always carries sportTag",
+  "file": "js/chatTransport.js",
+  "old": "    ...(sportTag ? { sportTag } : {}),\n    body: ev.body || '',",
+  "new": "    sportTag,\n    body: ev.body || '',",
+  "suites": [
+   "transporttest.mjs"
+  ],
+  "red": {
+   "suite": "transporttest.mjs",
+   "label": "[18a] an UNTAGGED event has NO sportTag key at all (a one-sport league's wire payload is byte-identical to before)"
+  }
+ },
+ {
+  "id": "W1-M4c singlesport-stamped",
+  "why": "systemSportFields stamps even in a one-sport league",
+  "file": "js/chat-ui.js",
+  "old": "    const sports = lockerRoomSportList();\n    if (!sports.length) return {};\n    const ctx = chatSportCtx(sports);\n    const code = validSportTag((weekId",
+  "new": "    const sports = lockerRoomSportList();\n    const ctx = chatSportCtx(sports) || { sports: ['cfb'], sportOfWeek: () => 'cfb', sportOfGame: () => 'cfb' };\n    const code = validSportTag((weekId",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7g] a ONE-sport league: all six emitters post, and no folded row has a sportTag key"
+  }
+ },
+ {
+  "id": "W1-M12b all-does-not-clear-sports",
+  "why": "markSeen(all) leaves the pill cursors behind",
+  "file": "js/chat.js",
+  "old": "    Object.keys(ls.byTag).forEach(t => { ls.byTag[t] = fwd(ls.byTag[t]); });",
+  "new": "    Object.keys(ls.byTag).forEach(t => { if (!t.startsWith('sport:')) ls.byTag[t] = fwd(ls.byTag[t]); });",
+  "suites": [
+   "chatsporttest.mjs",
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[5g] reading the room (`All`) is reading every pill: markSeen('all') advances the sport cursors too"
+  }
+ },
+ {
+  "id": "W1-M13 collision",
+  "why": "a forged sport: gameTag reads the pill cursor in latestUnreadNotifying",
+  "file": "js/chat.js",
+  "old": "readCursorFor(ls, (m.gameTag && !isSportCursorTag(m.gameTag)) ? m.gameTag : 'all')",
+  "new": "readCursorFor(ls, m.gameTag || 'all')",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[5l] a message with gameTag \"sport:nfl\" is judged against the ROOM cursor (unread), not the NFL pill's — a member cannot make their message read as already-read"
+  }
+ },
+ {
+  "id": "W1-M7b thread-tagged-by-pill",
+  "why": "a thread message takes the selected pill's sport, not its game's",
+  "file": "js/chat-ui.js",
+  "old": "  const code = validSportTag(ctx.sportOfGame(gameTag));\n  return code && ctx.sports.includes(code) ? code : '';",
+  "new": "  const code = validSportTag(U.sportFilter !== 'all' ? U.sportFilter : ctx.sportOfGame(gameTag));\n  return code && ctx.sports.includes(code) ? code : '';",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7e] a thread message carries its GAME's sport (read from the game's week's competition) — a CFB game under the NFL pill is still 'cfb'"
+  }
+ },
+ {
+  "id": "W1-M10 filter-not-per-account",
+  "why": "the selection survives an account or league change",
+  "file": "js/chat-ui.js",
+  "old": "    const owned = U.sportFilterOwner === sportFilterOwnerKey();",
+  "new": "    const owned = true;",
+  "suites": [
+   "chatsporttest.mjs",
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[8d] another ACCOUNT never inherits the selection"
+  }
+ },
+ {
+  "id": "W1-M11 target-hidden",
+  "why": "ensureChatTargetVisible never resets",
+  "file": "js/chat-ui.js",
+  "old": "  const selected = currentSportFilter(sports);\n  if (selected === 'all') return false;",
+  "new": "  const selected = currentSportFilter(sports);\n  if (selected === 'all' || true) return false;",
+  "suites": [
+   "chatsporttest.mjs",
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[8a] a push/link to an NFL thread message while CFB is selected resets the filter to All first"
+  }
+ },
+ {
+  "id": "W1-M11b thread-hidden",
+  "why": "a thread of another sport stays hidden behind the pill",
+  "file": "js/chat-ui.js",
+  "old": "    if (!owned || !offered || threadOfOther) {",
+  "new": "    if (!owned || !offered) {",
+  "suites": [
+   "chatsporttest.mjs",
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[8b] opening an NFL game thread while CFB is selected resets the filter to All (a thread is never hidden behind a pill)"
+  }
+ },
+ {
+  "id": "W1-M11c deeplink-hook-removed",
+  "why": "app.js deepLinkTo no longer resets the pill",
+  "file": "js/app.js",
+  "old": "if (destination.tab === 'chat' && destination.params?.messageId) { try { ensureChatTargetVisible(",
+  "new": "if (false && destination.params?.messageId) { try { ensureChatTargetVisible(",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "6-2c: a push/notification deep link to a message the CFB pill would hide opens it (the filter was reset first) and flashes it"
+  }
+ },
+ {
+  "id": "W1-M15 composer-tag-dropped",
+  "why": "the room composer stops sending the game's sport",
+  "file": "js/chat-ui.js",
+  "old": "sendMessage({ body, gameTag, sportTag: currentComposerSportTag(gameTag),",
+  "new": "sendMessage({ body, gameTag,",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7e] ALL THREE player send paths (the room composer, the game sheet composer and the 📎 callout) send through it"
+  }
+ },
+ {
+  "id": "W1-M17 xss-label",
+  "why": "the pill label is not escaped",
+  "file": "js/chat-sport-pills.js",
+  "old": "      esc(text), dot(badge), '</button>',",
+  "new": "      text, dot(badge), '</button>',",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[6o] hostile code / label / badge text render INERT: no live <img>/<script>, no on* attribute, the quote-breaking attempt is &quot;-escaped, in text and in ever"
+  }
+ },
+ {
+  "id": "W1-M17b xss-name",
+  "why": "the accessible name is not escaped",
+  "file": "js/chat-sport-pills.js",
+  "old": "'\" aria-label=\"', esc(name),",
+  "new": "'\" aria-label=\"', name,",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[6o] hostile code / label / badge text render INERT: no live <img>/<script>, no on* attribute, the quote-breaking attempt is &quot;-escaped, in text and in ever"
+  }
+ },
+ {
+  "id": "W1-M17d escaper-optional",
+  "why": "a missing escaper no longer throws",
+  "file": "js/chat-sport-pills.js",
+  "old": "  if (typeof esc !== 'function') throw new TypeError('sportPillsMarkup: an HTML escaper is required');",
+  "new": "  if (typeof esc !== 'function') esc = (s) => String(s);",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[6n] a missing escaper THROWS — the builder never renders unescaped"
+  }
+ },
+ {
+  "id": "W1-M18 name-without-state",
+  "why": "the accessible name drops \"selected\"",
+  "file": "js/chat-sport-pills.js",
+  "old": "${selected ? ', selected' : ''}",
+  "new": "",
+  "suites": [
+   "chatsporttest.mjs",
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[6g] each pill is a radio; exactly the selected one is aria-checked"
+  }
+ },
+ {
+  "id": "W1-M19 pill-40",
+  "why": ".chat-pill goes back to 40 pt",
+  "file": "css/styles.css",
+  "old": "padding:6px 12px;min-height:44px;box-sizing:border-box;font-size:.78rem;font-weight:600;color:var(--text-secondary)",
+  "new": "padding:6px 12px;min-height:40px;box-sizing:border-box;font-size:.78rem;font-weight:600;color:var(--text-secondary)",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "2-390-a: every sport pill is >= 44 pt tall (40/40/40)"
+  }
+ },
+ {
+  "id": "W1-M20 no-press",
+  "why": "pills stop compressing on press",
+  "file": "css/styles.css",
+  "old": ".chat-pill:active{transform:scale(.97)}",
+  "new": ".chat-pill:active{transform:none}",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "5-1: a pressed sport pill compresses to 97% (none)"
+  }
+ },
+ {
+  "id": "W1-M21 no-fade",
+  "why": "the list fade is gone",
+  "file": "js/chat-ui.js",
+  "old": "  scroll.classList.add('chat-scroll-fade');",
+  "new": "",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "5-5: right after a pill tap the new list fades in over 150 ms ({\"has\":false,\"anim\":\"none\",\"dur\":\"0s\"})"
+  }
+ },
+ {
+  "id": "W1-M22 fade-ignores-reduce-motion",
+  "why": "Reduce Motion still fades",
+  "file": "js/chat-ui.js",
+  "old": "  if (!scroll || prefersReducedMotion()) return;",
+  "new": "  if (!scroll) return;",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "5-7: Reduce Motion: the list swaps INSTANTLY (no fade class; animation \"none\")"
+  }
+ },
+ {
+  "id": "W1-M23 tap-unbound",
+  "why": "sport pills have no click binding",
+  "file": "js/chat-ui.js",
+  "old": "  root?.querySelectorAll('[data-chat-sport-filter]').forEach(b => b.addEventListener('click', () => onSportPillTap(b.dataset.chatSportFilter)));",
+  "new": "",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "3-1: the NFL pill shows plain messages + NFL thread/system/legacy rows only ([\"plain1\",\"cfbThread1\",\"nflThread1\",\"plain2\",\"sysCfb\",\"sysNfl\",\"nflLegacy\",\"plain3\""
+  }
+ },
+ {
+  "id": "W1-M25 game-pills-not-narrowed",
+  "why": "game pills ignore the selected sport",
+  "file": "js/chat-ui.js",
+  "old": "  if (selected !== 'all') {\n    const ctx = chatSportCtx(sports);\n    [...tags.keys()]",
+  "new": "  if (false) {\n    const ctx = chatSportCtx(sports);\n    [...tags.keys()]",
+  "suites": [
+   "chatsporttest.mjs",
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7d] the NFL pill: only NFL games (got [\"gC\",\"gN\",\"gN2\"])"
+  }
+ },
+ {
+  "id": "W1-M26 only-current-week-games",
+  "why": "game pills gather only the default current week (the NFL game gets no pill)",
+  "file": "js/chat-ui.js",
+  "old": "  const weeks = sports.length ? getAllCurrentWeeks() : [getCurrentWeek()];",
+  "new": "  const weeks = [getCurrentWeek()];",
+  "suites": [
+   "chatsporttest.mjs",
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7d] `All`: every sport's game pills — the live NFL game gets a pill from ITS week too (got [\"gC\",\"gN2\"])"
+  }
+ },
+ {
+  "id": "W1-M27 draft-lost",
+  "why": "a pill tap clobbers the composer (cleared)",
+  "file": "js/chat-ui.js",
+  "old": "  U.replyTo = null; U.tagStripped = false;\n  _chatFadeNext = true;",
+  "new": "  U.replyTo = null; U.tagStripped = false;\n  _chatFadeNext = true; try { const i = document.getElementById('chat-input'); if (i) i.value = ''; } catch {}",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "3-7: the composer's draft survives the repaint (nothing was rebuilt around it)"
+  }
+ },
+ {
+  "id": "W1-M28 scroll-kept",
+  "why": "switching pills keeps the old scroll position instead of landing on the newest",
+  "file": "js/chat-ui.js",
+  "old": "  const chatViewKey = `${U.filter}|${sportSel}`;",
+  "new": "  const chatViewKey = `${U.filter}`;",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "3-15c: a pill tap from the top of a long list lands on the NEWEST message of the filtered view"
+  }
+ },
+ {
+  "id": "P2-wire-3 fold-drops-tag",
+  "why": "newItem stops carrying the tag: a tagged row folds untagged",
+  "file": "js/chat.js",
+  "old": "           ...(validSportTag(ev.sportTag) ? { sportTag: ev.sportTag } : {}),\n           body: ev.body || '',",
+  "new": "           body: ev.body || '',",
+  "suites": [
+   "commsporttest.mjs",
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "commsporttest.mjs",
+   "label": "[8f] the NFL week's lifecycle post is QUEUED by chat.js with sportTag \"nfl\" (and folds with it)"
+  }
+ },
+ {
+  "id": "P2-fanout-1 game-ignored",
+  "why": "notify-fanout reads the game but never lets it decide (tag-only, as before Part 2)",
+  "file": "supabase/functions/notify-fanout/index.js",
+  "old": "              if (resolved.sport) rowSport = resolved.sport;      // the game decides; the tag is only the fallback",
+  "new": "              /* the game never decides */",
+  "suites": [
+   "supabase/tests/functions/notifyFanout.twin.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/functions/notifyFanout.twin.mjs",
+   "label": "MS-G1: a SCRIBE reply in an NFL game thread with an EMPTY sport_tag is pushed to the NFL entrants (Drew, Brayden, Kevin) and not to Jacob (got [\"p1\",\"p2\",\"p3\",\""
+  }
+ },
+ {
+  "id": "P2-fanout-3 game-read-unfenced",
+  "why": "the game read loses its league_id filter (a cross-league leak)",
+  "file": "supabase/functions/notify-fanout/index.js",
+  "old": ".from('games').select('league_id,id,week_id')\n          .eq('league_id', leagueId).eq('id', gameTag).limit(1);",
+  "new": ".from('games').select('league_id,id,week_id')\n          .eq('id', gameTag).limit(1);",
+  "suites": [
+   "supabase/tests/functions/notifyFanout.twin.mjs",
+   "supabase/tests/functions.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/functions/notifyFanout.twin.mjs",
+   "label": "MS-G6a (security A4): the game read and the week read are each made ONCE, each filtered by the WEBHOOK ROW's league_id and by the one id they look up"
+  }
+ },
+ {
+  "id": "P2-fanout-4 second-wall-gone",
+  "why": "sportOfGameRows stops refusing rows of another league",
+  "file": "supabase/functions/_shared/competition-passes.mjs",
+  "old": "      if (r && typeof r === 'object' && String(r.league_id) === String(leagueId)) out.push(r); else dropped += 1;",
+  "new": "      if (r && typeof r === 'object') out.push(r); else dropped += 1;",
+  "suites": [
+   "supabase/tests/functions/notifyFanout.twin.mjs",
+   "supabase/tests/functions.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/functions/notifyFanout.twin.mjs",
+   "label": "MS-G6b (cross-league fixture): ANOTHER league's game and week with the same ids, answered first, never decide the audience - the NFL entrants of THIS league are"
+  }
+ },
+ {
+  "id": "P2-fanout-5 lookup-in-one-sport",
+  "why": "the game and week are read in a one-sport league too",
+  "file": "supabase/functions/notify-fanout/index.js",
+  "old": "      if (gameTag && multi) {",
+  "new": "      if (gameTag) {",
+  "suites": [
+   "supabase/tests/functions/notifyFanout.twin.mjs",
+   "supabase/tests/functions.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/functions/notifyFanout.twin.mjs",
+   "label": "MS-G5: a ONE-sport league: a game-tagged row reads competitions ONCE, reads no game or week, narrows nothing and leaves no audience word on the run row"
+  }
+ },
+ {
+  "id": "P2-fanout-6 games-error-ignored",
+  "why": "a failed game read no longer fails open and loud",
+  "file": "supabase/functions/notify-fanout/index.js",
+  "old": "        if (gameErr) {\n          audienceFallback = true;\n        } else {",
+  "new": "        if (gameErr) {\n          /* ignored */\n        } else {",
+  "suites": [
+   "supabase/tests/functions/notifyFanout.twin.mjs",
+   "supabase/tests/functions.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/functions/notifyFanout.twin.mjs",
+   "label": "MS-G7(games): a failed games read delivers to every member (the same array, untouched) and ends the run LOUD with the fixed word audience_unreadable and audienc"
+  }
+ },
+ {
+  "id": "P2-fanout-7 weeks-error-ignored",
+  "why": "a failed week read no longer fails open and loud",
+  "file": "supabase/functions/notify-fanout/index.js",
+  "old": "            if (weekErr) {\n              audienceFallback = true;\n            } else {",
+  "new": "            if (weekErr) {\n              /* ignored */\n            } else {",
+  "suites": [
+   "supabase/tests/functions/notifyFanout.twin.mjs",
+   "supabase/tests/functions.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/functions/notifyFanout.twin.mjs",
+   "label": "MS-G7(weeks): a failed weeks read delivers to every member (the same array, untouched) and ends the run LOUD with the fixed word audience_unreadable and audienc"
+  }
+ },
+ {
+  "id": "P2-fanout-8 default-comp-lost",
+  "why": "a week with no competition_id no longer resolves to the DEFAULT competition",
+  "file": "supabase/functions/_shared/competition-passes.mjs",
+  "old": "  const comp = compId ? trusted.find((c) => c.id === compId) : trusted.find((c) => c.isDefault);",
+  "new": "  const comp = compId ? trusted.find((c) => c.id === compId) : null;",
+  "suites": [
+   "supabase/tests/functions/notifyFanout.twin.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/functions/notifyFanout.twin.mjs",
+   "label": "MS-G2b: a message in a CFB thread tagged 'nfl' goes to the CFB audience (everyone is in CFB) - the tag cannot NARROW it either (got [\"p1\",\"p3\"])"
+  }
+ },
+ {
+  "id": "P2-list-1 not-multi-gated",
+  "why": "the pill list ignores isMultiSport(): a one-sport league gets a (degenerate) row / ctx",
+  "file": "js/chat-ui.js",
+  "old": "try { return isMultiSport() ? leagueSports() : []; } catch { return []; }",
+  "new": "try { return leagueSports(); } catch { return []; }",
+  "suites": [
+   "chatsporttest.mjs",
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[6a0] chat-ui's lockerRoomSportList() IS `isMultiSport() ? leagueSports() : []` — the sports lane's two functions, nothing re-derived"
+  }
+ },
+ {
+  "id": "P2-list-2 closed-set-filter-gone",
+  "why": "the builder no longer refuses a dbCode outside the closed set",
+  "file": "js/chat-sport-pills.js",
+  "old": "(Array.isArray(sports) ? sports : []).filter((s) => s && validSportTag(s.dbCode));",
+  "new": "(Array.isArray(sports) ? sports : []);",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[6o2] an entry whose dbCode is outside the closed set (markup, a prototype name, a near miss) is NOT rendered at all, and a hostile `selected` is simply `All`: "
+  }
+ },
+ {
+  "id": "P2-list-3 reads-picks",
+  "why": "the pill builder starts reading a pick (a leaf must never)",
+  "file": "js/chat-sport-pills.js",
+  "old": "import { validSportTag } from './sport-tag.js';",
+  "new": "import { validSportTag } from './sport-tag.js';\nimport { getPicks } from './storage.js';",
+  "suites": [
+   "consumertest.mjs"
+  ],
+  "red": {
+   "suite": "consumertest.mjs",
+   "label": "[2b] chat-sport-pills.js: names no submission reader (getPicks)"
+  }
+ },
+ {
+  "id": "P2-list-4 tag-leaf-reads-picks",
+  "why": "the sport-tag leaf starts naming a pick reader",
+  "file": "js/sport-tag.js",
+  "old": "export function validSportTag(value) {",
+  "new": "export function validSportTag(value, getPick = null) { void getPick; /* getTiebreakerGuess */",
+  "suites": [
+   "consumertest.mjs"
+  ],
+  "red": {
+   "suite": "consumertest.mjs",
+   "label": "[2b] sport-tag.js: names no submission reader (getPick)"
+  }
+ },
+ {
+  "id": "P2-order-1 live-not-first",
+  "why": "game pills no longer put LIVE games first",
+  "file": "js/chat-ui.js",
+  "old": "(ranked.get(a[0]).live - ranked.get(b[0]).live) || (ranked.get(a[0]).at",
+  "new": "(0) || (ranked.get(a[0]).at",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7d3] DI-530: live games first (by kickoff: CFB 10-03 then NFL 10-05), then the scheduled ones by kickoff (the 10-02 game after both live ones, then 10-05 eveni"
+  }
+ },
+ {
+  "id": "P2-order-2 kickoff-reversed",
+  "why": "game pills order by kickoff LATEST first",
+  "file": "js/chat-ui.js",
+  "old": "(ranked.get(a[0]).at < ranked.get(b[0]).at ? -1 : 1)",
+  "new": "(ranked.get(a[0]).at < ranked.get(b[0]).at ? 1 : -1)",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7d3] DI-530: live games first (by kickoff: CFB 10-03 then NFL 10-05), then the scheduled ones by kickoff (the 10-02 game after both live ones, then 10-05 eveni"
+  }
+ },
+ {
+  "id": "P2-order-3 reordered-in-one-sport",
+  "why": "the live-first order also reorders a ONE-sport league (byte-identity lost)",
+  "file": "js/chat-ui.js",
+  "old": "  if (sports.length) {\n    const rank = (id)",
+  "new": "  if (true) {\n    const rank = (id)",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[8f] BYTE-IDENTITY: with no competitions (pre-backfill) the pill row is exactly what the pre-D1 tree rendered"
+  }
+ },
+ {
+  "id": "P2-esc-1 label-unescaped",
+  "why": "the game-pill label is interpolated without esc() (the reviewer's note 1 regression)",
+  "file": "js/chat-ui.js",
+  "old": "${esc(gamePillLabel(found.game, found.week, labelSports, labelCtx))} ${dot(n)}</button>`;",
+  "new": "${gamePillLabel(found.game, found.week, labelSports, labelCtx)} ${dot(n)}</button>`;",
+  "suites": [
+   "chatsporttest.mjs",
+   "xsstest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[7d4] the multi-sport game pill renders the hostile team names INERT: escaped text, no live tag, the quote break is &quot;-escaped, one well-formed button (\"<bu"
+  }
+ },
+ {
+  "id": "P2-inset-1 guard-14",
+  "why": "the v14.1 mobile edge guard goes back to a hard-coded 14px",
+  "file": "css/styles.css",
+  "old": "  .main-content { padding-left: var(--page-pad); padding-right: var(--page-pad); }",
+  "new": "  .main-content { padding-left: 14px; padding-right: 14px; }",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "2-390-f2: N4 — the pills start >= 16 pt from the screen edge (14.0), the Chat page's inset raised from 14"
+  }
+ },
+ {
+  "id": "P2-inset-2 token-14",
+  "why": "the phone tier of --page-pad is 14 again",
+  "file": "css/styles.css",
+  "old": "@media (max-width: 480px) {\n  .app-header-inner",
+  "new": "@media (max-width: 480px) {\n  :root { --page-pad: 14px; }\n  .app-header-inner",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "2-390-f2: N4 — the pills start >= 16 pt from the screen edge (14.0), the Chat page's inset raised from 14"
+  }
+ },
+ {
+  "id": "P2-inset-3 token-10-small",
+  "why": "the below-360 pt phone tier is 10 again",
+  "file": "css/styles.css",
+  "old": "@media (max-width: 360px) {\n  /* W-57 Part 2: the 10 pt page inset that lived here is gone",
+  "new": "@media (max-width: 360px) {\n  :root { --page-pad: 10px; }\n  /* W-57 Part 2: the 10 pt page inset that lived here is gone",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "8-360: at 360 pt wide every tab's content (picks, dashboard, home, chat, leaderboard, rules, commissioner, admin) sits 16 pt from both screen edges — computed ."
+  }
+ },
+ {
+  "id": "P2-inset-5 tablet-lost",
+  "why": "the tablet tier (24 pt from 768) is flattened to 16",
+  "file": "css/styles.css",
+  "old": "@media(min-width:768px){:root{--page-pad:24px}}",
+  "new": "@media(min-width:768px){:root{--page-pad:16px}}",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "8-768: the tablet tier is untouched — 24 pt from 768 pt up (16/16)"
+  }
+ },
+ {
+  "id": "P2-lo-1 close-8",
+  "why": "the league overview close goes back to 8 pt from the edge and top",
+  "file": "css/styles.css",
+  "old": ".lo-head{display:flex;align-items:flex-start;gap:8px;padding:16px 16px 8px 16px}",
+  "new": ".lo-head{display:flex;align-items:flex-start;gap:8px;padding:8px 8px 8px 16px}",
+  "suites": [
+   "sportgeometrytest.mjs"
+  ],
+  "red": {
+   "suite": "sportgeometrytest.mjs",
+   "label": "[4-9] the close button is 16 pt in from the trailing edge and 16 pt from the top — never nearer than Breathing Room's 16 (got 8/8)"
+  }
+ },
+ {
+  "id": "P3-gate fade-swallows-tap",
+  "why": "P-3: turn the 150 ms list fade into an input gate - a pill tap that lands while the fade class is still on the list is ignored",
+  "file": "js/chat-ui.js",
+  "old": "  if (next === currentSportFilter(sports)) return;\n  haptic('selection');",
+  "new": "  if (next === currentSportFilter(sports) || document.getElementById('chat-scroll')?.classList.contains('chat-scroll-fade')) return;\n  haptic('selection');",
+  "suites": [
+   "chatsportbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "5-6c: …and that second tap was honoured at once - the NFL pill is selected and the list is the NFL's ([\"plain1\",\"cfbThread1\",\"plain2\",\"sysCfb\",\"plain3\",\"own0\",\""
+  }
+ },
+ {
+  "id": "C1-1 bound-bypassed",
+  "why": "security C-1: notify-fanout reads the raw game_tag again (the bound is bypassed)",
+  "file": "supabase/functions/notify-fanout/index.js",
+  "old": "  const gameTag = usableGameTag(record && record.game_tag);",
+  "new": "  const gameTag = record && typeof record.game_tag === 'string' ? record.game_tag : '';",
+  "suites": [
+   "supabase/tests/functions/notifyFanout.twin.mjs",
+   "supabase/tests/functions.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/functions/notifyFanout.twin.mjs",
+   "label": "MS-G9a: a 201-character game_tag (no sport tag) makes no games read - indeed no sport read at all - delivers to everyone and does NOT end audience_unreadable (g"
+  }
+ },
+ {
+  "id": "C1-2 length-removed",
+  "why": "security C-1: the 200-character limit is deleted from usableGameTag",
+  "file": "supabase/functions/_shared/competition-passes.mjs",
+  "old": "  if (value.length > GAME_TAG_MAX) return '';",
+  "new": "",
+  "suites": [
+   "supabase/tests/functions/notifyFanout.twin.mjs",
+   "supabase/tests/functions.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/functions/notifyFanout.twin.mjs",
+   "label": "MS-G9a: a 201-character game_tag (no sport tag) makes no games read - indeed no sport read at all - delivers to everyone and does NOT end audience_unreadable (g"
+  }
+ },
+ {
+  "id": "C1-3 length-off-by-one",
+  "why": "security C-1: the limit lets 201 characters through",
+  "file": "supabase/functions/_shared/competition-passes.mjs",
+  "old": "  if (value.length > GAME_TAG_MAX) return '';",
+  "new": "  if (value.length > GAME_TAG_MAX + 1) return '';",
+  "suites": [
+   "supabase/tests/functions/notifyFanout.twin.mjs",
+   "supabase/tests/functions.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/functions/notifyFanout.twin.mjs",
+   "label": "MS-G9a: a 201-character game_tag (no sport tag) makes no games read - indeed no sport read at all - delivers to everyone and does NOT end audience_unreadable (g"
+  }
+ },
+ {
+  "id": "C1-4 length-excludes-200",
+  "why": "security C-1: the limit refuses a tag of exactly 200 characters",
+  "file": "supabase/functions/_shared/competition-passes.mjs",
+  "old": "  if (value.length > GAME_TAG_MAX) return '';",
+  "new": "  if (value.length >= GAME_TAG_MAX) return '';",
+  "suites": [
+   "supabase/tests/functions/notifyFanout.twin.mjs",
+   "supabase/tests/functions.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/functions/notifyFanout.twin.mjs",
+   "label": "MS-G9d(200 characters): 200 characters is still looked up - one games read, filtered by that id and by the webhook row's league (not an id-shape regex)"
+  }
+ },
+ {
+  "id": "C1-5 control-removed",
+  "why": "security C-1: the control-character test is deleted",
+  "file": "supabase/functions/_shared/competition-passes.mjs",
+  "old": "  if (/[\\u0000-\\u001f\\u007f-\\u009f]/.test(value)) return '';",
+  "new": "",
+  "suites": [
+   "supabase/tests/functions/notifyFanout.twin.mjs",
+   "supabase/tests/functions.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/functions/notifyFanout.twin.mjs",
+   "label": "MS-G9c(NUL): a game_tag containing a NUL makes no games read and does not end audience_unreadable"
+  }
+ },
+ {
+  "id": "C1-6 control-c0-only",
+  "why": "security C-1: only C0 controls are refused (DEL and the C1 range pass)",
+  "file": "supabase/functions/_shared/competition-passes.mjs",
+  "old": "  if (/[\\u0000-\\u001f\\u007f-\\u009f]/.test(value)) return '';",
+  "new": "  if (/[\\u0000-\\u001f]/.test(value)) return '';",
+  "suites": [
+   "supabase/tests/functions/notifyFanout.twin.mjs",
+   "supabase/tests/functions.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/functions/notifyFanout.twin.mjs",
+   "label": "MS-G9c(DEL): a game_tag containing a DEL makes no games read and does not end audience_unreadable"
+  }
+ },
+ {
+  "id": "C1-7 shape-regex",
+  "why": "security C-1: an id-SHAPE regex replaces the bound for odd-looking ids (the coordinator ruled length and characters only)",
+  "file": "supabase/functions/_shared/competition-passes.mjs",
+  "old": "  if (/[\\u0000-\\u001f\\u007f-\\u009f]/.test(value)) return '';",
+  "new": "  if (/[\\u0000-\\u001f\\u007f-\\u009f]/.test(value)) return '';\n  if (!/^[A-Za-z0-9_-]+$/.test(value)) return '';",
+  "suites": [
+   "supabase/tests/functions/notifyFanout.twin.mjs",
+   "supabase/tests/functions.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/functions/notifyFanout.twin.mjs",
+   "label": "MS-G9d(an unusual id): an unusual id is still looked up - one games read, filtered by that id and by the webhook row's league (not an id-shape regex)"
+  }
+ },
+ {
+  "id": "N3-1 archived-skipped",
+  "why": "reviewer N3/G1 (the gap mutant that survived): sportOfGameRows skips archived competitions, so a game of an archived sport resolves to '' and a forged live tag decides",
+  "file": "supabase/functions/_shared/competition-passes.mjs",
+  "old": "const c = trustedCompetition(r, leagueId); if (c) trusted.push(c); }\n  const compId",
+  "new": "const c = trustedCompetition(r, leagueId); if (c && !c.archived) trusted.push(c); }\n  const compId",
+  "suites": [
+   "supabase/tests/functions/notifyFanout.twin.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/functions/notifyFanout.twin.mjs",
+   "label": "MS-G10a: a message in an ARCHIVED sport's game thread FORGED to say 'nfl' goes to EVERYONE (the game resolves to the archived NBA, which has no live competition"
+  }
+ },
+ {
+  "id": "N4-1 popover-natural-width",
+  "why": "reviewer N4: the grid goes back to its fixed 306 px width, so the popover is 320 px wide and sits 6 pt from the screen edge at 390",
+  "file": "css/styles.css",
+  "old": "gap:6px;width:min(306px,calc(100vw - 96px));max-width:calc(100vw - 48px)}",
+  "new": "gap:6px;width:306px;max-width:calc(100vw - 48px)}",
+  "suites": [
+   "chatsportbrowsertest.mjs",
+   "feedbacktest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "9-400a: at 400 pt wide the popover sits >= 16 pt from BOTH screen edges on both entry points - row path 64..384 (right gap 16.0), long-press bar 65..385 (right "
+  }
+ },
+ {
+  "id": "N4-2 cap-too-small",
+  "why": "reviewer N4: the cap leaves only 12 pt (96 -> 90)",
+  "file": "css/styles.css",
+  "old": "gap:6px;width:min(306px,calc(100vw - 96px));max-width:calc(100vw - 48px)}",
+  "new": "gap:6px;width:min(306px,calc(100vw - 90px));max-width:calc(100vw - 48px)}",
+  "suites": [
+   "chatsportbrowsertest.mjs",
+   "feedbacktest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "9-400a: at 400 pt wide the popover sits >= 16 pt from BOTH screen edges on both entry points - row path 64..384 (right gap 16.0), long-press bar 65..385 (right "
+  }
+ },
+ {
+  "id": "N4-3 cap-from-row-path-only",
+  "why": "reviewer N4: the cap is worked out from the ROW path (x = 64) only, so the long-press bar (x = 65) is left 15 pt from the edge (96 -> 94)",
+  "file": "css/styles.css",
+  "old": "gap:6px;width:min(306px,calc(100vw - 96px));max-width:calc(100vw - 48px)}",
+  "new": "gap:6px;width:min(306px,calc(100vw - 94px));max-width:calc(100vw - 48px)}",
+  "suites": [
+   "chatsportbrowsertest.mjs",
+   "feedbacktest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "9-400a: at 400 pt wide the popover sits >= 16 pt from BOTH screen edges on both entry points - row path 64..384 (right gap 16.0), long-press bar 65..385 (right "
+  }
+ },
+ {
+  "id": "N4-4 columns-fixed",
+  "why": "reviewer N4: the two columns are fixed 150 px again, so in a narrower grid the options spill out of the popover",
+  "file": "css/styles.css",
+  "old": "grid-template-columns:repeat(2,minmax(0,1fr));\n  gap:6px;width:min(306px,calc(100vw - 96px))",
+  "new": "grid-template-columns:repeat(2,150px);\n  gap:6px;width:min(306px,calc(100vw - 96px))",
+  "suites": [
+   "chatsportbrowsertest.mjs",
+   "feedbacktest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "9-393b: the 2x2 grid is kept (2 columns), all 4 options are >= 44 pt in both axes (smallest 44.0) and inside the popover"
+  }
+ },
+ {
+  "id": "N4-5 reason-row-own-width",
+  "why": "reviewer N4: the reason row keeps its old fixed 306 px, so the popover changes width (a jump) when a rating is chosen",
+  "file": "css/styles.css",
+  "old": ".feedback-reason{width:min(306px,calc(100vw - 96px));",
+  "new": ".feedback-reason{width:306px;",
+  "suites": [
+   "chatsportbrowsertest.mjs",
+   "feedbacktest.mjs"
+  ],
+  "red": {
+   "suite": "chatsportbrowsertest.mjs",
+   "label": "9-400a: at 400 pt wide the popover sits >= 16 pt from BOTH screen edges on both entry points - row path 64..382 (right gap 18.0), long-press bar 65..385 (right "
+  }
+ }
+]

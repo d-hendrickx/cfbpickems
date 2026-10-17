@@ -1,0 +1,12 @@
+{
+  "id": "leaguesettingstest",
+  "script": "leaguesettingstest.mjs",
+  "label": "122",
+  "summary": "loose",
+  "floor": 188,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "D1 Lane A (2026-10-08, G1): RAISED to 188 by [8m10..12] (sportOf decides the sport; college-football folds to cfb; a throwing resolver reads as the default). Before that: D1 Lane A (2026-10-08, W-21/DI-542): RAISED to 185 by the two-sport Leave sentence cases. Before that: RAISED from 170 for SP-53 release gate G-6 (2026-10-01): the bound parsed out of 0042's SQL and the client constant compared, the 140-case (status x lock x kickoff) server-model equality, the 17-row boundary table, the anchor (greatest, NULL-skipping), firstKickoffByWeek (min …"
+}

@@ -47,6 +47,11 @@
  *      button's confirm() gate, mutation-tested against weekHasUnresolvedTie().
  *      (SP-54 / DI-469: [8a] gains the exact tb-missing-draw text, [8c] is
  *      re-derived for the Extra Point-disabled dead heat, [8c2]/[8c3] are new.)
+ *      RE-DERIVED 2026-10-07 (FB-027 / DI-518, bug batch W): the manual
+ *      Finalize no longer finalizes behind a confirm(); it OPENS THE GUIDED
+ *      FLOW, whose Step 4 shows the same notice inline. The five fixtures stay;
+ *      each now proves no confirm(), no finalize, and the flow open on that week.
+ *      The notice's exact texts stay pinned in tiebreaktest [T27].
  *   9  [additional, beyond the required 7] DI-H end to end — the Data-tab
  *      "Recalculate All Finalized Weeks" button.
  */
@@ -83,6 +88,8 @@ function makeEl(id) {
     removeEventListener() {},
     appendChild() {}, removeChild() {}, remove() {}, focus() {}, scrollTo() {},
     insertAdjacentHTML() {},
+    // FB-027 (2026-10-07) — [8]'s Finalize now opens the wizard sheet, whose shell tags its wrap (mountSheetShell()); attributes are inert here.
+    setAttribute() {}, removeAttribute() {}, getAttribute: () => null,
     querySelector: sel => bySelector(sel),
     querySelectorAll: sel => selectorSets.get(sel) || [],
     closest: () => null,
@@ -833,8 +840,10 @@ console.log('\n[7] DI-D — tiebreaker saved AFTER finalization, through the rea
 // 8. [additional, beyond the required 7] DI-E — the manual Finalize button's
 //    confirm() gate, driven through the REAL week-status-btn click handler,
 //    mutation-tested against weekHasUnresolvedTie().
+//    SUPERSEDED 2026-10-07 by FB-027 / DI-518: the same button now opens the
+//    guided Finalize flow (see the re-derivation note inside the block).
 // ─────────────────────────────────────────────────────────────────────────────
-console.log('\n[8] DI-E — manual Finalize confirm() gate…');
+console.log('\n[8] DI-E → FB-027 / DI-518 — the manual Finalize opens the guided flow, never a confirm()-then-finalize…');
 {
   localStorage.clear(); // isolation — see [7]'s comment
   storage.getPlayers().forEach(p => { if (p.active) storage.savePlayer({ ...p, active: false }); });
@@ -864,63 +873,53 @@ console.log('\n[8] DI-E — manual Finalize confirm() gate…');
     btn._fire('click');
   }
 
-  // ── 8a. TIED, no tiebreaker, Cancel → confirm() fires with DI-E's exact
-  //    copy, and the week must NOT finalize.
+  // RE-DERIVED 2026-10-07 (FB-027 / DI-518, bug batch W). Drew: "i should be able to finalize the week in the week wizard, this should include the tie
+  // breaker and longest field goal." This button used to apply `final` on the spot (behind DI-E's confirm() of the SP-54 notice), so a week finalized
+  // with no tiebreaker and no longest field goal. DI-518: every Finalize entry OPENS THE GUIDED FLOW instead; the notice is that flow's Step 4 inline
+  // warning (weekwizardtest [15-26]; its exact texts stay pinned in tiebreaktest [T27]). The five fixtures that drove the old gate stay, so each notice
+  // shape — tb-missing-draw, the Extra Point dead heat, ep-missing, the entered Extra Point, a clear winner — is proven to reach the flow, not a finalize.
+  // (The old [8b] "OK finalizes anyway" branch has no successor: there is no OK any more.) The end-to-end flow, on a real element tree, is
+  // wizardfinalizetest.mjs [1-22..24].
+  // Review round 1, R1 — the four integration proofs the re-derivation dropped are RESTORED through the one surface the notice has now: the guided
+  // flow's Step 4 calls app.finalizeTieNotice(week, players, picks, games) (injected into unresolvedTieWarning). Per fixture, the kind it reaches,
+  // or its silence, from the real preview over the real storage — the composer's exact texts stay pinned in tiebreaktest [T27].
+  const noticeFor = (weekId) => app.finalizeTieNotice(storage.getWeek(weekId), storage.getPlayers().filter((p) => p.active), storage.getPicks(weekId), storage.getGames(weekId));
+  const opensFlow = (weekId, label, expectKind) => {
+    const notice = noticeFor(weekId);
+    assert(expectKind === null ? (notice.show === false && notice.kind === null && notice.text === '') : (notice.show === true && notice.kind === expectKind && notice.text.length > 0),
+      `R1 [8] ${label}: the guided Step 4 notice ${expectKind === null ? 'is SILENT' : `is "${expectKind}"`} (got ${JSON.stringify({ show: notice.show, kind: notice.kind })})`);
+    const before = storage.getWeek(weekId);
+    confirmCalls = []; confirmQueue = [];
+    fireFinalize(weekId);
+    const flow = app._finalizeFlowStateForTest();
+    const w = storage.getWeek(weekId);
+    assert(confirmCalls.length === 0, `FB-027 [8] ${label}: Finalize asks no confirm() (got ${confirmCalls.length})`);
+    assert(w.status === 'live' && w.finalizedAt == null && w.actualTiebreakerValue === before.actualTiebreakerValue,
+      `FB-027 [8] ${label}: …and does NOT finalize — the week stays live, untouched (status ${w.status})`);
+    assert(flow && flow.step === 1 && flow.targetWeekId === weekId,
+      `FB-027 [8] ${label}: …it opens the guided flow at Step 1 for THIS week (got ${JSON.stringify(flow)})`);
+  };
+
+  // ── 8a. TIED, no tiebreaker (the tb-missing-draw shape).
   tiedWeek('r8_w1');
-  confirmCalls = []; confirmQueue = [false]; // Cancel
-  fireFinalize('r8_w1');
-  assert(confirmCalls.length === 1, `confirm() was called exactly once for a tied, no-tiebreaker week (got ${confirmCalls.length})`);
-  assert(confirmCalls[0].includes('tie in correct picks') && confirmCalls[0].includes('Enter the tiebreaker first (Cancel)') && confirmCalls[0].includes('finalize anyway'),
-    `confirm() carried DI-E's exact copy: "${confirmCalls[0]}"`);
-  // SP-54 / DI-469: the false sentence is gone and the dialog names what ACTUALLY decides. This fixture is tied 1-1 with no schools and no Extra Point, so the
-  // preview reaches the draw: the `tb-missing-draw` notice, exact.
-  assert(!/arbitrar/i.test(confirmCalls[0]), 'SP-54 [8a]: the dialog never says "arbitrarily"');
-  assert(confirmCalls[0] === "This week has a tie in correct picks and no tiebreaker value entered, and as it stands it would end at the week's draw. Enter the tiebreaker first (Cancel), or finalize anyway and fix it later; entering the tiebreaker or the Extra Point afterward recalculates the week (OK).",
-    `SP-54 [8a]: the exact tb-missing-draw text (a tie that would end at the week's draw): "${confirmCalls[0]}"`);
-  assert(storage.getWeek('r8_w1').status === 'live', 'Cancel on the confirm() → the week did NOT finalize (still live)');
+  opensFlow('r8_w1', '8a tied, no tiebreaker', 'tb-missing-draw');
 
-  // ── 8b. TIED, no tiebreaker, OK → week finalizes anyway.
-  tiedWeek('r8_w2');
-  confirmCalls = []; confirmQueue = [true]; // OK
-  fireFinalize('r8_w2');
-  assert(confirmCalls.length === 1, 'confirm() fired again for a second tied week');
-  assert(storage.getWeek('r8_w2').status === 'final', 'OK on the confirm() → the week DID finalize');
-
-  // ── 8c. A tiebreaker is ALREADY on file (even though the games would
-  //    still tie) → the NO-TIEBREAKER notice must NOT fire. Trigger is
-  //    deliberately narrow: actualTiebreakerValue == null AND a tie.
-  //    RE-DERIVED 2026-10-01 (SP-54 / DI-469, J2): the claim stays true for that
-  //    notice, so the fixture now disables the Extra Point (a dead heat: the
-  //    draw decides, nothing is actionable, silent as before). With the Extra
-  //    Point ENABLED and empty a SEPARATE notice fires — [8c2] — and once it is
-  //    entered the dialog is silent again — [8c3].
+  // ── 8c. A tiebreaker on file, the Extra Point disabled (the dead heat that used to finalize silently).
   const W8c = tiedWeek('r8_w3');
   storage.saveWeek({ ...W8c, actualTiebreakerValue: 12, tiebreakerFinalized: true, extraPointEnabled: false });
-  confirmCalls = []; confirmQueue = [];
-  fireFinalize('r8_w3');
-  assert(confirmCalls.length === 0, 'a tiebreaker already on file suppresses the NO-TIEBREAKER confirm() entirely (Extra Point disabled: a dead heat is silent), even though the games themselves still tie');
-  assert(storage.getWeek('r8_w3').status === 'final', 'and the week finalizes directly, exactly like today, with no interruption');
+  opensFlow('r8_w3', '8c tiebreaker on file, Extra Point off', null);   // a dead heat with the Extra Point off: nothing is actionable
 
-  // ── 8c2. A tiebreaker on file, the tie would still reach the draw, the Extra Point is ENABLED and has no result: the ep-missing notice fires.
+  // ── 8c2. A tiebreaker on file, the Extra Point ENABLED with no result (the ep-missing shape).
   const W8c2 = tiedWeek('r8_w5');
   storage.saveWeek({ ...W8c2, actualTiebreakerValue: 12, tiebreakerFinalized: true, extraPointEnabled: true, extraPointActual: null });
-  confirmCalls = []; confirmQueue = [false];                       // Cancel
-  fireFinalize('r8_w5');
-  assert(confirmCalls.length === 1 && confirmCalls[0] === "This tie would be settled by the Extra Point, and no longest field goal is entered yet. Enter it first (Cancel), or finalize anyway and let the week's draw decide; entering it afterward recalculates the week (OK).",
-    `SP-54 [8c2]: with the Extra Point enabled and empty the ep-missing notice fires, exact: "${confirmCalls[0]}"`);
-  assert(storage.getWeek('r8_w5').status === 'live', 'SP-54 [8c2]: Cancel blocks the finalize');
-  confirmCalls = []; confirmQueue = [true];                        // OK
-  fireFinalize('r8_w5');
-  assert(confirmCalls.length === 1 && storage.getWeek('r8_w5').status === 'final', 'SP-54 [8c2]: OK finalizes it (the week\'s draw decides)');
+  opensFlow('r8_w5', '8c2 Extra Point enabled and empty', 'ep-missing');
 
-  // ── 8c3. …and once the Extra Point is entered, the same tie is a true dead heat: silent.
+  // ── 8c3. …and with the Extra Point entered.
   const W8c3 = tiedWeek('r8_w6');
   storage.saveWeek({ ...W8c3, actualTiebreakerValue: 12, tiebreakerFinalized: true, extraPointEnabled: true, extraPointActual: 52 });
-  confirmCalls = []; confirmQueue = [];
-  fireFinalize('r8_w6');
-  assert(confirmCalls.length === 0 && storage.getWeek('r8_w6').status === 'final', 'SP-54 [8c3]: with the Extra Point entered a tie that still ends at the draw is a true dead heat: NO dialog, the week finalizes');
+  opensFlow('r8_w6', '8c3 Extra Point entered', null);                   // a true dead heat: silent
 
-  // ── 8d. A CLEAR winner (no tie) → confirm() must NOT fire.
+  // ── 8d. A CLEAR winner (no tie).
   const weekIdClear = 'r8_w4';
   const Wc = { weekId: weekIdClear, weekNumber: 1, season: 2026, status: 'live', dataSourceMode: 'manual',
     actualTiebreakerValue: null, tiebreakerFinalized: false, blurb: '', recap: '', groupId: null, isGroupTiebreaker: false };
@@ -930,10 +929,7 @@ console.log('\n[8] DI-E — manual Finalize confirm() gate…');
     { pickId: `${weekIdClear}_pk_x1`, weekId: weekIdClear, gameId: `${weekIdClear}_g1`, playerId: 'r8_x', selectedTeam: 'Home1' },
     { pickId: `${weekIdClear}_pk_y1`, weekId: weekIdClear, gameId: `${weekIdClear}_g1`, playerId: 'r8_y', selectedTeam: 'Away1' },
   ]);
-  confirmCalls = []; confirmQueue = [];
-  fireFinalize(weekIdClear);
-  assert(confirmCalls.length === 0, 'a week with a clear winner (no tie) never triggers the confirm() — unchanged from before this input');
-  assert(storage.getWeek(weekIdClear).status === 'final', 'and finalizes directly');
+  opensFlow(weekIdClear, '8d clear winner', null);                       // no tie: silent
 }
 
 // NOTE (2026-09-03, per reviewer's BLOCK) — weekHasUnresolvedTie() was

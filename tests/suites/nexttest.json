@@ -1,0 +1,13 @@
+{
+  "id": "nexttest",
+  "script": "nexttest.mjs",
+  "summary": "strict",
+  "floor": 34,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/next-up.js"
+  ],
+  "note": "D1 Lane B fix round 2 (DI-599 / PF-455, 2026-10-08): js/next-up.js, the viewer's next shared opportunity from published weeks only — priority picks-due > picks-in > follow > none (soonest first), never a Draft week, a demo week (commissioner aside), an empty, final or finished week, or a past lock called 'locks'; DI-599's exact copy and the honest under-way variants, no sport words in a one-sport league, the Final card's short form, the buttons; purity; six mutants on data: URLs. Registered 2026-10-08."
+}

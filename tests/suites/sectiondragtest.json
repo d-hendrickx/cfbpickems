@@ -1,0 +1,27 @@
+{
+  "id": "sectiondragtest",
+  "script": "sectiondragtest.mjs",
+  "label": "123",
+  "summary": "loose",
+  "floor": 745,
+  "timeoutMs": 600000,
+  "tags": [
+    "browser",
+    "slow"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/sw-register.js",
+    "css/**",
+    "index.html",
+    "service-worker.js",
+    "manifest.json",
+    "config.json",
+    "icons/**",
+    "vendor/**",
+    "reveal/**",
+    "favicon.*"
+  ],
+  "expectedMs": 245600,
+  "note": "RAISED from 744 by W-22 (2026-10-08): AT2c, AT2's short hold carries the same page-side premise as the moved case (read and lift both before the 500 ms press timer, else a harness condition, run once more); 743 -> 744 AT2b, 740 -> 743 [E0c]-[E0e], 737 -> 740 the AT8 / E12 / E16 Done guards, 736 -> 737 the E16 y-150 guard (history before 736: tests/suites/_archive.md)."
+}

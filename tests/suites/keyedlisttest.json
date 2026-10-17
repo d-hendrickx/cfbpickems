@@ -1,0 +1,15 @@
+{
+  "id": "keyedlisttest",
+  "script": "keyedlisttest.mjs",
+  "summary": "strict",
+  "floor": 68,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/keyed-list.js",
+    "js/app.js",
+    "css/styles.css"
+  ],
+  "note": "D1 Lane B DI-572: the 48 pt team lockup and the keyed in-place row patch (ten ticks add zero <img>). Registered 2026-10-07."
+}

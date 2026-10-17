@@ -1,0 +1,30 @@
+{
+  "id": "feedbackrlstest",
+  "script": "feedbackrlstest.mjs",
+  "label": "73e2",
+  "summary": {
+    "regex": "(✅ ALL PASS|❌ \\d+ FAILED) — (\\d+) passed, (\\d+) failed",
+    "flags": "",
+    "passed": 2,
+    "failed": 3,
+    "verdict": {
+      "group": 1,
+      "equals": "✅ ALL PASS",
+      "combined": false
+    },
+    "skipped": null
+  },
+  "floor": 15,
+  "forbid": [
+    {
+      "regex": "ERR_MODULE_NOT_FOUND",
+      "flags": "",
+      "label": "feedbackrlstest.mjs resolves its whole module graph"
+    }
+  ],
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 200,
+  "note": ")"
+}

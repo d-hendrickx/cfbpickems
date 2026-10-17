@@ -1,0 +1,12 @@
+{
+  "id": "weekprogresstest",
+  "script": "weekprogresstest.mjs",
+  "label": "73g",
+  "summary": "strict",
+  "floor": 78,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "raised from 71 by UN-412 / DI-502e (W-18): the seam's refreshWeekProgress() wrapper"
+}

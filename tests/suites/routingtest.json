@@ -1,0 +1,16 @@
+{
+  "id": "routingtest",
+  "script": "routingtest.mjs",
+  "summary": "strict",
+  "floor": 206,
+  "tags": [
+    "smoke"
+  ],
+  "deps": [
+    "js/*.js",
+    "supabase/functions/_shared/*.mjs",
+    "supabase/functions/*/index.js"
+  ],
+  "expectedMs": 100,
+  "note": "D1 Lane C DI-633/634/635/636: model routing as data - the catalog, resolveRoute order (league choice, platform row, defaults), the tier rules, fallback, class shares and caps, the Admin routing card model and render. Registered 2026-10-08 (Lane C 3.A)."
+}

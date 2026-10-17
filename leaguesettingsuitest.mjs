@@ -165,6 +165,9 @@ _log('\n[1] The rendered half — every state of the DI §1 master state matrix�
   const lf = (o) => parse(V.leaveFooterHTML({ leagueName: 'Saturday Crew', ...o }, { escHtml }));
   assert(txt(lf({ blockedWeeks: 1 }).querySelector('#ls-leave-reason')) === 'You can leave after this week is final.' && txt(lf({ blockedWeeks: 2 }).querySelector('#ls-leave-reason')) === 'You can leave after these weeks are final.' && !lf({}).querySelector('#ls-leave-reason'),
     '[1w] Q-W (a): the reason sits in the footer only while blocked, singular for one week and plural for several');
+  assert(txt(lf({ blockedWeeks: 1, enteredSports: 2 }).querySelector('#ls-leave-reason')) === 'You can leave after your current weeks are final.' && txt(lf({ blockedWeeks: 3, enteredSports: 2 }).querySelector('#ls-leave-reason')) === 'You can leave after your current weeks are final.'
+    && txt(lf({ blockedWeeks: 1, enteredSports: 1 }).querySelector('#ls-leave-reason')) === 'You can leave after this week is final.' && !lf({ blockedWeeks: 0, enteredSports: 2 }).querySelector('#ls-leave-reason'),
+    '[1w2] DI-542: a member entered in two or more sports reads "your current weeks" (one blocked week or several); a single-sport member is unchanged; nobody blocked sees no reason at all');
   assert(txt(lf({}).querySelector('.ls-footer-muted')) === 'Want your account gone instead? Profile, then Delete Account.', '[1x] the muted Delete Account pointer closes the group');
 
   // LEAVE SHEETS — OPEN IOUs / PENDING WEEK / LEAGUE OF ONE (a league of one never renders a picker)
@@ -493,7 +496,7 @@ async function world(o = {}) {
   const mem = (leagueId, name, role, extra = {}) => ({ leagueId, memberId: 'm-' + leagueId, role, displayName: 'Kev', leagueName: name, pilot: false, status: 'active', sportDefault: 'cfb', ...extra });
   const S = {
     userId: 'u1', calls: [], gates: {}, hooks: {},
-    memberships: [mem(cfg.leagueId, cfg.leagueName, cfg.role, { pilot: cfg.pilot, status: cfg.status }), ...cfg.otherLeagues.map((l) => mem(l.id, l.name, l.role || 'player'))],
+    memberships: [mem(cfg.leagueId, cfg.leagueName, cfg.role, { pilot: cfg.pilot, status: cfg.status, ...(cfg.memberId ? { memberId: cfg.memberId } : {}) }), ...cfg.otherLeagues.map((l) => mem(l.id, l.name, l.role || 'player'))],
     accepting: { [cfg.leagueId]: cfg.accepting }, preflight: [], candidatesCalled: 0,
     rpcCalls: () => S.calls.filter((c) => c[0] === 'rpc').map((c) => c[1]),
     rpcArgs: (name) => S.calls.filter((c) => c[0] === 'rpc' && c[1] === name).map((c) => c[2]),
@@ -533,7 +536,7 @@ async function world(o = {}) {
   };
   globalThis.window.supabase = { createClient: () => client };
   auth._resetAuthForTest(); app._resetAuthUIWiringForTest(); app._resetAuthHoldForTest();
-  auth.configureAuth({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'k' });
+  auth.configureAuth({ authMode: 'supabase', ...(cfg.dataMode ? { dataMode: cfg.dataMode } : {}), supabaseUrl: 'https://x.test', supabaseAnonKey: 'k' });   // [7] (0046): `dataMode`/`memberId` let one world be a PLAYER on the server path
   auth._setHasSupabaseDataBackendForTest(true);
   app._setWarmRelaunchAtBootForTest(true);
   auth._setStoredSessionForTest({ access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
@@ -937,13 +940,28 @@ quiet();
     ['a locked week where only ANOTHER player has picks', [{ weekId: 'w1', status: 'locked' }], [{ pickId: 'k1', weekId: 'w1', playerId: 'someone-else', gameId: 'g', selectedTeam: 'A' }], false],
     ['a locked week with NO picks at all', [{ weekId: 'w1', status: 'locked' }], [], false],
     // G-6 / MC-1, the WIRED path: the app's weeks carry neither a lock time nor a first kickoff, so app.js must hand the games (getGames()) to the predicate. The default fixture kickoff is one hour ago.
-    ['a LOCKED week with no lock time whose first kickoff was 6 DAYS 23 HOURS ago (inside the seven-day bound)', [{ weekId: 'w1', status: 'locked' }], [{ pickId: 'k1', weekId: 'w1', playerId: 'm-L1', gameId: 'g', selectedTeam: 'A' }], true, iso(-(7 * 86400000 - 3600000))],
-    ['a LOCKED week with no lock time whose first kickoff was 8 DAYS ago (the G-6 bound has lapsed: leaving is allowed)', [{ weekId: 'w1', status: 'locked' }], [{ pickId: 'k1', weekId: 'w1', playerId: 'm-L1', gameId: 'g', selectedTeam: 'A' }], false, iso(-8 * 86400000)],
-    ['a LOCKED week with NO games and no lock time (no anchor: the server\'s coalesce reads it as lapsed)', [{ weekId: 'w1', status: 'locked' }], [{ pickId: 'k1', weekId: 'w1', playerId: 'm-L1', gameId: 'g', selectedTeam: 'A' }], false, null],
+    ['a LOCKED week with no lock time whose first kickoff was 6 DAYS 23 HOURS ago (inside the seven-day bound)', [{ weekId: 'w1', status: 'locked' }], [{ pickId: 'k1', weekId: 'w1', playerId: 'm-L1', gameId: 'g', selectedTeam: 'A' }], true,
+      [{ weekId: 'w1', kickoff: iso(-(7 * 86400000 - 3600000)) }]],
+    ['a LOCKED week with no lock time whose first kickoff was 8 DAYS ago (the G-6 bound has lapsed: leaving is allowed)', [{ weekId: 'w1', status: 'locked' }], [{ pickId: 'k1', weekId: 'w1', playerId: 'm-L1', gameId: 'g', selectedTeam: 'A' }], false,
+      [{ weekId: 'w1', kickoff: iso(-8 * 86400000) }]],
+    ['a LOCKED week with NO games and no lock time (no anchor: the server\'s coalesce reads it as lapsed)', [{ weekId: 'w1', status: 'locked' }], [{ pickId: 'k1', weekId: 'w1', playerId: 'm-L1', gameId: 'g', selectedTeam: 'A' }], false,
+      []],
+    // PF-1 / DI-495(b), reviewer N8 — from 0043 leave_league sees a week as in progress from its LOCK INSTANT (pick_window_open() is false from it), not only from a stored picks_lock_at.
+    // The first kickoff is 10 minutes ahead and the offset 30, so the derived instant passed 20 minutes ago; the stored picksLockAt is NULL.
+    ['an OPEN week with NO stored lock time whose DERIVED lock instant (first kickoff - 30 min) has PASSED (0043: refused at the instant, with no job)', [{ weekId: 'w1', status: 'open' }], [{ pickId: 'k1', weekId: 'w1', playerId: 'm-L1', gameId: 'g1', selectedTeam: 'A' }], true,
+      [{ gameId: 'g1', weekId: 'w1', kickoff: iso(10 * 60000) }]],
+    ['an OPEN week with no stored lock time whose derived instant is still AHEAD (the first kickoff is 3 hours away)', [{ weekId: 'w1', status: 'open' }], [{ pickId: 'k1', weekId: 'w1', playerId: 'm-L1', gameId: 'g1', selectedTeam: 'A' }], false,
+      [{ gameId: 'g1', weekId: 'w1', kickoff: iso(3 * 3600000) }]],
+    ['an OPEN week whose derived instant passed but whose EXPLICIT lock time (a late entry) is still AHEAD: the explicit time is the instant', [{ weekId: 'w1', status: 'open', picksLockAt: iso(3600000) }], [{ pickId: 'k1', weekId: 'w1', playerId: 'm-L1', gameId: 'g1', selectedTeam: 'A' }], false,
+      [{ gameId: 'g1', weekId: 'w1', kickoff: iso(10 * 60000) }]],
+    ['an OPEN DEMO week whose derived instant passed (a demo week is exempt from the derived instant)', [{ weekId: 'w1', status: 'open', dataSourceMode: 'demo' }], [{ pickId: 'k1', weekId: 'w1', playerId: 'm-L1', gameId: 'g1', selectedTeam: 'A' }], false,
+      [{ gameId: 'g1', weekId: 'w1', kickoff: iso(10 * 60000) }]],
+    ['an OPEN week with no stored lock time and NO dated game (no instant: not closed, as on the server)', [{ weekId: 'w1', status: 'open' }], [{ pickId: 'k1', weekId: 'w1', playerId: 'm-L1', gameId: 'g1', selectedTeam: 'A' }], false,
+      [{ gameId: 'g1', weekId: 'w1', kickoff: null }]],
   ];
-  for (const [label, weeks, picks, blocked, kick = iso(-3600000)] of cases) {
+  for (const [label, weeks, picks, blocked, games = [{ weekId: 'w1', kickoff: iso(-3600000) }]] of cases) {   // the default slate: one game that kicked off an hour ago (G-6 needs an anchor)
     const S = await world({ role: 'player' });
-    seed({ weeks, picks, games: kick === null ? [] : [{ weekId: 'w1', kickoff: kick }] });
+    seed({ weeks, picks, games });
     openSettings(); await settle();
     const row = q('[data-ls-action="leave"]');
     assert(blocked ? (row.getAttribute('aria-disabled') === 'true' && txt(q('#ls-leave-reason')) === 'You can leave after this week is final.') : (!row.hasAttribute('aria-disabled') && !q('#ls-leave-reason')), `[4e-1] Q-W (a), ${label}: the Leave row is ${blocked ? 'DIMMED with the reason' : 'live'}`);
@@ -967,6 +985,38 @@ quiet();
   }
 
   {
+    // D1 Lane A (2026-10-08, DI-542 / S-2 G1) - the Leave reason for a member entered in TWO sports, through the REAL app.js wiring (lsEnteredSportCount -> settings page / footer repaint) over real
+    // competition rows. A week's sport is NOT a field of the week the client holds (the projection never carries `.sport`; competition.js's competitionForWeek is the only resolver, R1), so
+    // the sports are read through the competition of each week the member has picks in.
+    const comp = (id, sport, isDefault) => storage.saveCompetition({ id, sport, kind: 'season', enrollment: 'all', isDefault, archivedAt: null, activeWeekId: null, settings: {}, createdAt: isDefault ? '2026-01-01T00:00:00.000Z' : '2026-02-01T00:00:00.000Z' });
+    const twoSports = async (label, weeks, picks, want, expectBlocked = true) => {
+      const S = await world({ role: 'player' });
+      comp('c-cfb', 'cfb', true); comp('c-nfl', 'nfl', false);
+      seed({ weeks, picks, games: weeks.map((w) => ({ weekId: w.weekId, kickoff: iso(-3600000) })) });
+      openSettings(); await settle();
+      const row = q('[data-ls-action="leave"]');
+      assert(expectBlocked ? row.getAttribute('aria-disabled') === 'true' : !row.hasAttribute('aria-disabled'), `[4e-5] ${label}: the Leave row is ${expectBlocked ? 'DIMMED' : 'live'}`);
+      assert(txt(q('#ls-leave-reason')) === want, `[4e-6] ${label}: the reason reads "${want}"`, `got ${JSON.stringify(txt(q('#ls-leave-reason')))}`);
+      if (expectBlocked) { row.click(); await settle(); assert(!layer() && S.rpcCalls().length === 0, `[4e-7] ${label}: a tap on the dimmed row does NOTHING (no sheet, no call)`); }
+      closeAll();
+    };
+    const pk = (id, weekId) => ({ pickId: id, weekId, playerId: 'm-L1', gameId: 'g', selectedTeam: 'A' });
+    await twoSports('a member with picks in BOTH sports, one week locked (the other final)', [{ weekId: 'wc', status: 'locked' }, { weekId: 'wn', status: 'final', competitionId: 'c-nfl' }], [pk('k1', 'wc'), pk('k2', 'wn')], 'You can leave after your current weeks are final.');
+    await twoSports('a member with picks in BOTH sports, both weeks in progress', [{ weekId: 'wc', status: 'locked' }, { weekId: 'wn', status: 'live', competitionId: 'c-nfl' }], [pk('k1', 'wc'), pk('k2', 'wn')], 'You can leave after your current weeks are final.');
+    await twoSports('CONTROL - a member with picks in ONE sport only, in a league that also runs the NFL (a non-entrant is never blocked or worded by a sport they do not play)', [{ weekId: 'wc', status: 'locked' }, { weekId: 'wn', status: 'live', competitionId: 'c-nfl' }], [pk('k1', 'wc')], 'You can leave after this week is final.');
+    await twoSports('CONTROL - two weeks of the SAME sport (single-sport wording is unchanged)', [{ weekId: 'w1', status: 'locked' }, { weekId: 'w2', status: 'live' }], [pk('k1', 'w1'), pk('k2', 'w2')], 'You can leave after these weeks are final.');
+    {
+      // the member's own picks only: another player's picks in the NFL week must not make ME a two-sport member
+      const S = await world({ role: 'player' });
+      comp('c-cfb', 'cfb', true); comp('c-nfl', 'nfl', false);
+      seed({ weeks: [{ weekId: 'wc', status: 'locked' }, { weekId: 'wn', status: 'live', competitionId: 'c-nfl' }], picks: [pk('k1', 'wc'), { ...pk('k2', 'wn'), playerId: 'someone-else' }], games: [{ weekId: 'wc', kickoff: iso(-3600000) }, { weekId: 'wn', kickoff: iso(-3600000) }] });
+      openSettings(); await settle();
+      assert(txt(q('#ls-leave-reason')) === 'You can leave after this week is final.', '[4e-8] the blind rule: only the leaver\'s OWN picks decide how many sports they are in (another player\'s NFL pick changes nothing)');
+      closeAll();
+    }
+  }
+
+  {
     // The "picks for an open week won't be scored" sentence is about the LEAVER's own picks only: another player's picks in the same open week must neither trigger it nor reach the page
     // (found by a mutation that widened the lookup to every player and survived this suite).
     const T = await world({ role: 'player' });
@@ -978,6 +1028,21 @@ quiet();
     clickAction('[data-ls-action="cancel"].lc-as-bold'); closeAll();
   }
 
+  {
+    // N8: the "won't be scored" sentence reads the SAME derived-instant list. An open week whose derived instant is ahead is "before lock" (the sentence is true); once the instant passes the
+    // Leave row is dimmed and the sheet is unreachable, so a sentence about leaving BEFORE the lock can never be shown for it.
+    const T = await world({ role: 'player' });
+    seed({ weeks: [{ weekId: 'w1', status: 'open' }], picks: [{ pickId: 'k1', weekId: 'w1', playerId: 'm-L1', gameId: 'g1', selectedTeam: 'A' }], games: [{ gameId: 'g1', weekId: 'w1', kickoff: iso(3 * 3600000) }] });
+    openSettings(); await settle();
+    q('[data-ls-action="leave"]').click(); await settle();
+    assert(/won't be scored/.test(txt(layer().querySelector('.lc-as-msg'))) && T.rpcCalls().length === 0, '[4e-3c] N8: an open week whose DERIVED instant is still ahead keeps the "won\'t be scored" sentence (the mirror did not over-block)');
+    clickAction('[data-ls-action="cancel"].lc-as-bold'); closeAll();
+    const U = await world({ role: 'player' });
+    seed({ weeks: [{ weekId: 'w1', status: 'open' }], picks: [{ pickId: 'k1', weekId: 'w1', playerId: 'm-L1', gameId: 'g1', selectedTeam: 'A' }], games: [{ gameId: 'g1', weekId: 'w1', kickoff: iso(10 * 60000) }] });
+    openSettings(); await settle();
+    assert(app._lsLeaveBlockedWeekIdsForTest().join() === 'w1' && q('[data-ls-action="leave"]').getAttribute('aria-disabled') === 'true' && U.rpcCalls().length === 0, '[4e-3d] N8: the same week once its derived instant has passed is IN PROGRESS: the Leave row is dimmed and nothing opens');
+    closeAll();
+  }
   // the plain flow
   const S = await world({ role: 'player' });
   seed({ weeks: [{ weekId: 'w1', status: 'open', picksLockAt: iso(3600000) }], picks: [{ pickId: 'k1', weekId: 'w1', playerId: 'm-L1', gameId: 'g', selectedTeam: 'A' }],
@@ -1572,6 +1637,9 @@ _log('\n[6] Source pins on the wiring…');
   assert(/getCachedMemberships\(\)\.length <= 1\) _autoLinkAttempted = true/.test(runLeave), '[6g] …and only when this is the last league (a plain count of memberships, not eligibility)');
   assert(!/weeksInProgressForMember|isWeekInProgressForLeave\(w, now\)\s*\)\s*;?\s*$/.test(section.replace(/LS\.isWeekInProgressForLeave\(w, now\)/g, '')) && /LSV\.leaveBlockedWeekIds\(/.test(section) && !/weeksInProgressForMember/.test(code),
     '[6h] Q-W (a) has ONE client predicate: app.js asks LSV.leaveBlockedWeekIds() and never calls the core\'s weeksInProgressForMember directly');
+  assert(/function lsWeeksForLeave\(\)\s*\{\s*return getWeeks\(\)\.map\(/.test(section) && /computeEffectiveLockAt\(w, getGames\(w\.weekId\)\)/.test(section) && /DATA_SOURCE_MODE\.DEMO\) return w;/.test(section)
+    && /LSV\.leaveBlockedWeekIds\(\{ weeks: lsWeeksForLeave\(\),/.test(section) && /lsWeeksForLeave\(\)\.some\(\(w\) => w && own\.has\(w\.weekId\)/.test(section) && !/getWeeks\(\)\.some\(/.test(section.slice(section.indexOf('function lsOpenWeekPicks('), section.indexOf('function lsOpenObligationCount('))),
+    '[6j2] N8 (PF-1 DI-495b): BOTH places the Leave row builds its weeks list go through lsWeeksForLeave() (each non-demo week\'s picksLockAt = computeEffectiveLockAt, the instant the server derives); neither reads getWeeks() raw');
   assert((section.match(/leaveBlockedWeekIds\(/g) || []).length === 1 && (code.match(/lsBlockedWeekCount\(\)/g) || []).length >= 3, '[6i] every consumer of the block (the row, the footer, the tap guard) goes through one helper, which reads that one predicate once');
   assert(!/\.role\b[^;]*\bfilter\(|\.filter\([^)]*\.role|commissionerCount|isSoleCommissioner/.test(section) && (section.match(/[!=]== 'commissioner'/g) || []).length === 2, '[6j] the wiring derives NO eligibility: the only role comparisons are the cached-role gates (is the person a commissioner at all), never counting commissioners or members');
   assert(/getAccountExitLeagues\(\)/.test(section) && (section.match(/getAccountExitLeagues\(\)/g) || []).length === 4 && !/archive_league_on_exit|archiveLeagueOnExit|account_exit_leagues/.test(section), '[6k] the preflight is the existing getAccountExitLeagues() wrapper only (asked on the Leave tap, after a stale answer, after a hand-off failure, and after a hand-off) — the wiring names no RPC itself');
@@ -1612,7 +1680,10 @@ _log('\n[6] Source pins on the wiring…');
   assert(/'\.\/js\/league-settings\.js'/.test(SW) && /'\.\/js\/league-settings-view\.js'/.test(SW), '[6zb] service-worker.js precaches BOTH modules (auth.js, admin-panel.js and app.js import them statically: a shell cache one module short is RG-236\'s blank app)');
   const LT = read('./loadtest.mjs');
   assert(/'league-settings-view',\n  \/\/ UN-389/.test(LT) && LT.indexOf("'league-settings-view'") < LT.indexOf("'account-exit',\n]) {") && /\n  'account-exit',\n\]\) \{/.test(LT), '[6zc] loadtest imports the rendered half in [1] ABOVE account-exit (accountexittest [11x] pins account-exit as the list\'s last entry)');
-  assert(/leaguesettingsuitest\.mjs/.test(LT), '[6zd] loadtest spawns this suite');
+  // [6zd] Since the tiered runner landed (W-11, docs/TESTING.md) a suite is registered by ONE manifest, tests/suites/<id>.json; loadtest.mjs spawns nothing.
+  // "A suite nothing spawns is a suite nobody runs" still holds, so the pin moved with the registration: the manifest must exist and run THIS script.
+  const LSM = (() => { try { return JSON.parse(read('./tests/suites/leaguesettingsuitest.json')); } catch { return null; } })();
+  assert(!!LSM && LSM.id === 'leaguesettingsuitest' && LSM.script === 'leaguesettingsuitest.mjs' && !(LSM.args && LSM.args.length), '[6zd] the sweep runs this suite (tests/suites/leaguesettingsuitest.json registers leaguesettingsuitest.mjs)');
   const CCS = read('./js/control-center.js');
   assert(/onOpenLeagueSettings/.test(CCS) && (APP.match(/onOpenLeagueSettings: \(\) => showLeaguePageOverlay\(\{ view: 'settings' \}\)/g) || []).length === 1, '[6ze] the drawer\'s callback is wired in app.js to the same overlay on the Settings view');
   const pilot = read('./js/pilot-only.js');
@@ -1620,6 +1691,244 @@ _log('\n[6] Source pins on the wiring…');
   assert(/nameHelper: 'Your friends will see this name\. You can change it later\.'/.test(read('./js/league-create.js')), '[6zg] "You can change it later." is restored in the New League helper (it ships in the SAME release as the rename RPC: a promise)');
 }
 
+
+const sbMod = await import('./js/supabase-backend.js');
+_log('\n[7] R-19 follow-up (0046) — Deny is the destructive-confirm ACTION SHEET (prompt() is gone), with an optional reason; a PLAYER\'s 2K25 move goes to the server, and every refusal is the loud-fail banner…');
+quiet();
+{
+  // window.prompt / confirm THROW for the whole section: a Deny that still reached for either is a red, never a silent pass.
+  const realPrompt = globalThis.prompt, realConfirm = globalThis.confirm;
+  globalThis.prompt = () => { throw new Error('window.prompt() was called — Deny must use the confirm sheet (0046)'); };
+  globalThis.confirm = () => { throw new Error('window.confirm() was called — Deny must use the confirm sheet (0046)'); };
+  const field = () => layer() && layer().querySelector('#ob-deny-reason');
+  const counter = () => txt(layer() && layer().querySelector('#ob-deny-count'));
+  const obById = (id) => getObligations().find((o) => o.obligationId === id);
+  try {
+    // ── the CURRENT-SEASON Deny, as the commissioner (the Comm card's path; Standings uses the same handler) ──
+    const S = await world({ role: 'commissioner', native: true });
+    seed({
+      players: [{ id: 'm-L1', name: 'Kev' }, { id: 'p-sam', name: 'Sam' }, { id: 'p-kai', name: 'Kai' }],
+      weeks: [{ weekId: 'w1', status: 'final' }],
+      obligations: [
+        { obligationId: 'o-d1', type: 'weekly', weekId: 'w1', payerPlayerId: 'p-sam', recipientPlayerId: 'p-kai', status: 'pending', amountOrPrize: '1 drink' },
+        { obligationId: 'o-d2', type: 'weekly', weekId: 'w1', payerPlayerId: 'p-sam', recipientPlayerId: 'p-kai', status: 'pending', amountOrPrize: '1 drink' },
+        { obligationId: 'o-d3', type: 'weekly', weekId: 'w1', payerPlayerId: 'p-kai', recipientPlayerId: 'p-sam', status: 'pending', amountOrPrize: '1 drink' },
+      ],
+    });
+    let redraws = 0;
+    const rerender = () => { redraws += 1; };
+    haptics = [];
+    app._handleObligationActionForTest('o-d1', 'deny', { rerender });
+    const L = layer();
+    assert(!!L && txt(L.querySelector('#ob-deny-title')) === 'Deny this payment?'
+      && txt(L.querySelector('.lc-as-msg')) === 'Sam says they paid Kai (1 drink). Denying puts it back to unpaid.'
+      && txt(L.querySelector('.lc-as-danger')) === 'Deny Payment' && txt(L.querySelector('.lc-as-bold')) === 'Cancel'
+      && L.querySelector('[role="alertdialog"]') && L.querySelector('[aria-modal="true"]'),
+      '[7a] Deny raises the action sheet: "Deny this payment?", who says they paid whom and what, destructive "Deny Payment", bold Cancel — an alert dialog, modal');
+    const fld = field();
+    assert(!!fld && !fld.hasAttribute('maxlength') && fld.getAttribute('data-max') === '200' && fld.getAttribute('type') === 'text' && fld.getAttribute('enterkeyhint') === 'done'
+      && txt(L.querySelector('label[for="ob-deny-reason"]')) === 'Reason (optional)' && counter() === '0/200' && fld.getAttribute('aria-describedby') === 'ob-deny-count',
+      '[7b] …with ONE optional single-line reason field: labelled "Reason (optional)", 200 characters at most (no UTF-16 maxlength — review N5), its live count "0/200" described to assistive tech');
+    assert(haptics.join() === 'notification:WARNING' && obById('o-d1').status === 'pending' && redraws === 0,
+      '[7c] the sheet appears with the warning notification every destructive confirm has, and NOTHING has changed yet');
+    type(fld, 'never got it');
+    const c1 = counter();
+    type(fld, '\u{1F37A}\u{1F37A}');
+    assert(c1 === '12/200' && counter() === '2/200', `[7d] the count follows typing, in CHARACTERS: two emoji read "2/200", not four UTF-16 units (${c1}, ${counter()})`);
+    type(fld, 'x'.repeat(250));
+    const capX = [fld.value.length, counter()];
+    type(fld, '\u{1F37A}'.repeat(250));
+    assert(capX[0] === 200 && capX[1] === '200/200' && [...fld.value].length === 200 && fld.value.length === 400 && counter() === '200/200',
+      `[7d2] the CAP is the same unit as the count (review N5): 250 letters stop at 200, and 250 emoji stop at 200 CHARACTERS — not at "100/200" (${JSON.stringify([capX, [...fld.value].length, counter()])})`);
+    type(fld, 'never got it');
+    let prevented = false;
+    fld.dispatchEvent({ type: 'keydown', key: 'Enter', target: fld, preventDefault() { prevented = true; } });
+    assert(prevented && !!layer() && obById('o-d1').status === 'pending', '[7e] Return dismisses the keyboard and NEVER confirms — a destructive action is never one Return away (Interaction Principles, Forms)');
+    clickAction('[data-ls-action="cancel"].lc-as-bold');
+    assert(!layer() && obById('o-d1').status === 'pending' && !('deniedReason' in obById('o-d1')) && redraws === 0, '[7f] Cancel changes nothing and closes the sheet');
+    app._handleObligationActionForTest('o-d1', 'deny', { rerender });
+    type(field(), 'tapped away');
+    clickAction('.lc-scrim');
+    assert(!layer() && obById('o-d1').status === 'pending' && !('deniedReason' in obById('o-d1')) && redraws === 0, '[7f2] tapping the dimmed scrim is Cancel: nothing changes, the typed reason is dropped (review N4)');
+    app._handleObligationActionForTest('o-d1', 'deny', { rerender });
+    document.dispatchEvent({ type: 'keydown', key: 'Escape' });
+    assert(!layer() && obById('o-d1').status === 'pending', '[7g] Esc is Cancel');
+
+    // Confirm, with a ragged and hostile reason: trimmed, a bidi override turned to a space, stored as TEXT.
+    haptics = [];
+    app._handleObligationActionForTest('o-d1', 'deny', { rerender });
+    type(field(), '  <img src=x onerror=alert(1)> \u202Egnorw  ');
+    clickAction('[data-ls-action="confirm-deny"]');
+    const d1 = obById('o-d1');
+    assert(!layer() && d1.status === 'unpaid' && d1.paidAt === null && d1.deniedReason === '<img src=x onerror=alert(1)>  gnorw'
+      && S.toastText().some((t) => t.includes('Denied — back to unpaid.')) && redraws === 1 && haptics.join() === 'notification:WARNING',
+      `[7h] Deny Payment saves UNPAID with the reason normalised to the server's CHECK (trimmed, the bidi override a space), closes, toasts and redraws — no haptic beyond the sheet's warning (T8) (${JSON.stringify(d1.deniedReason)})`);
+    const ledger = parse(app.renderObligationsAdmin());
+    const badge = ledger.querySelectorAll('.badge').find((b) => (b.getAttribute('title') || '').startsWith('Denied: '));
+    assert(!!badge && badge.getAttribute('title') === 'Denied: <img src=x onerror=alert(1)>  gnorw' && ledger.querySelectorAll('img').length === 0,
+      '[7i] the reason reaches the Unpaid badge as plain text (escaped into its title) — no element is ever made of it');
+    {
+      // M-30 (Drew D-61): the Comm Obligations card shows the reason under the Unpaid row, escaped; none without one, none off Unpaid.
+      saveAllObligations(getObligations().map((o) => (o.obligationId === 'o-d3' ? { ...o, deniedReason: 'a stale pending reason' } : o)));   // a PENDING row that still carries a reason
+      const C = parse(app.renderObligationsAdmin());
+      const rowOf = (id) => C.querySelectorAll('.ob-row').find((r) => r.querySelector(`[data-ob-id="${id}"]`));
+      const d1Line = rowOf('o-d1') && rowOf('o-d1').querySelector('.ob-denied-line');
+      assert(!!d1Line && txt(d1Line) === 'Denied: <img src=x onerror=alert(1)> gnorw' && rowOf('o-d1').querySelectorAll('img').length === 0
+        && !rowOf('o-d2').querySelector('.ob-denied-line') && !rowOf('o-d3').querySelector('.ob-denied-line') && !/a stale pending reason/.test(rowOf('o-d3').textContent),
+        `[7u] M-30: the Comm card shows "Denied: <reason>" under the Unpaid row as plain text (no element made of it); a pending row shows none (${d1Line && txt(d1Line)})`);
+      const html = app.renderObligationsAdmin();
+      assert(html.includes('<div class="ob-denied-line">Denied: &lt;img src=x onerror=alert(1)&gt;  gnorw</div>') && (html.match(/ob-denied-line/g) || []).length === 1,
+        '[7u2] …in the markup, escaped character for character, exactly once');
+      const n250 = DM.normalizeDeniedReason('x'.repeat(250));
+      const e250 = DM.normalizeDeniedReason('\u{1F37A}'.repeat(250));
+      const edge = DM.normalizeDeniedReason('a'.repeat(199) + '  b');
+      assert(n250.length === 200 && [...e250].length === 200 && edge === 'a'.repeat(199) && DM.normalizeDeniedReason('a\u202Eb\u0007c') === 'a b c'
+        && DM.normalizeDeniedReason('   ') === null && DM.normalizeDeniedReason(42) === null && DM.DENIED_REASON_MAX === 200,
+        '[7t] normalizeDeniedReason: cut to 200 CHARACTERS (emoji too), trimmed again after the cut, refused characters become spaces, blank and non-strings are no reason (review N4)');
+    }
+    app._handleObligationActionForTest('o-d2', 'deny', { rerender });
+    clickAction('[data-ls-action="confirm-deny"]');
+    assert(obById('o-d2').status === 'unpaid' && obById('o-d2').deniedReason == null && obById('o-d2').deniedReason !== '',
+      '[7j] Deny Payment with the field left empty is a denial with NO reason (null), never an empty string');
+    // The row moves while the sheet is open (another device confirmed it): the confirmed Deny changes nothing.
+    app._handleObligationActionForTest('o-d3', 'deny', { rerender });
+    saveAllObligations(getObligations().map((o) => (o.obligationId === 'o-d3' ? { ...o, status: 'paid', paidAt: new Date().toISOString() } : o)));
+    const before3 = redraws;
+    clickAction('[data-ls-action="confirm-deny"]');
+    assert(obById('o-d3').status === 'paid' && S.toastText().some((t) => t.includes('changed before you denied it')) && redraws === before3 + 1,
+      '[7k] a Deny confirmed after the payment moved elsewhere changes NOTHING, says so, and redraws');
+    // The commissioner's Undo (paid -> unpaid) on a row still carrying an OLD reason: it comes back Unpaid with NO reason, and no line shows.
+    saveAllObligations(getObligations().map((o) => (o.obligationId === 'o-d3' ? { ...o, deniedReason: 'an old reason' } : o)));
+    app._handleObligationActionForTest('o-d3', 'undo', { rerender });
+    const d3 = obById('o-d3');
+    const d3Row = parse(app.renderObligationsAdmin()).querySelectorAll('.ob-row').find((r) => r.querySelector('[data-ob-id="o-d3"]'));
+    assert(d3.status === 'unpaid' && d3.paidAt === null && d3.deniedReason == null && !!d3Row && !d3Row.querySelector('.ob-denied-line') && !/an old reason/.test(d3Row.textContent),
+      '[7v] the commissioner\'s Undo puts a paid row back to Unpaid WITHOUT a reason — an old one never reappears under it (0046 review, F1)');
+    closeAll();
+
+    // ── the 2K25 Deny, as the commissioner: the SAME sheet, WITHOUT the field (that record keeps a bare status) ──
+    const S2 = await world({ role: 'commissioner', native: true, pilot: true });
+    storage.saveSetting('ob2025', { ob_2025_wk1: 'pending' });
+    let r2 = 0;
+    app._handleOb2025ActionForTest('ob_2025_wk1', 'deny', { rerender: () => { r2 += 1; } });
+    assert(!!layer() && txt(layer().querySelector('#ob-deny-title')) === 'Deny this payment?' && !field()
+      && txt(layer().querySelector('.lc-as-msg')) === 'Kevin says they paid Brayden (1 drink). Denying puts it back to unpaid.',
+      '[7l] the 2K25 Deny raises the same sheet with NO reason field (the 2K25 record has nowhere to keep one)');
+    clickAction('[data-ls-action="confirm-deny"]');
+    assert(!layer() && !('ob_2025_wk1' in (storage.getSettings().ob2025 || {})) && r2 === 1 && S2.toastText().some((t) => t.includes('Denied — back to unpaid.')),
+      '[7m] …and the commissioner\'s confirmed Deny puts it back to unpaid on his settings overlay (a commissioner write, unchanged)');
+    closeAll();
+
+    // ── a PLAYER's 2K25 move, Supabase data mode: the server path, never saveSetting; every refusal the loud-fail banner ──
+    const S3 = await world({ role: 'player', memberId: 'p3', dataMode: 'supabase', native: true, pilot: true });
+    const calls = [];
+    let answer = null;
+    app._setOb2025SettleForTest((args) => { calls.push(args); return answer(args); });
+    try {
+      let redraw3 = 0;
+      const settingsBefore = JSON.stringify(storage.getSettings().ob2025 || {});
+      let release;
+      answer = () => new Promise((res) => { release = () => res({ ok: true, status: 'pending' }); });
+      haptics = [];
+      app._handleOb2025ActionForTest('ob_2025_wk1', 'mark', { rerender: () => { redraw3 += 1; } });
+      app._handleOb2025ActionForTest('ob_2025_wk1', 'mark', { rerender: () => { redraw3 += 1; } });   // a double tap, in flight
+      assert(calls.length === 1 && calls[0].obligationId === 'ob_2025_wk1' && calls[0].action === 'mark' && JSON.stringify(storage.getSettings().ob2025 || {}) === settingsBefore && redraw3 === 1,
+        `[7n] a PLAYER's 2K25 Mark Paid goes to the SERVER (settle_2025_obligation), ONCE for a double tap, redraws ONCE the moment it leaves ("Saving…"), and never writes the settings overlay itself (${JSON.stringify(calls)}, ${redraw3} redraw)`);
+      const cardHost = document.createElement('div');
+      const wk1Btn = () => { cardHost.innerHTML = app._renderSeason2025OutstandingForTest(); app._bindSeason2025SectionsForTest(cardHost); return cardHost.querySelectorAll('.ob2025-action-btn').find((b) => b.getAttribute('data-ob-id') === 'ob_2025_wk1'); };
+      const inFlightBtn = wk1Btn();
+      assert(!!inFlightBtn && inFlightBtn.disabled === true && txt(inFlightBtn) === 'Saving…' && inFlightBtn.getAttribute('aria-busy') === 'true' && inFlightBtn.getAttribute('aria-disabled') === 'true',
+        `[7n2] while the server has not answered, the row's button reads "Saving…", disabled and busy — it neither looks idle nor takes a second tap (review N3) (${inFlightBtn && txt(inFlightBtn)})`);
+      release(); await tick();
+      const afterBtn = wk1Btn();
+      assert(!!afterBtn && afterBtn.disabled !== true && txt(afterBtn) !== 'Saving…', `[7n3] …and once it answers, the row is live again (${afterBtn && txt(afterBtn)})`);
+      assert(S3.toastText().some((t) => t.includes('Marked as paid — waiting on Brayden')) && redraw3 === 2 && haptics.includes('impact:MEDIUM'),
+        '[7o] …and only once the server answers: the toast, one medium impact, a second redraw');
+      // N2 (review): this world has a REAL red sync banner up already (it never hydrated: "Cross-device sync is OFF…"). A 2K25 refusal must
+      // not replace it — the sync failure outranks it — so the 2K25 message is a toast; with no banner up, it is the banner itself.
+      const syncBanner = document.getElementById('backend-error-banner');
+      const syncText = syncBanner ? syncBanner.textContent : '';
+      answer = () => Promise.reject(Object.assign(new Error('not_party'), { code: 'not_party' }));
+      haptics = [];
+      app._handleOb2025ActionForTest('ob_2025_wk1', 'mark', { rerender: () => { redraw3 += 1; } });
+      await tick();
+      assert(!!syncBanner && syncBanner.style.display === 'block' && syncBanner.getAttribute('data-owner') === 'app' && /Cross-device sync is OFF/.test(syncText)
+        && document.getElementById('backend-error-banner').textContent === syncText
+        && S3.toastText().some((t) => t.includes('That 2K25 balance was not saved.') && t.includes('Only the two people on that balance, or the commissioner, can change it.'))
+        && haptics.includes('notification:ERROR') && redraw3 === 4,
+        '[7p] with a REAL sync failure already on the red banner, a 2K25 refusal KEEPS that banner and says itself in a toast (review N2) — the error haptic, a redraw, never silent');
+      syncBanner.style.display = 'none';   // the sync failure is resolved (as "synced" does); now nothing is up
+      app._handleOb2025ActionForTest('ob_2025_wk1', 'mark', { rerender: () => { redraw3 += 1; } });
+      await tick();
+      const own = document.getElementById('backend-error-banner');
+      assert(!!own && own.style.display === 'block' && own.getAttribute('data-owner') === 'ob2025' && /That 2K25 balance was not saved\./.test(own.textContent)
+        && /Only the two people on that balance, or the commissioner, can change it\./.test(own.textContent) && !/not_party/.test(own.textContent) && redraw3 === 6,
+        '[7p2] with NO banner up, a 2K25 refusal IS the loud-fail banner — what happened and what to do, never the server\'s code');
+      answer = () => Promise.reject(Object.assign(new Error('TypeError: Failed to fetch'), { code: 'unavailable' }));
+      app._handleOb2025ActionForTest('ob_2025_wk1', 'mark', {});
+      await tick();
+      assert(/The server couldn’t be reached, or didn’t answer\./.test(document.getElementById('backend-error-banner').textContent),
+        '[7q] a network failure replaces its own earlier 2K25 banner (same owner), in plain words');
+      // A PLAYER's 2K25 DENY: p3 is the RECIPIENT of ob_2025_wk7 (Drew -> Kevin), claimed pending on the server.
+      calls.length = 0;
+      let release7s = null, r7s = 0;
+      answer = () => new Promise((res) => { release7s = () => res({ ok: true, status: 'unpaid' }); });
+      // This world never hydrated, so the app holds content ('data-hold') and the action-sheet layer — correctly — will not open under
+      // a hold. The hold is lifted and the adapter put in a serving state for this one case; storage here reads the device copy.
+      sbMod._setStateForTest('ACTIVE', 'leaguesettingsuitest [7s]');
+      app._resetAuthHoldForTest();
+      storage.saveSetting('ob2025', { ob_2025_wk7: 'pending' });
+      app._handleOb2025ActionForTest('ob_2025_wk7', 'deny', { rerender: () => { r7s += 1; } });
+      const noField = !!layer() && !field() && calls.length === 0 && r7s === 0;
+      clickAction('[data-ls-action="confirm-deny"]');
+      const host7s = document.createElement('div');
+      host7s.innerHTML = app._renderSeason2025OutstandingForTest();
+      app._bindSeason2025SectionsForTest(host7s);
+      const b7 = (act) => host7s.querySelectorAll('.ob2025-action-btn').find((b) => b.getAttribute('data-ob-id') === 'ob_2025_wk7' && b.getAttribute('data-ob-action') === act);
+      assert(r7s === 1 && !!b7('deny') && b7('deny').disabled === true && txt(b7('deny')) === 'Saving…' && b7('deny').getAttribute('aria-busy') === 'true'
+        && !!b7('confirm') && b7('confirm').disabled === true && txt(b7('confirm')) === 'Confirm' && b7('confirm').getAttribute('aria-busy') !== 'true',
+        `[7s2] a Deny confirmed FROM THE SHEET redraws at once (review round 3, N3): the tapped Deny reads "Saving…" and busy, Confirm is quietly disabled under its own label (${r7s} redraw; ${b7('deny') && txt(b7('deny'))} / ${b7('confirm') && txt(b7('confirm'))})`);
+      release7s(); await tick();
+      assert(noField && !layer() && calls.length === 1 && calls[0].obligationId === 'ob_2025_wk7' && calls[0].action === 'deny',
+        `[7s] a PLAYER's 2K25 Deny raises the same sheet (no field) and, confirmed, is the server call too — nothing before the confirm (${JSON.stringify(calls)})`);
+      // Reviewer note 3 (0046 round 3): only a REAL sync failure (owner 'app') is "sync is off"; the 2K25, feedback and wizard banners are not.
+      {
+        const bnr = document.getElementById('backend-error-banner');
+        const probe = (owner, display) => { if (owner === null) bnr.removeAttribute('data-owner'); else bnr.setAttribute('data-owner', owner); bnr.style.display = display; return app._isSyncFailureBannerUpForTest(); };
+        const got = { app: probe('app', 'block'), ob2025: probe('ob2025', 'block'), feedback: probe('feedback', 'block'), wizard: probe('wizard', 'block'), noOwner: probe(null, 'block'), hiddenApp: probe('app', 'none') };
+        assert(got.app === true && got.ob2025 === false && got.feedback === false && got.wizard === false && got.noOwner === true && got.hiddenApp === false,
+          `[7w] the red banner reads as "sync is OFF" ONLY for owner 'app' (or no owner, B8's reading) and only while visible — never for an ob2025, feedback or wizard banner (${JSON.stringify(got)})`);
+        // PF-416 follow-up, item 5 (thread 100726-D1, 2026-10-07) — PF-1's two NOTICES ride the same node under owner 'app' (showLockRefusalNotice(), the
+        // status-moved banner), and neither means sync is off: "This week is locked." is a refusal the server was right to make, and the status-moved
+        // notice reports a correction already applied. Read as a sync failure, they made the layout toast say "Sync is off." and the pick submit ask
+        // "Cross-device sync is currently OFF … Submit anyway?" on a working connection.
+        const probeNotice = (notice) => { bnr.setAttribute('data-owner', 'app'); bnr.setAttribute('data-notice', notice); bnr.style.display = 'block'; const r = app._isSyncFailureBannerUpForTest(); bnr.setAttribute('data-notice', ''); return r; };
+        const gotN = { lockClosed: probeNotice('lock-closed'), statusMoved: probeNotice('status-moved'), plain: probeNotice('') };
+        assert(gotN.lockClosed === false && gotN.statusMoved === false && gotN.plain === true,
+          `PF-416 [7w3] the lock-closed and status-moved NOTICES are not a sync failure; an ordinary 'app' banner still is (${JSON.stringify(gotN)})`);
+        const APP7 = stripComments(read('./js/app.js'));
+        const body7 = (name) => { const i = APP7.indexOf(`function ${name}(`); if (i < 0) return ''; let d = 0, j = APP7.indexOf(') {', i) + 2; const s0 = j; for (; j < APP7.length; j++) { if (APP7[j] === '{') d++; else if (APP7[j] === '}') { d--; if (!d) break; } } return APP7.slice(s0, j + 1); };
+        assert(/const syncBroken = isBackendConfigured\(\) && isSyncFailureBannerUp\(\);/.test(body7('submitPicks')) && /const syncBroken = isBackendConfigured\(\) && isSyncFailureBannerUp\(\);/.test(body7('layoutSavedToast'))
+          && !/banner\.style\.display !== 'none'/.test(body7('submitPicks') + body7('layoutSavedToast')),
+          '[7w2] …and BOTH places that warn about it — the pick submit\'s "Cross-device sync is currently OFF" confirm and the layout save toast — ask that one predicate, never visibility alone');
+      }
+    } finally {
+      app._setOb2025SettleForTest(null);
+      sbMod._resetForTest();   // the adapter back to IDLE with an empty mirror ([7s] put it in ACTIVE)
+    }
+    closeAll();
+  } finally {
+    globalThis.prompt = realPrompt; globalThis.confirm = realConfirm;
+  }
+
+  // ── source: the obligation Deny paths reach for neither prompt() nor confirm() ──
+  const APPSRC = stripComments(read('./js/app.js'));
+  const fnBody = (name) => { const i = APPSRC.indexOf(`function ${name}(`); if (i < 0) return ''; let d = 0, j = APPSRC.indexOf(') {', i) + 2; const s0 = j; for (; j < APPSRC.length; j++) { if (APPSRC[j] === '{') d++; else if (APPSRC[j] === '}') { d--; if (!d) break; } } return APPSRC.slice(s0, j + 1); };
+  const bodies = ['handleObligationAction', 'applyObligationDeny', 'handleOb2025Action', 'applyOb2025Action', 'obOpenDenySheet', 'obConfirmDeny'].map(fnBody);
+  assert(bodies.every((b) => b.length > 80) && !bodies.some((b) => /\b(window\.)?(prompt|confirm)\(/.test(b)),
+    '[7r] none of the six obligation Deny functions calls prompt() or confirm() (all six found)');
+}
+loud();
 
 _log(`\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed`);
 process.stdout.write('', () => process.stderr.write('', () => process.exit(fail === 0 ? 0 : 1)));

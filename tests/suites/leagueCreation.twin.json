@@ -1,0 +1,12 @@
+{
+  "id": "leagueCreation.twin",
+  "script": "supabase/tests/functions/leagueCreation.twin.mjs",
+  "label": "81w",
+  "summary": "loose",
+  "floor": 69,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 200,
+  "note": "DI-431/432 — the fan-in loop and due call, the platform cap/effective budget/worst-case estimate, and the reservation model (IRB never refused below 25, ceiling refuses non-pilot only, 50 concurrent never exceed the cap)"
+}

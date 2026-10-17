@@ -1,0 +1,13 @@
+{
+  "id": "drafttest",
+  "script": "drafttest.mjs",
+  "label": "86",
+  "summary": "strict",
+  "floor": 124,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 100,
+  "note": "(D1 combine, 2026-10-08: RAISED from 122 to 124 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - RAISED from 84 by DI-398 round 2 (2026-09-28): §10/§16 re-derived off #pref-nick/#chat-prefs-btn (removed) onto a new #cc-body-chat fixture / #chat-search-input, plus a bindChatPage()-has-no-bindPrefsPanel() structural check — a near-zero count would mean the guard is vacuous)"
+}

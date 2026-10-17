@@ -769,6 +769,9 @@ _realLog('\n[11] isPrivateRow — THE WRITER ALLOW-LIST: every code path that wr
     // runtime READERS (a private row is dropped / targeted, nothing is written)
     'js/feed-cards.js|if (c.private === true || c.visibleTo || c.visible_to) return null;',
     "supabase/functions/_shared/job-rules.mjs|const directTo = record && record.visible_to ? String(record.visible_to) : '';",
+    // D1 (W-18, migration 0044, 2026-10-07) - the pre-flight checks that the five messages columns the announcer writes or leaves unset EXIST (it names visible_to only to prove it is a column it leaves unset; it never writes it)
+    "supabase/migrations/0044_pick_status_submit_line.sql|and column_name in ('author_kind', 'meta', 'emitted_by', 'sport_tag', 'visible_to');",
+    "supabase/migrations/0044_pick_status_submit_line.sql|raise exception 'cfbp 0044: public.messages does not carry the five columns this file writes or leaves unset (author_kind, meta, emitted_by, sport_tag, visible_to; found %) — apply 0010, 0018 and 0033 first', v_n;",
     // DDL
     'supabase/migrations/0018_push_selftest.sql|alter table public.messages add column if not exists visible_to text;',
     'supabase/migrations/0018_push_selftest.sql|comment on column public.messages.visible_to is',
@@ -2091,11 +2094,15 @@ _realLog('\n[24] Home wiring (DI-372 amendment A1, security W1/W2, 2026-10-01) �
   const bound = chat.chatBoundToLeague;
   const HomeMod = await import('./js/home.js');
   const source = () => HomeMod.makeChatCandidateSource({ getMessages: chat.getMessages, isPrivateRow: chat.isPrivateRow, chatBoundToLeague: chat.chatBoundToLeague });
-  const ask = (leagueId) => source()({ leagueId, supabase: true, now: BASE_TS + 3600e3, timezone: 'PT' });
+  // SECURITY F-2 (the 0045 review): a lock notice is Home-eligible only under the app's own id for a REAL, locked week the source is handed, so League One's final week rides along.
+  const L1_WEEK = { weekId: 'wL1', weekNumber: 1, status: 'final' };
+  const ask = (leagueId) => source()({ leagueId, supabase: true, now: BASE_TS + 3600e3, timezone: 'PT', weeks: [L1_WEEK] });
   try {
     await freshPage();
     seedL1(4); seedL2(3);
-    serverAdd('L1', { id: 'l1_scribe', author: 'scribe', body: 'SCRIBE says a thing about League One' });
+    // FB-013 (D1 batch H): only a Home-eligible SCRIBE post (js/home.js HOME_SCRIBE_KINDS — the week-lock lifecycle notice) reaches the candidate list at all,
+    // so the positive control below is a real one of those: the league binding, not the purpose filter, is what this section proves.
+    serverAdd('L1', { id: 'sys_lc_PICKS_LOCKED_wL1', author: 'scribe', body: 'SCRIBE says a thing about League One', meta: { kind: 'lifecycle', event: 'PICKS_LOCKED', weekId: 'wL1' } });
     // A: signed in, chat not started: the store has never caught up
     await signInAs('u-drew', 'L1');
     assert(bound('L1') === false, '24-A: signed in on League One but the room has NOT caught up (chat never started): chatBoundToLeague("L1") is false — fail closed, never "bound" on a cold store');
@@ -2107,7 +2114,7 @@ _realLog('\n[24] Home wiring (DI-372 amendment A1, security W1/W2, 2026-10-01) �
       '24-B2: an empty, missing or non-string league id is NEVER bound (two unresolved "" terms must not compare equal)');
     // the positive control for the candidate source: bound + the right league yields the SCRIBE row; the other league yields NOTHING
     const okL1 = ask('L1');
-    assert(okL1.scribe.some((c) => c.id === 'l1_scribe' && c.leagueId === 'L1'),
+    assert(okL1.scribe.some((c) => c.id === 'sys_lc_PICKS_LOCKED_wL1' && c.leagueId === 'L1'),
       `24-B3: positive control — bound to L1, the real candidate source returns League One's SCRIBE post stamped with ITS league (got ${JSON.stringify(okL1.scribe.map((c) => c.id))})`);
     const asL2 = ask('L2');
     assert(asL2.scribe.length === 0 && asL2.lockerRoom.length === 0,

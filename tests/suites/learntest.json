@@ -1,0 +1,12 @@
+{
+  "id": "learntest",
+  "script": "learntest.mjs",
+  "label": "99",
+  "summary": "loose",
+  "floor": 338,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 300,
+  "note": "SCRIBE v3 Package C client half (DI-274…281, 2026-09-24): the learning-rate table (Fast/Normal/Locked, every knob), decay/cap/conflict rules shared with the loader, the retracted-rating read boundary, the Training card's Learnings list on the Data tab only (RG-10) with …"
+}

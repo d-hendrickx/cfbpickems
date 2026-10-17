@@ -1,0 +1,9 @@
+{
+  "id": "leagueoverviewtest",
+  "script": "leagueoverviewtest.mjs",
+  "summary": "strict",
+  "floor": 161,
+  "tags": ["quick"],
+  "expectedMs": 400,
+  "note": "(D1 combine, 2026-10-08: RAISED from 146 to 161 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - D1 (v0.30.0) DI-554/556/522, security C3 + C5: js/league-overview.js — the six mockup situations as member and commissioner, the card contract (one button per played sport, nothing nested), the Join card states, the League Page region as the same markup, hostile text everywhere including aria-label, and no pick or rival reaching the markup"
+}

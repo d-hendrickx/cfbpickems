@@ -1,0 +1,22 @@
+{
+  "id": "gdseamtest",
+  "script": "gdseamtest.mjs",
+  "summary": "strict",
+  "floor": 36,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/home.js",
+    "js/competition.js",
+    "js/all-sports.js",
+    "js/game-sort.js",
+    "js/pushed-screen.js",
+    "js/card-detail.js",
+    "index.html",
+    "minidom.mjs"
+  ],
+  "note": "RAISED from 33 (2026-10-14, reviewer G5): 1f-0/1f a forged \"all\" from a one-sport member opens no All sports view (his sport's Dashboard, current week, pointer untouched) and the in-suite mutant for the loosened guard. | (33 with [6b]: a REAL tap on a sport pill ends the Back chip.) D1 Lane B Game Day, the consolidated round (2026-10-08): the Lane A seam on the app side, driven through the REAL app.js over the real index.html (minidom) in a two-sport league: Game Day's footer scope (All sports / a sport / a forged one / one sport), a Game view's Make your picks and What's next's Make your NFL picks set the sport AND the week, openSportWeek (the card detail's two tab buttons), the overview chip's openGameDay op, and the All sports Sort row (effective mode, Custom disabled, Live first reorders, the saved mode orders the first paint); eight app.js mutants on data: URL copies. Registered 2026-10-08."
+}

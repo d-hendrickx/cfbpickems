@@ -1,0 +1,16 @@
+{
+  "id": "pglite0051.check",
+  "script": "supabase/tests/pglite0051.check.mjs",
+  "summary": "loose",
+  "floor": 1,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "supabase/migrations/0051_scribe_routing_and_class_budget.sql",
+    "supabase/migrations/0043_pf1_server_lock.sql",
+    "supabase/migrations/0036_sb11_platform_kv_key_refusal.sql"
+  ],
+  "expectedMs": 3000,
+  "note": "D1 Lane C 0051 run END TO END in an in-process Postgres (PGlite) with mutation teeth (--mutate=). PGlite is not a repo dependency, so without PGLITE_DIR the suite prints SKIP and counts its one skip (green and hollow: it says so on its first line); with it, 48 assertions (direct settle and INSERT/UPDATE/DELETE attacks as authenticated and anon included). Registered 2026-10-08 (Lane C 3.A)."
+}

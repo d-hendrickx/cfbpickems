@@ -1012,25 +1012,12 @@ console.log('\n[19] F7 remediation — drift guard: embedded SCRIBE_SYSTEM_PROMP
   assert(promptBase.length - addendumIdx > 200, 'fixture check: a real addendum body follows the marker, not just the heading');
   const docPortion = promptBase.slice(0, addendumIdx).replace(/\n---\n+$/, '\n');
 
-  const docPath = fileURLToPath(new URL('../docs/SCRIBE.md', import.meta.url));
-  const docSrc = await readFile(docPath, 'utf8');
-  const legacyRe = /\*\*Slack triggers \(legacy[\s\S]*?\n\n/;
-  assert(legacyRe.test(docSrc), 'fixture check: docs/SCRIBE.md still carries the marked legacy Slack-trigger subsection to strip before comparing');
-  const docExpected = docSrc.replace(legacyRe, '');
-
-  // Comment-strip tolerant: normalize away blank lines and per-line leading/
-  // trailing whitespace — real content edits still fail this; incidental
-  // reflow/whitespace does not.
-  const norm = s => s.split('\n').map(l => l.trim()).filter(Boolean).join('\n');
-  const normDoc = norm(docExpected), normEmbedded = norm(docPortion);
-  assert(normDoc === normEmbedded,
-    normDoc === normEmbedded ? 'embedded snapshot matches docs/SCRIBE.md v2.1 (minus the legacy Slack subsection) — no drift'
-      : 'DRIFT DETECTED: backend/Code.gs\'s SCRIBE_SYSTEM_PROMPT_BASE no longer matches docs/SCRIBE.md. Whoever edited docs/SCRIBE.md must hand-update the embedded snapshot in backend/Code.gs (search "SCRIBE_SYSTEM_PROMPT_BASE") to match — GAS cannot import the doc at runtime, per that variable\'s own header comment.');
-
-  // Canary — prove the comparison is capable of failing, not vacuously true
-  // from over-loose normalization.
-  const tamperedDoc = docExpected.replace('Core Identity', 'Core IdentityXYZ');
-  assert(norm(tamperedDoc) !== normEmbedded, 'canary: a real one-word content change IS caught by this comparison — the guard is not vacuous');
+  // RETIRED 2026-10-07 (Drew, M-27: "retire"; D-52). The comparison of backend/Code.gs's embedded
+  // SCRIBE_SYSTEM_PROMPT_BASE with docs/SCRIBE.md is gone: Apps Script was retired on 2026-09-23 (v0.23.5),
+  // so Code.gs is a frozen archive of what that backend ran (v3.1) and is never updated again. The live
+  // personas are drift-checked against docs/SCRIBE.md by supabase/tests/scribePersonaDrift.check.mjs and
+  // scribePersonaGenericDrift.check.mjs. The fixture checks above still prove the archive loads.
+  console.log('  (Code.gs ↔ docs/SCRIBE.md comparison retired 2026-10-07, D-52: Code.gs is a frozen archive)');
 }
 
 console.log('\n[20] F8 remediation — get_current_standings/get_player_statistics surface a caveat for grouped weeks instead of silently asserting pooled numbers…');

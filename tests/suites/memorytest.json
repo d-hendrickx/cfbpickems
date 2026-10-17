@@ -1,0 +1,12 @@
+{
+  "id": "memorytest",
+  "script": "memorytest.mjs",
+  "label": "79",
+  "summary": "strict",
+  "floor": 100,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 300,
+  "note": "— a near-zero count would mean the guard is vacuous)"
+}

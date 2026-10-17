@@ -1,0 +1,20 @@
+{
+  "id": "xsstest",
+  "script": "xsstest.mjs",
+  "label": "73h",
+  "summary": {
+    "regex": "xsstest\\.mjs — (\\d+) passed, (\\d+) failed",
+    "flags": "",
+    "passed": 1,
+    "failed": 2,
+    "verdict": null,
+    "skipped": null
+  },
+  "floor": 786,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 29100,
+  "note": "RAISED from 782 by DESIGN_D1_E (2026-10-15): [9c-1f-j1..j4] the join nudge's markup in js/home.js (the sport chip, the sentence, the title, the shared button's action) sweeps at ZERO and removing any escHtml() from it in a scratch copy IS reported. | D1 DI-557 (2026-10-14): floor 775 -> 782, measured: [9c-5] the stall banner's hostile sport label, code and competition id through the real escaper, both audiences (the maintenance banner's precedent). MERGE int deeb4e7d into feat/d1-history (2026-10-14): floor = the merged tree's measured 765 (this branch 731, int 709). The census [18c] gains five allow entries for Game Day's and History's own selector constants (SHARE_SHEET_ID, RIVAL_SHEET_ID, SORT_SHEET_ID, the closed dir value, gameday-dom's attribute names). Earlier notes (both sides of the merge): tests/suites/_archive.md, 'xsstest - manifest notes moved here'."
+}

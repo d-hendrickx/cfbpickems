@@ -1,0 +1,548 @@
+[
+ {
+  "id": "S1 contexts unused",
+  "why": "Home's competitions never come from the feed contexts (the X1 placeholder: one default competition in a several-sport league)",
+  "file": "js/home.js",
+  "old": "  else competitionList = competitionsFromContexts(contexts, viewerId);",
+  "new": "  else competitionList = null;",
+  "suites": [
+   "viewerlinetest.mjs"
+  ],
+  "red": {
+   "suite": "viewerlinetest.mjs",
+   "label": "6a: with no competitions dependency the snapshot's competitions ARE the feed contexts (CFB)"
+  }
+ },
+ {
+  "id": "S2 week sport from the week record",
+  "why": "R1 broken: a week's sport read from its own `sport` field, not its competition",
+  "file": "js/home.js",
+  "old": "const weekSport = (s, w) => { const c = competitionOfWeek(asArray(s.competitions), w); return c ? c.sport : (asArray(s.competitions).some(x => Array.isArray(x.weekIds)) ? '' : sportOfWeek(w)); };",
+  "new": "const weekSport = (s, w) => sportOfWeek(w);",
+  "suites": [
+   "viewerlinetest.mjs"
+  ],
+  "red": {
+   "suite": "viewerlinetest.mjs",
+   "label": "6g: R1 — Game Day labels each game by its competition (NFL games NFL, CFB games CFB), not by the week record's field"
+  }
+ },
+ {
+  "id": "S3 entered ignores the week's entrants",
+  "why": "C1 broken: a late joiner counts as entered on the week he joined after",
+  "file": "js/home.js",
+  "old": "  if (ids && isNonEmptyString(viewer)) return ids.includes(String(viewer));\n",
+  "new": "",
+  "suites": [
+   "viewerlinetest.mjs"
+  ],
+  "red": {
+   "suite": "viewerlinetest.mjs",
+   "label": "6h: C1 — a late joiner is \"Following\" on the week he joined after (entered false there), entered on CFB"
+  }
+ },
+ {
+  "id": "S4 Season of N over the active roster",
+  "why": "C4 broken: \"Season Nth of N\" ranks among every active member, not the competition's entrants",
+  "file": "js/home.js",
+  "old": "    const entrants = entrantIds ? players.filter(p => entrantIds.has(String(p.playerId))) : players;",
+  "new": "    const entrants = players;",
+  "suites": [
+   "viewerlinetest.mjs"
+  ],
+  "red": {
+   "suite": "viewerlinetest.mjs",
+   "label": "6e: C4 — NFL \"Season\" is \"of 3\": the three NFL entrants, never the six active members, and the three non-entrants' NFL pick rows count for nothing (2nd of 6 · 1"
+  }
+ },
+ {
+  "id": "S5 a week no competition holds is offered",
+  "why": "What's next offers a week outside every competition in scope",
+  "file": "js/next-up.js",
+  "old": "    if (!isStr(sport)) continue;                                            // a week no competition in scope holds is not Home's to offer",
+  "new": "    if (!isStr(sport)) sport = 'cfb';",
+  "suites": [
+   "viewerlinetest.mjs"
+  ],
+  "red": {
+   "suite": "viewerlinetest.mjs",
+   "label": "6j: What's next offers the NFL week by its competition (sport cfb, week z9) and never z9, the earlier-locking week no competition in scope holds"
+  }
+ },
+ {
+  "id": "S6 card detail view crosses sports",
+  "why": "card-detail viewThrough ignores the week's competition (every sport's weeks and the active roster)",
+  "file": "js/card-detail.js",
+  "old": "  const comp = competitionOf(s, scopeWeek);",
+  "new": "  const comp = null;",
+  "suites": [
+   "viewerlinetest.mjs"
+  ],
+  "red": {
+   "suite": "viewerlinetest.mjs",
+   "label": "6m: the view through a CFB week holds CFB's weeks and its six entrants (6; weeks w1,w2,n1)"
+  }
+ },
+ {
+  "id": "S7 Game Day button loses its sport",
+  "why": "the Now card's Make picks button no longer carries its week's sport",
+  "file": "js/gameday.js",
+  "old": "  if (body.action && isStr(i.actionSport) && (body.action.tab === 'picks' || body.action.tab === 'dashboard')) body.action.sport = i.actionSport;\n",
+  "new": "",
+  "suites": [
+   "hometest.mjs"
+  ],
+  "red": {
+   "suite": "hometest.mjs",
+   "label": "9: I5 a several-sport league: the Now card's go-tab button carries the sport of ITS week (data-sport=\"cfb\")"
+  }
+ },
+ {
+  "id": "S8 dashAllSports is the placeholder",
+  "why": "the All sports view's Sort sheet treats it as one sport (Custom enabled)",
+  "file": "js/app.js",
+  "old": "function dashAllSports() { try { return isMultiSport() && getDashboardScope() === DASHBOARD_ALL; } catch { return false; } }",
+  "new": "function dashAllSports() { return false; }",
+  "suites": [
+   "gdseamtest.mjs"
+  ],
+  "red": {
+   "suite": "gdseamtest.mjs",
+   "label": "6d: the Sort button opens the sheet, and Custom is DISABLED in All sports"
+  }
+ },
+ {
+  "id": "S9 submissionCounts back to the active roster",
+  "why": "\"N of M in\" counts a second active-roster filter instead of the week's entrants in a several-sport league (the int form's rosterFor(w) undone)",
+  "file": "js/home.js",
+  "old": "    if (rosterFor) { try { active = asArray(rosterFor(w)).filter(p => p && p.active); } catch { active = []; } }",
+  "new": "    if (rosterFor) { try { active = players.filter(q => q && q.active); } catch { active = []; } }",
+  "suites": [
+   "homesportstest.mjs"
+  ],
+  "red": {
+   "suite": "homesportstest.mjs",
+   "label": "[3e \"N of M in\" counts the ENTRANTS of the week's own sport: CFB 6 of 6, NFL 3 of 3]"
+  }
+ },
+ {
+  "id": "P1 sport pill keeps the Back chip",
+  "why": "onSportPillTap no longer ends the Back chip",
+  "file": "js/chat-ui.js",
+  "old": "  try { _returnHooks && typeof _returnHooks.onFilterChange === 'function' && _returnHooks.onFilterChange(); } catch { /* the chip is a courtesy */ }   // D1 DI-588: a sport pill is a chat filter pill; changing it ends the Back chip\n",
+  "new": "",
+  "suites": [
+   "chatsporttest.mjs"
+  ],
+  "red": {
+   "suite": "chatsporttest.mjs",
+   "label": "[8c2] a sport pill tap that changes the sport ends the Back chip (onFilterChange once)"
+  }
+ },
+ {
+  "id": "P2 sport row unlisted for the drawer",
+  "why": "a pan on a scrolled sport row opens the Control Center (B1 again)",
+  "file": "js/nav-gestures.js",
+  "old": ", .gr-sat-chips, .chat-sport-pills';",
+  "new": ", .gr-sat-chips';",
+  "suites": [
+   "navgesturestest.mjs"
+  ],
+  "red": {
+   "suite": "navgesturestest.mjs",
+   "label": "5n-chat-sport-pills: on CHAT a touch on a sport pill of a sport row scrolled right (scrollLeft 120) is the ROW's pan: the drawer does not arm"
+  }
+ },
+ {
+  "id": "T1 no subtitle",
+  "why": "the permanent \"Also appears in the Locker Room\" subtitle is gone",
+  "file": "js/chat-ui.js",
+  "old": "          <div class=\"chat-sheet-sub chat-sheet-lens\">Also appears in the Locker Room</div></div>",
+  "new": "          </div>",
+  "suites": [
+   "d1wiringtest.mjs"
+  ],
+  "red": {
+   "suite": "d1wiringtest.mjs",
+   "label": "10b: the header says, permanently, \"Also appears in the Locker Room\""
+  }
+ },
+ {
+  "id": "T2 the old close",
+  "why": "the close is the ✕ character again, unlabelled",
+  "file": "js/chat-ui.js",
+  "old": "<button type=\"button\" class=\"chat-sheet-close\" id=\"chat-sheet-close\" aria-label=\"Close\">${icon('close')}</button>",
+  "new": "<button class=\"chat-sheet-close\" id=\"chat-sheet-close\">✕</button>",
+  "suites": [
+   "d1wiringtest.mjs"
+  ],
+  "red": {
+   "suite": "d1wiringtest.mjs",
+   "label": "10d: the close is the icon family's ✕ (an svg, no ✕ character), labelled \"Close\""
+  }
+ },
+ {
+  "id": "T3 Open in chat back in the header",
+  "why": "\"Open in chat\" crowds the header again",
+  "file": "js/chat-ui.js",
+  "old": "        <div class=\"chat-sheet-header-actions\">\n          ${refreshControlHTML('chat-sheet-refresh')}",
+  "new": "        <div class=\"chat-sheet-header-actions\">\n          <button class=\"btn btn-ghost btn-sm\" id=\"chat-sheet-open-main\">Open in chat</button>\n          ${refreshControlHTML('chat-sheet-refresh')}",
+  "suites": [
+   "d1wiringtest.mjs"
+  ],
+  "red": {
+   "suite": "d1wiringtest.mjs",
+   "label": "10e: \"Open in chat\" sits in its own row beneath the header, label kept"
+  }
+ },
+ {
+  "id": "T4 no grabber",
+  "why": "the native grabber is not drawn",
+  "file": "js/chat-ui.js",
+  "old": "<div class=\"chat-sheet-header${headerCls}\">${isNativeShell() ? '<span class=\"sheet-grabber\" aria-hidden=\"true\"></span>' : ''}",
+  "new": "<div class=\"chat-sheet-header${headerCls}\">",
+  "suites": [
+   "d1wiringtest.mjs"
+  ],
+  "red": {
+   "suite": "d1wiringtest.mjs",
+   "label": "10o: native: a grabber in the header and the drag bound on the header (only there, so the message list keeps its own scroll)"
+  }
+ },
+ {
+  "id": "T5 no drag",
+  "why": "the header drag-down is never bound",
+  "file": "js/chat-ui.js",
+  "old": "  bindThreadSheetDrag(wrap);\n",
+  "new": "",
+  "suites": [
+   "d1wiringtest.mjs"
+  ],
+  "red": {
+   "suite": "d1wiringtest.mjs",
+   "label": "10o: native: a grabber in the header and the drag bound on the header (only there, so the message list keeps its own scroll)"
+  }
+ },
+ {
+  "id": "T6 Esc closes at once",
+  "why": "Esc closes the sheet synchronously (a Game view beneath can pop on the same press)",
+  "file": "js/chat-ui.js",
+  "old": "    setTimeout(() => { if (document.getElementById('chat-sheet-wrap') === wrap) closeSheet(); }, 0);",
+  "new": "    closeSheet();",
+  "suites": [
+   "d1wiringtest.mjs"
+  ],
+  "red": {
+   "suite": "d1wiringtest.mjs",
+   "label": "10g: Esc does not pop the sheet synchronously (every keydown listener still sees it)"
+  }
+ },
+ {
+  "id": "T7 Esc ignores a modal",
+  "why": "Esc closes the sheet from under a modal",
+  "file": "js/chat-ui.js",
+  "old": "    if (_revealedRootId || document.querySelector('.modal-overlay, #site-gate-overlay, #share-sheet-wrap')) return;\n",
+  "new": "",
+  "suites": [
+   "d1wiringtest.mjs"
+  ],
+  "red": {
+   "suite": "d1wiringtest.mjs",
+   "label": "10i: with a modal over the sheet, Esc leaves the sheet alone"
+  }
+ },
+ {
+  "id": "T8 the old empty copy",
+  "why": "every empty thread says \"No messages about this game yet.\"",
+  "file": "js/chat-ui.js",
+  "old": "  return final ? 'No one talked about this game.' : 'No messages about this game yet.';",
+  "new": "  return 'No messages about this game yet.';",
+  "suites": [
+   "d1wiringtest.mjs"
+  ],
+  "red": {
+   "suite": "d1wiringtest.mjs",
+   "label": "10l: final, retention off: \"No one talked about this game.\""
+  }
+ },
+ {
+  "id": "T9 30 pt close",
+  "why": "the thread sheet's close falls back to the shared 30 pt circle",
+  "file": "css/styles.css",
+  "old": "#chat-thread-sheet .chat-sheet-close{width:44px;height:44px;",
+  "new": "#chat-thread-sheet .chat-sheet-close{width:30px;height:30px;",
+  "suites": [
+   "gameviewstyletest.mjs"
+  ],
+  "red": {
+   "suite": "gameviewstyletest.mjs",
+   "label": "6a: the close is 44 x 44 pt (web/default: 30x30; native/default: 30x30; web/1.35x: 30x30; native/1.35x: 30x30)"
+  }
+ },
+ {
+  "id": "T10 Open in chat flush",
+  "why": "\"Open in chat\" sits flush against its hairline",
+  "file": "css/styles.css",
+  "old": ".chat-sheet-openrow{display:flex;justify-content:center;margin:0 0 8px;padding-top:8px;",
+  "new": ".chat-sheet-openrow{display:flex;justify-content:center;margin:0 0 8px;padding-top:0;",
+  "suites": [
+   "gameviewstyletest.mjs"
+  ],
+  "red": {
+   "suite": "gameviewstyletest.mjs",
+   "label": "6b: \"Open in chat\" is >= 44 pt, centred in its own row, 8 pt under the row's hairline (web/default: 44 pt, off 0, 0 below a 1px line; native/default: 44 pt, off"
+  }
+ },
+ {
+  "id": "SH1 no duplicate check",
+  "why": "the same reference in the same place within 10 minutes posts a second message",
+  "file": "js/chat-ui.js",
+  "old": "  if (dup) return { ok: false, reason: 'duplicate', id: dup.id };\n  const sportTag",
+  "new": "  const sportTag",
+  "suites": [
+   "sharetest.mjs"
+  ],
+  "red": {
+   "suite": "sharetest.mjs",
+   "label": "4d: the same reference in the same place again within 10 minutes: \"duplicate\", the first message's id, NOTHING sent"
+  }
+ },
+ {
+  "id": "SH2 attachment opens without the resolver",
+  "why": "a reference renders \"Open details\" whatever the reader may see",
+  "file": "js/chat-ui.js",
+  "old": "  if (ref && shareAvailable(ref)) {",
+  "new": "  if (ref) {",
+  "suites": [
+   "sharetest.mjs"
+  ],
+  "red": {
+   "suite": "sharetest.mjs",
+   "label": "5b: a forged reference — an extra text key, an unknown type, a non-object, an odd id, an item that is not there, a comparison nobody registered — renders ONLY t"
+  }
+ },
+ {
+  "id": "SH3 no re-check at the tap",
+  "why": "the tap trusts the paint's pass-cached answer: an item hidden since the paint opens",
+  "file": "js/app.js",
+  "old": "  if (!shareRefAvailableNow(r)) return;                    // asked again at the tap, never trusted from the paint\n",
+  "new": "",
+  "suites": [
+   "sharetest.mjs"
+  ],
+  "red": {
+   "suite": "sharetest.mjs",
+   "label": "5j: an attachment drawn while the item was visible opens NOTHING once the item stops being visible to this reader (the gate is asked again at the tap, not trust"
+  }
+ },
+ {
+  "id": "SH4 no sharer gate at open",
+  "why": "a share of an item the sharer may not see opens the sheet",
+  "file": "js/app.js",
+  "old": "  if (!shareRefAvailableNow(share.ref)) return;             // the sharer's own gate, asked again here: Share exists only for what THIS member may see right now\n",
+  "new": "",
+  "suites": [
+   "sharetest.mjs"
+  ],
+  "red": {
+   "suite": "sharetest.mjs",
+   "label": "6e: a share of an item the sharer may not see (a demo week's game for a member) never opens the sheet: the sharer's own gate is asked again at open"
+  }
+ },
+ {
+  "id": "SH5 Share with chat off",
+  "why": "Share is offered when the commissioner has turned chat off",
+  "file": "js/app.js",
+  "old": "  try { const s = getSession(); return isChatEnabled() && !!(s && s.playerId && s.playerVerified) && !isContentWithheld(); } catch { return false; }",
+  "new": "  try { const s = getSession(); return !!(s && s.playerId && s.playerVerified) && !isContentWithheld(); } catch { return false; }",
+  "suites": [
+   "sharetest.mjs"
+  ],
+  "red": {
+   "suite": "sharetest.mjs",
+   "label": "6d: signed out, or with chat off, there is no Share button (Game view and card detail)"
+  }
+ },
+ {
+  "id": "SH6 the viewer's pick rides along",
+  "why": "the Game view's share text carries the viewer's own pick",
+  "file": "js/home.js",
+  "old": "    const share = viewer && model.thread && model.thread.enabled !== false ? gameShareOf(game, phase, { sportLabel: comps.length > 1 && comp ? comp.label : '' }) : null;",
+  "new": "    const share0 = viewer && model.thread && model.thread.enabled !== false ? gameShareOf(game, phase, { sportLabel: comps.length > 1 && comp ? comp.label : '' }) : null;\n    const share = share0 && own ? { ...share0, line: `${share0.line} · Your pick: ${own.team}` } : share0;",
+  "suites": [
+   "sharetest.mjs"
+  ],
+  "red": {
+   "suite": "sharetest.mjs",
+   "label": "6a: a share's text is INVARIANT under every pick change (flipped, removed): it carries no pick (\"Sat 10:50 AM · Washington at Oregon: Line: Oregon -7 · Your pic"
+  }
+ },
+ {
+  "id": "SH7 card Share ignores the capability",
+  "why": "the card detail offers Share with chat off",
+  "file": "js/card-detail.js",
+  "old": "  if (!c.capabilities.share || !isId(s.viewerId)) return null;",
+  "new": "  if (!isId(s.viewerId)) return null;",
+  "suites": [
+   "sharetest.mjs"
+  ],
+  "red": {
+   "suite": "sharetest.mjs",
+   "label": "6d: signed out, or with chat off, there is no Share button (Game view and card detail)"
+  }
+ },
+ {
+  "id": "SH8 a draft week opens",
+  "why": "a game or week the server still calls a draft opens for a member (viewableWeek's draft rule dropped)",
+  "file": "js/home.js",
+  "old": "    if (wstatus === 'draft' && isCommissioner !== true) return false;\n",
+  "new": "",
+  "suites": [
+   "sharetest.mjs"
+  ],
+  "red": {
+   "suite": "sharetest.mjs",
+   "label": "5f: …nor a game or week of a DRAFT week"
+  }
+ },
+ {
+  "id": "SH9 the post mints a system id",
+  "why": "the share posts under a sys_ id (0045 refuses it on the player path)",
+  "file": "js/chat-ui.js",
+  "old": "  const id = sendEvent({ type: 'message', author: self, body, gameTag: tag,",
+  "new": "  const id = sendEvent({ id: 'sys_share_' + Date.now(), type: 'message', author: self, body, gameTag: tag,",
+  "suites": [
+   "sharetest.mjs"
+  ],
+  "red": {
+   "suite": "sharetest.mjs",
+   "label": "4b: its id is chat.js's uuid for a player event, never a sys_ / scribe_ / pin_ id (0045 refuses those on the player path) (sys_share_1791481849490)"
+  }
+ },
+ {
+  "id": "SH10 Share sheet does not suspend gestures",
+  "why": "a week swipe or pull to refresh can arm on the page beneath an open Share sheet",
+  "file": "js/nav-gestures.js",
+  "old": "  if (document.getElementById?.('share-sheet-wrap')) return true;\n",
+  "new": "",
+  "suites": [
+   "sharetest.mjs"
+  ],
+  "red": {
+   "suite": "sharetest.mjs",
+   "label": "4h-2: while the Share sheet is up the page's gestures stand down (week swipe, pull to refresh) even with no pushed screen beneath it"
+  }
+ },
+ {
+  "id": "P1b sport pill keeps the Back chip (real tap)",
+  "why": "the same defect as P1, caught end to end: a REAL tap on the NFL pill on the Chat tab leaves the Back chip",
+  "file": "js/chat-ui.js",
+  "old": "  try { _returnHooks && typeof _returnHooks.onFilterChange === 'function' && _returnHooks.onFilterChange(); } catch { /* the chip is a courtesy */ }   // D1 DI-588: a sport pill is a chat filter pill; changing it ends the Back chip\n",
+  "new": "",
+  "suites": [
+   "gdseamtest.mjs"
+  ],
+  "red": {
+   "suite": "gdseamtest.mjs",
+   "label": "6b-1: a REAL tap on the NFL pill (bindFilterButtons' own listener) ends the Back chip, as a filter pill tap does (chain {\"levels\":[{\"id\":\"game:c2\",\"title\":\"OSU "
+  }
+ },
+ {
+  "id": "T11 the close is dead",
+  "why": "the thread sheet's ✕ is drawn but never bound",
+  "file": "js/chat-ui.js",
+  "old": "  document.getElementById('chat-sheet-close')?.addEventListener('click', closeSheet);\n",
+  "new": "",
+  "suites": [
+   "d1wiringtest.mjs"
+  ],
+  "red": {
+   "suite": "d1wiringtest.mjs",
+   "label": "10h-2: a real tap on the ✕ closes the sheet (and its state) and leaves the Game view"
+  }
+ },
+ {
+  "id": "SH11 focus is lost on close",
+  "why": "closing the Share sheet leaves focus nowhere (VoiceOver loses its place)",
+  "file": "js/app.js",
+  "old": "    try { if (ss && ss.opener && ss.opener.isConnected && typeof ss.opener.focus === 'function' && !document.getElementById(SHARE_WRAP_ID)) ss.opener.focus({ preventScroll: true }); } catch { /* focus is a courtesy */ }\n",
+  "new": "",
+  "suites": [
+   "sharetest.mjs"
+  ],
+  "red": {
+   "suite": "sharetest.mjs",
+   "label": "4n: Cancel posts nothing, closes the sheet, and returns focus to the Share button"
+  }
+ },
+ {
+  "id": "T12 the static dot pulses",
+  "why": "the thread sheet's (and the Dashboard's halftime / stale) static live dot written with ONE class loses to .live-dot's later pulse",
+  "file": "css/styles.css",
+  "old": ".live-dot.live-dot-static{animation:none;opacity:1;transform:none}",
+  "new": ".live-dot-static{animation:none;opacity:1;transform:none}",
+  "suites": [
+   "readinessmotiontest.mjs"
+  ],
+  "red": {
+   "suite": "readinessmotiontest.mjs",
+   "label": "4-run: .live-dot.live-dot-static — game-thread bottom sheet header (never loops, DI-592) never loops, motion allowed or not (neutral:L \"live-dot-pulse 1.6s ease"
+  }
+ },
+ {
+  "id": "F1 one read per message",
+  "why": "security F-1: Share's resolver rebuilds the whole Home derivation for every shared message (the pass cache is never hit)",
+  "file": "js/app.js",
+  "old": "  if (_shareTargets && _shareTargets.key === key && _shareTargets.version === _shareDataVersion) return _shareTargets;\n",
+  "new": "",
+  "suites": [
+   "sharetest.mjs"
+  ],
+  "red": {
+   "suite": "sharetest.mjs",
+   "label": "5b-1: painting 50 shared messages (50 drawn with \"Open details\") built 50 fresh read(s) — at most ONE per paint, never one per message"
+  }
+ },
+ {
+  "id": "F1b the pass outlives its task",
+  "why": "the pass's read is never dropped: a later paint answers from a stale read (an item hidden since still opens its attachment)",
+  "file": "js/app.js",
+  "old": "  setTimeout(() => { if (_shareTargets === built) _shareTargets = null; }, 0);   // the pass ends with this task\n",
+  "new": "",
+  "suites": [
+   "sharetest.mjs"
+  ],
+  "red": {
+   "suite": "sharetest.mjs",
+   "label": "5b-2: the pass's answer lives only as long as its task — the next pass reads the draft week and says no (before true, same task true, next pass true); an ACTION"
+  }
+ },
+ {
+  "id": "N1 week rule ignores the server",
+  "why": "security nit: what Share may open reads the STORED week status, not the server-confirmed one",
+  "file": "js/home.js",
+  "old": "    try { wstatus = snapshot.confirmedStatusFor(week) || week.status; } catch { wstatus = week.status; }\n",
+  "new": "",
+  "suites": [
+   "viewerlinetest.mjs"
+  ],
+  "red": {
+   "suite": "viewerlinetest.mjs",
+   "label": "6p: a week the SERVER still calls a draft is not openable through Share (nor its games), whatever the stored status says"
+  }
+ },
+ {
+  "id": "G5 one-sport member gets All sports",
+  "why": "reviewer G5: a forged \"all\" scope is honoured for a member who plays only one sport (the guard loosened to >= 1)",
+  "file": "js/app.js",
+  "old": "    if (scope === DASHBOARD_ALL && played.length >= 2) {",
+  "new": "    if (scope === DASHBOARD_ALL && played.length >= 1) {",
+  "suites": [
+   "gdseamtest.mjs"
+  ],
+  "red": {
+   "suite": "gdseamtest.mjs",
+   "label": "1f: a forged \"all\" from a one-sport member opens NO All sports view: his sport's Dashboard on its current week, the pointer untouched (scope cfb, week w_cfb_1, "
+  }
+ }
+]

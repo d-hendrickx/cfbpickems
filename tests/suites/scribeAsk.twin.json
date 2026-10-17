@@ -1,0 +1,12 @@
+{
+  "id": "scribeAsk.twin",
+  "script": "supabase/tests/functions/scribeAsk.twin.mjs",
+  "label": "81f",
+  "summary": "loose",
+  "floor": 857,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 400,
+  "note": "DI-T6.3 — scribe-ask end to end: the class-U auth gate, the ack-row reservation, budget/throttle no-ops, the happy path, a model refusal, a two-attempt outage, the blind-rule re-verification (a planted open-week pick withheld both by a direct tool call and a full two-round …"
+}

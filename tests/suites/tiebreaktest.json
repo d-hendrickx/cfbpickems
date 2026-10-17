@@ -1,0 +1,12 @@
+{
+  "id": "tiebreaktest",
+  "script": "tiebreaktest.mjs",
+  "label": "124",
+  "summary": "strict",
+  "floor": 407,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 5500,
+  "note": "(v0.29.0 release review N1, 2026-10-02: RAISED from 406 — T24 (group) pins the split-week email's tie reason); earlier: floor 406 (SP-54 second review, 2026-10-01: RAISED from 396 — [T-G]'s state classifier is tested on synthetic files clause by clause (K8), the effective date …"
+}

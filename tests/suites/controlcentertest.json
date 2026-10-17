@@ -1,0 +1,12 @@
+{
+  "id": "controlcentertest",
+  "script": "controlcentertest.mjs",
+  "label": "107",
+  "summary": "loose",
+  "floor": 285,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 500,
+  "note": "RAISED from 268 by D1 Lane B (DI-613, 2026-10-08): [16a-p], the Show picks row. | set to the measured merged count at the v0.29.0 batch-5b integration (2026-10-01): SB-18v2 + SP-52 themes (fix/sb18-readiness-motion-v2 @ 379c937, with themes DI A1.10/A1.11) merged onto int/batch5b. The SB-18v2 branch read floor 260 \u2014 RAISED from 257 by A1.9 review round \u2026"
+}

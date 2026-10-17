@@ -1,0 +1,12 @@
+{
+  "id": "sportopstest",
+  "script": "sportopstest.mjs",
+  "summary": "strict",
+  "floor": 61,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 5000,
+  "note": "(D1 combine, 2026-10-08: RAISED from 45 to 61 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - D1 (v0.30.0) coordinator notes 2026-10-08: registerSportOps wired against the server branch's openers by name - this tree alone offers no commissioner row; with openAddSportSheet + setLensSport all five ops (Add a sport, Manage, Sport entries, Set up week, the k-of-n count), each through the commissioner lens and never the player's pointer; a lens that refuses or throws opens nothing; the entrants-only count; the overview rows; a sheet above the overview stays swipeable; the seam's reads of competition.js / storage.js pinned by name and shape; three in-memory mutants"
+}

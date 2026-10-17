@@ -1,0 +1,10 @@
+{
+  "id": "pglite0044.check",
+  "script": "supabase/tests/pglite0044.check.mjs",
+  "summary": "loose",
+  "floor": 1,
+  "tags": [],
+  "deps": ["supabase/migrations/0033_multisport_core.sql", "supabase/migrations/0043_pf1_server_lock.sql", "supabase/migrations/0044_pick_status_submit_line.sql"],
+  "expectedMs": 6000,
+  "note": "D1 / W-18 / 0044 (security follow-up): the whole migration EXECUTED in an in-process Postgres (PGlite) over stubs - 47 assertions when PGlite is installed (PGLITE_DIR or supabase/tests/node_modules), and a printed SKIP counted as the one assertion ('1 passed, 0 failed', floor 1: the runner's ratchet needs a positive floor and PGlite is not a repo dependency). A green run WITHOUT PGlite proves nothing about the SQL; read the SKIP line."
+}

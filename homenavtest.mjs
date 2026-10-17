@@ -107,9 +107,14 @@ _log('\n[1] The static markup and the ship-together rule (T3)…');
   const homeBtnSrc = INDEX.match(/<button class="nav-item active" data-tab="home"[\s\S]*?<\/button>/)[0];
   const svgInIndex = homeBtnSrc.match(/<svg[\s\S]*?<\/svg>/)[0];
   assert(svgInIndex.replace(' aria-hidden="true" focusable="false"', '') === ICONS.home && icon('home').replace(' aria-hidden="true" focusable="false"', '') === ICONS.home && /<span class="nav-icon nav-home-disc" aria-hidden="true">/.test(homeBtnSrc) && /<span class="sr-only">Home<\/span>/.test(homeBtnSrc),
-    '1-8: the Home button\'s SVG is EXACTLY ICONS.home (plus the aria-hidden/focusable attributes icon() adds) (one asset, the roof class on the pediment), inside a .nav-home-disc that is aria-hidden, with an sr-only "Home"');
-  assert((svgInIndex.match(/class="home-roof"/g) || []).length === 1 && !/<svg[^>]*class=/.test(svgInIndex.replace(/<path class="home-roof"/, '<path')),
-    '1-9: the roof carries class="home-roof" once (CSS fills it when Home is selected) and nothing else is classed');
+    '1-8: the Home button\'s SVG is EXACTLY ICONS.home (plus the aria-hidden/focusable attributes icon() adds) (one asset), inside a .nav-home-disc that is aria-hidden, with an sr-only "Home"');
+  // D1 DI-584 (Drew chose mark B, D-56): the asset is the FULL filled Munera temple — the same six shapes as the sign-in gate's mark — not the retired stroked outline with a fillable roof.
+  const shapesOf = (svg) => (svg.match(/<(path|rect)\b[^>]*\/>/g) || []).map((t) => t.replace(/\s+/g, ' '));
+  const { getGateMarkSVG } = await import('./js/brand.js');
+  const markPins = (svg) => /^<svg viewBox="205 250 614 495" fill="currentColor"/.test(svg) && !/stroke/.test(svg) && !/class=/.test(svg) && !/home-roof/.test(svg) && shapesOf(svg).length === 6 && JSON.stringify(shapesOf(svg)) === JSON.stringify(shapesOf(getGateMarkSVG())) && /aria-hidden="true" focusable="false"/.test(svg);
+  assert(markPins(svgInIndex) === true, '1-9: DI-584 — the static Home button carries the FILLED mark: viewBox 205 250 614 495, fill="currentColor", no stroke, no class, the six shapes byte-identical to getGateMarkSVG(), the mark aria-hidden');
+  assert(markPins(svgInIndex.replace('<path d=', '<path class="home-roof" d=')) === false && markPins(svgInIndex.replace('fill="currentColor"', 'fill="currentColor" stroke="currentColor"')) === false && markPins(svgInIndex.replace('x="296" y="445.57"', 'x="296" y="446.57"')) === false && markPins(svgInIndex.replace(' aria-hidden="true" focusable="false"', '')) === false,
+    '1-9b: MUTATION — the retired roof class, a stroke, a nudged column, or a mark that is not aria-hidden each turn 1-9 RED');
   assert(INDEX.split('<button class="nav-item').length - 1 === 5 && !/Default tab is DASHBOARD/.test(INDEX) && !/Picks · Dashboard · Chat · Standings · Comm/.test(INDEX) && /Picks · Dashboard · Home · Chat · Standings/.test(INDEX),
     '1-10: the stale comments are fixed ("Default tab is DASHBOARD" and the five-with-Comm list are gone; the new five is written down)');
   // the menu trigger (UN-320c): the drawer is the dialog this button controls
@@ -145,7 +150,10 @@ _log('\n[1] The static markup and the ship-together rule (T3)…');
   const norm = (s) => s.replace(/\s+/g, ' ').trim();
   assert(norm(staticRoot.innerHTML) === norm(painted.innerHTML) && /feed-skel/.test(painted.innerHTML),
     '1-17: the static #home-root content is BYTE-FOR-BYTE the feed skeleton home.js paints while its data is not ready (four .feed-skel cards in .home-feed, aria-busy, an sr-only loading status): never the spinner, nothing shifts on the first paint');
-  assert(mount(staticRoot.innerHTML).querySelectorAll('.feed-skel').length === HomeMod.SKELETON_CARD_COUNT && HomeMod.SKELETON_CARD_COUNT === 4, '1-18: …and it is exactly SKELETON_CARD_COUNT (4) cards');
+  // D1 Lane B (DI-603): the FIRST skeleton card is Game Day's own (a header and two pills: the card's height, so the feed does not shift when the real card arrives); the other three are the generic lines.
+  const skelRoot = mount(staticRoot.innerHTML);
+  assert(skelRoot.querySelectorAll('.feed-skel').length + skelRoot.querySelectorAll('.gd--skeleton').length === HomeMod.SKELETON_CARD_COUNT && skelRoot.querySelectorAll('.gd--skeleton').length === 1 && HomeMod.SKELETON_CARD_COUNT === 4,
+    '1-18: …and it is exactly SKELETON_CARD_COUNT (4) cards: Game Day\'s own skeleton first, then three generic lines');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -176,7 +184,9 @@ _log('\n[2] The CSS contract (T1), each clause with a mutant…');
       chatLift: /#page-chat\.active\{--chat-nav-gap:calc\(8px \+ var\(--nav-disc-reach\)\);[^}]*padding-bottom:var\(--chat-nav-gap\)/.test(c),
       chatKeyboardGap: /body\[data-keyboard-up\] #page-chat\.active\{--nav-bar-clearance:0px;--chat-nav-gap:8px\}/.test(c),
       submitNudge: /\.submit-bar\{[^}]*bottom:\s*calc\(var\(--nav-bar-clearance\)\s*\+\s*8px\s*\+\s*var\(--nav-disc-reach\)\)/.test(c),
-      reduced: /@media \(prefers-reduced-motion:reduce\)\{\.nav-home-disc \.home-roof,\.nav-home-disc::after\{transition:none\}\}/.test(c),
+      reduced: /@media \(prefers-reduced-motion:reduce\)\{\.nav-home-disc::after\{transition:none\}\}/.test(c),
+      markSize: /\.nav-icon\.nav-home-disc svg\{[^}]*width:32px;height:auto;/.test(c) && !/\.nav-icon\.nav-home-disc svg\{[^}]*stroke-width/.test(c),
+      noRoof: !/home-roof/.test(c),
     };
   };
   const real = contract(CSS);
@@ -187,6 +197,9 @@ _log('\n[2] The CSS contract (T1), each clause with a mutant…');
     ['the shipped hide distance (gap + safe-area only)', 'hide', (s) => s.replace('translateY(calc(100% + var(--nav-pill-bottom) + var(--nav-disc-reach)));transition:transform 240ms ease-in}', 'translateY(calc(100% + var(--nav-pill-gap) + env(safe-area-inset-bottom,0px)));transition:transform 240ms ease-in}')],
     ['the floor is dropped from --nav-pill-bottom (the collar touches the screen edge with no inset)', 'floor', (s) => s.replace(/--nav-pill-bottom:max\(calc\(var\(--nav-pill-gap\) \+ env\(safe-area-inset-bottom,0px\)\),calc\(var\(--nav-disc-reach\) \+ 8px\)\);/, '--nav-pill-bottom:calc(var(--nav-pill-gap) + env(safe-area-inset-bottom,0px));')],
     ['the clearance grows by the disc reach (pages leave MORE room at the bottom: Drew said no)', 'clearanceNoDisc', (s) => s.replace('--nav-bar-clearance:calc(var(--nav-pill-h) + var(--nav-pill-bottom));', '--nav-bar-clearance:calc(var(--nav-pill-h) + var(--nav-pill-bottom) + var(--nav-disc-reach));')],
+    ['the mark is the old 28 pt stroked glyph again (width:28px, a stroke width)', 'markSize', (s) => s.replace('width:32px;height:auto;display:block}', 'width:28px;height:28px;stroke-width:1.5;display:block}')],
+    ['the retired roof-fill rule comes back', 'noRoof', (s) => s.replace('.nav-item.active .nav-home-disc::after{opacity:1}', '.nav-home-disc .home-roof{fill:none}\n.nav-item.active .nav-home-disc::after{opacity:1}')],
+    ['the reduced-motion rule still names the retired roof', 'reduced', (s) => s.replace('@media (prefers-reduced-motion:reduce){.nav-home-disc::after{transition:none}}', '@media (prefers-reduced-motion:reduce){.nav-home-disc .home-roof,.nav-home-disc::after{transition:none}}')],
     ['the disc is a different size (64 pt, the first recommendation)', 'sizeToken', (s) => s.replace('--nav-disc-d:56px', '--nav-disc-d:64px')],
     ['the disc is offset upward (B\'s translateY: Drew asked for CENTRED, not raised)', 'discUntranslated', (s) => s.replace('.nav-icon.nav-home-disc{position:relative;', '.nav-icon.nav-home-disc{transform:translateY(-9px);position:relative;')],
     ['overflow:hidden on the pill (it would clip the disc)', 'noOverflowHidden', (s) => s.replace('.bottom-nav{position:fixed;', '.bottom-nav{overflow:hidden;position:fixed;')],
@@ -234,7 +247,7 @@ _log('\n[4] The wiring, by source (W2 / W3 / W5, checklist 1-18)…');
     escHtml: /createHome\(\{[\s\S]*?\n\s*escHtml,/.test(w),
     isContentWithheld: /\n\s*isContentWithheld,/.test(w),
     currentIdentityKey: /\n\s*currentIdentityKey,/.test(w),
-    renderCompact: /\n\s*renderCompact: renderDashboardCompact,/.test(w),
+    entrantsFor: /\n\s*entrantsFor: entrantsForWeek,/.test(w),   // D1 Lane B: the retired Live Peek's renderCompact is gone; the gate's membership seam (who is IN a sport for a week, security C4) is handed by reference instead
     chatSource: /makeChatCandidateSource\(\{ getMessages, isPrivateRow, chatBoundToLeague \}\)/.test(w),
     confirmed: /confirmedStatusFor: \(w\) => \{\s*if \(getBackendMode\(\) !== 'supabase'\) return w\.status;\s*try \{ return sb\.getConfirmedWeekStatus\(w\.weekId\) \|\| w\.status; \}\s*catch \{ return w\.status; \}\s*\},/.test(w),
     picksRead: /picksReadConfirmed: \(id\) => sb\.picksReadWhilePublic\(id\) === true,/.test(w),
@@ -246,13 +259,13 @@ _log('\n[4] The wiring, by source (W2 / W3 / W5, checklist 1-18)…');
     noStubChat: !/chatBoundToLeague\s*[:=]\s*\(/.test(w) && !/=>\s*true/.test(w.slice(w.indexOf('createHome({'), w.indexOf('createHome({') + 1200).replace(/=== true,/g, '')),
   });
   const real = pins(wiring);
-  assert(Object.values(real).every(Boolean), `4-1: every gate is handed to createHome BY REFERENCE — the app's own escHtml, isContentWithheld, currentIdentityKey, renderDashboardCompact, chat.js's getMessages / isPrivateRow / chatBoundToLeague, the container hook, the tab reader, the news adapter (${Object.entries(real).filter(([, v]) => !v).map(([k]) => k).join(', ') || 'all ' + Object.keys(real).length + ' pins'})`);
+  assert(Object.values(real).every(Boolean), `4-1: every gate is handed to createHome BY REFERENCE — the app's own escHtml, isContentWithheld, currentIdentityKey, entrantsForWeek, chat.js's getMessages / isPrivateRow / chatBoundToLeague, the container hook, the tab reader, the news adapter (${Object.entries(real).filter(([, v]) => !v).map(([k]) => k).join(', ') || 'all ' + Object.keys(real).length + ' pins'})`);
   const mut = (label, key, from, to) => { const m = wiring.replace(from, to); assert(m !== wiring && pins(m)[key] === false, `4-2: MUTATION — ${label}: pin "${key}" goes RED`); };
   mut('isContentWithheld replaced by a constant (a Home that can never withhold: the S-C7 hole)', 'isContentWithheld', '\n    isContentWithheld,', '\n    isContentWithheld: () => false,');
   mut('currentIdentityKey replaced by a constant (W3)', 'currentIdentityKey', '\n    currentIdentityKey,', '\n    currentIdentityKey: () => \'x\',');
   mut('currentIdentityKey wrapped (W3: never a wrapper)', 'currentIdentityKey', '\n    currentIdentityKey,', '\n    currentIdentityKey: () => currentIdentityKey(),');
   mut('escHtml replaced by String (W5: never String)', 'escHtml', '\n    escHtml,', '\n    escHtml: String,');
-  mut('renderCompact replaced by a stub', 'renderCompact', 'renderCompact: renderDashboardCompact,', 'renderCompact: () => \'\',');
+  mut('entrantsFor replaced by every active player (C4: a non-entrant would count as a member of the sport)', 'entrantsFor', 'entrantsFor: entrantsForWeek,', 'entrantsFor: () => getPlayers().filter(p => p.active),');
   mut('chatBoundToLeague replaced by a stub (W2: never () => true)', 'chatSource', 'makeChatCandidateSource({ getMessages, isPrivateRow, chatBoundToLeague })', 'makeChatCandidateSource({ getMessages, isPrivateRow, chatBoundToLeague: () => true })');
   mut('confirmedStatusFor trusts the client status', 'confirmed', "if (getBackendMode() !== 'supabase') return w.status;", 'return w.status;');
   mut('picksReadConfirmed answers true', 'picksRead', 'picksReadConfirmed: (id) => sb.picksReadWhilePublic(id) === true,', 'picksReadConfirmed: () => true,');
@@ -274,8 +287,8 @@ _log('\n[4] The wiring, by source (W2 / W3 / W5, checklist 1-18)…');
   assert(/export const state = \{[\s\S]*?currentTab: 'home',/.test(APP), '4-6: item 1 — state.currentTab initializes to "home"');
   assert(/_nativeShellTabRestored\) \? state\.currentTab : 'home';/.test(APP), '4-7: item 2 — bootDefaultTab() falls back to "home"');
   assert(/NATIVE_SHELL_VALID_TABS = \['home', /.test(APP), '4-8: item 3 — "home" is a valid native-restore tab');
-  assert(/\(\{ home: renderHomePage, picks: renderPicksPage,/.test(code) && /function renderHomePage\(\) \{\s*getHomeWiring\(\)\.homeView\.renderHome\(\);\s*renderPausedLeagueBannerIfNeeded\('home'\);\s*\}/.test(code),
-    '4-9: item 4 — the dispatcher has home: renderHomePage, which paints Home and then the paused-league banner');
+  assert(/\(\{ home: renderHomePage, picks: renderPicksPage,/.test(code) && /function renderHomePage\(\) \{\s*getHomeWiring\(\)\.homeView\.renderHome\(\);\s*renderPausedLeagueBannerIfNeeded\('home'\);\s*renderSportStallBannerIfNeeded\('home'\);[^\n]*\s*armLockFlipForPage\(\);\s*\}/.test(code),
+    '4-9: item 4 — the dispatcher has home: renderHomePage, which paints Home, then the paused-league banner, then the stall banner (D1 / DI-557), then watches the lock instant (D1 E1: the one lock-flip timer; weeklocktest [5u])');
   assert(/PAUSED_BANNER_PAGE_IDS = \{\s*home: 'page-home',/.test(code) && /'page-home', 'page-picks'/.test(code),
     '4-10: item 11 — "home" is in the paused-banner page map (the maintenance map copies it) and page-home is in the A6 teardown list');
   // item 5: NO nav-highlight change; item 17: ONE pull-to-refresh binder
@@ -285,7 +298,7 @@ _log('\n[4] The wiring, by source (W2 / W3 / W5, checklist 1-18)…');
   assert(/if \(state\.currentTab === 'dashboard'\) renderDashboard\(\);\s*else if \(state\.currentTab === 'home'\) await getHomeWiring\(\)\.homeView\.refresh\(\);/.test(sync) && sync.indexOf('throw new Error') < sync.indexOf("state.currentTab === 'home'") && sync.indexOf('doRefreshScores') < sync.indexOf("state.currentTab === 'home'"),
     '4-13: item 17 — runManualSync() refreshes Home AFTER the hydrate/ACTIVE check (which throws into the binder\'s onFail -> showSyncFailureBanner) and after the scores refresh');
   // item 18: four repaint sites + the sync leg
-  assert((code.match(/state\.currentTab ?=== ?'home'\) renderHomePage\(\)/g) || []).length === 4, '4-14: item 18 — the four repaint sites (live score x2, auto-open, auto-transition) each repaint Home when it is showing');
+  assert((code.match(/state\.currentTab ?=== ?'home'\) renderHomePage\(\)/g) || []).length === 3, '4-14: item 18 — the three repaint sites (live score x1, auto-open, auto-transition) each repaint Home when it is showing (D1 / DI-535 #1, 2026-10-07: the two live-score sites became ONE re-render after the per-sport refresh loop in runAutoRefreshTick, so a server-job round and a client round repaint through the same line)');
   // item 6/16: identity chokepoint
   const delta = fnAt('applyIdentityDeltaIfChanged');
   assert(/if \(_homeWiring\) \{ _homeWiring\.homeNews\.reset\(\); _homeWiring\.homeView\.resetNews\(\); \}/.test(delta), '4-15: item 16 — applyIdentityDeltaIfChanged() resets the news adapter AND the Home slot (security C1\'s wiring half), without constructing the wiring');
@@ -396,6 +409,31 @@ _log('\n[5] The wiring, RUN — the real app.js against a real element tree buil
   app.state.commTab = 'week'; window.navigateTo('home');
   app._onHomeActionForTest('go-tab', { tab: 'commissioner', commTab: 'bogus' });
   assert(app.state.commTab === 'week', '5-18: an unknown commTab is ignored (the renderer allow-lists it too; the app re-checks)');
+  // FB-022 (D1 batch H) — View All keeps its context: the live Now card's "See the full slate" carries ITS week, so the Dashboard opens on that week even when the
+  // player had last swiped Picks / Dashboard to another one (state.viewingWeekId is shared by both tabs). The current week is stored as null (the selector's own convention).
+  {
+    const wA = { weekId: 'hn_wA', weekNumber: 1, season: 2026, status: 'final', dataSourceMode: 'live' };
+    const wB = { weekId: 'hn_wB', weekNumber: 2, season: 2026, status: 'live', dataSourceMode: 'live' };
+    storage.saveWeek(wA); storage.saveWeek(wB);
+    try {
+      const cur = storage.getCurrentWeek();
+      assert(!!cur && cur.weekId === 'hn_wB', `5-18a: (fixture) the live week is the current week (got ${cur && cur.weekId})`);
+      reset(); window.navigateTo('home'); app.state.viewingWeekId = 'hn_wA';
+      app._onHomeActionForTest('go-tab', { tab: 'dashboard', weekId: 'hn_wB' });
+      assert(app.state.currentTab === 'dashboard' && app.state.viewingWeekId === null,
+        `5-18b: FB-022 — "See the full slate" from a live Now card lands the Dashboard on THAT week (the current one: viewingWeekId null), not on the older week the player had swiped to (got ${JSON.stringify(app.state.viewingWeekId)})`);
+      reset(); window.navigateTo('home'); app.state.viewingWeekId = null;
+      app._onHomeActionForTest('go-tab', { tab: 'dashboard', weekId: 'hn_wA' });
+      assert(app.state.viewingWeekId === 'hn_wA', `5-18c: …a Now card about a NON-current week opens the Dashboard on that week (got ${JSON.stringify(app.state.viewingWeekId)})`);
+      reset(); window.navigateTo('home'); app.state.viewingWeekId = 'hn_wA';
+      app._onHomeActionForTest('go-tab', { tab: 'dashboard', weekId: 'no-such-week' });
+      app._onHomeActionForTest('go-tab', { tab: 'dashboard', weekId: 42 });
+      assert(app.state.currentTab === 'dashboard' && app.state.viewingWeekId === 'hn_wA', '5-18d: …a week id that names no week (or is not a string) is ignored: the tab still opens, the selected week is untouched');
+    } finally {
+      app.state.viewingWeekId = null;
+      storage.deleteWeek('hn_wA'); storage.deleteWeek('hn_wB');
+    }
+  }
   storage.clearSession?.();
   app._onHomeActionForTest('build-slate');
   assert(!document.getElementById('week-wizard-sheet-wrap'), '5-19: W6 — build-slate with NO commissioner session opens nothing (the role is re-checked at tap time, not trusted from the markup that rendered the button)');

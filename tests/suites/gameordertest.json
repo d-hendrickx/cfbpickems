@@ -1,0 +1,14 @@
+{
+  "id": "gameordertest",
+  "script": "gameordertest.mjs",
+  "summary": "strict",
+  "floor": 70,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/game-order.js",
+    "js/storage.js"
+  ],
+  "note": "D1 Lane B DI-579: Kickoff / Live first / My order, the per-player per-week preference and its coercion. Registered 2026-10-07."
+}

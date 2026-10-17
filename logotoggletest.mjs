@@ -98,8 +98,7 @@ const storage = await import('./js/storage.js');
 const app = await import('./js/app.js');
 assert(typeof app._buildControlCenterCtxForTest === 'function', '0-1: fixture — the real drawer ctx builder is reachable (_buildControlCenterCtxForTest)');
 assert(typeof app.renderGameCard === 'function' && typeof app.renderDashboardTable === 'function'
-  && typeof app.renderDashboardCompact === 'function' && typeof app.renderAvailableGamesList === 'function'
-  && typeof app.renderAdminGamesList === 'function', '0-2: fixture — every logo render path is exported for direct rendering');
+  && typeof app.renderDashboardCompact === 'function' && typeof app._gamesRowsHTMLForTest === 'function', '0-2: fixture — every logo render path is exported for direct rendering (D1 W-69: the two Comm Games row paths are now ONE row renderer, reached through _gamesRowsHTMLForTest with a pool-only row and a slate row)');
 
 // ── Fixture ────────────────────────────────────────────────────────────────
 storage.setBackendMode('local');
@@ -205,10 +204,12 @@ console.log('\n[1] Every render path that draws a team logo honors the toggle, b
       () => app.renderDashboardTable(PLAYERS, finalGames, storage.getPicks(W_FINAL), results, W_FINAL, 45)],
     ['1d Dashboard Compact — pick chips', 'dc-chip-logo',
       () => app.renderDashboardCompact(PLAYERS, finalGames, storage.getPicks(W_FINAL), results, W_FINAL, 45)],
-    ['1e Comm Games tab — Available Games pool rows', 'slate-row-logo',
-      () => app.renderAvailableGamesList(openGames, [], storage.getWeek(W_OPEN))],
-    ['1f Comm Games tab — slate rows', 'slate-row-logo',
-      () => app.renderAdminGamesList([...openGames], storage.getWeek(W_OPEN), {})],
+    // RE-DERIVED 2026-10-14 (D1 W-69): the Available Games rows and the Selected Slate rows are ONE list now (games-list.js gameRowHTML); a Not-on-slate row (pool only) and an On-slate row are its two states,
+    // and each still draws the logo only when the Team-logos switch is on.
+    ['1e Comm Games tab — Not-on-slate rows (the pool)', 'slate-row-logo',
+      () => app._gamesRowsHTMLForTest({ week: storage.getWeek(W_OPEN), slate: [], pool: openGames })],
+    ['1f Comm Games tab — On-slate rows', 'slate-row-logo',
+      () => app._gamesRowsHTMLForTest({ week: storage.getWeek(W_OPEN), slate: [...openGames], pool: [] })],
   ];
   for (const [label, marker, render] of paths) {
     setLogoPref(true);

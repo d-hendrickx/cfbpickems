@@ -1,0 +1,12 @@
+{
+  "id": "controlcolortest",
+  "script": "controlcolortest.mjs",
+  "label": "112n",
+  "summary": "strict-noverdict",
+  "floor": 25,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 400,
+  "note": "RAISED from 21 by the v0.28.0 integration round 2 step 3 (2026-09-30): the Push branch's .league-switch-leaving ghost needed an allowlist entry (its [2c] reason check), and [3i]/[3j]/[3k] prove that entry goes stale if the ghost becomes a button or takes pointer events; before …"
+}

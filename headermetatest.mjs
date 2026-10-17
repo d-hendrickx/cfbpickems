@@ -482,7 +482,10 @@ console.log('\n[css4] web header overflow — the week name ellipsizes, the pill
   assert(/text-overflow:\s*ellipsis/.test(strongRule) && /min-width:\s*0/.test(strongRule) && /overflow:\s*hidden/.test(strongRule),
     `[css4-d3] the <strong> week NAME is the one element that ellipsizes (overflow:hidden + text-overflow:ellipsis + min-width:0 so it can shrink as a flex item) — never "LOCKED" (got "${strongRule}")`);
   const appSrc4 = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
-  assert(/<span class="week-heading-name"><strong>\$\{escHtml\(wl\.name\)\}<\/strong><span class="badge badge-\$\{escHtml\(week\.status\)\} ml-sm">\$\{escHtml\(week\.status\.toUpperCase\(\)\)\}<\/span><\/span>/.test(appSrc4),
+  // D1 / DI-510 (2026-10-07): the badge's class and text come from weekBadgePhase() (the ONE week-lock state), both still escaped; strong + badge are still SIBLINGS in .week-heading-name.
+  // RE-DERIVED 2026-10-08 (D1 Part 2 item 1): the strong's text is now `hw.code ? hw.code + ' ' + wl.name : wl.name` ("NFL Week 6" in a several-sport league, the unchanged name in a one-sport one); it is STILL one
+  // escHtml() of one expression, and strong + badge are STILL siblings inside .week-heading-name.
+  assert(/<span class="week-heading-name"><strong>\$\{escHtml\(hw\.code \? hw\.code \+ ' ' \+ wl\.name : wl\.name\)\}<\/strong><span class="badge badge-\$\{escHtml\(headBadge\.phase\)\}\$\{lockFlipClass\(\)\} ml-sm">\$\{escHtml\(headBadge\.label\)\}<\/span><\/span>/.test(appSrc4),
     '[css4-d4] the header markup is exactly strong + badge as SIBLINGS inside .week-heading-name (the flex items [css4-d1..d3] describe), with both status interpolations escaped');
   // MUTANT 1: the 3e4f57a shape (ratio, not order) must fail [css4-b].
   const mutant = css.replace(/\.header-meta\{display:flex;align-items:center;flex:0 0 auto;min-width:0;/, '.header-meta{display:flex;align-items:center;flex:0 1 auto;min-width:0;');
@@ -568,18 +571,40 @@ console.log('\n[pill] #league-pill — hides below 48px, and role="button" activ
   });
   const pill = makePill();
   idMap['league-pill'] = pill;
-  // showLeagueSelectorSheet() builds an overlay and appends it to <body>; the
-  // sheet opening IS the observable outcome, so the spy records appends.
+  // The pill opens the league OVERVIEW sheet (D1 DI-556); the overview's "Switch or join a league" row opens the old "Choose a League" sheet. Both are built by document.createElement
+  // and appended to <body>, so the spy records appends, and the node gives real listener bookkeeping + id lookup so the sheets' REAL handlers run (the overview registers itself in the
+  // document by id exactly as the browser would).
   const opened = [];
-  const richEl = () => ({
-    attrs: {}, classList: { add(){}, remove(){} }, style: {}, dataset: {},
-    addEventListener(){}, setAttribute(k, v){ this.attrs[k] = v; }, remove(){},
-    querySelector(){ return null; }, querySelectorAll(){ return []; },
-    _html: '', set innerHTML(v){ this._html = v; }, get innerHTML(){ return this._html; },
-  });
+  const makeNode = () => {
+    const byId = new Map(); const l = {};
+    const node = {
+      attrs: {}, classList: { add(){}, remove(){} }, style: { setProperty(){}, removeProperty(){} }, dataset: {}, removed: false, focused: false,
+      addEventListener(t, fn) { (l[t] ||= []).push(fn); },
+      removeEventListener(t, fn) { l[t] = (l[t] || []).filter(x => x !== fn); },
+      setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }, removeAttribute(k) { delete this.attrs[k]; },
+      remove() { this.removed = true; if (this.id && idMap[this.id] === this) delete idMap[this.id]; },
+      focus() { this.focused = true; },
+      count(t) { return (l[t] || []).length; },
+      querySelectorAll() { return []; },
+      querySelector(sel) {
+        const m = /^#([\w-]+)$/.exec(sel);
+        if (!m || !new RegExp(`id="${m[1]}"`).test(this._html)) return null;
+        if (!byId.has(m[1])) { const n = makeNode(); n.id = m[1]; byId.set(m[1], n); }
+        return byId.get(m[1]);
+      },
+      fire(t, ev = {}) { (l[t] || []).forEach(fn => fn({ target: {}, ...ev })); },
+      _html: '', set innerHTML(v) { this._html = v; }, get innerHTML() { return this._html; },
+    };
+    return node;
+  };
+  // A tap on an overview row, as the sheet's one delegated handler sees it (event.target.closest('[data-lo-action]')).
+  const tapOverviewRow = (wrap, action, sport = '') => {
+    const row = { disabled: false, getAttribute: (k) => ({ 'data-lo-action': action, 'data-sport': sport })[k] ?? null };
+    wrap.fire('click', { target: { closest: () => row } });
+  };
   const realCreate = document.createElement;
-  document.createElement = richEl;
-  document.body.appendChild = (el) => { opened.push(el); };
+  document.createElement = makeNode;
+  document.body.appendChild = (el) => { opened.push(el); if (el.id) idMap[el.id] = el; };
 
   auth.configureAuth({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'k' });
   auth._setStoredSessionForTest({ access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
@@ -599,28 +624,64 @@ console.log('\n[pill] #league-pill — hides below 48px, and role="button" activ
   const key = (k) => ({ key: k, preventDefault() { prevented++; } });
   opened.length = 0; prevented = 0;
   pill.fire('keydown', key('Enter'));
-  assert(opened.length === 1 && /Choose a League/.test(opened[0].innerHTML) && prevented === 1,
-    `[pill-2] Enter opens the SAME league-selector sheet a tap opens (opened ${opened.length}, prevented ${prevented})`);
-  // REVIEWER BLOCK B4 (RG-298, 2026-09-28) — the sheet used to render cards
-  // only; with one membership it was a "Choose a League" modal with a single
-  // choice. It now ALSO carries the Create-League stub card (leagues-home.js's
-  // existing coming-soon card) and a "Join a League" row — Drew's ruling B's
-  // "the one league + Join or Create a League."
-  assert(/create-league-card/.test(opened[0].innerHTML) && /\+ Create new league/.test(opened[0].innerHTML),
-    '[pill-2b] BLOCK B4 — the sheet carries the Create-League stub card (same coming-soon card DI-313\'s Leagues Home already uses)');
-  assert(/id="league-selector-join-btn"/.test(opened[0].innerHTML) && />Join a League</.test(opened[0].innerHTML),
-    '[pill-2c] BLOCK B4 — the sheet carries a "Join a League" row');
+  const overview = opened[0];
+  assert(opened.length === 1 && overview?.id === 'league-overview-sheet-wrap' && /id="league-overview-title"[^>]*>League A</.test(overview.innerHTML) && prevented === 1,
+    `[pill-2] D1 DI-556 — Enter opens the league OVERVIEW (titled with the league's name), and prevents the default (opened ${opened.length}, id ${overview?.id}, prevented ${prevented})`);
+  // The old "Choose a League" sheet is not gone: it is the overview's "Switch or join a league" row (DI-556), and it keeps what REVIEWER BLOCK B4 (RG-298, 2026-09-28) gave it - the
+  // Create-League stub card (leagues-home.js's coming-soon card) and a "Join a League" row (Drew's ruling B: "the one league + Join or Create a League").
+  const overviewBody = overview?.querySelector('#league-overview-body');
+  assert(/data-lo-action="switch-league"/.test(overviewBody?.innerHTML || '') && /Switch or join a league/.test(overviewBody?.innerHTML || ''),
+    '[pill-2a] the overview carries the "Switch or join a league" row (the way to the league selector now that the pill opens the overview)');
+  opened.length = 0;
+  tapOverviewRow(overview, 'switch-league');
+  const selector = opened[0];
+  assert(overview.removed === true && opened.length === 1 && /Choose a League/.test(selector?.innerHTML || ''),
+    `[pill-2a2] tapping that row closes the overview and opens the league-selector sheet (overview removed ${overview.removed}, opened ${opened.length})`);
+  assert(/create-league-card/.test(selector.innerHTML) && /\+ Create new league/.test(selector.innerHTML),
+    '[pill-2b] BLOCK B4 - the selector sheet carries the Create-League stub card (same coming-soon card DI-313\'s Leagues Home already uses)');
+  assert(/id="league-selector-join-btn"/.test(selector.innerHTML) && />Join a League</.test(selector.innerHTML),
+    '[pill-2c] BLOCK B4 - the selector sheet carries a "Join a League" row');
   opened.length = 0; prevented = 0;
   pill.fire('keydown', key(' '));
-  assert(opened.length === 1 && prevented === 1,
-    `[pill-3] Space opens it too, and its default (page scroll) is prevented (opened ${opened.length}, prevented ${prevented})`);
+  const spaceOverview = opened[0];
+  assert(opened.length === 1 && spaceOverview?.id === 'league-overview-sheet-wrap' && prevented === 1,
+    `[pill-3] Space opens the overview too, and its default (page scroll) is prevented (opened ${opened.length}, prevented ${prevented})`);
   opened.length = 0; prevented = 0;
   pill.fire('keydown', key('Tab')); pill.fire('keydown', key('a'));
   assert(opened.length === 0 && prevented === 0,
-    '[pill-4] any other key does nothing and prevents nothing — Tab still moves focus');
+    '[pill-4] any other key does nothing and prevents nothing - Tab still moves focus');
   opened.length = 0;
   pill.fire('click', {});
-  assert(opened.length === 1, '[pill-5] a tap still opens the sheet (the click path is unchanged)');
+  assert(opened.length === 0 && idMap['league-overview-sheet-wrap'] === spaceOverview && spaceOverview.removed === false,
+    '[pill-5a] a tap while the overview is ALREADY up repaints it in place - never a second sheet stacked on the first');
+  app._closeLeagueOverviewForTest({ immediate: true });
+  opened.length = 0;
+  pill.fire('click', {});
+  assert(opened.length === 1 && opened[0]?.id === 'league-overview-sheet-wrap', '[pill-5] a tap opens the overview (the click path and the key path are the same function)');
+  app._closeLeagueOverviewForTest({ immediate: true });
+
+  // D1 DI-556 / security C5 - a league named like markup is inert in the pill, in its accessible name (set as an attribute VALUE, never parsed) and in the overview's title.
+  {
+    const HOSTILE = '"><img src=x onerror=alert(1)>';
+    auth._setMembershipsForTest([{ leagueId: 'A', memberId: 'm1', role: 'player', displayName: 'x', leagueName: HOSTILE }, { leagueId: 'B', memberId: 'm2', role: 'commissioner', displayName: 'x', leagueName: 'League B' }]);
+    auth.setActiveLeagueId('A');
+    app.renderLeaguePill();
+    assert(!/<img/i.test(pill.innerHTML) && /&lt;img/.test(pill.innerHTML), `[pill-xss-1] the pill's markup carries the hostile league name as TEXT (no live element): ${pill.innerHTML.slice(0, 120)}`);
+    assert(pill.getAttribute('aria-label') === `${HOSTILE}. League overview. Opens the overview.`, '[pill-xss-2] ...and its aria-label is the name as one attribute value (set through setAttribute, never parsed as markup)');
+    opened.length = 0;
+    pill.fire('click', {});
+    const ov = opened[0];
+    const title = (ov?.innerHTML || '').match(/id="league-overview-title"[^>]*>([^<]*)</);
+    assert(!!ov && !/<img/i.test(ov.innerHTML) && !!title && /&lt;img|&quot;&gt;/.test(title[1]), `[pill-xss-3] the overview's title is the same name, escaped (title text: ${title ? title[1].slice(0, 60) : 'none'})`);
+    assert(!/"\s*(onerror|onmouseover|onclick)\s*=/i.test(ov.innerHTML.replace(/&quot;/g, '')), '[pill-xss-4] ...and no attribute of the sheet was broken out of');
+    app._closeLeagueOverviewForTest({ immediate: true });
+    auth._setMembershipsForTest([
+      { leagueId: 'A', memberId: 'm1', role: 'player', displayName: 'x', leagueName: 'League A' },
+      { leagueId: 'B', memberId: 'm2', role: 'commissioner', displayName: 'x', leagueName: 'League B' },
+    ]);
+    auth.setActiveLeagueId('A');
+    app.renderLeaguePill();
+  }
 
   app.renderLeaguePill(); app.renderLeaguePill();
   assert(pill.count('keydown') === 1, `[pill-6] re-rendering never stacks a second keydown handler (got ${pill.count('keydown')})`);
@@ -645,37 +706,19 @@ console.log('\n[pill] #league-pill — hides below 48px, and role="button" activ
   //    The reviewer's exact sequence: one membership -> tap the pill -> tap
   //    "Join a League" -> a join form must be on screen.
   {
-    // Nodes that answer querySelector('#id') for ids present in their own
-    // markup, with real listener bookkeeping, so the sheet's REAL handlers run.
-    const makeNode = () => {
-      const byId = new Map(); const l = {};
-      const node = {
-        attrs: {}, classList: { add(){}, remove(){} }, style: {}, dataset: {}, removed: false, focused: false,
-        addEventListener(t, fn) { (l[t] ||= []).push(fn); },
-        setAttribute(k, v) { this.attrs[k] = v; }, remove() { this.removed = true; },
-        focus() { this.focused = true; },
-        count(t) { return (l[t] || []).length; },
-        querySelectorAll() { return []; },
-        querySelector(sel) {
-          const m = /^#([\w-]+)$/.exec(sel);
-          if (!m || !new RegExp(`id="${m[1]}"`).test(this._html)) return null;
-          if (!byId.has(m[1])) { const n = makeNode(); n.id = m[1]; byId.set(m[1], n); }
-          return byId.get(m[1]);
-        },
-        fire(t, ev = {}) { (l[t] || []).forEach(fn => fn({ target: {}, ...ev })); },
-        _html: '', set innerHTML(v) { this._html = v; }, get innerHTML() { return this._html; },
-      };
-      return node;
-    };
     const joinFormOnScreen = (html) => /id="league-join-code"/.test(html) && /id="league-join-btn"/.test(html);
     const prevCreate = document.createElement;
     document.createElement = makeNode;
     try {
       opened.length = 0;
       pill.fire('click', {});
+      const lo = opened[0];
+      assert(opened.length === 1 && lo?.id === 'league-overview-sheet-wrap', `[pill-2d0] fixture: ONE membership, tap the pill -> the league overview opens (opened ${opened.length})`);
+      opened.length = 0;
+      tapOverviewRow(lo, 'switch-league');
       const sheet = opened[0];
       assert(opened.length === 1 && /Choose a League/.test(sheet?.innerHTML || ''),
-        `[pill-2d] fixture: ONE membership, tap the pill -> the league-selector sheet opens (opened ${opened.length}) — not vacuous`);
+        `[pill-2d] fixture: ONE membership, tap the pill, then "Switch or join a league" -> the league-selector sheet opens (opened ${opened.length}) — not vacuous`);
       const joinRow = sheet?.querySelector('#league-selector-join-btn');
       assert(!!joinRow, '[pill-2d2] fixture: the sheet\'s "Join a League" row is a live, bound node');
       opened.length = 0;
@@ -706,6 +749,14 @@ console.log('\n[pill] #league-pill — hides below 48px, and role="button" activ
       const body = src.slice(start, src.indexOf('\n}', start));
       assert(start > -1 && /showJoinLeagueSheet\(\)/.test(body) && !/renderLeagueFlowScreen\(/.test(body.replace(/\/\/.*$/gm, '')),
         '[pill-2i] showLeagueSelectorSheet()\'s join row calls showJoinLeagueSheet(), never renderLeagueFlowScreen()');
+      // D1 DI-556 - "the pill's due dot and the switcher dot read the same function": ONE function (sportDueItems) feeds the pill's dot and aria-label clause, the switcher's dots and the
+      // overview's At-a-glance chip; `sportsNeedingPicks` itself is called only inside it. A second, parallel derivation is how the dot and the badge came to disagree before.
+      const codeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"\\])\/\/[^\n]*/g, '$1');
+      const fnBody = (name) => { const a = codeOnly.indexOf(name); return a < 0 ? '' : codeOnly.slice(a, codeOnly.indexOf('\n}\n', a)); };
+      const callers = [['renderLeaguePill', 'export function renderLeaguePill()'], ['paintSportSwitcher', 'function paintSportSwitcher'], ['buildLeagueOverviewModel', 'function buildLeagueOverviewModel']];
+      const missing = callers.filter(([, sig]) => !/\bsportDueItems\(/.test(fnBody(sig))).map(([n]) => n);
+      assert(missing.length === 0 && (codeOnly.match(/\bsportsNeedingPicks\(/g) || []).length === 1,
+        `[pill-due] the pill, the switcher and the overview chip all read sportDueItems() and sportsNeedingPicks() is called in exactly one place (missing: ${missing.join(', ') || 'none'}; sportsNeedingPicks calls: ${(codeOnly.match(/\bsportsNeedingPicks\(/g) || []).length})`);
     } finally {
       document.createElement = prevCreate;
     }
@@ -835,13 +886,14 @@ console.log('\n[pill-sport] DI-417 — the league pill\'s sport: full -> code ->
   // exactly one membership is "Tap for leagues." (opens the sheet to
   // browse/join/create, not to "switch" among options that don't exist),
   // re-derived from the pre-B4 "Tap to switch." expectation.
-  assert(pill.getAttribute('aria-label') === 'Active league: IRB Pool, viewing: College Football. Tap for leagues.',
+  // D1 DI-556 - the pill's tap opens the league OVERVIEW, so the accessible name says so (and still names the league and, when known, the sport).
+  assert(pill.getAttribute('aria-label') === 'IRB Pool. League overview. Viewing College Football. Opens the overview.',
     `[pill-sport-1] aria-label names both league and sport (got "${pill.getAttribute('aria-label')}")`);
 
   pill._clientWidth = 120; app.renderLeaguePill();
   assert(!pill.hidden && /\bCFB\b/.test(pill.textContent) && !/College Football/.test(pill.textContent),
     `[pill-sport-2] tight room (120px — full overflows, code fits) -> degrades to the SHORT CODE, not hidden ("${pill.textContent}")`);
-  assert(pill.getAttribute('aria-label') === 'Active league: IRB Pool, viewing: College Football. Tap for leagues.',
+  assert(pill.getAttribute('aria-label') === 'IRB Pool. League overview. Viewing College Football. Opens the overview.',
     `[pill-sport-3] aria-label is UNCHANGED by the visual degradation step — it still names the full sport, only the visible pill compresses (got "${pill.getAttribute('aria-label')}")`);
 
   pill._clientWidth = 70; app.renderLeaguePill();
@@ -867,7 +919,7 @@ console.log('\n[pill-sport] DI-417 — the league pill\'s sport: full -> code ->
   pill._clientWidth = 400; app.renderLeaguePill();
   assert(!pill.hidden && /College Football/.test(pill.textContent),
     `[pill-sport-7] NO current week at all (deleted; getCurrentWeek() -> null), membership sportDefault:'cfb' -> the sport STILL shows, from the league fallback alone (got "${pill.textContent}")`);
-  assert(pill.getAttribute('aria-label') === 'Active league: IRB Pool, viewing: College Football. Tap for leagues.',
+  assert(pill.getAttribute('aria-label') === 'IRB Pool. League overview. Viewing College Football. Opens the overview.',
     `[pill-sport-7b] …and the aria-label names it too (got "${pill.getAttribute('aria-label')}")`);
 
   // ── NEITHER source resolves -> league name alone. A week round-tripped
@@ -886,8 +938,8 @@ console.log('\n[pill-sport] DI-417 — the league pill\'s sport: full -> code ->
   // pre-DI-418 exact-match "no caret" expectation.
   assert(!pill.hidden && /^IRB Pool ▾$/.test(pill.textContent),
     `[pill-sport-8] neither the week NOR the membership resolves a sport -> league name alone (plus the DI-418 caret) even with plenty of room, no "·" separator (got "${pill.textContent}")`);
-  assert(pill.getAttribute('aria-label') === 'Active league: IRB Pool. Tap for leagues.',
-    `[pill-sport-9] …and the aria-label drops the ", viewing:" clause entirely rather than naming an unknown sport, but STILL carries a tap phrase (single membership -> "Tap for leagues.", REVIEWER BLOCK B4) (got "${pill.getAttribute('aria-label')}")`);
+  assert(pill.getAttribute('aria-label') === 'IRB Pool. League overview. Opens the overview.',
+    `[pill-sport-9] …and the aria-label drops the "Viewing …" clause entirely rather than naming an unknown sport, but STILL says what the tap does (D1 DI-556: "Opens the overview.") (got "${pill.getAttribute('aria-label')}")`);
 
   // ── priority order — a week that DOES carry its own `sport` (an explicit,
   //    forward-compatible case; still round-tripped, and it survives because

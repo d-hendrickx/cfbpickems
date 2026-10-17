@@ -47,7 +47,40 @@ export class MiniElement {
   _removeChild(c) { const i = this._children.indexOf(c); if (i >= 0) this._children.splice(i, 1); c.parentNode = null; }
   appendChild(c) { if (c.parentNode) c.parentNode._removeChild(c); this._children.push(c); c.parentNode = this; return c; }
   removeChild(c) { this._removeChild(c); return c; }
+  // D1 Lane B (2026-10-07) — what the keyed-list reconciler needs: ordered insertion and replacement, and element siblings.
+  insertBefore(c, ref) {
+    if (c.parentNode) c.parentNode._removeChild(c);
+    const i = ref ? this._children.indexOf(ref) : -1;
+    if (i < 0) this._children.push(c); else this._children.splice(i, 0, c);
+    c.parentNode = this; return c;
+  }
+  replaceChild(fresh, old) { const i = this._children.indexOf(old); if (i < 0) return old; if (fresh.parentNode) fresh.parentNode._removeChild(fresh); const j = this._children.indexOf(old); this._children.splice(j, 1, fresh); fresh.parentNode = this; old.parentNode = null; return old; }
+  insertAdjacentHTML(pos, html) {
+    const holder = new MiniElement(this.ownerDocument, 'div'); holder.innerHTML = String(html == null ? '' : html);
+    const kids = holder._children.slice();
+    if (pos === 'beforeend') kids.forEach((k) => this.appendChild(k));
+    else if (pos === 'afterbegin') { const first = this._children[0] || null; kids.forEach((k) => this.insertBefore(k, first)); }
+    // (the sport switcher, D1 DI-555, places itself after the page's section header: the Game Day round's gdseamtest drives that paint through minidom, 2026-10-08)
+    else if (pos === 'afterend' && this.parentNode) { const p = this.parentNode, i = p._children.indexOf(this), next = p._children[i + 1] || null; kids.forEach((k) => p.insertBefore(k, next)); }
+    else if (pos === 'beforebegin' && this.parentNode) { const p = this.parentNode; kids.forEach((k) => p.insertBefore(k, this)); }
+    else throw new Error(`minidom: insertAdjacentHTML('${pos}') is not supported`);
+  }
+  get previousElementSibling() { if (!this.parentNode) return null; const k = this.parentNode.children; const i = k.indexOf(this); return i > 0 ? k[i - 1] : null; }
+  get nextElementSibling() { if (!this.parentNode) return null; const k = this.parentNode.children; const i = k.indexOf(this); return i >= 0 && i < k.length - 1 ? k[i + 1] : null; }
   remove() { if (this.parentNode) this.parentNode._removeChild(this); }
+  // D1 Game Day fix round 1 (2026-10-08): what patchGameDay's region swap needs (a real DOM has both).
+  cloneNode(deep = false) {
+    const c = new MiniElement(this.ownerDocument, this.localName);
+    for (const [k, v] of this._attrs) c._attrs.set(k, v);
+    if (deep) for (const ch of this._children) c.appendChild(ch.nodeType === 3 ? new MiniText(ch.data) : ch.cloneNode(true));
+    return c;
+  }
+  replaceWith(...nodes) {
+    const p = this.parentNode; if (!p) return;
+    const ref = this.nextElementSibling ? this.nextElementSibling : null;
+    p._removeChild(this);
+    for (const n of nodes) p.insertBefore(typeof n === 'string' ? new MiniText(n) : n, ref);
+  }
   contains(n) { while (n) { if (n === this) return true; n = n.parentNode; } return false; }
   // ── attributes ──
   get id() { return this._attrs.get('id') || ''; }
@@ -57,6 +90,7 @@ export class MiniElement {
   setAttribute(k, v) { this._attrs.set(k, String(v)); if (k === 'value') this._value = null; }
   getAttribute(k) { return this._attrs.has(k) ? this._attrs.get(k) : null; }
   hasAttribute(k) { return this._attrs.has(k); }
+  getAttributeNames() { return [...this._attrs.keys()]; }   // D1 Game Day fix round 2 (2026-10-08): the in-place patcher syncs attributes by name (a real DOM has it)
   removeAttribute(k) { this._attrs.delete(k); }
   toggleAttribute(k, force) { const on = force === undefined ? !this._attrs.has(k) : !!force; if (on) this._attrs.set(k, ''); else this._attrs.delete(k); return on; }
   get classList() {
@@ -102,6 +136,13 @@ export class MiniElement {
   set innerHTML(html) { for (const c of this._children) c.parentNode = null; this._children = []; parseInto(this, String(html == null ? '' : html)); }
   get innerHTML() { return this._children.map((c) => serialize(c)).join(''); }
   get outerHTML() { return serialize(this); }
+  /** Replace this element with the parsed markup (the Picks head slot, fillPicksHeadSlot; gdseamtest 2026-10-08). A detached element ignores it, as a browser does not (it throws), so callers keep their guard. */
+  set outerHTML(html) {
+    const p = this.parentNode; if (!p) return;
+    const holder = new MiniElement(this.ownerDocument, 'div'); holder.innerHTML = String(html == null ? '' : html);
+    for (const k of holder._children.slice()) p.insertBefore(k, this);
+    p._removeChild(this); this.parentNode = null;
+  }
   // ── queries ──
   matches(sel) { return compile(sel).some((chain) => matchChain(this, chain)); }
   closest(sel) { const chains = compile(sel); let n = this; while (n && n.nodeType === 1) { if (chains.some((c) => matchChain(n, c))) return n; n = n.parentNode; } return null; }
@@ -197,13 +238,14 @@ function compile(sel) {
   selCache.set(sel, chains); return chains;
 }
 function parseCompound(t) {
-  const c = { tag: null, id: null, classes: [], attrs: [], nots: [] }; let i = 0;
+  const c = { tag: null, id: null, classes: [], attrs: [], nots: [], lastChild: false }; let i = 0;
   const m = /^[a-zA-Z][\w-]*/.exec(t); if (m) { c.tag = m[0].toLowerCase(); i = m[0].length; } else if (t[0] === '*') i = 1;
   while (i < t.length) {
     if (t[i] === '#') { const r = /^#([\w-]+)/.exec(t.slice(i)); c.id = r[1]; i += r[0].length; }
     else if (t[i] === '.') { const r = /^\.([\w-]+)/.exec(t.slice(i)); c.classes.push(r[1]); i += r[0].length; }
     else if (t[i] === '[') { const e = t.indexOf(']', i); const body = t.slice(i + 1, e); const q = /^([\w-]+)(?:=(?:"([^"]*)"|'([^']*)'|(.*)))?$/.exec(body); c.attrs.push({ name: q[1], val: q[2] ?? q[3] ?? q[4] ?? null }); i = e + 1; }
     else if (t.startsWith(':not(', i)) { const e = t.indexOf(')', i); c.nots.push(parseCompound(t.slice(i + 5, e))); i = e + 1; }
+    else if (t.startsWith(':last-child', i)) { c.lastChild = true; i += 11; }          // D1 Game Day fix round 1 (2026-10-08): app.js's Game view stepper reads '.ps-level:last-child'; the element that is its parent's last ELEMENT child
     else throw new Error(`minidom: unsupported selector "${t}"`);
   }
   return c;
@@ -214,6 +256,7 @@ function matchCompound(el, c) {
   for (const cl of c.classes) if (!el.classList.contains(cl)) return false;
   for (const a of c.attrs) { if (!el.hasAttribute(a.name)) return false; if (a.val !== null && el.getAttribute(a.name) !== a.val) return false; }
   for (const n of c.nots) if (matchCompound(el, n)) return false;
+  if (c.lastChild) { const p = el.parentNode; if (!p || typeof p.children === 'undefined') return false; const k = p.children; if (k[k.length - 1] !== el) return false; }
   return true;
 }
 /** Whether `el` matches the selector chain, right to left (chain[i].comb joins chain[i-1] to chain[i]). Ancestors outside the element a query was called on may match, as in a real DOM. */

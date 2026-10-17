@@ -127,7 +127,7 @@ console.log('\n[1] Card-map completeness/uniqueness (RG-10) …');
     'obligations': 'players', 'players-pins-contact': 'players', 'account-linking': 'admin',
     'league-rules': 'rules', 'alma-maters': 'rules',
     'scribe-participation': 'scribe', 'scribe-heat': 'scribe', 'scribe-learning-rate': 'scribe',
-    'chat-scribe': 'scribe', 'scribe-model': 'admin',
+    'chat-scribe': 'scribe', 'scribe-profile': 'scribe', 'scribe-model': 'admin',
     'auto-refresh': 'admin', 'randomize-picks-shortcut': 'admin', 'security-settings': 'admin',
     'export-data': 'admin', 'data-management': 'admin', 'chat-retention': 'admin',
     'chat-history': 'admin', 'recalculate-finalized-weeks': 'admin', 'obligation-corrections': 'admin',
@@ -167,7 +167,7 @@ console.log('\n[1] Card-map completeness/uniqueness (RG-10) …');
   assert(JSON.stringify(adminKeys) === JSON.stringify(rolesKeys),
     '[1k] ADMIN_CARD_TAB is EXACTLY CARD_OPERABILITY\'s keys (25, DI-425 added scribe-digest-export/scribe-post-queue/chat-diagnostics 2026-09-28)',
     `admin=${JSON.stringify(adminKeys)} roles=${JSON.stringify(rolesKeys)}`);
-  assert(adminKeys.length === 25, '[1k2] fixture check — the table really has 25 rows now (22 + DI-425\'s three)', `${adminKeys.length}`);
+  assert(adminKeys.length === 27, '[1k2] fixture check — the table really has 27 rows now (22 + DI-425\'s three + D1 Lane C\'s two: scribe-routes, content-ai-status)', `${adminKeys.length}`);
   const adminTabKeys = new Set(ADMIN_TABS.map((t) => t.key));
   assert(Object.values(ADMIN_CARD_TAB).every((v) => adminTabKeys.has(v)),
     '[1l] every ADMIN_CARD_TAB value is a real ADMIN_TABS key (never super-admin, never "admin")');
@@ -261,10 +261,10 @@ const VIEWER_ADMIN_AND_COMMISSIONER = { playerId: 'p-drew', isAdmin: true, playe
 // DI-425 (2026-09-28) added 'scribe-digest-export'/'scribe-post-queue'/'chat-diagnostics' —
 // all three 'admin' scope in js/roles.js's CARD_OPERABILITY (see that file's own DI-425 comment
 // for why none of the three is commissioner-RLS-gated the way 'scribe-model' is).
-const ADMIN_ONLY_ROWS = ['espn-source', 'data-proof', 'users-across-leagues', 'platform-admins', 'pilot-league-flag', 'export-data', 'background-jobs', 'feedback-bug-reports', 'scribe-digest-export', 'scribe-post-queue', 'chat-diagnostics'];
+const ADMIN_ONLY_ROWS = ['espn-source', 'data-proof', 'users-across-leagues', 'platform-admins', 'pilot-league-flag', 'export-data', 'background-jobs', 'feedback-bug-reports', 'scribe-digest-export', 'scribe-post-queue', 'chat-diagnostics', 'scribe-routes', 'content-ai-status'];
 const COMMISSIONER_ONLY_ROWS = ['data-source-mode', 'demo-simulation', 'account-linking', 'auto-refresh', 'randomize-picks-shortcut', 'security-settings', 'scribe-caps-limits', 'data-management', 'chat-retention', 'chat-history', 'recalculate-finalized-weeks', 'obligation-corrections', 'scribe-model'];
 assert(ADMIN_ONLY_ROWS.length + COMMISSIONER_ONLY_ROWS.length + 1 /* scribe-training, pilot-gated */ === Object.keys(ADMIN_CARD_TAB).length,
-  '[fixture] ADMIN_ONLY_ROWS + COMMISSIONER_ONLY_ROWS + scribe-training account for all 25 ADMIN_CARD_TAB rows',
+  '[fixture] ADMIN_ONLY_ROWS + COMMISSIONER_ONLY_ROWS + scribe-training account for all 27 ADMIN_CARD_TAB rows',
   `${ADMIN_ONLY_ROWS.length + COMMISSIONER_ONLY_ROWS.length + 1} vs ${Object.keys(ADMIN_CARD_TAB).length}`);
 
 function cardPresent(html, cardId) {
@@ -520,7 +520,7 @@ console.log('\n[9] Composed viewer-bag contract …');
   };
   const outComposed = renderAdminPanel({ viewer: composedBag, league: LEAGUE_PILOT, leagues: [LEAGUE_PILOT], users: USERS, escHtml, icon: iconFn, bodies: {} });
   const all22 = Object.keys(ADMIN_CARD_TAB);
-  assert(all22.length === 25, '[9c] fixture check — ADMIN_CARD_TAB really has 25 keys (22 + DI-425\'s three)', `${all22.length}`);
+  assert(all22.length === 27, '[9c] fixture check — ADMIN_CARD_TAB really has 27 keys (22 + DI-425\'s three + D1 Lane C\'s two)', `${all22.length}`);
   for (const id of all22) assert(cardPresent(outComposed, id), `[9c/${id}] fully composed bag, pilot league — card PRESENT (Drew gets all 25)`);
 }
 

@@ -1,0 +1,13 @@
+{
+  "id": "themetest",
+  "script": "themetest.mjs",
+  "label": "125",
+  "summary": "strict-combined",
+  "floor": 334,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 900,
+  "note": "RAISED from 314 by A1.9 review round (2026-10-01): the seven named-advisory 'still fires' assertions that A1.9 CLOSED are gone ([T4] two entries, [T11] five), and [T17] adds 27 pins (F1 on every Dark side under both triggers, F3a-F3e measured on every surface, the closed …"
+}

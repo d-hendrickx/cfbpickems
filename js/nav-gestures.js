@@ -144,7 +144,23 @@ export const DRAWER_ZONE_FRACTION = 0.25;
  * no other DOM/global state.
  */
 const DRAWER_YIELD_SELECTOR = '.chat-msg, input, textarea, [contenteditable]';
-const DRAWER_HSCROLL_SELECTOR = '.chat-pills-scroll, .dashboard-scroll, .comm-tabbar, .batch-grid-scroll';
+// D1 Lane B Game Day, fix round 1 (reviewer B1, 2026-10-08): `.gd-rail` (Home: the live-game pills — DI-603 said it was added and it was not; Home is an "anywhere" tab, so a pan on a scrolled rail opened the
+// Control Center) and `.gr-sat-chips` (Rules: the Request-a-Game Saturday chips, the same class of defect). Exported so navgesturestest can prove EVERY horizontal scroller in the stylesheet is listed here
+// or carries a written exemption (5n-struct) — a new scroller that nobody lists is this defect again. `.chat-sport-pills` (the Locker Room's sport row, W-57) joined at the merge of int, 2026-10-08: it sits
+// beside `.chat-pills-scroll` on Chat, another "anywhere" tab, and the struct scan named it.
+export const DRAWER_HSCROLL_SELECTOR = '.chat-pills-scroll, .dashboard-scroll, .comm-tabbar, .batch-grid-scroll, .gd-rail, .gr-sat-chips, .chat-sport-pills';
+
+/**
+ * W-70 / DI-W70.4 (2026-10-14) — the tabs whose in-tab pager shares the left quarter of the screen with the Control Center: a left-to-right swipe that STARTS in the left
+ * quarter opens the drawer, one that starts further in moves to the previous page. ONE set, read by the drawer binder (through isInDrawerOpenZone) and by every pager, so the two
+ * can never disagree about the zone. The bottom tabs are not in it and never gain a swipe (T-27): this set decides who owns a touch INSIDE a page, never which page is showing.
+ * Every other tab (Chat, Standings, Home, Admin, ...) keeps DI-419 ruling A's "from anywhere".
+ */
+export const DRAWER_ZONE_TABS = Object.freeze(['picks', 'dashboard', 'commissioner']);
+
+function _isCommTabStrip(target) {
+  return !!(target && typeof target.closest === 'function' && target.closest('.comm-tabbar'));
+}
 
 /** Exported for direct/mutation testing — see the file-header note above. */
 export function _isDrawerYieldTarget(target) {
@@ -152,6 +168,37 @@ export function _isDrawerYieldTarget(target) {
   if (target.closest(DRAWER_YIELD_SELECTOR)) return true;
   const scroller = target.closest(DRAWER_HSCROLL_SELECTOR);
   return !!(scroller && (scroller.scrollLeft || 0) > 0);
+}
+
+/**
+ * W-70 / DI-W70.4 (2026-10-14) — can anything from `target` up to (not including) `stopAt` scroll sideways? A generic check (the computed overflow-x is auto or scroll AND there is
+ * overflow to scroll), so a future horizontal scroller on a paged surface needs no entry in a selector list. Pure over the DOM it is handed; no `getComputedStyle` (a bare test
+ * environment) reads as "no".
+ */
+export function canScrollHorizontally(target, stopAt = null) {
+  if (typeof getComputedStyle !== 'function') return false;
+  for (let el = target; el && el !== stopAt && el.nodeType === 1; el = el.parentElement) {
+    let cs = null;
+    try { cs = getComputedStyle(el); } catch { cs = null; }
+    const ox = cs && cs.overflowX;
+    if ((ox === 'auto' || ox === 'scroll') && (el.scrollWidth || 0) > (el.clientWidth || 0) + 1) return true;
+  }
+  return false;
+}
+
+const PAGER_YIELD_SELECTOR = `${DRAWER_YIELD_SELECTOR}, select, [data-no-pane-swipe]`;
+
+/**
+ * W-70 / DI-W70.4 — the PAGER-side yield. A touch that starts on a text field, a select, a marked control, the Comm tab strip or inside anything that scrolls sideways belongs to that
+ * control for the whole touch: the pager (the Comm tabs, the wizard's steps) stands down with no bounce. It reuses the drawer's own two selectors (DRAWER_YIELD_SELECTOR,
+ * DRAWER_HSCROLL_SELECTOR), so the drawer and the pagers cannot disagree about what a "more specific control" is. `stopAt` is the pager's own root: a scroller ABOVE it is not
+ * the control's. Passed as `opts.shouldYield` to bindWeekSwipe(); Picks and Dashboard do not pass it.
+ */
+export function isPagerYieldTarget(target, stopAt = null) {
+  if (!target || typeof target.closest !== 'function') return false;
+  if (target.closest(PAGER_YIELD_SELECTOR)) return true;
+  if (target.closest(DRAWER_HSCROLL_SELECTOR)) return true;
+  return canScrollHorizontally(target, stopAt);
 }
 
 /**
@@ -174,7 +221,10 @@ export function _isDrawerYieldTarget(target) {
  */
 export function isInDrawerOpenZone({ tab, clientX, viewportWidthPx, target } = {}) {
   if (_isDrawerYieldTarget(target)) return false;
-  if (tab !== 'picks' && tab !== 'dashboard') return true;
+  if (!DRAWER_ZONE_TABS.includes(tab)) return true;
+  // W-70 / DI-W70.4 — on Comm the tab strip keeps its OWN touch (it scrolls on a narrow phone), at rest as well as scrolled: the pager and the drawer
+  // both stand down for it. Picks and Dashboard have no such strip, so their answer is unchanged.
+  if (tab === 'commissioner' && _isCommTabStrip(target)) return false;
   // On Picks/Dashboard, no viewport width to measure the 25% fraction
   // against means there is no basis to claim the touch for the drawer —
   // fails CLOSED (week-swipe keeps ownership of its own tab, matching
@@ -234,9 +284,32 @@ export function gesturesSuspended({ ignoreLayoutBar = false } = {}) {
   // N1 (DI-430, 2026-09-30) — the New League sheet (`#league-create-sheet-wrap`) is a FOURTH body-appended full-screen surface, the same shape as the wizard sheet
   // just above (it is built on the same shell). A week-swipe or pull-to-refresh on the page beneath must not arm while it is up.
   if (document.getElementById?.('league-create-sheet-wrap')) return true;
+  // D1 (v0.30.0, DI-554) — the League Overview sheet (`#league-overview-sheet-wrap`) is a SEVENTH body-appended sheet of the same shape (it is built on the same shell): a week swipe or
+  // pull-to-refresh on the page beneath must not arm while it is up.
+  if (document.getElementById?.('league-overview-sheet-wrap')) return true;
   // UN-389 / DI-446 (2026-09-30) — the Delete Account sheet (`#pwacct-delete-overlay`) used to be a `.modal-overlay` (counted by the line above); converted to the shared sheet shell it is a
   // FIFTH body-appended surface of the same shape, and a week-swipe or pull-to-refresh on the page beneath must not arm while it is up.
   if (document.getElementById?.('pwacct-delete-overlay')) return true;
+  // D1 Lane C (DI-644, 2026-10-07) — the SCRIBE profile pane (`#scribe-profile-overlay`, a full-screen push with its own edge swipe-back) and its sheets (`#scribe-profile-sheet-wrap`,
+  // the shared sheet shell) are a SIXTH and SEVENTH body-appended surface of the same shape; a week-swipe or pull-to-refresh on the page beneath must not arm while either is up.
+  if (document.getElementById?.('scribe-profile-overlay')) return true;
+  if (document.getElementById?.('scribe-profile-sheet-wrap')) return true;
+  // PF-1 / Amendment 1 (2026-10-01) — the Late Entry sheet (`#late-entry-sheet-wrap`, "Re-open Picks" after the lock instant) is a SIXTH body-appended sheet of the same shape: a week-swipe
+  // or pull-to-refresh on the page beneath must not arm while it is up.
+  if (document.getElementById?.('late-entry-sheet-wrap')) return true;
+  // D1 Lane B / DI-595 (2026-10-08) — the rival picker sheet (`#rival-picker-sheet-wrap`, the shared sheet shell) is one more body-appended sheet of the same shape: opened from Standings' own row there is no
+  // pushed screen under it to suspend the gestures, so a week swipe or pull-to-refresh on the page beneath must not arm while it is up.
+  if (document.getElementById?.('rival-picker-sheet-wrap')) return true;
+  // D1 Lane B / DI-607 (2026-10-08) — the Dashboard's Sort sheet (`#sort-sheet-wrap`) is a SEVENTH body-appended sheet of the same shape: a week-swipe or pull-to-refresh on the page beneath must not arm while it is up.
+  if (document.getElementById?.('sort-sheet-wrap')) return true;
+  // D1 Lane B / DI-597 (2026-10-08) — the Share to chat sheet (`#share-sheet-wrap`): one more body-appended sheet of the same shape. It opens over a pushed screen today (which suspends these on its own);
+  // listed for itself so it never depends on what is under it.
+  if (document.getElementById?.('share-sheet-wrap')) return true;
+  // D1 Lane B / DI-581 — while the member ARRANGES their Custom list the rows own the touch: no week swipe, no drawer swipe, no pull-to-refresh competes with the drag (Interaction Principles, Gestures).
+  if (document.querySelector?.('[data-games-arranging="true"]')) return true;
+  // D1 (W-68, DI-W68.3; W-70, DI-W70.4) - the swap picker sheet (`#swap-picker-sheet-wrap`, the shared sheet shell) is one more body-appended sheet of the same shape: no week swipe, Comm tab swipe or
+  // pull-to-refresh arms underneath it.
+  if (document.getElementById?.('swap-picker-sheet-wrap')) return true;
   // T-13 (control-center drawer), wired this window. `#control-center`'s own
   // `data-open` attribute is driven by js/control-center.js's
   // `isDrawerVisuallyOpen(state)` — true for 'open'/'opening'/'closing', and
@@ -257,6 +330,9 @@ export function gesturesSuspended({ ignoreLayoutBar = false } = {}) {
   // Overlays (modals, sheets, the drawer) stay the other entries above and
   // still suspend the section drag: they sit over the bar and own the touch.
   if (!ignoreLayoutBar && document.getElementById?.('layout-edit-bar')) return true;
+  // D1 Lane B / DI-571 (2026-10-07) — the pushed-screen shell (`#pushed-root`, js/pushed-screen.js): a card detail, and later GameDay / a comparison / a week detail. A SIXTH body-appended
+  // full-screen surface of the League overlay's shape; a week swipe, a drawer swipe or a pull-to-refresh on the page beneath must not arm while it is up.
+  if (document.getElementById?.('pushed-root')) return true;
   return false;
 }
 
@@ -435,22 +511,53 @@ function flushDeferredRendersAfterThisTouch() {
 // two call sites in js/app.js.
 // ─────────────────────────────────────────────────────────────────────────
 const deferredRenders = new Map();
+// W-22 (2026-10-07, app defect a) — pages whose cancel/edge spring-back is
+// still sliding (page key → springs in flight). The incoming week is a child
+// of the page root, so a repaint landing mid-spring (one parked during the
+// drag and run at the release, or a live tick just after it) rebuilt the root
+// under it and the strip the page uncovers went blank for the whole spring.
+// That page's repaints wait for the spring as they wait for the finger;
+// springBack() runs them when it ends.
+const springingPages = new Map();
 
 /** True (and the render parked) while a week swipe, the control-center
- *  drawer's drag OR (SP-57, 2026-10-01) a lifted section owns the touch;
- *  false — render now — otherwise. `key` is the page ('picks' | 'dashboard'
+ *  drawer's drag OR (SP-57, 2026-10-01) a lifted section owns the touch, or
+ *  (W-22) while this page's spring-back is still sliding; false — render
+ *  now — otherwise. `key` is the page ('picks' | 'dashboard'
  *  | 'leaderboard'). The name is kept for its call sites in js/app.js and
  *  js/section-drag.js. */
 export function deferRenderWhileWeekSwiping(key, render) {
-  if (!REPAINT_DEFERRING_OWNERS.has(touchOwner) || typeof render !== 'function') return false;
+  if ((!REPAINT_DEFERRING_OWNERS.has(touchOwner) && !springingPages.has(key)) || typeof render !== 'function') return false;
   deferredRenders.set(key, render);
   return true;
 }
 
+/**
+ * D1 / DI-557 (review N6, 2026-10-14) - the door for an IN-PLACE paint (the stall banner): it waits exactly as deferRenderWhileWeekSwiping() does (a touch that owns the page, or this page's
+ * spring-back still sliding, keyed by the PAGE), but it NEVER REPLACES a repaint already parked for that page: a parked full repaint paints everything an in-place one would, and
+ * replacing it would drop it. True when the paint is held (parked now, or already covered by a parked repaint); false when it may run at once. Under its own key it was never held for a spring.
+ */
+export function deferInPlaceRepaint(key, render) {
+  if ((!REPAINT_DEFERRING_OWNERS.has(touchOwner) && !springingPages.has(key)) || typeof render !== 'function') return false;
+  if (!deferredRenders.has(key)) deferredRenders.set(key, render);
+  return true;
+}
+
+/** Test hook (DI-557 review N6) - puts a page in the "spring-back still sliding" state exactly as springBack() does, and returns the function that ends it the way the spring's end does: release the hold, then run what it held. */
+export function _holdSpringForTest(page) {
+  springingPages.set(page, (springingPages.get(page) || 0) + 1);
+  return () => {
+    const n = (springingPages.get(page) || 1) - 1;
+    if (n > 0) springingPages.set(page, n); else springingPages.delete(page);
+    if (!springingPages.size && !REPAINT_DEFERRING_OWNERS.has(touchOwner)) flushDeferredRenders();
+  };
+}
+
 function flushDeferredRenders(skipKey) {
   if (!deferredRenders.size) return;
-  const run = [...deferredRenders.entries()].filter(([k]) => k !== skipKey).map(([, fn]) => fn);
-  deferredRenders.clear();
+  const keep = (k) => k !== skipKey && springingPages.has(k);   // W-22 — a sliding spring keeps its page's repaint until it ends
+  const run = [...deferredRenders.entries()].filter(([k]) => k !== skipKey && !keep(k)).map(([, fn]) => fn);
+  for (const k of [...deferredRenders.keys()]) if (!keep(k)) deferredRenders.delete(k);
   for (const fn of run) {
     try { fn(); } catch (err) { if (typeof console !== 'undefined') console.warn('[nav-gestures] deferred repaint failed', err); }
   }
@@ -591,6 +698,16 @@ export function _navShowHideStateMachine(events) {
 const navHideStates = new WeakMap();
 
 /**
+ * D1 Lane B / DI-574's amendment (2026-10-07) — a PROGRAMMATIC scroll is not the reader scrolling. Home's reader-anchoring correction (js/home.js keepReaderInPlace) and
+ * navigateTo()'s per-tab scroll restore both move the window by script; that fires a real `scroll` event, which the hide-on-scroll reducer below would read as the reader
+ * swiping down (hiding the tab bar) or up. `pauseNavHide(ms)` makes the binder swallow scroll ticks for that long, moving its baseline with them, so the bar stays exactly
+ * as it was. A correction is one instant scroll: its event lands within a frame, so a short window (default 200 ms) covers it and the reader's next real scroll is read normally.
+ */
+let navHidePausedUntil = 0;
+export function pauseNavHide(ms = 200, now = Date.now()) { navHidePausedUntil = Math.max(navHidePausedUntil, now + Math.max(0, Number(ms) || 0)); }
+export function isNavHidePaused(now = Date.now()) { return now < navHidePausedUntil; }
+
+/**
  * DOM binder — T-24. `getScrollEl` returns either `window` or the live
  * `#chat-scroll` node; called fresh whenever the caller re-binds (e.g.
  * app.js's `navigateTo()` on every tab change, per the DI). Idempotent per
@@ -640,6 +757,7 @@ export function bindScrollDirection(getScrollEl) {
       applyHidden(entry.state.hidden);
       return;
     }
+    if (isNavHidePaused()) { entry.lastY = scrollY; return; }    // a scripted correction, not the reader (pauseNavHide above)
     if (entry.lastY === null) { entry.lastY = scrollY; return; }
 
     const keyboardUp = isKeyboardUp();
@@ -1390,6 +1508,8 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
   // ones a stale spring timer removes.
   let panels = new Map();
   const leavingPanels = new Set();
+  // W-22 review B1 — the cancel/edge spring-back still sliding, if any: how to END it (a touch that lands on root cuts it short).
+  let spring = null;
 
   function viewportWidthPx() {
     return (typeof window !== 'undefined' && typeof window.innerWidth === 'number') ? window.innerWidth : 0;
@@ -1440,12 +1560,15 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     const rect = root.getBoundingClientRect();
     const vh = (typeof window !== 'undefined' && typeof window.innerHeight === 'number') ? window.innerHeight : 0;
     const scrolled = (typeof window !== 'undefined' && typeof window.scrollY === 'number') ? window.scrollY : 0;
+    // W-70 (DI-W70.2) - PANE mode: the paged surface is a pane inside a clipped container (the wizard sheet's body), not a page in the document. The incoming layer fills the pane
+    // from its top (it lands scrolled to its top) - no document-scroll arithmetic, no viewport height.
+    const paneMode = opts.layers === 'pane';
     // Where the week LANDS: scrolled to its top (Picks), or at this same
     // scroll offset (Dashboard). `top` is root-relative; the layer runs from
     // there to the bottom of the viewport.
-    const top = opts.incomingAtTop ? scrolled : Math.max(0, -rect.top);
-    const shift = opts.incomingAtTop ? 0 : top;
-    const height = Math.round(vh - (rect.top + top));
+    const top = paneMode ? 0 : (opts.incomingAtTop ? scrolled : Math.max(0, -rect.top));
+    const shift = paneMode ? 0 : (opts.incomingAtTop ? 0 : top);
+    const height = paneMode ? Math.round(rect.height) : Math.round(vh - (rect.top + top));
     if (!(height > 0)) return;
     const layer = document.createElement('div');
     layer.className = 'week-swipe-incoming-layer';
@@ -1482,6 +1605,12 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     else delete root.dataset.weekSwipeAnimating;
   }
 
+  /** W-70 review N-7 - `opts.onSettled()` fires once when a COMMITTED swipe's slide (or Reduce Motion fade) has finished and the layers are gone. Not on a spring-back or a refusal. */
+  function notifySettled() {
+    if (typeof opts.onSettled !== 'function') return;
+    try { opts.onSettled(); } catch (err) { console.warn('[nav-gestures] onSettled threw', err); }
+  }
+
   /**
    * Same idiom as `js/app.js`'s `finishSlideThenRemove()` (League Page
    * swipe-back / control-center drawer precedent, see this function's own
@@ -1493,6 +1622,7 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
   function afterTransition(done, durationMs) {
     let finished = false;
     let timer = null;
+    let backstop = null;
     function finish(e) {
       if (finished) return;
       if (e && e.target !== root) return;
@@ -1500,6 +1630,7 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
       root.removeEventListener('transitionend', finish);
       root.removeEventListener('animationend', finish);
       if (timer !== null) clearTimeout(timer);
+      if (backstop !== null) clearTimeout(backstop);
       done();
     }
     root.addEventListener('transitionend', finish);
@@ -1511,7 +1642,19 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     // WEEK_SWIPE_BOUNCE_MS for a cancel/edge spring-back), never a single
     // shared literal — the fallback must time out AFTER the real CSS
     // transition it is standing in for, whichever bucket that is.
-    timer = setTimeout(finish, (durationMs ?? WEEK_SWIPE_BOUNCE_MS) + 60);
+    // W-22 (2026-10-07, app defect b) — and it counts from the frame the
+    // transition STARTS in (the next drawn frame), not from this call: with
+    // the main thread busy as the finger lifted (a 200 ms stall measured),
+    // the slide began late and a timer armed here fired mid-slide, dropping
+    // the incoming week with the page still 30 px out. No rAF (a bare test
+    // environment): armed at once, as before.
+    const arm = () => { if (!finished) timer = setTimeout(finish, (durationMs ?? WEEK_SWIPE_BOUNCE_MS) + 60); };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(arm); else arm();
+    // W-22 review N1 — and a generous wall-clock BACKSTOP armed now, beside it: if no frame is ever drawn (a backgrounded page, a
+    // renderer that never paints) the frame-armed timer never starts, and `animating` and a spring's repaint hold must still end.
+    backstop = setTimeout(finish, (durationMs ?? WEEK_SWIPE_BOUNCE_MS) + 60 + 500);
+    // W-22 review B1 — ends the wait WITHOUT running `done`: for an animation that something else already ended.
+    return () => { if (finished) return; finished = true; root.removeEventListener('transitionend', finish); root.removeEventListener('animationend', finish); if (timer !== null) clearTimeout(timer); clearTimeout(backstop); };
   }
 
   function springBack() {
@@ -1520,12 +1663,26 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     // SB-23 — the incoming week (a child of root) slides back out with it.
     if (prefersReducedMotion()) { setAnimating(false); setX('0px'); removePanels(); return; }
     const leaving = takePanelsForSpring();
+    const page = dragTab;   // W-22 (a) — this page's repaints wait for the spring
+    let holding = page != null;
+    if (holding) springingPages.set(page, (springingPages.get(page) || 0) + 1);
+    // W-22 review B1 — the hold is released exactly ONCE: when the spring ends, or by the touch that cuts it short.
+    const release = () => { if (!holding) return false; holding = false; const n = (springingPages.get(page) || 1) - 1; if (n > 0) springingPages.set(page, n); else springingPages.delete(page); return true; };
     setAnimating('bounce');
     setX('0px');
-    afterTransition(() => {
+    const stopWaiting = afterTransition(() => {
+      spring = null;
       setAnimating(false);
       for (const el of leaving) { leavingPanels.delete(el); dropLayer(el); }
+      release();
+      // The spring is over: run what it held — unless a new touch owns the
+      // page by now, whose own release runs them (never under a finger).
+      if (!springingPages.size && !REPAINT_DEFERRING_OWNERS.has(touchOwner)) flushDeferredRenders();
     }, WEEK_SWIPE_BOUNCE_MS);
+    // W-22 review B1 — a touch that lands on root while this slides ENDS it (onTouchStart puts the page at rest and drops the
+    // layers; a transition cut that way never fires transitionend): its completion no longer runs, its hold lets go NOW — or
+    // the new gesture's own preview and commit repaint would be parked behind it — and what it held runs when that touch ends.
+    spring = { end: () => { spring = null; stopWaiting(); if (release()) flushDeferredRendersAfterThisTouch(); } };
   }
 
   /**
@@ -1609,15 +1766,30 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
       // timer, or a throwing onNavigate).
       clone.innerHTML = root.innerHTML;
       const cs = clone.style;
-      cs.position = 'fixed';
-      cs.top = `${rect.top}px`;
-      cs.left = `${rect.left}px`;
+      if (opts.layers === 'pane') {
+        // W-70 (DI-W70.2) - PANE mode. The pane sits inside a TRANSFORMED sheet, which is the containing block of any `position:fixed` descendant: a viewport-fixed clone would be placed
+        // relative to the sheet and sit off by the sheet's own offset. So the clone is `absolute` in the pane's PARENT (the clipping container, `position:relative`), at root's live rect
+        // taken in THAT box's coordinates: it starts exactly under the finger inside the sheet, whatever the sheet's own transform is, and the container clips it at the sheet's edge.
+        const host = root.parentNode;
+        const hr = typeof host.getBoundingClientRect === 'function' ? host.getBoundingClientRect() : { left: 0, top: 0 };
+        cs.position = 'absolute';
+        cs.top = `${rect.top - hr.top - (host.clientTop || 0)}px`;
+        cs.left = `${rect.left - hr.left - (host.clientLeft || 0)}px`;
+        cs.overflowY = 'hidden';
+      } else {
+        cs.position = 'fixed';
+        cs.top = `${rect.top}px`;
+        cs.left = `${rect.left}px`;
+        cs.overflowY = 'auto';
+      }
       cs.width = `${rect.width}px`;
       cs.height = `${rect.height}px`;
-      cs.overflowY = 'auto';
       cs.pointerEvents = 'none';
       cs.zIndex = '5';
       cs.transform = 'translateX(0px)';
+      // W-70 (DI-W70.3) - a caller whose surface keeps every section in one DOM (Comm: five tabs, CSS shows one) trims the copy to what the outgoing page SHOWED, so the exit layer
+      // (a sibling of root, outside the rules keyed on root) does not stack all five tabs for the length of the slide.
+      if (typeof opts.decorateOutgoing === 'function') { try { opts.decorateOutgoing(clone, root); } catch (err) { if (typeof console !== 'undefined') console.warn('[nav-gestures] decorateOutgoing failed', err); } }
       root.parentNode.insertBefore(clone, root.nextSibling);
       removeClone = () => { if (clone.parentNode) clone.parentNode.removeChild(clone); };
       // N-b — innerHTML carries no scroll position: a sideways-scrolled
@@ -1635,6 +1807,9 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
           for (let i = 0; i < src.length; i++) {
             const sl = src[i].scrollLeft;
             if (sl > 0 && dst[i].tagName === src[i].tagName && dst[i].className === src[i].className) dst[i].scrollLeft = sl;
+            // W-70 - and, in PANE mode, a scroller's vertical offset too (the wizard body scrolls inside the pane; the exit layer must show what the finger left, not the top).
+            const st = opts.layers === 'pane' ? src[i].scrollTop : 0;
+            if (st > 0 && dst[i].tagName === src[i].tagName && dst[i].className === src[i].className) dst[i].scrollTop = st;
           }
         }
       }
@@ -1669,6 +1844,7 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
         removeClone();
         setAnimating(false);
         busy = false;
+        notifySettled();
       }, WEEK_SWIPE_FADE_MS);
       return;
     }
@@ -1708,6 +1884,7 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
         removeClone();
         setAnimating(false);
         busy = false;
+        notifySettled();
       }, WEEK_SWIPE_COMMIT_MS);
     };
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(animate); else animate();
@@ -1717,7 +1894,9 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     // RG-TBD-A2 — cleared first, before any early return, so a leftover
     // claim can never leave the week swipe standing down forever.
     clearStaleTouchClaim(e);
-    if (busy || gesturesSuspended()) { start = null; return; }
+    // W-70 (DI-W70.2) - `opts.isSuspended` replaces the shared gate for a surface that is ITSELF one of the shared gate's blockers (the wizard sheet is in gesturesSuspended()): it passes
+    // "is another surface on top of me", exactly as bindSwipeToDismiss's getBlocked does. Absent => today's gate, byte-identical.
+    if (busy || (typeof opts.isSuspended === 'function' ? opts.isSuspended() : gesturesSuspended())) { start = null; return; }
     const t = e.touches?.[0];
     if (!t) return;
     // DI-419 — no zone-based refusal to arm here anymore (see this
@@ -1727,6 +1906,7 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     // Defensive — clears any transition attribute a prior interrupted
     // spring-back left behind, so a fresh drag always starts raw/untracked
     // (never lagging the finger under a leftover transition).
+    if (spring) spring.end();   // W-22 review B1 — and a spring this touch cuts short is OVER, its repaint hold included
     setAnimating(false);
     // C2 (reviewer round 2) — a background re-render mid-drag can replace
     // the touched node before its own touchend/touchcancel ever arrives
@@ -1744,6 +1924,10 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     samples = [];
     dragTarget = e.target ?? null;
     const s = typeof getState === 'function' ? getState() : { weekIds: [], currentWeekId: null, tab: null };
+    // D1 DI-525 rev 3 (Drew D-59) — a page whose week is NOT swipeable right now (the Dashboard's All sports: each sport's week has its own number, lock and finalization, so "previous week" is
+    // ambiguous) says so with `inert: true`: this touch is not claimed, nothing is dragged and nothing bounces. It is NOT the "no weeks to move to" case (that one rubber-bands, by design).
+    // The drawer's edge swipe is a separate binder on the window and is unaffected.
+    if (s && s.inert === true) { start = null; axis = null; lastDx = 0; samples = []; return; }
     dragWeekIds = Array.isArray(s?.weekIds) ? s.weekIds : [];
     dragCurrentWeekId = s?.currentWeekId ?? null;
     dragTab = s?.tab ?? null;
@@ -1790,12 +1974,21 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
       // the (unrelated) zone-geometry answer, or week-swipe would wrongly
       // KEEP tracking over a scroller/text-field just because the drawer
       // also refused it.
-      if (axis === 'x' && dx > 0 && (
+      // W-70 (DI-W70.2) - `opts.yieldToDrawer === false` for a surface the drawer can never arm under (the wizard sheet): without it the back swipe would yield to a drawer that
+      // is not there and be stranded. Absent => today's check, unchanged.
+      if (axis === 'x' && dx > 0 && opts.yieldToDrawer !== false && (
         isInDrawerOpenZone({ tab: dragTab, clientX: start.x, viewportWidthPx: viewportWidthPx() }) ||
         _isDrawerYieldTarget(dragTarget)
       )) {
         start = null; axis = null; lastDx = 0;
         return;
+      }
+      // W-70 (DI-W70.4) - and the pager-side yield: a touch that began on a control with its own use for the finger (a field, the Comm tab strip, a sideways scroller) stays that
+      // control's for the whole touch. No claim, no bounce, no drag lock. Absent => never asked (Picks and Dashboard are byte-identical).
+      if (axis === 'x' && typeof opts.shouldYield === 'function') {
+        let yielded = false;
+        try { yielded = opts.shouldYield(dragTarget, dx) === true; } catch { yielded = false; }
+        if (yielded) { start = null; axis = null; lastDx = 0; return; }
       }
       // RG-TBD-A2 — locked horizontal: this touch is now the week swipe's.
       // From here the reorder's long-press can no longer start on it.
@@ -1844,7 +2037,15 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     lastRelease = { dx, releaseT, samples: samples.slice(), go };
     // A flick can commit short of SWIPE_COMMIT_PX; _weekSwipeResolve() keeps
     // its own distance gate, so hand it the same DIRECTION at least that far.
-    const target = go ? _weekSwipeResolve(dragWeekIds, dragCurrentWeekId, Math.sign(dx) * Math.max(Math.abs(dx), SWIPE_COMMIT_PX)) : null;
+    let target = go ? _weekSwipeResolve(dragWeekIds, dragCurrentWeekId, Math.sign(dx) * Math.max(Math.abs(dx), SWIPE_COMMIT_PX)) : null;
+    // W-70 (DI-W70.2) - the step pager asks, at RELEASE and before any clone or slide, whether the change will actually happen (a refusing Next, unsaved edits on a Back). A refusal is
+    // a spring-back and a callback, never a slide: the animation never plays for a step change that will not occur. Absent => never asked.
+    let refusedDir = 0;
+    if (target != null && typeof opts.canCommit === 'function') {
+      let ok = false;
+      try { ok = opts.canCommit(target, Math.sign(dx)) === true; } catch (err) { ok = false; if (typeof console !== 'undefined') console.warn('[nav-gestures] canCommit failed', err); }
+      if (!ok) { refusedDir = Math.sign(dx); target = null; }
+    }
     const swipedPage = dragTab;
     start = null; axis = null; lastDx = 0; samples = [];
     const heldTouch = touchClaimedBy() === WEEK_SWIPE_TOUCH_OWNER;
@@ -1858,10 +2059,15 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
       removePanels();
       // onNavigate() repaints the swiped page itself, from current data —
       // its parked repaint is redundant; any OTHER page's still runs.
-      try { commitSlide(dx, target); } finally { flushDeferredRenders(swipedPage); }
+      // W-70 - `opts.navigateRepaints === false`: onNavigate() does NOT repaint this page (Comm's tab switch flips visibility and re-renders nothing), so a repaint parked during the
+      // drag is NOT redundant and must run.
+      try { commitSlide(dx, target); } finally { flushDeferredRenders(opts.navigateRepaints === false ? undefined : swipedPage); }
     } else {
       springBack();
       flushDeferredRenders();
+      if (refusedDir !== 0 && typeof opts.onRefused === 'function') {
+        try { opts.onRefused(refusedDir); } catch (err) { if (typeof console !== 'undefined') console.warn('[nav-gestures] onRefused failed', err); }
+      }
     }
   }
 
@@ -2324,7 +2530,9 @@ const swipeToDismissStates = new WeakMap();
  */
 export function bindSwipeToDismiss(el, opts = {}) {
   if (!el || typeof el.addEventListener !== 'function') return () => {};
-  if (!isNativeShell()) return () => {};
+  // W-70 (DI-W70.1) - `opts.allowWeb`: the wizard sheet's swipe-down also runs on a TOUCH device in the home-screen web app (Drew tests there). It adds touch listeners only, so a mouse or
+  // a trackpad is unaffected, and the sheet's own close controls stay. Absent => native-only, as for every other caller.
+  if (!isNativeShell() && opts.allowWeb !== true) return () => {};
   if (swipeToDismissStates.has(el)) return swipeToDismissStates.get(el);
   const axis = opts.axis === 'y' ? 'y' : 'x';
   const getBlocked = typeof opts.getBlocked === 'function' ? opts.getBlocked : () => false;
@@ -2335,10 +2543,22 @@ export function bindSwipeToDismiss(el, opts = {}) {
   let start = null, lockedAxis = null, dragActive = false, dragProgress = 0;
   let lastPos = 0, lastT = 0, velocityPxPerMs = 0;
 
+  // W-70 (DI-W70.1) - `opts.canStart(e)`: asked at touchstart, false => the touch is not ours and nothing arms. The wizard binds this to the WHOLE sheet, so it says yes for the header
+  // and grabber, and for the body only at scroll-top, off a text field and off a sideways scroller (a drag that begins elsewhere scrolls). Absent => always.
+  const canStart = typeof opts.canStart === 'function' ? opts.canStart : null;
+  // `opts.claimForwardOnly`: the gesture is claimed only when the FIRST decisive movement goes the dismiss way. A body drag that starts upward is a scroll and is abandoned for
+  // the whole touch, so nothing is locked under a finger that is scrolling. Absent => today's claim (any decisive vertical movement).
+  const claimForwardOnly = opts.claimForwardOnly === true;
+
   function onTouchStart(e) {
     if (getBlocked()) { start = null; return; }
     const t = e.touches?.[0];
     if (!t) return;
+    if (canStart) {
+      let ok = false;
+      try { ok = canStart(e) === true; } catch { ok = false; }
+      if (!ok) { start = null; return; }
+    }
     start = { x: t.clientX, y: t.clientY };
     lockedAxis = null;
     dragActive = false;
@@ -2355,7 +2575,10 @@ export function bindSwipeToDismiss(el, opts = {}) {
     const dy = t.clientY - start.y;
     if (lockedAxis === null && (Math.abs(dx) > AXIS_DEAD_ZONE_PX || Math.abs(dy) > AXIS_DEAD_ZONE_PX)) {
       lockedAxis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
-      if (lockedAxis === axis) dragActive = true;
+      if (lockedAxis === axis) {
+        if (claimForwardOnly && (axis === 'x' ? dx : dy) <= 0) { start = null; return; }   // W-70 - it is a scroll: not ours for this touch
+        dragActive = true;
+      }
     }
     if (lockedAxis !== axis || !dragActive) return;
     const raw = axis === 'x' ? dx : dy;

@@ -417,14 +417,12 @@ console.log('\n[3] Demo "Finalize All & Calculate"…');
 // ═════════════════════════════════════════════════════════════════════════════
 console.log('\n[4] Game modal — Save Game…');
 
-/** The ✏️ button next to a game in the Games tab. Must exist BEFORE binding —
- *  the binder walks `.edit-game-btn` at bind time, exactly as the browser does
- *  after `renderCommPage()` writes the list. */
-function prepareEditButton(gameId) {
-  const editBtn = makeEl('__edit__');
-  editBtn.dataset.gameId = gameId;
-  selectorSets.set('.edit-game-btn', [editBtn]);
-  return editBtn;
+/** The Edit button on a game's row in the Games tab (see the note below: now a delegated action, opened through the handler's own function). */
+// RE-DERIVED 2026-10-14 (D1 W-69): the per-row `.edit-game-btn` is a delegated `data-action="row-edit"` on the Games section now; this fake-DOM harness has no section to tap, so the edit is opened through the
+// SAME function the delegated handler calls (openGameEditor, exported as _openGameEditorForTest) with the game's real week. gameslisttest [7] taps the real button and proves the full path.
+function prepareEditButton(gameId, week = null) {
+  // `week` is the week the Games tab is showing (what bindComm() binds with): the editor takes THAT week, as the old per-row handler did, even when the fixture's game carries another week id.
+  return { gameId, _fire() { app._openGameEditorForTest(gameId, week || storage.getWeek(getGame(gameId).weekId) || WEEK); } };
 }
 
 /** Register the modal's fields, fire the edit button, then fire Save. */
@@ -597,7 +595,9 @@ console.log('\n[5] Agreement across every score-entry path…');
 // ═════════════════════════════════════════════════════════════════════════════
 console.log('\n[6] [structural] app.js holds no second copy of the ATS comparison…');
 {
-  const src = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+  // D1 Lane B (DI-612, 2026-10-08): the Dashboard chip's live-tint helper (livePickStatus) moved VERBATIM from app.js into js/pick-chips.js; both files are scanned, so the pin still counts the same three
+  // live-tint expressions and no second ATS comparison can hide in the moved half.
+  const src = (await readFile(new URL('./js/app.js', import.meta.url), 'utf8')) + '\n' + (await readFile(new URL('./js/pick-chips.js', import.meta.url), 'utf8'));
   // Strip comments so prose describing the rule can never trip the scan.
   const strip = s => s
     .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -661,7 +661,7 @@ console.log('\n[6] [structural] app.js holds no second copy of the ATS compariso
   const adjusted = [...code.matchAll(/\b(?:const|let|var)\s+adj\w*\s*=\s*[^;\n]*\+\s*(?:sv|spread)\b[^;\n]*/g)]
     .map(m => m[0].trim());
   assert(adjusted.length === 3,
-    `app.js builds a spread-adjusted score in exactly 3 places, all live-tint display — found ${adjusted.length}: ${JSON.stringify(adjusted)}`);
+    `app.js (with the chip helper it handed to pick-chips.js) builds a spread-adjusted score in exactly 3 places, all live-tint display — found ${adjusted.length}: ${JSON.stringify(adjusted)}`);
   const liveTintOnly = adjusted.every(a => /game\.homeScore/.test(a));
   assert(liveTintOnly,
     'and all three read game.homeScore for display — none reads a value typed into a score-entry field');
@@ -753,7 +753,7 @@ function poisonAllFields() {
   storage.saveWeek(week);
   saveGame(g);
   const games = storage.getGames(week.weekId);
-  const btn = prepareEditButton('gt_espn1');
+  const btn = prepareEditButton('gt_espn1', week);
   bindCommEventListeners(week, games, [], [], storage.getSettings(), [week]);
   poisonAllFields();
   el('m-spread-fav').value = 'away';
@@ -785,7 +785,7 @@ function poisonAllFields() {
   storage.saveWeek(week);
   saveGame(g);
   const games = storage.getGames(week.weekId);
-  const btn = prepareEditButton('gt_manual_draft');
+  const btn = prepareEditButton('gt_manual_draft', week);
   bindCommEventListeners(week, games, [], [], storage.getSettings(), [week]);
   el('m-home').value = 'NEW HOME';
   el('m-away').value = 'NEW AWAY';
@@ -821,7 +821,7 @@ function poisonAllFields() {
   storage.saveWeek(week);
   saveGame(g);
   const games = storage.getGames(week.weekId);
-  const btn = prepareEditButton('gt_manual_open');
+  const btn = prepareEditButton('gt_manual_open', week);
   bindCommEventListeners(week, games, [], [], storage.getSettings(), [week]);
   poisonAllFields();
   el('m-hs').value = '17';
@@ -849,7 +849,7 @@ function poisonAllFields() {
   storage.saveWeek(week);
   saveGame(g);
   const games = storage.getGames(week.weekId);
-  const btn = prepareEditButton('gt_manual_linked');
+  const btn = prepareEditButton('gt_manual_linked', week);
   bindCommEventListeners(week, games, [], [], storage.getSettings(), [week]);
   poisonAllFields();
   el('m-save');
@@ -882,7 +882,7 @@ function poisonAllFields() {
   el('m-mult-preset').value = '1';
   el('m-is-manual').checked = false;
   el('m-save');
-  el('add-manual-game-btn')._fire('click');
+  app._startManualAddForTest({ weekId: week.weekId });
   el('m-save')._fire('click');
   const created = storage.getGames(week.weekId).find(x => x.homeTeam === 'BRAND NEW HOME');
   assert(!!created, '7e: a brand-new game (week open, not draft) is created — creation is never locked, per DI-415\'s "no game" case');
@@ -928,7 +928,7 @@ console.log('\n[8] SB-24 — manual game form: the ESPN event ID is digits or no
     el('m-espn-eventid').value = rawId;
     el('m-espn-eventid-error');
     el('m-save');
-    el('add-manual-game-btn')._fire('click');
+    app._startManualAddForTest({ weekId: week.weekId });
     el('m-save')._fire('click');
     const created = storage.getGames(week.weekId).find(x => x.homeTeam === 'SB24 HOME') || null;
     (created ? saved : refused).push({ rawId, stored: created ? created.espnEventId : undefined });
@@ -1017,7 +1017,7 @@ console.log('\n[8] SB-24 — manual game form: the ESPN event ID is digits or no
     storage.saveWeek(week);
     saveGame(legacy);
     const before = JSON.stringify(getGame('gt_sb24_legacy'));
-    const btn = prepareEditButton('gt_sb24_legacy');
+    const btn = prepareEditButton('gt_sb24_legacy', week);
     bindCommEventListeners(week, storage.getGames(week.weekId), [], [], storage.getSettings(), [week]);
     el('m-spread-fav').value = ''; el('m-spread-margin').value = '';
     el('m-mult-preset').value = '1';

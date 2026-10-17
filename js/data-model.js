@@ -170,6 +170,8 @@ export const TEAM_MASCOT_LOOKUP = {
 export function formatTeamName(school, mascot) {
   if (!school) return '';
   const m = (mascot && mascot.trim()) || TEAM_MASCOT_LOOKUP[school] || '';
+  // A name that already ends in its mascot ("Detroit Lions" + "Lions": every NFL game, and any game stored before the NFL fix) is not drawn with it twice (S9).
+  if (m && school.length >= m.length && school.slice(-m.length).toLowerCase() === m.toLowerCase() && (school.length === m.length || /\s/.test(school.charAt(school.length - m.length - 1)))) return school;
   return m ? `${school} (${m})` : school;
 }
 
@@ -518,6 +520,33 @@ export const THEME_GROUP_LABELS = { munera: 'Munera', neutral: 'Neutral', school
 
 // ─── DEFAULT RULES ────────────────────────────────────────────────────────────
 
+export const RULES_LOCK_SENTENCE = 'Picks lock before the first kickoff of the week, usually 30 minutes before, at the time shown on the Picks page. After that, no picks or guesses are accepted.';
+/**
+ * D1 / DI-512 — a league whose commissioner saved a copy of the rules still holds the OLD default sentence (v0.29.0 said players could pick "until kickoff", which was never how the week
+ * locked). This table maps the EXACT old default sentence to the corrected one **at render time only** (the Rules page and the Comm rules editor): stored text is never rewritten by the
+ * app, and any other text — including a custom rule that merely contains the same words — is left alone.
+ */
+export const RULES_LEGACY_REPLACEMENTS = Object.freeze([
+  Object.freeze({ from: 'Games lock at kickoff. If the week is locked, no picks are accepted even for future games.', to: RULES_LOCK_SENTENCE }),
+]);
+/** @returns {{ rules: Array, replaced: number }} the rules with every exact legacy sentence swapped (the input is never mutated; untouched sections keep their identity). */
+export function applyRulesLegacyReplacements(rules) {
+  if (!Array.isArray(rules)) return { rules, replaced: 0 };
+  let replaced = 0;
+  const out = rules.map((section) => {
+    if (!section || !Array.isArray(section.items)) return section;
+    let touched = false;
+    const items = section.items.map((item) => {
+      const hit = typeof item === 'string' ? RULES_LEGACY_REPLACEMENTS.find((r) => r.from === item.trim()) : null;
+      if (!hit) return item;
+      touched = true; replaced += 1;
+      return hit.to;
+    });
+    return touched ? { ...section, items } : section;
+  });
+  return { rules: out, replaced };
+}
+
 // F3 (2026-09-04) — this array's "Alma mater games (OU, Texas A&M, USC,
 // Notre Dame, Purdue, Arkansas)..." line used to hardcode the six-school
 // catalog directly. That went stale the moment the roster became derived
@@ -546,7 +575,10 @@ export const DEFAULT_RULES = [
     'Alma mater games — the schools claimed by active players — are always prioritized.',
     'You pick which team you think will win against the spread.',
     'Picks are blind — you cannot see others\' picks until you submit your own.',
-    'Games lock at kickoff. If the week is locked, no picks are accepted even for future games.',
+    // PF-1 (2026-10-01, Drew: "ok to change wording"; DI finding 1) — the week locks at its first kickoff MINUS the commissioner's offset (30 minutes by default), never at "kickoff", which
+    // was never true: the client has always locked there and, from migration 0043, so does the server. D1 / DI-512 (2026-10-07) settles the wording: it names no number (a commissioner can set a
+    // different offset per week) and points at the time the Picks page shows.
+    RULES_LOCK_SENTENCE,
   ]},
   { id:'r2', section:'Scoring', items:[
     'Correct ATS pick = 1 point.',
@@ -871,30 +903,84 @@ export function scribePushIsContentFree(leagueHeat) {
   return SCRIBE_HEAT_INDEX[level] >= SCRIBE_HEAT_INDEX.savage;
 }
 
-// ─── SCRIBE MODEL CHOICE (SCRIBE v3, DI-282) ─────────────────────────────────
+// ─── SCRIBE MODEL CATALOG (D1 Lane C, DI-633 / UN-477 / PF-477; SCRIBE v3's DI-282 choice, re-based on it) ───
 //
-// DREW, 2026-09-23: "i also want to be able to toggle if scribe is using sonnet
-// or opus." The two ids the commissioner may choose between, in ONE place, for
-// the same reason the heat ladder is here (N-3): the client card renders from
-// this list and the Edge Functions price and send from
-// `supabase/functions/_shared/scribe-rate.js`'s rate card — two files that must
-// agree about what a legal model id is, and `data-model.js` is the one module
-// in this codebase everything can import.
+// ONE TABLE THAT KNOWS A MODEL: its id, its price, whether it may be used, and the request shape it takes. It is the ONLY place in the
+// shipped tree (`js/` and `supabase/functions/`) where a `claude-` model id is allowed to appear, and `supabase/tests/functions.check.mjs`
+// fails the build on a planted literal anywhere else. The reason is the one F-3 (security gate, 2026-09-23) gave for the old rate card: "we can
+// send it" and "we can price it" must be ONE question by construction. `scribe-rate.js`'s rate card, `anthropic.js`'s SCRIBE_MODEL_DEFAULT and the
+// commissioner's choices below are all DERIVED from this table, never typed a second time.
 //
-// ORDER IS SEMANTIC, exactly like SCRIBE_HEAT_ORDER: [0] IS THE DEFAULT, and it
-// is `claude-sonnet-5` — the same string `_shared/anthropic.js`'s
-// SCRIBE_MODEL_DEFAULT carries, which is what every path already falls back to
-// today. A missing `settings.scribe.model` therefore reads as CURRENT
-// BEHAVIOUR (CONVENTIONS #10) and the cheaper of the two, which is the safe
-// direction for a value that multiplies a bill by 2.5. `heattest.mjs` §[11]
-// asserts the two constants agree and that every choice here is priced on the
-// rate card — an id the rate card does not know would be metered at the Sonnet
-// fallback while being billed as Opus.
+// A task class names a TIER (haiku, sonnet, opus), never an id; the id is looked up here. Adding a model means editing this table, deliberately and in
+// code: a model that cannot be priced cannot be metered. Re-routing a class between catalog models needs no code (`platform_kv.scribe_model_routes`).
 //
-// FROZEN because it is an ALLOW-LIST, enforced at the write boundary
-// (`setScribeModel()` in js/app.js) and again server-side in `rateSettings()`
-// (F-3). A list that can be pushed to at runtime is not an allow-list.
-export const SCRIBE_MODEL_CHOICES = Object.freeze(['claude-sonnet-5', 'claude-opus-5']);
+// THE IDS AND PRICES ARE THE CURRENT ONES (coordinator, 2026-10-08, from Anthropic's model documentation; D-32): per million tokens, input / output —
+//   claude-haiku-5-5  $0.10 / $0.50 (prompts up to 100,000 tokens; $0.50 / $2.50 above that, the whole request)    claude-sonnet-5-5  $2 / $10    claude-opus-5-5  $4 / $20.
+// Haiku 4.5 (claude-haiku-4-5-20251001) is documented as Legacy with retirement "not sooner than October 15, 2026", so it is NOT in the catalog: its two ids live only in
+// SCRIBE_MODEL_LEGACY_IDS below, where a stored choice that still names it resolves to the haiku tier and is sent, priced and metered as the CURRENT id.
+//
+// REQUEST SHAPE. `thinking` / `effort` say whether the model takes the `thinking` field and `output_config.effort`; the pair is sent TOGETHER or not at all (RG-222), by
+// `anthropic.js` `applyModelShape`. `thinkingType` is what that field says: 'adaptive' (Sonnet, Opus: `thinking:{type:'adaptive'}`, the effort the caller chose) or
+// 'disabled' (Haiku 5.5, with `effortFixed` 'low'). Haiku 5.5 thinks by default (adaptive, effort medium), `thinking:{type:'enabled', budget_tokens}` is a 400, and
+// `{type:'disabled'}` is legal only at effort high or below. Its work here is short and structured (a classify verdict in 128 tokens, a judge's JSON, a card), where
+// thinking tokens would spend the answer's own `max_tokens` budget and bill as output, so it is told NOT to think, at the lowest effort: deterministic, cheapest, and legal.
+// NOTHING in this tree sends `thinking.type: 'enabled'` or a `budget_tokens` (a static pin in functions.check). `webSearchTool` is the server-tool version the isolated
+// retrieval request (DI-640) uses on that tier; `web_search_20260209` (dynamic filtering) applies to Claude 4.6 and later, so all three tiers carry it. UNVERIFIED AGAINST THE LIVE
+// API (no call was made from the build): if a tier rejects its tool the retrieval fails closed into its own plain "can't pull a current source" line, never a guess.
+//
+// PRICE BANDS. `bandTokens` / `inputOver` / `outputOver` (optional) carry a two-band price: a request whose prompt is over `bandTokens` is priced at the `Over` rates.
+// Every call this app makes has a prompt far under 100,000 tokens, so the base rate is the live one; the band is carried so the meter can never under-bill a long one.
+export const SCRIBE_MODEL_TIERS = Object.freeze(['haiku', 'sonnet', 'opus']);
+export const SCRIBE_MODEL_CATALOG = Object.freeze({
+  haiku: Object.freeze({ id: 'claude-haiku-5-5', label: 'Haiku', input: 0.1, output: 0.5, bandTokens: 100000, inputOver: 0.5, outputOver: 2.5, available: true, thinking: true, effort: true, thinkingType: 'disabled', effortFixed: 'low', webSearchTool: 'web_search_20260209' }),
+  sonnet: Object.freeze({ id: 'claude-sonnet-5-5', label: 'Sonnet', input: 2, output: 10, available: true, thinking: true, effort: true, thinkingType: 'adaptive', effortFixed: null, webSearchTool: 'web_search_20260209' }),
+  opus: Object.freeze({ id: 'claude-opus-5-5', label: 'Opus', input: 4, output: 20, available: true, thinking: true, effort: true, thinkingType: 'adaptive', effortFixed: null, webSearchTool: 'web_search_20260209' }),
+});
+/** The ids a stored `settings.scribe.model` (or an old `job_runs` row) may still carry, mapped to the tier that replaced them. A stored legacy choice keeps working
+ *  (CONVENTIONS #10): it resolves to its tier and is sent, priced and metered as the CURRENT id. They are the only other model literals the shipped tree may hold. */
+export const SCRIBE_MODEL_LEGACY_IDS = Object.freeze({ 'claude-sonnet-5': 'sonnet', 'claude-opus-5': 'opus', 'claude-haiku-4-5': 'haiku', 'claude-haiku-4-5-20251001': 'haiku' });
+
+/** The tier a catalog id or a legacy id belongs to, or null. `hasOwnProperty`, never a bracket probe (F-1: 'constructor' is a string and is on every object). */
+export function tierForModelId(id) {
+  if (typeof id !== 'string') return null;
+  for (const t of SCRIBE_MODEL_TIERS) if (SCRIBE_MODEL_CATALOG[t].id === id) return t;
+  return Object.prototype.hasOwnProperty.call(SCRIBE_MODEL_LEGACY_IDS, id) ? SCRIBE_MODEL_LEGACY_IDS[id] : null;
+}
+/** Alias with the DI's own name. */
+export const legacyModelToTier = tierForModelId;
+
+/** The task classes (a closed set; `platform_kv_value_ok` in migration 0043 repeats it) and, per class, the tiers it may route to. Opus is a chat option, not a
+ *  routine feed model (PM section 6). */
+export const SCRIBE_MODEL_CLASSES = Object.freeze(['chat', 'learn', 'classify', 'judge', 'feed', 'analysis', 'retrieval']);
+/**
+ * The classes whose handler EXECUTES a fallback tier (DI-635: "exactly one retry runs on that tier"). Only `chat` does: the other classes' failure behaviour is the one DI-635 names
+ * for them (classify and judge fail closed, Home cards render their structured facts or are omitted, analysis shows the record, a source lookup says it could not pull one, and
+ * learning skips the pass), none of which is a retry on a second tier. A fallback saved for any other class would be a setting that does nothing, so the resolver ignores it and the Admin
+ * card does not offer it (PF-477 acceptance 3: "an approved fallback OR an honest failure path").
+ */
+export const SCRIBE_FALLBACK_CLASSES = Object.freeze(['chat']);
+export const SCRIBE_CLASS_ALLOWED_TIERS = Object.freeze({
+  chat: Object.freeze(['sonnet', 'opus']),
+  learn: Object.freeze(['sonnet', 'opus']),
+  classify: Object.freeze(['haiku', 'sonnet']),
+  judge: Object.freeze(['haiku', 'sonnet']),
+  feed: Object.freeze(['haiku', 'sonnet']),
+  analysis: Object.freeze(['haiku', 'sonnet']),
+  retrieval: Object.freeze(['haiku', 'sonnet']),
+});
+/** The default tier per class. `learn` is listed as sonnet but FOLLOWS `chat` when chat is routed elsewhere (`resolveRoute`). */
+export const SCRIBE_CLASS_DEFAULT_TIER = Object.freeze({
+  chat: 'sonnet', learn: 'sonnet', classify: 'haiku', judge: 'haiku', feed: 'haiku', analysis: 'haiku', retrieval: 'haiku',
+});
+/** DI-636 — the $25 total split per job class, in dollars (default-when-missing; `platform_kv.scribe_class_caps_usd` overrides any share). The sum is the pilot's
+ *  and the platform's ceiling (25). Re-split by Drew's ruling M-39 (2026-10-08): chat 10 (was 11), retrieval 3 (was 1), analysis 1 (was 2); learn 3, classify 2, judge 1, feed 5 unchanged. A non-pilot league uses `share / 25 x` its own monthly cap. Drew can change any share in one write. */
+export const SCRIBE_CLASS_CAP_SHARES_DEFAULT_USD = Object.freeze({
+  chat: 10, learn: 3, classify: 2, judge: 1, feed: 5, analysis: 1, retrieval: 3,
+});
+export const SCRIBE_CLASS_CAP_TOTAL_USD = 25;
+/** The commissioner's chat-model choices (DI-282, derived from the catalog): [0] IS THE DEFAULT (sonnet), the cheaper of the two. A list that can be pushed to at
+ *  runtime is not an allow-list, so it is frozen; it is enforced at the write boundary (`setScribeModel()` in js/app.js) and again server-side (`rateSettings()`, F-3). */
+export const SCRIBE_MODEL_CHOICES = Object.freeze([SCRIBE_MODEL_CATALOG.sonnet.id, SCRIBE_MODEL_CATALOG.opus.id]);
 
 // ─── SCRIBE LEARNING RATE (SCRIBE v3, Package C, DI-274) ─────────────────────
 //
@@ -1213,7 +1299,25 @@ export function createPlayer(displayName, email='', pin='0000', almaMater='', in
   };
 }
 
-export function createWeek(season, weekNumber, startDate='', endDate='') {
+/**
+ * D1 (DI-533 #6, D-31) - the tiebreaker question for a sport profile's `tiebreakerDefault`, with its `{game}` placeholder filled by the matchup
+ * ("Detroit Lions at Green Bay Packers"), or by the neutral words "the tiebreaker game" until a game is chosen. A profile whose question has no
+ * placeholder (college football's) is returned as written. data-model.js never imports js/sports/*, so the profile arrives as an argument.
+ */
+export function tiebreakerQuestionFor(profile, game = null) {
+  const q = profile && profile.tiebreakerDefault && typeof profile.tiebreakerDefault.question === 'string' ? profile.tiebreakerDefault.question : null;
+  if (!q) return null;
+  const label = game && game.awayTeam && game.homeTeam ? `${game.awayTeam} at ${game.homeTeam}` : 'the tiebreaker game';
+  return q.replace('{game}', label);
+}
+
+/**
+ * `profile` and `competitionId` are D1's (DI-533 #2). The profile is the SPORT PROFILE of the week's competition, whether that competition is the league's
+ * default or not (so a league whose main sport is the NFL builds NFL weeks). ABSENT, or the college-football profile, the week is byte-identical to what this
+ * function has always returned. A week of a NON-default competition carries `competitionId`; the caller passes null for the default competition and the key is
+ * then not written at all (absent, never an explicit null: a CFB week's record and its row stay exactly as they were).
+ */
+export function createWeek(season, weekNumber, startDate='', endDate='', { competitionId = null, profile = null } = {}) {
   // v0.16.0 — weeks carry Ischemic Extra Point fields (enabled/actual/detect)
   // v0.17.1 — weeks carry auto-transition config (auto-lock/auto-live/auto-final)
   // v0.17.7 (UN-118/UN-125) — weeks carry multi-part GROUP fields. A week
@@ -1265,6 +1369,16 @@ export function createWeek(season, weekNumber, startDate='', endDate='') {
     // the LIVE roster for those rather than throwing or reading an empty
     // list as "genuinely zero schools claimed."
     lockedAlmaMaters: null,
+    // D1 (DI-533 #2/#6/#7): the sport profile's values, ONLY when the profile differs from college football's. A week built with no profile, or the cfb
+    // profile, gets none of these keys (the object above is returned unchanged). The NFL: the Monday-night total as the tiebreaker (custom / manual), and the
+    // longest-field-goal contest OFF until the commissioner turns it on (a college week keeps it on, as today).
+    ...(competitionId ? { competitionId } : {}),
+    ...(profile && profile.tiebreakerDefault && profile.tiebreakerDefault.type !== TIEBREAKER_TYPE.ALMA_MATER_TOTAL ? {
+      tiebreakerType: profile.tiebreakerDefault.type,
+      tiebreakerCalculationMode: profile.tiebreakerDefault.calcMode,
+      tiebreakerQuestion: tiebreakerQuestionFor(profile),
+    } : {}),
+    ...(profile && profile.sideContest && profile.sideContest.optional ? { extraPointEnabled: false } : {}),
   };
 }
 
@@ -1709,6 +1823,18 @@ export function gameDataReadiness(game) {
 // every other module can pull from it without a cycle.
 // DO NOT create a second mapping anywhere. Import buildAbbrMap from here.
 
+// D1 (DI-536, D-31, 2026-10-07) - the NFL's 32 ESPN abbreviations, keyed by the team name an NFL game STORES (ESPN's `displayName`, "New York Jets": data-provider.js
+// teamNameFor(); the `location` is not unique in the NFL). Verified against ESPN's NFL teams endpoint on 2026-10-07. The keys never collide with a college school name
+// (every one is "City Mascot"), so buildAbbrMap() can read this table beside TEAM_ABBR with no ambiguity. js/sports/nfl.js exposes it as the profile's `teamAbbr`.
+export const NFL_TEAM_ABBR = Object.freeze({
+  'Arizona Cardinals':'ARI', 'Atlanta Falcons':'ATL', 'Baltimore Ravens':'BAL', 'Buffalo Bills':'BUF', 'Carolina Panthers':'CAR', 'Chicago Bears':'CHI',
+  'Cincinnati Bengals':'CIN', 'Cleveland Browns':'CLE', 'Dallas Cowboys':'DAL', 'Denver Broncos':'DEN', 'Detroit Lions':'DET', 'Green Bay Packers':'GB',
+  'Houston Texans':'HOU', 'Indianapolis Colts':'IND', 'Jacksonville Jaguars':'JAX', 'Kansas City Chiefs':'KC', 'Las Vegas Raiders':'LV', 'Los Angeles Chargers':'LAC',
+  'Los Angeles Rams':'LAR', 'Miami Dolphins':'MIA', 'Minnesota Vikings':'MIN', 'New England Patriots':'NE', 'New Orleans Saints':'NO', 'New York Giants':'NYG',
+  'New York Jets':'NYJ', 'Philadelphia Eagles':'PHI', 'Pittsburgh Steelers':'PIT', 'San Francisco 49ers':'SF', 'Seattle Seahawks':'SEA', 'Tampa Bay Buccaneers':'TB',
+  'Tennessee Titans':'TEN', 'Washington Commanders':'WSH',
+});
+
 export const TEAM_ABBR = {
   // SEC
   'Alabama':'BAMA','Arkansas':'ARK','Auburn':'AUB','Florida':'FLA','Georgia':'UGA',
@@ -1795,16 +1921,7 @@ export const TEAM_ABBR = {
  */
 export function buildAbbrMap(games) {
   const map = new Map();
-  const smartTrunc = (name) => {
-    if (!name) return '';
-    if (TEAM_ABBR[name]) return TEAM_ABBR[name];
-    const words = name.split(/\s+/).filter(Boolean);
-    // Single-word names: take first 4 chars uppercase.
-    if (words.length === 1) return words[0].slice(0, 4).toUpperCase();
-    // Multi-word: take first letter of each word, max 5 chars (handles "A&M" specifically).
-    const initials = words.map(w => w.replace(/[^A-Za-z&]/g,'').charAt(0)).join('').toUpperCase().slice(0,5);
-    return initials || words[0].slice(0,4).toUpperCase();
-  };
+  const smartTrunc = singleTeamAbbr;   // D1 third pass (item 5): the ONE single-team lookup teamAbbr() also uses; the dedup below is buildAbbrMap's own (it needs the whole slate)
 
   const teams = new Set();
   for (const g of games) {
@@ -1843,17 +1960,28 @@ export function buildAbbrMap(games) {
 }
 
 /**
- * Shorthand for one team, using the shared table with the same smart-truncate
- * fallback as buildAbbrMap. Use buildAbbrMap when you have a slate — it also
- * dedups across the render so two teams never share an abbreviation.
+ * D1 third pass (item 5, reviewer nits) — THE single-team lookup, shared by teamAbbr() and buildAbbrMap() so the two can never disagree about one team.
+ * The NFL table is read FIRST: its keys are full "City Mascot" names (ESPN's displayName), the more specific, so even if a college key ever collided with one, an NFL team would keep its NFL code
+ * (profiletest [ab-4]; today no name is in both tables, profiletest pins that too). Both tables are read as OWN keys only, so a name like "constructor" cannot return an Object prototype member.
+ * Unknown names fall back to the smart-truncate: one word -> its first four letters; several -> the initials, at most five (handles "A&M").
  */
-export function teamAbbr(name) {
+function singleTeamAbbr(name) {
   if (!name) return '';
-  if (TEAM_ABBR[name]) return TEAM_ABBR[name];
-  const words = String(name).split(/\s+/).filter(Boolean);
+  const n = String(name);
+  if (Object.prototype.hasOwnProperty.call(NFL_TEAM_ABBR, n)) return NFL_TEAM_ABBR[n];        // D1 (DI-536): an NFL team reads its ESPN abbreviation
+  if (Object.prototype.hasOwnProperty.call(TEAM_ABBR, n) && TEAM_ABBR[n]) return TEAM_ABBR[n];
+  const words = n.split(/\s+/).filter(Boolean);
   if (words.length === 1) return words[0].slice(0, 4).toUpperCase();
   const initials = words.map(w => w.replace(/[^A-Za-z&]/g, '').charAt(0)).join('').toUpperCase().slice(0, 5);
   return initials || words[0].slice(0, 4).toUpperCase();
+}
+
+/**
+ * Shorthand for one team, through the same lookup as buildAbbrMap (both tables, NFL first, then the smart-truncate). Use buildAbbrMap when you have a slate — it also
+ * dedups across the render so two teams never share an abbreviation. D1 third pass (item 5): it used to read the college table only, so "Detroit Lions" came out "DL".
+ */
+export function teamAbbr(name) {
+  return singleTeamAbbr(name);
 }
 
 // ─── DEBT-PAYMENT APPROVAL (UN-89) ─────────────────────────────────────────
@@ -1942,4 +2070,22 @@ export function obligationNextStatus(status, role, action) {
   if ((status === 'unpaid' || status === 'pending') && action === 'waive' && role === 'admin') return 'waived';
   if (status === 'waived' && action === 'reopen' && role === 'admin') return 'unpaid';
   return null;
+}
+
+/**
+ * R-19 (0046) — THE DENIAL REASON'S SHAPE, the client's half of `obligations_denied_reason_shape`
+ * (supabase/migrations/0046_r19_obligation_settle.sql PART A): null, or 1-200 characters, not blank, and none of
+ * the refused class — the class 0037/0042 already refuse in a league name (C0/C1 controls, U+061C, and the
+ * invisible / bidirectional format characters). static.check pins this source equal to the SQL class.
+ * `normalizeDeniedReason` makes any typed text satisfy that CHECK, so a reason is never refused for its shape:
+ * refused characters become spaces, the ends are trimmed, it is cut to 200 CHARACTERS (code points — Postgres's
+ * char_length — not UTF-16 units) and trimmed again; nothing left is `null` ("no reason").
+ */
+export const DENIED_REASON_MAX = 200;
+export const DENIED_REASON_REFUSED = /[\u0001-\u001F\u007F-\u009F\u061C\u200B-\u200F\u2028-\u202E\u2060-\u206F\uFEFF]/g;
+export function normalizeDeniedReason(raw) {
+  if (typeof raw !== 'string') return null;
+  const cleaned = raw.replace(DENIED_REASON_REFUSED, ' ').trim();
+  const cut = [...cleaned].slice(0, DENIED_REASON_MAX).join('').trim();
+  return cut ? cut : null;
 }

@@ -1,0 +1,12 @@
+{
+  "id": "pushIdentityToken.twin",
+  "script": "supabase/tests/functions/pushIdentityToken.twin.mjs",
+  "label": "81r",
+  "summary": "loose",
+  "floor": 135,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 200,
+  "note": "DI-253 — push-identity-token end to end: the class-U member gate (and that the SIGNING KEY is never read for a caller who fails it), the cross-league refusal, an independently verified HS256 signature over {sub,iat,exp}, the body-cannot-choose-the-subject mutation in six …"
+}

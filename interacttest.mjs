@@ -330,9 +330,13 @@ console.log('\n[6] DI-286 — the candidate and judge parsers…');
 // ═══════════════════════════════════════════════════════════════════════════
 {
   assert(BEST_OF_CANDIDATES === 3, `6-1: three candidates (got ${BEST_OF_CANDIDATES})`);
-  assert(CANDIDATES_OUTPUT_FORMAT.schema.properties.candidates.minItems === 3
-    && CANDIDATES_OUTPUT_FORMAT.schema.properties.candidates.maxItems === 3,
-    '6-2: the schema pins BOTH minItems and maxItems — a model that returned one is not cheaper, it is a best-of-1 wearing a best-of-3\'s cost');
+  // W-91 (LIVE 2026-10-03..16): 6-2 used to pin `minItems: 3, maxItems: 3` here, and the API refuses that schema outright (HTTP 400,
+  // "For 'array' type, 'minItems' values other than 0 or 1 are not supported"), so every unprompted best-of-three generation failed.
+  // The schema now asks for an array of strings (minItems 1, the most it may say); three is enforced in code by parseCandidates().
+  const w91Cand = CANDIDATES_OUTPUT_FORMAT.schema.properties.candidates;
+  assert(!('maxItems' in w91Cand) && (w91Cand.minItems === undefined || w91Cand.minItems <= 1)
+    && parseCandidates(JSON.stringify({ candidates: ['a', 'b', 'c', 'd'] })).length === BEST_OF_CANDIDATES,
+    '6-2: the schema carries no count the API refuses (no maxItems, minItems at most 1) and the cap of three lives in parseCandidates() instead');
 
   const good = JSON.stringify({ candidates: ['one', 'two', 'three'] });
   assert(JSON.stringify(parseCandidates(good)) === JSON.stringify(['one', 'two', 'three']),

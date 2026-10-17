@@ -92,8 +92,9 @@ const matchC = (el, c) => !!el && !!el.tagName && !(c.tag && el.tagName !== c.ta
 const match = (el, sel) => sel.split(',').some(p => matchC(el, cmp(p)));
 function all(root, sel) { const out = []; (function walk(e) { for (const k of e.children || []) { if (match(k, sel)) out.push(k); walk(k); } })(root); return out; }
 
+// D1 (DI-484 #4): each item gets its own URL (two ids at one URL are read-time duplicates now, as they would be from a real feed).
 const hostileItem = (o = {}) => Object.freeze({
-  id: 'news_h1', url: 'https://www.espn.com/college-football/story/_/id/1/x', source: 'ESPN', headline: 'Fine story', imageUrl: null, publishedAt: iso(NOW - 2 * HOUR),
+  id: 'news_h1', url: 'https://www.espn.com/college-football/story/_/id/' + encodeURIComponent(String(o.id || 'news_h1')) + '/x', source: 'ESPN', headline: 'Fine story', imageUrl: null, publishedAt: iso(NOW - 2 * HOUR),
   sport: 'cfb', teamIds: [], reason: null, relevanceTier: null, teamNames: [], teamShortNames: [], description: null, ...o,
 });
 const FAKE_BUTTON = '<button data-home-action="build-slate" data-tab="commissioner" data-comm-target="games" data-haptic="medium">Build</button>';
@@ -182,7 +183,7 @@ console.log('\n[2] W9 — a hostile headline plus a fake data-home-action button
   const before = e.calls.actions.length;
   for (const c of cards) { e.container.dispatch('click', { target: c }); for (const k of all(c, '*')) e.container.dispatch('click', { target: k }); }
   assert(e.calls.actions.length === before, '2-4: clicking every news card and every element inside it fires NO onAction (Home\'s delegated handler obeys data-home-action only on real elements)');
-  assert(e.calls.opened.length >= cards.length && e.calls.opened.every(h => h === 'https://www.espn.com/college-football/story/_/id/1/x'), '2-5: …while the TAP wiring did open the cards\' own validated article link (a tap anywhere inside a card opens it) and NOTHING else');
+  assert(e.calls.opened.length >= cards.length && e.calls.opened.every(h => items.some(it => it.url === h) && h.startsWith('https://www.espn.com/college-football/story/_/id/')), '2-5: …while the TAP wiring did open the cards\' own validated article link (a tap anywhere inside a card opens it) and NOTHING else');
   assert(nowCardButtons === homeButtons(e.container).length, '2-6: the set of Home buttons is the same before and after (the cards added none)');
   // a card rendered by Home is the card renderNewsCard returns, spliced as-is
   const card0 = cards[0];
@@ -427,7 +428,7 @@ async function mutatedModule(rel, from, to) {
     '8-1: [BET-KEEP] an ESPN betting-desk article (the /espn/betting/ path, an "ESPN BET" headline and description) renders as ONE .news-card through the real Home renderer, with its headline, and the slot is ready');
   assert(e.calls.actions.length === 0 && homeButtons(e.container).length === 0, '8-2: …and it is an ordinary card: no home action, no data-home-action anywhere in the feed');
   // the proof has teeth: a betting drop hidden inside renderNewsCard (newsCard.js) and one hidden inside Home's own news splice (home.js) must each turn 8-1 red.
-  const dropCard = await mutatedModule('./js/newsCard.js', "    if (!id || !headline || !source) return '';\n", "    if (!id || !headline || !source) return '';\n    if (/\\bbets?\\b|odds/i.test(headline)) return '';\n");
+  const dropCard = await mutatedModule('./js/newsCard.js', "  if (!id || !headline || !byline) return '';\n", "  if (!id || !headline || !byline) return '';\n  if (/\\bbets?\\b|odds/i.test(headline)) return '';\n");
   assert(!!dropCard, '8-3: (the newsCard.js mutation anchor matches exactly once: the validation line at the top of renderNewsCard)');
   if (dropCard) {
     const m = mkEnv({ items: [BET_ITEM], renderCard: dropCard.renderNewsCard });
@@ -440,6 +441,107 @@ async function mutatedModule(rel, from, to) {
     const m = mkEnv({ items: [BET_ITEM], homeModule: dropHome });
     m.home.renderHome(); await flush();
     assert(newsCards(m.container).length === 0, '8-6: MUTATION — a betting drop inside Home\'s own news splice leaves ZERO news cards for the betting article, so 8-1 goes red (the second place a quiet filter could hide)');
+  }
+}
+
+console.log('\n[9] D1 Lane C review (2026-10-14): a failed NEWS read keeps the content cards (B3); Home hands the adapter its visit baseline (B4)…');
+{
+  const content = Object.freeze({ id: 'content_00000000-0000-4000-8000-0000000000c1', contentId: '00000000-0000-4000-8000-0000000000c1', cardKind: 'matchup.preview', sport: 'cfb',
+    eventRef: 'espn:event:401856716', teamKeys: ['missouri'], publishedAt: iso(NOW - HOUR), freshAsOf: iso(NOW - HOUR), eligibleUntil: iso(NOW + 24 * HOUR), card: { headline: 'Texas A&M at Missouri' },
+    summary: null, watch: [], talk: null, facts: [], sources: [], synthesisStatus: 'structured', version: 1 });
+  const flags = { newsDown: true, newsCalls: 0 };
+  const tr = { fetchNews: async () => { flags.newsCalls++; if (flags.newsDown) throw new transportMod.NewsUnavailableError(['cfb']); return { items: [hostileItem({ id: 'news_ok', headline: 'A real headline' })], errors: {}, stats: {} }; },
+    fetchContent: async () => ({ items: [content] }) };
+  const e = mkEnv({ transport: tr });
+  e.home.renderHome(); await flush();
+  const html = e.container.innerHTML;
+  assert(e.home._newsStateForTest().status === 'ready' && /data-content-id="content_00000000-0000-4000-8000-0000000000c1"/.test(html) && /data-card-type="news-error"/.test(html),
+    '9-1: news FAILS, content OK -> the content card renders AND the calm news-error note sits beside it (DI-660), never the content lost behind a news error');
+  assert(e.container.querySelectorAll('[data-card-type="news-error"]').length === 1 && newsCards(e.container).length === 0, '9-2: exactly one news-error note, and no headline card');
+  flags.newsDown = false;
+  await e.home.refresh(); await flush();
+  assert(/news_ok|A real headline/.test(e.container.innerHTML) && !/data-card-type="news-error"/.test(e.container.innerHTML), '9-3: a refresh with the news back replaces the note with the headline (the content card stays)');
+  // a QUIET background refetch whose news leg fails never replaces standing headlines with an error
+  flags.newsDown = true;
+  e.state.now = NOW + 60 * 60 * 1000;
+  const before = flags.newsCalls;
+  e.home.renderHome(); await flush(); e.home.renderHome(); await flush(); e.home.renderHome(); await flush();
+  assert(/A real headline/.test(e.container.innerHTML) && !/data-card-type="news-error"/.test(e.container.innerHTML), '9-4: a quiet refetch (stale timer) whose news leg fails keeps the headlines on screen (no error swap)');
+  assert(flags.newsCalls - before === 1, `9-4b: …and asks ONCE, then waits a full stale interval (three repaints, ${flags.newsCalls - before} request): a failed quiet refetch never loops`);
+  // B4: Home hands the adapter a getter for THIS visit's baseline (DI-587), read after the await
+  const cap = [];
+  const e2 = mkEnv({ extraDeps: { fetchNews: async (o) => { cap.push(o); return []; } } });
+  e2.home.renderHome(); await flush();
+  assert(cap.length >= 1 && typeof cap[0].seenBaseline === 'function' && cap[0].seenBaseline() === e2.home._sessionForTest().baseline, '9-5: fetchNews receives seenBaseline(), a getter for the visit baseline Home holds');
+  e2.state.now = NOW + 10 * 60 * 1000; e2.home.noteLeft(); e2.state.now = NOW + 20 * 60 * 1000;
+  e2.home.renderHome(); await flush();
+  const base = e2.home._sessionForTest().baseline;
+  assert(Number.isFinite(base) && cap[cap.length - 1].seenBaseline() === base, `9-6: after a real visit ends and a new one starts, the getter answers the NEW baseline (${base})`);
+}
+
+console.log('\n[10] M-56 (Drew, 2026-10-15; two phases): a NORMAL league\'s Home News fills from ESPN; after phase 2 the PILOT league\'s from every publisher, through the REAL server transport…');
+{
+  const pilotOnly = await import('./js/pilot-only.js');
+  // the seed as 0054 writes it (news_sources_for answers only what news_visible_source_ids lets the caller see): ESPN cleared with v0.29.0's picture hosts.
+  // A disabled publisher's row is never answered (and its articles are never served by news_feed) — the client is handed what the server would hand it.
+  const ESPN_SRC = { id: 'nat-espn-cfb-json', publisher: 'ESPN', kind: 'national', paywall: 'none', rank: 40, legal_status: 'cleared', link_hosts: ['www.espn.com', 'espn.com'],
+    image_hosts: ['espncdn.com', '.espncdn.com', 'espn.com', '.espn.com', 'espnmedia-cdn.akamaized.net'] };
+  const espnRow = (n) => ({ id: 700 + n, url: `https://www.espn.com/college-football/story/_/id/4${n}/x`, dedupe_key: null, source_id: 'nat-espn-cfb-json', publisher: 'ESPN', via: null, kind: 'national',
+    paywall: 'none', headline: `ESPN headline ${n} about the weekend slate`, image_url: `https://a.espncdn.com/photo/2026/1001/r${n}.jpg`, sport: 'cfb', team_keys: [], team_names: [],
+    published_at: iso(NOW - n * HOUR), updated_at: iso(NOW - n * HOUR) });
+  const calls = [];
+  const client = {
+    from() { return { select() { return { in: async () => ({ data: [{ key: 'news_enabled', value: true }, { key: 'news_images', value: true }], error: null }) }; } }; },
+    async rpc(name, args) {
+      calls.push(name);
+      if (name === 'news_feed') return { data: [espnRow(1), espnRow(2)], error: null };
+      if (name === 'news_sources_for') return { data: (args.p_ids || []).includes('nat-espn-cfb-json') ? [ESPN_SRC] : [], error: null };
+      return { data: null, error: { code: 'unexpected' } };
+    },
+  };
+  transportMod.clearNewsCache();
+  transportMod.installNewsTransport({ getClient: () => client });
+  pilotOnly.setPilotOnlyLeagueResolver(() => ({ id: 'L-normal', pilot: false }));     // a NORMAL league: no pilot sources reach it
+  try {
+    const e = mkEnv({ transport: { fetchNews: transportMod.fetchNews, fetchContent: async () => ({ items: [] }) } });
+    e.home.renderHome(); await flush(); await flush();
+    const cards = newsCards(e.container);
+    const html = e.container.innerHTML;
+    assert(e.home._newsStateForTest().status === 'ready' && cards.length === 2 && /ESPN headline 1 about the weekend slate/.test(html) && /ESPN headline 2/.test(html),
+      `10-1: a normal league's Home News slot shows the two ESPN headlines from the collector's store (status ${e.home._newsStateForTest().status}, ${cards.length} cards) — never "News is temporarily unavailable."`);
+    assert(/https:\/\/a\.espncdn\.com\/photo\/2026\/1001\/r1\.jpg/.test(html) && !/data-card-type="news-error"/.test(html),
+      '10-2: …with ESPN\'s picture (its host is on the cleared row\'s pinned list, as in live v0.29.0) and no news-error note');
+    assert(calls.includes('news_feed') && calls.includes('news_sources_for'), '10-3: (fixture) the cards came through the real server path: news_feed, then news_sources_for');
+    // the PILOT league (IRB): the server answers it the pilot publishers too (news_visible_source_ids), so Home shows ESPN AND CBS — CBS with no picture (its host is not pinned)
+    transportMod.clearNewsCache();
+    pilotOnly.setPilotOnlyLeagueResolver(() => ({ id: 'L-pilot', pilot: true }));
+    const CBS_SRC = { id: 'nat-cbs-cfb', publisher: 'CBS Sports', kind: 'national', paywall: 'none', rank: 45, legal_status: 'pilot', link_hosts: ['www.cbssports.com'], image_hosts: [] };
+    const cbsRow = { ...espnRow(5), id: 705, url: 'https://www.cbssports.com/college-football/news/pilot-story/', source_id: 'nat-cbs-cfb', publisher: 'CBS Sports', headline: 'CBS headline for the pilot league only',
+      image_url: 'https://sportshub.cbsistatic.com/i/r/2026/10/01/p.jpg' };
+    const pilotClient = { from: client.from, async rpc(name, args) {
+      if (name === 'news_feed') return { data: [espnRow(1), espnRow(2), cbsRow], error: null };
+      if (name === 'news_sources_for') return { data: [ESPN_SRC, CBS_SRC].filter((x) => (args.p_ids || []).includes(x.id)), error: null };
+      return client.rpc(name, args);
+    } };
+    transportMod.installNewsTransport({ getClient: () => pilotClient });
+    const e2 = mkEnv({ transport: { fetchNews: transportMod.fetchNews, fetchContent: async () => ({ items: [] }) } });
+    e2.home.renderHome(); await flush(); await flush();
+    const h2 = e2.container.innerHTML;
+    assert(newsCards(e2.container).length === 3 && /CBS headline for the pilot league only/.test(h2) && !/cbsistatic/.test(h2),
+      '10-4: after PHASE 2 (Drew enables the pilot publishers once the new privacy page is served) the PILOT league\'s Home shows the ESPN headlines AND the pilot publisher\'s (CBS), the CBS card WITHOUT a picture (its host is not pinned: SC-N5)');
+    transportMod.installNewsTransport({ getClient: () => client });
+    // a row whose source the server did NOT answer (a disabled or invisible publisher) is dropped at the client too: never a card
+    transportMod.clearNewsCache();
+    pilotOnly.setPilotOnlyLeagueResolver(() => ({ id: 'L-normal', pilot: false }));
+    const leak = { ...client, async rpc(name, args) { if (name === 'news_feed') return { data: [espnRow(3), { ...espnRow(4), source_id: 'nat-cbs-cfb', url: 'https://www.cbssports.com/x/4', publisher: 'CBS Sports' }], error: null }; return client.rpc(name, args); } };
+    transportMod.installNewsTransport({ getClient: () => leak });
+    const e3 = mkEnv({ transport: { fetchNews: transportMod.fetchNews, fetchContent: async () => ({ items: [] }) } });
+    e3.home.renderHome(); await flush(); await flush();
+    assert(newsCards(e3.container).length === 1 && !/cbssports/.test(e3.container.innerHTML), '10-5: in a NORMAL league an article whose publisher the registry read does not answer (CBS, a pilot publisher) never becomes a card — the client belt behind the server\'s RLS');
+  } finally {
+    pilotOnly.setPilotOnlyLeagueResolver(null);
+    transportMod.installNewsTransport({ getClient: null });
+    transportMod.clearNewsCache();
   }
 }
 

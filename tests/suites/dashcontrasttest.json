@@ -1,0 +1,12 @@
+{
+  "id": "dashcontrasttest",
+  "script": "dashcontrasttest.mjs",
+  "label": "112c-dash",
+  "summary": "strict-combined",
+  "floor": 295,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 3100,
+  "note": "RAISED from 294 by A1.9 review round (2026-10-01): the three SP52_ADVISORIES 'still fires' assertions are gone (the advisories were CLOSED at the value level and the machinery deleted) and the KNOWN_DEBT ratchet now has four entries (the two 3.74 originals plus Paper Light's two …"
+}

@@ -1,0 +1,20 @@
+{
+  "id": "almatest",
+  "script": "almatest.mjs",
+  "label": "112l",
+  "summary": {
+    "regex": "(?:✅ ALL PASS — |❌ )(\\d+) passed, (\\d+) failed",
+    "flags": "",
+    "passed": 1,
+    "failed": 2,
+    "verdict": null,
+    "skipped": null
+  },
+  "floor": 347,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 400,
+  "note": "(SP-54, 2026-10-01: RAISED from 312 — [13d]/[6b] the alma snapshot builder and the lock-path stamp; the earlier history follows) — RAISED from 287 by the v0.27.4 integration merge 1/6 (2026-09-30: Batch B RG-305's full-ESPN-school-list pickers, confirmed on the merged tree) …"
+}

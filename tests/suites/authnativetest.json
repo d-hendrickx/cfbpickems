@@ -1,0 +1,12 @@
+{
+  "id": "authnativetest",
+  "script": "authnativetest.mjs",
+  "label": "93b",
+  "summary": "strict",
+  "floor": 168,
+  "tags": [
+    "slow"
+  ],
+  "expectedMs": 26400,
+  "note": "raised from 73 after the 3c fix window (B1, 2026-09-25) added [15k]/[15l]/[15m]/[15n], proving the signedIn gate survives a re-fired SIGNED_IN/TOKEN_REFRESHED carrying a still-pending recovery session, on top of reviewer F2-F6's earlier sections; the ratchet only tightens)"
+}

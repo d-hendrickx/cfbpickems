@@ -1,0 +1,12 @@
+{
+  "id": "gaterebrandtest",
+  "script": "gaterebrandtest.mjs",
+  "label": "113",
+  "summary": "strict-combined",
+  "floor": 167,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 300,
+  "note": "2026-09-29 — UN-312 / DI-437 + DI-438). Raise the floor when the suite grows; the ratchet only tightens"
+}

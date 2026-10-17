@@ -1,0 +1,11 @@
+{
+  "id": "pushAliasMigrate.twin",
+  "script": "supabase/tests/functions/pushAliasMigrate.twin.mjs",
+  "summary": "strict",
+  "floor": 277,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 3000,
+  "note": "W-61 / DI-552 push-alias-migrate end to end against an in-memory OneSignal (no real call): the five modes, the super-admin-only gate for every mode x eight caller kinds, the PUSH_MIGRATE_ENABLED switch, relinked / unlinked / no-history seats, the report-to-apply fingerprint, the mapping rule on the wire, log-before-move, test-send to the caller's own alias, revert, and a no-secret / counts-only scan."
+}

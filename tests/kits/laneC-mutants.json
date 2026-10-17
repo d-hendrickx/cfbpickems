@@ -1,0 +1,1848 @@
+{
+ "comment": "D1 Lane C mutation kit (S-3). Generated once from the builder's scratch scripts and committed; run with tests/kits/laneC-mutants.mjs. `red` is the count observed when the table was recorded.",
+ "mutants": [
+  {
+   "id": "A1",
+   "group": "ask",
+   "what": "tool always offered",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "const tools = scribeToolDefinitions(wantsLookup && lookupAvailable);",
+   "new": "const tools = scribeToolDefinitions(true);",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:14"
+  },
+  {
+   "id": "A2",
+   "group": "ask",
+   "what": "retrieval carries context",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "question: clean.question, model: retrievalRoute.id",
+   "new": "question: clean.question + ' ' + (triggerRow.body || '') + ' ' + rosterNames.join(' '), model: retrievalRoute.id",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:2"
+  },
+  {
+   "id": "A3",
+   "group": "ask",
+   "what": "persona gets raw web tool",
+   "file": "supabase/functions/_shared/scribe-tools.mjs",
+   "old": "if (includeSportsLookup === true) tools.push({ ...SPORTS_LOOKUP_TOOL });",
+   "new": "if (includeSportsLookup === true) tools.push({ ...SPORTS_LOOKUP_TOOL });\n  tools.push({ type: 'web_search_20250305', name: 'web_search', max_uses: 2 });",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:5"
+  },
+  {
+   "id": "A4",
+   "group": "ask",
+   "what": "fallback widens prompt",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "effort: limits.effort, systemBlocks, userContent, tools, maxTokens: genMaxTokens, executeTool: loopTool,",
+   "new": "effort: limits.effort, systemBlocks, userContent: ai > 0 ? userContent + ' EXTRA' : userContent, tools, maxTokens: genMaxTokens, executeTool: loopTool,",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:1"
+  },
+  {
+   "id": "A5",
+   "group": "ask",
+   "what": "grounding off",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "if (checkGrounding(c, groundingCorpus, { names: false, smallIntMax: 10 }).ok) candidates.push(c);",
+   "new": "if (true) candidates.push(c);",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:1"
+  },
+  {
+   "id": "A6",
+   "group": "ask",
+   "what": "chips from model text",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "sources: (lookupState.sources.length && !allUngrounded && guarded.text) ? lookupState.sources : undefined,",
+   "new": "sources: (lookupState.sources.length && !allUngrounded && guarded.text) ? [...lookupState.sources, ...(guarded.text.match(/https:\\/\\/[^\\s]+/g) || []).map((u) => ({ label: 'x', url: u, publishedAt: null }))] : undefined,",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:1"
+  },
+  {
+   "id": "A7",
+   "group": "ask",
+   "what": "news read",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "  const chatRoute = routeFor(routing, 'chat', { pilot, settings: settingsValue });",
+   "new": "  await sb.from('news_articles').select('title').limit(3);\n  const chatRoute = routeFor(routing, 'chat', { pilot, settings: settingsValue });",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:1"
+  },
+  {
+   "id": "A8",
+   "group": "ask",
+   "what": "chat class cap removed",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "if (await classBudgetExceeded(sb, leagueId, 'chat',",
+   "new": "if (false && await classBudgetExceeded(sb, leagueId, 'chat',",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:2"
+  },
+  {
+   "id": "A9",
+   "group": "ask",
+   "what": "platform switch ignored",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "|| !routing.searchOn) lookupBlocked = 'switch_off';",
+   "new": ") lookupBlocked = 'switch_off';",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:6"
+  },
+  {
+   "id": "A10",
+   "group": "ask",
+   "what": "retrieval class cap ignored",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "else if (await classBudgetExceeded(sb, leagueId, 'retrieval',",
+   "new": "else if (false && await classBudgetExceeded(sb, leagueId, 'retrieval',",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:4"
+  },
+  {
+   "id": "A11",
+   "group": "ask",
+   "what": "sanitizer skipped",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "if (!clean.ok) { lookupState.refusals += 1;",
+   "new": "if (false) { lookupState.refusals += 1;",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:1"
+  },
+  {
+   "id": "A12",
+   "group": "ask",
+   "what": "run limit removed",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "if (lookupState.runs >= 1 || lookupState.refusals >= 2)",
+   "new": "if (lookupState.refusals >= 2)",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:2"
+  },
+  {
+   "id": "A13",
+   "group": "ask",
+   "what": "C-1: the lookup runs although it was not offered (the availability refusal removed)",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "if (available !== true) {",
+   "new": "if (false) {",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:9"
+  },
+  {
+   "id": "A14",
+   "group": "ask",
+   "what": "slate text emits a pick count (blind rule, ask + autonomous)",
+   "file": "supabase/functions/_shared/scribe-evidence.mjs",
+   "old": ".map((g) => slateGameLine(g, { now, numbers, threadGameId, week: w, feedCheckedAt }))",
+   "new": ".map((g) => { const r = slateGameLine(g, { now, numbers, threadGameId, week: w, feedCheckedAt }); const n = ((view && view.picks) || []).filter((p) => p && String(p.gameId) === String(g.gameId)).length; return n ? { ...r, text: r.text + ` (picks ${n})` } : r; })",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "supabase/tests/functions/scribeAutonomous.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:1 scribeAutonomous.twin.mjs:1"
+  },
+  {
+   "id": "S1",
+   "group": "static0051",
+   "what": "redefine validator",
+   "file": "supabase/migrations/0051_scribe_routing_and_class_budget.sql",
+   "old": "begin;\n\n-- ═",
+   "new": "begin;\ncreate or replace function public.platform_kv_value_ok(p_key text, p_value jsonb) returns boolean language sql as $$ select true $$;\n\n-- ═",
+   "suites": [
+    "supabase/tests/static.check.mjs"
+   ],
+   "red": "static.check.mjs:5"
+  },
+  {
+   "id": "S2",
+   "group": "static0051",
+   "what": "seed a platform_kv row",
+   "file": "supabase/migrations/0051_scribe_routing_and_class_budget.sql",
+   "old": "begin;\n\n-- ═",
+   "new": "begin;\ninsert into public.platform_kv (key, value) values ('scribe_search', '\"on\"'::jsonb);\n\n-- ═",
+   "suites": [
+    "supabase/tests/static.check.mjs"
+   ],
+   "red": "static.check.mjs:5"
+  },
+  {
+   "id": "S3",
+   "group": "static0051",
+   "what": "RLS not forced",
+   "file": "supabase/migrations/0051_scribe_routing_and_class_budget.sql",
+   "old": "alter table public.platform_spend force row level security;",
+   "new": "",
+   "suites": [
+    "supabase/tests/static.check.mjs"
+   ],
+   "red": "static.check.mjs:1"
+  },
+  {
+   "id": "S4",
+   "group": "static0051",
+   "what": "grant to authenticated",
+   "file": "supabase/migrations/0051_scribe_routing_and_class_budget.sql",
+   "old": "grant execute on function public.platform_spend_settle(text, numeric) to service_role;",
+   "new": "grant execute on function public.platform_spend_settle(text, numeric) to service_role, authenticated;",
+   "suites": [
+    "supabase/tests/static.check.mjs"
+   ],
+   "red": "static.check.mjs:1"
+  },
+  {
+   "id": "S5",
+   "group": "static0051",
+   "what": "cap test non-atomic",
+   "file": "supabase/migrations/0051_scribe_routing_and_class_budget.sql",
+   "old": "where key = p_key and amount_usd + p_amount <= p_cap",
+   "new": "where key = p_key",
+   "suites": [
+    "supabase/tests/static.check.mjs"
+   ],
+   "red": "static.check.mjs:1"
+  },
+  {
+   "id": "S6",
+   "group": "static0051",
+   "what": "policy added",
+   "file": "supabase/migrations/0051_scribe_routing_and_class_budget.sql",
+   "old": "revoke all on table public.platform_spend from public, anon, authenticated;",
+   "new": "revoke all on table public.platform_spend from public, anon, authenticated;\ncreate policy platform_spend_read on public.platform_spend for select using (true);",
+   "suites": [
+    "supabase/tests/static.check.mjs"
+   ],
+   "red": "static.check.mjs:2"
+  },
+  {
+   "id": "S7",
+   "group": "static0051",
+   "what": "setter md5 compare dropped",
+   "file": "supabase/migrations/0051_scribe_routing_and_class_budget.sql",
+   "old": "if (select md5(p.prosrc) from pg_proc p where p.oid = 'public.super_set_platform_kv(text,jsonb)'::regprocedure) is distinct from current_setting('cfbp.h51_setter', true) then",
+   "new": "if false then",
+   "suites": [
+    "supabase/tests/static.check.mjs"
+   ],
+   "red": "static.check.mjs:1"
+  },
+  {
+   "id": "S8",
+   "group": "static0051",
+   "what": "settle unclamped",
+   "file": "supabase/migrations/0051_scribe_routing_and_class_budget.sql",
+   "old": "greatest(0, amount_usd + p_delta)",
+   "new": "amount_usd + p_delta",
+   "suites": [
+    "supabase/tests/static.check.mjs"
+   ],
+   "red": "static.check.mjs:1"
+  },
+  {
+   "id": "S9",
+   "group": "static0051",
+   "what": "key shape widened",
+   "file": "supabase/migrations/0051_scribe_routing_and_class_budget.sql",
+   "old": "check (key ~ '^feed:[0-9]{4}-(0[1-9]|1[0-2])$')",
+   "new": "check (key ~ '^[a-z]+:[0-9]{4}-(0[1-9]|1[0-2])$')",
+   "suites": [
+    "supabase/tests/static.check.mjs"
+   ],
+   "red": "static.check.mjs:1"
+  },
+  {
+   "id": "S10",
+   "group": "static0051",
+   "what": "the S51.rls verdict is vacuous again (a forged insert is no longer required to be refused)",
+   "file": "supabase/tests/rls.test.mjs",
+   "old": "&& !!mIns.error && !!aIns.error",
+   "new": "&& true",
+   "suites": [
+    "supabase/tests/static.check.mjs"
+   ],
+   "red": "static.check.mjs:1"
+  },
+  {
+   "id": "P1",
+   "group": "pins",
+   "what": "literal model in classify",
+   "file": "supabase/functions/scribe-classify/index.js",
+   "old": "const routing = await loadRoutingConfig(sb);",
+   "new": "const routing = await loadRoutingConfig(sb);\n  const LITERAL = 'claude-haiku-9';",
+   "suites": [
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": "functions.check.mjs:1"
+  },
+  {
+   "id": "P2",
+   "group": "pins",
+   "what": "literal model in client js",
+   "file": "js/scribe-routing.js",
+   "old": "export const SCRIBE_ROUTE_SOURCES",
+   "new": "const LIT = 'claude-sonnet-9';\nexport const SCRIBE_ROUTE_SOURCES",
+   "suites": [
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": "functions.check.mjs:1"
+  },
+  {
+   "id": "P3",
+   "group": "pins",
+   "what": "raw web tool in autonomous",
+   "file": "supabase/functions/scribe-autonomous/index.js",
+   "old": "const routing = await loadRoutingConfig(sb);",
+   "new": "const routing = await loadRoutingConfig(sb);\n  const RAW = { type: 'web_search_20260209', name: 'web_search' };",
+   "suites": [
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": "functions.check.mjs:1"
+  },
+  {
+   "id": "P4",
+   "group": "pins",
+   "what": "news + anthropic in learn",
+   "file": "supabase/functions/scribe-learn/index.js",
+   "old": "const routing = await loadRoutingConfig(sb);",
+   "new": "const routing = await loadRoutingConfig(sb);\n  await sb.from('news_articles').select('title');",
+   "suites": [
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": "functions.check.mjs:1"
+  },
+  {
+   "id": "P5",
+   "group": "pins",
+   "what": "unnamed meter call in classify",
+   "file": "supabase/functions/scribe-classify/index.js",
+   "old": "promptChars, maxTokens: MAX_TOKENS, cls: 'classify',",
+   "new": "promptChars, maxTokens: MAX_TOKENS,",
+   "suites": [
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": "functions.check.mjs:1"
+  },
+  {
+   "id": "P6",
+   "group": "pins",
+   "what": "retrieval imports context",
+   "file": "supabase/functions/_shared/scribe-retrieval.mjs",
+   "old": "import { cleanUntrusted } from './scribe-contract.mjs';",
+   "new": "import { cleanUntrusted } from './scribe-contract.mjs';\nimport { renderAskUserBlocks } from './scribe-context.mjs';",
+   "suites": [
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": "functions.check.mjs:1"
+  },
+  {
+   "id": "P7",
+   "group": "pins",
+   "what": "model constant in trainer",
+   "file": "supabase/functions/trainer/index.js",
+   "old": "const trainerRoute = routeFor(routing, 'learn', { pilot: true, settings: settingsValue });",
+   "new": "const trainerRoute = routeFor(routing, 'learn', { pilot: true, settings: settingsValue });\n  const bad = { model: SCRIBE_MODEL_DEFAULT };",
+   "suites": [
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": "functions.check.mjs:1"
+  },
+  {
+   "id": "P8",
+   "group": "pins",
+   "what": "call site passes context",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "question: clean.question, model: retrievalRoute.id",
+   "new": "question: clean.question, model: retrievalRoute.id, extra: triggerRow.body",
+   "suites": [
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": "functions.check.mjs:1"
+  },
+  {
+   "id": "P9",
+   "group": "pins",
+   "what": "a handler sets a thinking field itself (enabled thinking)",
+   "file": "supabase/functions/scribe-classify/index.js",
+   "old": "const routing = await loadRoutingConfig(sb);",
+   "new": "const routing = await loadRoutingConfig(sb);\n  const bad = { thinking: { type: 'enabled', budget_tokens: 1000 } };",
+   "suites": [
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": "functions.check.mjs:2"
+  },
+  {
+   "id": "K1",
+   "group": "caps",
+   "what": "classify cap off",
+   "file": "supabase/functions/scribe-classify/index.js",
+   "old": "if (await classBudgetExceeded(sb, leagueId, 'classify',",
+   "new": "if (false && await classBudgetExceeded(sb, leagueId, 'classify',",
+   "suites": [
+    "supabase/tests/functions/scribeClassify.twin.mjs"
+   ],
+   "red": "scribeClassify.twin.mjs:4"
+  },
+  {
+   "id": "K2",
+   "group": "caps",
+   "what": "learn cap off",
+   "file": "supabase/functions/scribe-learn/index.js",
+   "old": "if (await classBudgetExceeded(sb, leagueId, 'learn',",
+   "new": "if (false && await classBudgetExceeded(sb, leagueId, 'learn',",
+   "suites": [
+    "supabase/tests/functions/scribeLearn.twin.mjs"
+   ],
+   "red": "scribeLearn.twin.mjs:3"
+  },
+  {
+   "id": "K3",
+   "group": "caps",
+   "what": "trainer cap off",
+   "file": "supabase/functions/trainer/index.js",
+   "old": "if (await classBudgetExceeded(sb, leagueId, 'learn',",
+   "new": "if (false && await classBudgetExceeded(sb, leagueId, 'learn',",
+   "suites": [
+    "supabase/tests/functions/trainer.twin.mjs"
+   ],
+   "red": "trainer.twin.mjs:3"
+  },
+  {
+   "id": "K4",
+   "group": "caps",
+   "what": "autonomous cap off",
+   "file": "supabase/functions/scribe-autonomous/index.js",
+   "old": "if (await classBudgetExceeded(sb, leagueId, 'chat',",
+   "new": "if (false && await classBudgetExceeded(sb, leagueId, 'chat',",
+   "suites": [
+    "supabase/tests/functions/scribeAutonomous.twin.mjs"
+   ],
+   "red": "scribeAutonomous.twin.mjs:1"
+  },
+  {
+   "id": "K5",
+   "group": "caps",
+   "what": "classify ignores platform route",
+   "file": "supabase/functions/scribe-classify/index.js",
+   "old": "const classifyRoute = routeFor(routing, 'classify', { pilot, settings });",
+   "new": "const classifyRoute = routeFor({ routes: { routes: {}, invalid: false, present: false }, shares: routing.shares, searchOn: true }, 'classify', { pilot, settings });",
+   "suites": [
+    "supabase/tests/functions/scribeClassify.twin.mjs"
+   ],
+   "red": "scribeClassify.twin.mjs:3"
+  },
+  {
+   "id": "K6",
+   "group": "caps",
+   "what": "learn ignores league model",
+   "file": "supabase/functions/scribe-learn/index.js",
+   "old": "const learnRoute = routeFor(routing, 'learn', { pilot: true, settings: settingsValue });",
+   "new": "const learnRoute = routeFor(routing, 'learn', { pilot: true, settings: null });",
+   "suites": [
+    "supabase/tests/functions/scribeLearn.twin.mjs"
+   ],
+   "red": "scribeLearn.twin.mjs:2"
+  },
+  {
+   "id": "K7",
+   "group": "caps",
+   "what": "trainer cap does not stop cursor",
+   "file": "supabase/functions/trainer/index.js",
+   "old": "if (await classBudgetExceeded(sb, leagueId, 'learn', classCapUsd('learn', { shares: routing.shares.shares, leagueCapUsd: capUsd }))) {",
+   "new": "if (await classBudgetExceeded(sb, leagueId, 'learn', classCapUsd('learn', { shares: { ...routing.shares.shares, learn: 99 }, leagueCapUsd: capUsd }))) {",
+   "suites": [
+    "supabase/tests/functions/trainer.twin.mjs"
+   ],
+   "red": "trainer.twin.mjs:2"
+  },
+  {
+   "id": "L1",
+   "group": "limits",
+   "what": "hash > not >=",
+   "file": "supabase/functions/_shared/synthesis-limits.mjs",
+   "old": "if (inWindow.length >= SYNTH_MAX_PER_HASH) {",
+   "new": "if (inWindow.length > SYNTH_MAX_PER_HASH) {",
+   "suites": [
+    "budgettest.mjs"
+   ],
+   "red": "budgettest.mjs:4"
+  },
+  {
+   "id": "L2",
+   "group": "limits",
+   "what": "failures day 4",
+   "file": "supabase/functions/_shared/synthesis-limits.mjs",
+   "old": "export const SYNTH_MAX_FAILURES_PER_DAY = 3;",
+   "new": "export const SYNTH_MAX_FAILURES_PER_DAY = 4;",
+   "suites": [
+    "budgettest.mjs"
+   ],
+   "red": "budgettest.mjs:4"
+  },
+  {
+   "id": "L3",
+   "group": "limits",
+   "what": "backoff idx off by one",
+   "file": "supabase/functions/_shared/synthesis-limits.mjs",
+   "old": "SYNTH_BACKOFF_MS[Math.min(consecutive, SYNTH_BACKOFF_MS.length) - 1]",
+   "new": "SYNTH_BACKOFF_MS[Math.min(consecutive, SYNTH_BACKOFF_MS.length) - 2 < 0 ? 0 : Math.min(consecutive, SYNTH_BACKOFF_MS.length) - 2]",
+   "suites": [
+    "budgettest.mjs"
+   ],
+   "red": "budgettest.mjs:3"
+  },
+  {
+   "id": "L4",
+   "group": "limits",
+   "what": "success does not reset",
+   "file": "supabase/functions/_shared/synthesis-limits.mjs",
+   "old": "for (let i = list.length - 1; i >= 0 && !list[i].ok; i -= 1) consecutive += 1;",
+   "new": "for (let i = list.length - 1; i >= 0; i -= 1) if (!list[i].ok) consecutive += 1;",
+   "suites": [
+    "budgettest.mjs"
+   ],
+   "red": "budgettest.mjs:1"
+  },
+  {
+   "id": "L5",
+   "group": "limits",
+   "what": "bad clock allowed",
+   "file": "supabase/functions/_shared/synthesis-limits.mjs",
+   "old": "if (!isMs(now) || typeof hash !== 'string' || !hash) return { allowed: false, reason: 'bad_input', retryAt: null };",
+   "new": "if (!isMs(now) || typeof hash !== 'string' || !hash) return { allowed: true, reason: 'ok', retryAt: null };",
+   "suites": [
+    "budgettest.mjs"
+   ],
+   "red": "budgettest.mjs:1"
+  },
+  {
+   "id": "L6",
+   "group": "limits",
+   "what": "run cap 30",
+   "file": "supabase/functions/_shared/synthesis-limits.mjs",
+   "old": "export const SYNTH_MAX_SUBJECTS_PER_RUN = 25;",
+   "new": "export const SYNTH_MAX_SUBJECTS_PER_RUN = 30;",
+   "suites": [
+    "budgettest.mjs"
+   ],
+   "red": "budgettest.mjs:3"
+  },
+  {
+   "id": "L7",
+   "group": "limits",
+   "what": "in flight 5",
+   "file": "supabase/functions/_shared/synthesis-limits.mjs",
+   "old": "export const SYNTH_MAX_IN_FLIGHT = 4;",
+   "new": "export const SYNTH_MAX_IN_FLIGHT = 5;",
+   "suites": [
+    "budgettest.mjs"
+   ],
+   "red": "budgettest.mjs:2"
+  },
+  {
+   "id": "L8",
+   "group": "limits",
+   "what": "future attempts counted",
+   "file": "supabase/functions/_shared/synthesis-limits.mjs",
+   "old": "isMs(a.at) && a.at <= now &&",
+   "new": "isMs(a.at) &&",
+   "suites": [
+    "budgettest.mjs"
+   ],
+   "red": "budgettest.mjs:1"
+  },
+  {
+   "id": "F1",
+   "group": "fallback",
+   "what": "supports fallback always",
+   "file": "js/scribe-routing.js",
+   "old": "export function classSupportsFallback(cls) { return typeof cls === 'string' && SCRIBE_FALLBACK_CLASSES.includes(cls); }",
+   "new": "export function classSupportsFallback(cls) { return typeof cls === 'string'; }",
+   "suites": [
+    "routingtest.mjs"
+   ],
+   "red": "routingtest.mjs:14"
+  },
+  {
+   "id": "F2",
+   "group": "fallback",
+   "what": "sheet always offers group",
+   "file": "js/scribe-routes-card.js",
+   "old": "const withFallback = classSupportsFallback(cls);",
+   "new": "const withFallback = true;",
+   "suites": [
+    "routingtest.mjs"
+   ],
+   "red": "routingtest.mjs:6"
+  },
+  {
+   "id": "F3",
+   "group": "fallback",
+   "what": "resolver carries fb anywhere",
+   "file": "js/scribe-routing.js",
+   "old": "const fbTier = classSupportsFallback(cls) ? fallbackTier : null;",
+   "new": "const fbTier = fallbackTier;",
+   "suites": [
+    "routingtest.mjs"
+   ],
+   "red": "routingtest.mjs:6"
+  },
+  {
+   "id": "F4",
+   "group": "fallback",
+   "what": "save writes fb anywhere",
+   "file": "js/scribe-routes-card.js",
+   "old": "(!classSupportsFallback(cls) || !isScribeTier(fb)",
+   "new": "(!isScribeTier(fb)",
+   "suites": [
+    "routingtest.mjs"
+   ],
+   "red": "routingtest.mjs:1"
+  },
+  {
+   "id": "F5",
+   "group": "fallback",
+   "what": "set widened to learn",
+   "file": "js/data-model.js",
+   "old": "SCRIBE_FALLBACK_CLASSES = Object.freeze(['chat']);",
+   "new": "SCRIBE_FALLBACK_CLASSES = Object.freeze(['chat', 'learn']);",
+   "suites": [
+    "routingtest.mjs"
+   ],
+   "red": "routingtest.mjs:4"
+  },
+  {
+   "id": "H1",
+   "group": "haiku",
+   "what": "haiku sent enabled",
+   "file": "supabase/functions/_shared/anthropic.js",
+   "old": "m.thinkingType === 'disabled' ? 'disabled' : 'adaptive'",
+   "new": "'enabled'",
+   "suites": [
+    "routingtest.mjs",
+    "supabase/tests/functions.check.mjs",
+    "supabase/tests/functions/scribeClassify.twin.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "budgettest.mjs",
+    "heattest.mjs"
+   ],
+   "red": "routingtest.mjs:12 functions.check.mjs:1 scribeClassify.twin.mjs:1 scribeAsk.twin.mjs:4 budgettest.mjs:0 heattest.mjs:0"
+  },
+  {
+   "id": "H2",
+   "group": "haiku",
+   "what": "budget_tokens added",
+   "file": "supabase/functions/_shared/anthropic.js",
+   "old": "payload.thinking = { type: m.thinkingType === 'disabled' ? 'disabled' : 'adaptive' };",
+   "new": "payload.thinking = { type: m.thinkingType === 'disabled' ? 'disabled' : 'adaptive' }; if (m.thinkingType === 'disabled') payload.thinking.budget_tokens = 1024;",
+   "suites": [
+    "routingtest.mjs",
+    "supabase/tests/functions.check.mjs",
+    "supabase/tests/functions/scribeClassify.twin.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "budgettest.mjs",
+    "heattest.mjs"
+   ],
+   "red": "routingtest.mjs:7 functions.check.mjs:1 scribeClassify.twin.mjs:1 scribeAsk.twin.mjs:2 budgettest.mjs:0 heattest.mjs:0"
+  },
+  {
+   "id": "H3",
+   "group": "haiku",
+   "what": "caller effort wins on haiku",
+   "file": "supabase/functions/_shared/anthropic.js",
+   "old": "SCRIBE_EFFORT_VALUES.includes(m.effortFixed) ? m.effortFixed : chosen",
+   "new": "chosen",
+   "suites": [
+    "routingtest.mjs",
+    "supabase/tests/functions.check.mjs",
+    "supabase/tests/functions/scribeClassify.twin.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "budgettest.mjs",
+    "heattest.mjs"
+   ],
+   "red": "routingtest.mjs:4 functions.check.mjs:0 scribeClassify.twin.mjs:0 scribeAsk.twin.mjs:0 budgettest.mjs:0 heattest.mjs:0"
+  },
+  {
+   "id": "H4",
+   "group": "haiku",
+   "what": "classify short shape removed",
+   "file": "supabase/functions/scribe-classify/index.js",
+   "old": "  applyShortCallShape(payload, model);\n",
+   "new": "  \n",
+   "suites": [
+    "routingtest.mjs",
+    "supabase/tests/functions.check.mjs",
+    "supabase/tests/functions/scribeClassify.twin.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "budgettest.mjs",
+    "heattest.mjs"
+   ],
+   "red": "routingtest.mjs:0 functions.check.mjs:0 scribeClassify.twin.mjs:1 scribeAsk.twin.mjs:0 budgettest.mjs:0 heattest.mjs:0"
+  },
+  {
+   "id": "H5",
+   "group": "haiku",
+   "what": "price band ignored",
+   "file": "supabase/functions/_shared/scribe-rate.js",
+   "old": "return Number.isFinite(rates.bandTokens) && promptTokens > rates.bandTokens ?",
+   "new": "return false ?",
+   "suites": [
+    "routingtest.mjs",
+    "supabase/tests/functions.check.mjs",
+    "supabase/tests/functions/scribeClassify.twin.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "budgettest.mjs",
+    "heattest.mjs"
+   ],
+   "red": "routingtest.mjs:2 functions.check.mjs:0 scribeClassify.twin.mjs:0 scribeAsk.twin.mjs:0 budgettest.mjs:0 heattest.mjs:0"
+  },
+  {
+   "id": "H6",
+   "group": "haiku",
+   "what": "haiku 4.5 back in catalog",
+   "file": "js/data-model.js",
+   "old": "id: 'claude-haiku-5-5'",
+   "new": "id: 'claude-haiku-4-5-20251001'",
+   "suites": [
+    "routingtest.mjs",
+    "supabase/tests/functions.check.mjs",
+    "supabase/tests/functions/scribeClassify.twin.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "budgettest.mjs",
+    "heattest.mjs"
+   ],
+   "red": "routingtest.mjs:5 functions.check.mjs:1 scribeClassify.twin.mjs:1 scribeAsk.twin.mjs:0 budgettest.mjs:0 heattest.mjs:1"
+  },
+  {
+   "id": "H7",
+   "group": "haiku",
+   "what": "legacy 4.5 id removed",
+   "file": "js/data-model.js",
+   "old": ", 'claude-haiku-4-5-20251001': 'haiku' }",
+   "new": " }",
+   "suites": [
+    "routingtest.mjs",
+    "supabase/tests/functions.check.mjs",
+    "supabase/tests/functions/scribeClassify.twin.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "budgettest.mjs",
+    "heattest.mjs"
+   ],
+   "red": "routingtest.mjs:2 functions.check.mjs:2 scribeClassify.twin.mjs:0 scribeAsk.twin.mjs:0 budgettest.mjs:0 heattest.mjs:1"
+  },
+  {
+   "id": "H8",
+   "group": "haiku",
+   "what": "haiku old search tool",
+   "file": "js/data-model.js",
+   "old": "bandTokens: 100000, inputOver: 0.5, outputOver: 2.5, available: true, thinking: true, effort: true, thinkingType: 'disabled', effortFixed: 'low', webSearchTool: 'web_search_20260209'",
+   "new": "bandTokens: 100000, inputOver: 0.5, outputOver: 2.5, available: true, thinking: true, effort: true, thinkingType: 'disabled', effortFixed: 'low', webSearchTool: 'web_search_20250305'",
+   "suites": [
+    "routingtest.mjs",
+    "supabase/tests/functions.check.mjs",
+    "supabase/tests/functions/scribeClassify.twin.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "budgettest.mjs",
+    "heattest.mjs"
+   ],
+   "red": "routingtest.mjs:2 functions.check.mjs:0 scribeClassify.twin.mjs:0 scribeAsk.twin.mjs:1 budgettest.mjs:0 heattest.mjs:0"
+  },
+  {
+   "id": "H9",
+   "group": "haiku",
+   "what": "short shape hits sonnet too",
+   "file": "supabase/functions/_shared/anthropic.js",
+   "old": "return m && m.thinkingType === 'disabled' ? applyModelShape(payload, modelId, m.effortFixed) : payload;",
+   "new": "return m ? applyModelShape(payload, modelId, 'low') : payload;",
+   "suites": [
+    "routingtest.mjs",
+    "supabase/tests/functions.check.mjs",
+    "supabase/tests/functions/scribeClassify.twin.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "budgettest.mjs",
+    "heattest.mjs"
+   ],
+   "red": "routingtest.mjs:1 functions.check.mjs:0 scribeClassify.twin.mjs:1 scribeAsk.twin.mjs:0 budgettest.mjs:0 heattest.mjs:0"
+  },
+  {
+   "id": "H10",
+   "group": "haiku",
+   "what": "haiku price typo",
+   "file": "js/data-model.js",
+   "old": "input: 0.1, output: 0.5, bandTokens",
+   "new": "input: 1, output: 5, bandTokens",
+   "suites": [
+    "routingtest.mjs",
+    "supabase/tests/functions.check.mjs",
+    "supabase/tests/functions/scribeClassify.twin.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "budgettest.mjs",
+    "heattest.mjs"
+   ],
+   "red": "routingtest.mjs:5 functions.check.mjs:0 scribeClassify.twin.mjs:0 scribeAsk.twin.mjs:0 budgettest.mjs:1 heattest.mjs:0"
+  },
+  {
+   "id": "H11",
+   "group": "haiku",
+   "what": "haiku thinking flag off",
+   "file": "js/data-model.js",
+   "old": "input: 0.1, output: 0.5, bandTokens: 100000, inputOver: 0.5, outputOver: 2.5, available: true, thinking: true, effort: true,",
+   "new": "input: 0.1, output: 0.5, bandTokens: 100000, inputOver: 0.5, outputOver: 2.5, available: true, thinking: false, effort: false,",
+   "suites": [
+    "routingtest.mjs",
+    "supabase/tests/functions.check.mjs",
+    "supabase/tests/functions/scribeClassify.twin.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "budgettest.mjs",
+    "heattest.mjs"
+   ],
+   "red": "routingtest.mjs:8 functions.check.mjs:0 scribeClassify.twin.mjs:1 scribeAsk.twin.mjs:2 budgettest.mjs:0 heattest.mjs:0"
+  },
+  {
+   "id": "B1",
+   "group": "packets",
+   "what": "slate packet adds a pick count",
+   "file": "supabase/functions/_shared/evidence-packets.mjs",
+   "old": "      if (gf.state === 'live') anyLive = true;",
+   "new": "      { const pc = ((view && view.picks) || []).filter((p) => p && String(p.gameId) === String(g.gameId)).length; if (pc) facts.push(makeFact(`game:${g.gameId}:picks`, `${pc} picks are in`, { source: LEAGUE_SOURCE })); }\n      if (gf.state === 'live') anyLive = true;",
+   "suites": [
+    "groundingtest.mjs"
+   ],
+   "red": "groundingtest.mjs:1"
+  },
+  {
+   "id": "B2",
+   "group": "packets",
+   "what": "game packet carries the pick side",
+   "file": "supabase/functions/_shared/evidence-packets.mjs",
+   "old": "  const gf = gameFacts(game, week, { now, feedCheckedAt });\n  return makePacket({\n    id: `game:${game.gameId}`",
+   "new": "  const gf = gameFacts(game, week, { now, feedCheckedAt });\n  for (const p of ((view && view.picks) || [])) if (p && String(p.gameId) === String(game.gameId)) gf.facts.push(makeFact(`game:${game.gameId}:pick:${p.playerId}`, `${p.playerId} picked ${p.selectedTeam}`, { source: LEAGUE_SOURCE }));\n  return makePacket({\n    id: `game:${game.gameId}`",
+   "suites": [
+    "groundingtest.mjs"
+   ],
+   "red": "groundingtest.mjs:1"
+  },
+  {
+   "id": "B3",
+   "group": "packets",
+   "what": "week packet counts picks",
+   "file": "supabase/functions/_shared/evidence-packets.mjs",
+   "old": "  const gaps = games.length ? [] : ['no games have been entered for this week yet'];\n  return makePacket({ id: `week:${week.weekId}`",
+   "new": "  const gaps = games.length ? [] : ['no games have been entered for this week yet'];\n  { const n = ((view && view.picks) || []).filter((p) => p && String(p.weekId) === String(week.weekId)).length; if (n) facts.push(makeFact(`week:${week.weekId}:picks`, `${n} picks submitted`, { source: LEAGUE_SOURCE })); }\n  return makePacket({ id: `week:${week.weekId}`",
+   "suites": [
+    "groundingtest.mjs"
+   ],
+   "red": "groundingtest.mjs:1"
+  },
+  {
+   "id": "B4",
+   "group": "packets",
+   "what": "history ignores the reveal fence",
+   "file": "supabase/functions/_shared/evidence-packets.mjs",
+   "old": "  if (week.status !== 'final' || !shownInStandings(week) || !(view.revealedWeekIds && view.revealedWeekIds.has(String(week.weekId)))) {",
+   "new": "  if (week.status !== 'final' || !shownInStandings(week)) {",
+   "suites": [
+    "groundingtest.mjs"
+   ],
+   "red": null,
+   "equivalent": "EQUIVALENT through revealedView: a FINAL week is always in revealedWeekIds (the filter is the belt to that brace, scribe-evidence.mjs), so removing this second check changes nothing for any view the handlers build. It differs only on a hand-built view with a final week outside revealedWeekIds; no test builds one, by design (G6: documented, no new test)"
+  },
+  {
+   "id": "B5",
+   "group": "packets",
+   "what": "history carries a tiebreaker guess",
+   "file": "supabase/functions/_shared/evidence-packets.mjs",
+   "old": "    facts.push(makeFact(`history:${week.weekId}:${r.playerId}`, `${name} went ${cc}-${ic} in ${title}${tag}`,",
+   "new": "    facts.push(makeFact(`history:${week.weekId}:${r.playerId}`, `${name} went ${cc}-${ic} in ${title}${tag} (tiebreaker guess ${r.tiebreakerGuess})`,",
+   "suites": [
+    "groundingtest.mjs"
+   ],
+   "red": "groundingtest.mjs:3"
+  },
+  {
+   "id": "C1",
+   "group": "chips",
+   "what": "the relayed gate is dropped (any author-scribe row draws chips: the F-1 forgery)",
+   "file": "js/source-chips.js",
+   "old": "if (!m || m.author !== 'scribe' || m.relayed !== false || m.deleted) return [];",
+   "new": "if (!m || m.author !== 'scribe' || m.deleted) return [];",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:15 adminaidispatchtest.mjs:4"
+  },
+  {
+   "id": "C2",
+   "group": "chips",
+   "what": "an ABSENT relayed field is read as \"not relayed\" (fails open before 0045)",
+   "file": "js/source-chips.js",
+   "old": "if (!m || m.author !== 'scribe' || m.relayed !== false || m.deleted) return [];",
+   "new": "if (!m || m.author !== 'scribe' || m.relayed === true || m.deleted) return [];",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:14 adminaidispatchtest.mjs:1"
+  },
+  {
+   "id": "C3",
+   "group": "chips",
+   "what": "the gate reads meta.relayed, which any member can write",
+   "file": "js/source-chips.js",
+   "old": "if (!m || m.author !== 'scribe' || m.relayed !== false || m.deleted) return [];",
+   "new": "if (!m || m.author !== 'scribe' || (m.meta && m.meta.relayed) !== false || m.deleted) return [];",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:5 adminaidispatchtest.mjs:1"
+  },
+  {
+   "id": "C4",
+   "group": "chips",
+   "what": "the author check is dropped (relayed false is enough)",
+   "file": "js/source-chips.js",
+   "old": "if (!m || m.author !== 'scribe' || m.relayed !== false || m.deleted) return [];",
+   "new": "if (!m || m.relayed !== false || m.deleted) return [];",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:4 adminaidispatchtest.mjs:0"
+  },
+  {
+   "id": "C5",
+   "group": "chips",
+   "what": "the label is read from the row again (a spoofed \"ESPN\" shows)",
+   "file": "js/source-chips.js",
+   "old": "out.push({ label: sourceLabelForUrl(href) ||",
+   "new": "out.push({ label: (typeof s.label === 'string' && s.label.trim().slice(0, 40)) || sourceLabelForUrl(href) ||",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:7 adminaidispatchtest.mjs:0"
+  },
+  {
+   "id": "C6",
+   "group": "chips",
+   "what": "a withdrawn message still draws",
+   "file": "js/source-chips.js",
+   "old": "if (!m || m.author !== 'scribe' || m.relayed !== false || m.deleted) return [];",
+   "new": "if (!m || m.author !== 'scribe' || m.relayed !== false) return [];",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:2 adminaidispatchtest.mjs:0"
+  },
+  {
+   "id": "C7",
+   "group": "chips",
+   "what": "at most four chips",
+   "file": "js/source-chips.js",
+   "old": "export const SOURCE_CHIPS_MAX = 3;",
+   "new": "export const SOURCE_CHIPS_MAX = 4;",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:1 adminaidispatchtest.mjs:0"
+  },
+  {
+   "id": "C8",
+   "group": "chips",
+   "what": "http addresses are accepted",
+   "file": "js/source-chips.js",
+   "old": "if (u.protocol !== 'https:' || u.port",
+   "new": "if ((u.protocol !== 'https:' && u.protocol !== 'http:') || u.port",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:3 adminaidispatchtest.mjs:0"
+  },
+  {
+   "id": "C9",
+   "group": "chips",
+   "what": "a port is accepted",
+   "file": "js/source-chips.js",
+   "old": "if (u.protocol !== 'https:' || u.port || u.username || u.password) return null;",
+   "new": "if (u.protocol !== 'https:' || u.username || u.password) return null;",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:2 adminaidispatchtest.mjs:0"
+  },
+  {
+   "id": "C10",
+   "group": "chips",
+   "what": "userinfo is accepted",
+   "file": "js/source-chips.js",
+   "old": "if (u.protocol !== 'https:' || u.port || u.username || u.password) return null;",
+   "new": "if (u.protocol !== 'https:' || u.port) return null;",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:2 adminaidispatchtest.mjs:0"
+  },
+  {
+   "id": "C11",
+   "group": "chips",
+   "what": "the fallback escaper is a bare String()",
+   "file": "js/source-chips.js",
+   "old": "const esc = typeof escIn === 'function' ? escIn : escapeText;",
+   "new": "const esc = typeof escIn === 'function' ? escIn : String;",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:2 adminaidispatchtest.mjs:0"
+  },
+  {
+   "id": "C12",
+   "group": "chips",
+   "what": "the address is put in the markup",
+   "file": "js/source-chips.js",
+   "old": "<button type=\"button\" class=\"chat-source-chip\" data-source-msg",
+   "new": "<button type=\"button\" class=\"chat-source-chip\" data-href=\"${list[i].href}\" data-source-msg",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:2 adminaidispatchtest.mjs:0"
+  },
+  {
+   "id": "C13",
+   "group": "chips",
+   "what": "the tap coerces \"\" / null / [1] to a chip index",
+   "file": "js/source-chips.js",
+   "old": "const i = typeof index === 'number' ? index : (typeof index === 'string' && /^[0-9]{1,2}$/.test(index) ? Number(index) : NaN);",
+   "new": "const i = Number(index);",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:3 adminaidispatchtest.mjs:0"
+  },
+  {
+   "id": "C14",
+   "group": "chips",
+   "what": "the date goes through the locale",
+   "file": "js/source-chips.js",
+   "old": "return `${(long ? MONTHS_LONG : MONTHS)[mo - 1]} ${d}`;",
+   "new": "return new Date(iso).toLocaleDateString('en-US', { month: long ? 'long' : 'short', day: 'numeric' });",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:6 adminaidispatchtest.mjs:0"
+  },
+  {
+   "id": "C15",
+   "group": "chips",
+   "what": "an IP-address host is accepted",
+   "file": "js/source-chips.js",
+   "old": "|| /^[0-9.]+$/.test(host)) return null;",
+   "new": ") return null;",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:2 adminaidispatchtest.mjs:0"
+  },
+  {
+   "id": "R1",
+   "group": "retrieval",
+   "what": "F-2: the question is not NFKC-normalized",
+   "file": "supabase/functions/_shared/scribe-retrieval.mjs",
+   "old": "const nq = question.normalize('NFKC');",
+   "new": "const nq = question;",
+   "suites": [
+    "retrievaltest.mjs"
+   ],
+   "red": "retrievaltest.mjs:2"
+  },
+  {
+   "id": "R2",
+   "group": "retrieval",
+   "what": "F-2: non-ASCII letters are separators again (the ASCII tokenizer)",
+   "file": "supabase/functions/_shared/sports-vocab.mjs",
+   "old": ".match(/[\\p{L}\\p{N}&]+/gu)",
+   "new": ".match(/[a-z0-9&]+/g)",
+   "suites": [
+    "retrievaltest.mjs"
+   ],
+   "red": "retrievaltest.mjs:4"
+  },
+  {
+   "id": "R3",
+   "group": "retrieval",
+   "what": "F-2: format / mark / private-use characters are no longer refused",
+   "file": "supabase/functions/_shared/scribe-retrieval.mjs",
+   "old": "if (UNSAFE_CHARS.test(nq)) return no;",
+   "new": "",
+   "suites": [
+    "retrievaltest.mjs"
+   ],
+   "red": "retrievaltest.mjs:1"
+  },
+  {
+   "id": "R4",
+   "group": "retrieval",
+   "what": "the member-name check is removed (the asker typed the name, so only this rule refuses it)",
+   "file": "supabase/functions/_shared/scribe-retrieval.mjs",
+   "old": "for (const raw of memberNames || []) {",
+   "new": "for (const raw of []) {",
+   "suites": [
+    "retrievaltest.mjs"
+   ],
+   "red": "retrievaltest.mjs:4"
+  },
+  {
+   "id": "R5",
+   "group": "retrieval",
+   "what": "F-2: a non-ASCII word skips the allow-list",
+   "file": "supabase/functions/_shared/scribe-retrieval.mjs",
+   "old": "    if (!askerWords.has(w) && !PUBLIC_VOCAB.has(w)) return no;",
+   "new": "    if (/[^\\x00-\\x7f]/.test(w)) continue;\n    if (!askerWords.has(w) && !PUBLIC_VOCAB.has(w)) return no;",
+   "suites": [
+    "retrievaltest.mjs"
+   ],
+   "red": "retrievaltest.mjs:7"
+  },
+  {
+   "id": "R6",
+   "group": "retrieval",
+   "what": "F-2: the member names are not normalized",
+   "file": "supabase/functions/_shared/scribe-retrieval.mjs",
+   "old": "const n = String(raw || '').normalize('NFKC').trim();",
+   "new": "const n = String(raw || '').trim();",
+   "suites": [
+    "retrievaltest.mjs"
+   ],
+   "red": "retrievaltest.mjs:1"
+  },
+  {
+   "id": "R7",
+   "group": "retrieval",
+   "what": "F-3: a chip url is the MODEL's string again",
+   "file": "supabase/functions/_shared/scribe-retrieval.mjs",
+   "old": "    const url = hit.url;",
+   "new": "    const url = modelUrl;",
+   "suites": [
+    "retrievaltest.mjs"
+   ],
+   "red": "retrievaltest.mjs:4"
+  },
+  {
+   "id": "R8",
+   "group": "retrieval",
+   "what": "F-3: the search result's own url is not validated",
+   "file": "supabase/functions/_shared/scribe-retrieval.mjs",
+   "old": "url: validateSourceUrl(r.url) });",
+   "new": "url: r.url });",
+   "suites": [
+    "retrievaltest.mjs"
+   ],
+   "red": "retrievaltest.mjs:2"
+  },
+  {
+   "id": "R9",
+   "group": "retrieval",
+   "what": "a url the search did not return is accepted",
+   "file": "supabase/functions/_shared/scribe-retrieval.mjs",
+   "old": "if (!hit || !hit.url) continue;",
+   "new": "if (!hit) continue;",
+   "suites": [
+    "retrievaltest.mjs"
+   ],
+   "red": "retrievaltest.mjs:1"
+  },
+  {
+   "id": "R10",
+   "group": "retrieval",
+   "what": "the labels are typed again on the server (a model-written label)",
+   "file": "supabase/functions/_shared/scribe-retrieval.mjs",
+   "old": "export function sourceLabelFor(url) { return sourceLabelForUrl(url); }",
+   "new": "export function sourceLabelFor(url) { return 'ESPN'; }",
+   "suites": [
+    "retrievaltest.mjs"
+   ],
+   "red": "retrievaltest.mjs:1"
+  },
+  {
+   "id": "D1",
+   "group": "dispatch",
+   "what": "the Super Admin belt in the row handler is removed",
+   "file": "js/app.js",
+   "old": "    if (!getIsSuperAdmin()) return;                    // the card renders no tap target for anyone else; this is the belt\n",
+   "new": "\n",
+   "suites": [
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "adminaidispatchtest.mjs:1"
+  },
+  {
+   "id": "D2",
+   "group": "dispatch",
+   "what": "a tap during an in-flight save is no longer ignored",
+   "file": "js/app.js",
+   "old": "  if (sh.status === 'saving') return;\n  const tierBtn",
+   "new": "  const tierBtn",
+   "suites": [
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "adminaidispatchtest.mjs:1"
+  },
+  {
+   "id": "D3",
+   "group": "dispatch",
+   "what": "Cancel / close works during an in-flight save",
+   "file": "js/app.js",
+   "old": "  if (sh && sh.status === 'saving' && !immediate) return;",
+   "new": "  if (false) return;",
+   "suites": [
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "adminaidispatchtest.mjs:1"
+  },
+  {
+   "id": "D4",
+   "group": "dispatch",
+   "what": "a second Save fires a second write",
+   "file": "js/app.js",
+   "old": "  if (!sh || sh.kind !== 'route' || sh.status === 'saving') return;",
+   "new": "  if (!sh || sh.kind !== 'route') return;",
+   "suites": [
+    "adminaidispatchtest.mjs"
+   ],
+   "red": null,
+   "equivalent": "BELT BEHIND D2: saveScribeRoute has exactly one caller, onAdminAiSheetClick, which already returns while the sheet is saving, so no control can reach this guard twice; it is kept as the second layer and is unreachable through any tap"
+  },
+  {
+   "id": "D5",
+   "group": "dispatch",
+   "what": "the one-automatic-fetch guard is gone (every repaint re-reads)",
+   "file": "js/app.js",
+   "old": "  if (getIsPlatformAdmin() && !_scribeRoutesCache.attempted && !_scribeRoutesCache.loading) refreshScribeRoutesCache();",
+   "new": "  if (getIsPlatformAdmin()) refreshScribeRoutesCache();",
+   "suites": [
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "adminaidispatchtest.mjs:1"
+  },
+  {
+   "id": "D6",
+   "group": "dispatch",
+   "what": "a failed save closes the sheet",
+   "file": "js/app.js",
+   "old": "    if (_adminAiSheet === sh) { sh.status = 'failed'; paintAdminAiSheet(); }",
+   "new": "    if (_adminAiSheet === sh) closeAdminAiSheet({ immediate: true });",
+   "suites": [
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "adminaidispatchtest.mjs:5"
+  },
+  {
+   "id": "D7",
+   "group": "dispatch",
+   "what": "pull-to-refresh no longer re-reads the Admin cards",
+   "file": "js/app.js",
+   "old": "    else if (state.currentTab === 'admin') await refreshAdminAiCaches();",
+   "new": "    ",
+   "suites": [
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "adminaidispatchtest.mjs:1"
+  },
+  {
+   "id": "D8",
+   "group": "dispatch",
+   "what": "Save writes the draft, not the computed value",
+   "file": "js/app.js",
+   "old": "await superSetPlatformKv('scribe_model_routes', next);",
+   "new": "await superSetPlatformKv('scribe_model_routes', sh.draft);",
+   "suites": [
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "adminaidispatchtest.mjs:1"
+  },
+  {
+   "id": "D9",
+   "group": "dispatch",
+   "what": "the card fetches its read but never repaints",
+   "file": "js/app.js",
+   "old": "    console.error('[admin] scribe routing read failed', e);\n    _scribeRoutesCache = { ..._scribeRoutesCache, loading: false, error: e?.message || 'failed', attempted: true };\n  }\n  if (state.currentTab === 'admin') renderAdminPage();",
+   "new": "    console.error('[admin] scribe routing read failed', e);\n    _scribeRoutesCache = { ..._scribeRoutesCache, loading: false, error: e?.message || 'failed', attempted: true };\n  }",
+   "suites": [
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "adminaidispatchtest.mjs:1"
+  },
+  {
+   "id": "X1",
+   "group": "render",
+   "what": "the cards' Retry/Refresh buttons drop to 34 pt",
+   "file": "css/styles.css",
+   "old": "#scribe-routes-retry-btn,#content-status-retry-btn,#content-status-refresh-btn{min-height:44px;",
+   "new": "#scribe-routes-retry-btn,#content-status-retry-btn,#content-status-refresh-btn{min-height:0;",
+   "suites": [
+    "adminairendertest.mjs"
+   ],
+   "red": "adminairendertest.mjs:6"
+  },
+  {
+   "id": "X2",
+   "group": "render",
+   "what": "the chip row loses its 8 pt gap",
+   "file": "css/styles.css",
+   "old": ".chat-source-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}",
+   "new": ".chat-source-row{display:flex;flex-wrap:wrap;gap:2px;margin-top:8px}",
+   "suites": [
+    "adminairendertest.mjs"
+   ],
+   "red": "adminairendertest.mjs:4"
+  },
+  {
+   "id": "X3",
+   "group": "render",
+   "what": "the sheet close button shrinks to 30 pt",
+   "file": "css/styles.css",
+   "old": ".admin-ai-close{width:44px;height:44px;",
+   "new": ".admin-ai-close{width:30px;height:30px;",
+   "suites": [
+    "adminairendertest.mjs"
+   ],
+   "red": "adminairendertest.mjs:8"
+  },
+  {
+   "id": "X4",
+   "group": "render",
+   "what": "the sheet body loses its 16 pt inset",
+   "file": "css/styles.css",
+   "old": "#admin-ai-sheet-body{overscroll-behavior:contain;padding:16px}",
+   "new": "#admin-ai-sheet-body{overscroll-behavior:contain;padding:4px}",
+   "suites": [
+    "adminairendertest.mjs"
+   ],
+   "red": "adminairendertest.mjs:8"
+  },
+  {
+   "id": "X5",
+   "group": "render",
+   "what": "Save / Cancel are left-aligned",
+   "file": "css/styles.css",
+   "old": ".scribe-route-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:16px}",
+   "new": ".scribe-route-actions{display:flex;flex-wrap:wrap;justify-content:flex-start;gap:8px;margin-top:16px}",
+   "suites": [
+    "adminairendertest.mjs"
+   ],
+   "red": "adminairendertest.mjs:6"
+  },
+  {
+   "id": "X6",
+   "group": "render",
+   "what": "a chip compresses to 90% instead of 97%",
+   "file": "css/styles.css",
+   "old": ".chat-source-chip:active{transform:scale(.97)}",
+   "new": ".chat-source-chip:active{transform:scale(.9)}",
+   "suites": [
+    "adminairendertest.mjs"
+   ],
+   "red": "adminairendertest.mjs:1"
+  },
+  {
+   "id": "X7",
+   "group": "render",
+   "what": "a chip shrinks to 30 pt",
+   "file": "css/styles.css",
+   "old": ".chat-source-chip{min-height:44px;",
+   "new": ".chat-source-chip{min-height:30px;",
+   "suites": [
+    "adminairendertest.mjs"
+   ],
+   "red": "adminairendertest.mjs:4"
+  },
+  {
+   "id": "G1",
+   "group": "pglite",
+   "what": "the reservation no longer refuses at the cap",
+   "pglite": "no-cap",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G2",
+   "group": "pglite",
+   "what": "a client role may call the reservation",
+   "pglite": "authed-exec",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G3",
+   "group": "pglite",
+   "what": "RLS is not forced",
+   "pglite": "rls-off",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G4",
+   "group": "pglite",
+   "what": "settle can drive the ledger negative",
+   "pglite": "settle-no-clamp",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G5",
+   "group": "pglite",
+   "what": "a client role may INSERT/UPDATE/DELETE the ledger",
+   "pglite": "authed-dml",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G6",
+   "group": "pglite",
+   "what": "anon may call settle",
+   "pglite": "anon-settle",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G7",
+   "group": "pglite",
+   "what": "the table keeps the default grants",
+   "pglite": "revoke-missing",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G8",
+   "group": "pglite",
+   "what": "no-cap with the migration's own end-state proof stripped (the BEHAVIOUR assertions alone)",
+   "pglite": "no-cap-noproof",
+   "red": "pglite:5"
+  },
+  {
+   "id": "G9",
+   "group": "pglite",
+   "what": "authed-exec, proof stripped",
+   "pglite": "authed-exec-noproof",
+   "red": "pglite:9"
+  },
+  {
+   "id": "G10",
+   "group": "pglite",
+   "what": "rls-off, proof stripped",
+   "pglite": "rls-off-noproof",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G11",
+   "group": "pglite",
+   "what": "settle-no-clamp, proof stripped",
+   "pglite": "settle-no-clamp-noproof",
+   "red": "pglite:2"
+  },
+  {
+   "id": "G12",
+   "group": "pglite",
+   "what": "authed-dml, proof stripped",
+   "pglite": "authed-dml-noproof",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G13",
+   "group": "pglite",
+   "what": "anon-settle, proof stripped",
+   "pglite": "anon-settle-noproof",
+   "red": "pglite:3"
+  },
+  {
+   "id": "G14",
+   "group": "pglite",
+   "what": "revoke-missing, proof stripped",
+   "pglite": "revoke-missing-noproof",
+   "red": "pglite:8"
+  },
+  {
+   "id": "R11",
+   "group": "retrieval",
+   "what": "the server url validator accepts an IP-address host again (the client already refuses it)",
+   "file": "supabase/functions/_shared/scribe-retrieval.mjs",
+   "old": " || /^[0-9.]+$/.test(u.hostname)) return null;   // an IP-address host is refused, as the client chip validator does",
+   "new": ") return null;",
+   "suites": [
+    "retrievaltest.mjs"
+   ],
+   "red": "retrievaltest.mjs:2"
+  },
+  {
+   "id": "C16",
+   "group": "chips",
+   "what": "N-1: a long host is cut from the LEFT again (a lookalike prefix is what the chip shows)",
+   "file": "js/source-labels.js",
+   "old": "`\\u2026${host.slice(-(MAX_HOST_LABEL - 1))}`",
+   "new": "host.slice(0, MAX_HOST_LABEL)",
+   "suites": [
+    "sourcechipstest.mjs",
+    "adminaidispatchtest.mjs"
+   ],
+   "red": "sourcechipstest.mjs:1 adminaidispatchtest.mjs:0"
+  },
+  {
+   "id": "Z1",
+   "group": "askroute",
+   "what": "B1: the pre-revision rule (an intent word AND an entity) comes back: \"what's Texas' record?\" gets no web",
+   "file": "supabase/functions/_shared/scribe-ask-route.mjs",
+   "old": "  if (teams.length > 0 || outsideCue) sports = !pureLeague || intent; // A: a named outside team / conference / league / award\n  else if (intent && (entity || !leagueish)) sports = true; // B: a player-or-game intent beside an entity\n  else if (stat && (!leagueish || (soft && !member && !cue && PLAYER_STAT.test(body)))) sports = true; // C: records / news / scores / stats / polls, with no league cue (a SOFT cue yields to a player-stat word)\n  else if (!leagueish && entity && QUESTION_FORM.test(body) && !BANTER_ASK.test(body)) { sports = true; reasons.push('question'); } // D: a question naming an entity\n",
+   "new": "  sports = (intent || stat) && entity; // the pre-revision rule\n",
+   "suites": [
+    "askroutetest.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "askroutetest.mjs:12 scribeAsk.twin.mjs:10"
+  },
+  {
+   "id": "Z2",
+   "group": "askroute",
+   "what": "B1: a named outside team still needs an intent word (rule A requires intent)",
+   "file": "supabase/functions/_shared/scribe-ask-route.mjs",
+   "old": "sports = !pureLeague || intent; // A:",
+   "new": "sports = intent; // A:",
+   "suites": [
+    "askroutetest.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "askroutetest.mjs:12 scribeAsk.twin.mjs:6"
+  },
+  {
+   "id": "Z3",
+   "group": "askroute",
+   "what": "B1: the league exclusion is gone (a named team inside a picks question is offered the lookup)",
+   "file": "supabase/functions/_shared/scribe-ask-route.mjs",
+   "old": "sports = !pureLeague || intent; // A:",
+   "new": "sports = true; // A:",
+   "suites": [
+    "askroutetest.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "askroutetest.mjs:2 scribeAsk.twin.mjs:0"
+  },
+  {
+   "id": "Z4",
+   "group": "askroute",
+   "what": "B1: the group pronouns (we / our / us) cancel a named outside team again",
+   "file": "supabase/functions/_shared/scribe-ask-route.mjs",
+   "old": "const pureLeague = member || strongCue;",
+   "new": "const pureLeague = member || cue;",
+   "suites": [
+    "askroutetest.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "askroutetest.mjs:1 scribeAsk.twin.mjs:0"
+  },
+  {
+   "id": "Z5",
+   "group": "askroute",
+   "what": "B1: rule D is gone (a lowercase question naming an unknown player is not offered)",
+   "file": "supabase/functions/_shared/scribe-ask-route.mjs",
+   "old": "else if (!leagueish && entity && QUESTION_FORM.test(body) && !BANTER_ASK.test(body)) {",
+   "new": "else if (false) {",
+   "suites": [
+    "askroutetest.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "askroutetest.mjs:1 scribeAsk.twin.mjs:1"
+  },
+  {
+   "id": "Z6",
+   "group": "askroute",
+   "what": "B1: a request for banter (\"tell me a joke\") is offered the lookup",
+   "file": "supabase/functions/_shared/scribe-ask-route.mjs",
+   "old": "&& QUESTION_FORM.test(body) && !BANTER_ASK.test(body)) {",
+   "new": "&& QUESTION_FORM.test(body)) {",
+   "suites": [
+    "askroutetest.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "askroutetest.mjs:1 scribeAsk.twin.mjs:3"
+  },
+  {
+   "id": "Z7",
+   "group": "askroute",
+   "what": "B1: a possessive no longer names the team (\"Oregon's\" is read as \"oregons\")",
+   "file": "supabase/functions/_shared/sports-vocab.mjs",
+   "old": "replace(/['\\u2019]s\\b/g, '').",
+   "new": "",
+   "suites": [
+    "askroutetest.mjs"
+   ],
+   "red": "askroutetest.mjs:1"
+  },
+  {
+   "id": "Z8",
+   "group": "judge",
+   "what": "B2: scribe-ask never checks the judge class counter",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "const judgeCapped = judgeWanted && await classBudgetExceeded(sb, leagueId, 'judge', classCapUsd('judge', { shares: classShares, leagueCapUsd: budgetCapUsd }));",
+   "new": "const judgeCapped = false;",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:7 functions.check.mjs:1"
+  },
+  {
+   "id": "Z9",
+   "group": "judge",
+   "what": "B2: scribe-ask reads the judge counter but does not apply the cap (three candidates and a judge call still go out)",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "const effectiveBestOfN = judgeCapped ? 1 : effectiveScribeBestOfN(limits.bestOfN);",
+   "new": "const effectiveBestOfN = effectiveScribeBestOfN(limits.bestOfN);",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:7 functions.check.mjs:1"
+  },
+  {
+   "id": "Z10",
+   "group": "judge",
+   "what": "B2: a capped judge SILENCES the chat reply (the skip the reviewer warned against) instead of behaving like bestOfN 1",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "const judgeCapped = judgeWanted && await classBudgetExceeded(sb, leagueId, 'judge', classCapUsd('judge', { shares: classShares, leagueCapUsd: budgetCapUsd }));",
+   "new": "const judgeCapped = judgeWanted && await classBudgetExceeded(sb, leagueId, 'judge', classCapUsd('judge', { shares: classShares, leagueCapUsd: budgetCapUsd }));\n  if (judgeCapped) return finish(envelopeSkipped(runId, SKIPPED.BUDGET, { classCapped: 'judge' }));",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:2"
+  },
+  {
+   "id": "Z11",
+   "group": "judge",
+   "what": "B2: scribe-autonomous never checks the judge class counter",
+   "file": "supabase/functions/scribe-autonomous/index.js",
+   "old": "const judgeCapped = limits.bestOfN === BEST_OF_CANDIDATES\n    && await classBudgetExceeded(sb, leagueId, 'judge', classCapUsd('judge', { shares: routing.shares.shares, leagueCapUsd: monthlyBudget }));",
+   "new": "const judgeCapped = false;",
+   "suites": [
+    "supabase/tests/functions/scribeAutonomous.twin.mjs",
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": "scribeAutonomous.twin.mjs:7 functions.check.mjs:1"
+  },
+  {
+   "id": "Z12",
+   "group": "judge",
+   "what": "B2: scribe-autonomous reads the judge counter but does not apply the cap",
+   "file": "supabase/functions/scribe-autonomous/index.js",
+   "old": "const bestOfN = judgeCapped ? 1 : limits.bestOfN;",
+   "new": "const bestOfN = limits.bestOfN;",
+   "suites": [
+    "supabase/tests/functions/scribeAutonomous.twin.mjs",
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": "scribeAutonomous.twin.mjs:7 functions.check.mjs:1"
+  },
+  {
+   "id": "Z13",
+   "group": "fallback",
+   "what": "gap G12: scribe-ask retries on the fallback after ANY outcome (a success, a refusal, an ungrounded answer), not only a provider failure",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "if (!providerFailure || ai === attempts.length - 1) break;",
+   "new": "if (ai === attempts.length - 1) break;",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:4"
+  },
+  {
+   "id": "Z14",
+   "group": "fallback",
+   "what": "gap G12: scribe-autonomous retries on the fallback after ANY outcome, not only a provider failure",
+   "file": "supabase/functions/scribe-autonomous/index.js",
+   "old": "if (!providerFailure || ai === attempts.length - 1) break;",
+   "new": "if (ai === attempts.length - 1) break;",
+   "suites": [
+    "supabase/tests/functions/scribeAutonomous.twin.mjs"
+   ],
+   "red": "scribeAutonomous.twin.mjs:3"
+  },
+  {
+   "id": "Z15",
+   "group": "ask",
+   "what": "gap G15: source chips ride the honest \"couldn't confirm\" line when a lookup ran",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "sources: (lookupState.sources.length && !allUngrounded && guarded.text) ? lookupState.sources : undefined,",
+   "new": "sources: lookupState.sources.length ? lookupState.sources : undefined,",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:1"
+  },
+  {
+   "id": "Z16",
+   "group": "ask",
+   "what": "N5: the grounding-drop line promises a retry again (\"Try again in a few minutes\")",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "const UNCONFIRMED_TEXT = \"SCRIBE couldn't confirm that from a current source.\";",
+   "new": "const UNCONFIRMED_TEXT = \"SCRIBE can't answer right now. Try again in a few minutes.\";",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "scribeAsk.twin.mjs:3"
+  },
+  {
+   "id": "Z17",
+   "group": "classify",
+   "what": "a classify failure (a 400 on the Haiku 5.5 shape) no longer records its apiErrorType / field / message on the run row",
+   "file": "supabase/functions/scribe-classify/index.js",
+   "old": "routeProblem: classifyRoute.problem || undefined,\n      apiErrorType: result.apiErrorType, apiErrorField: result.apiErrorField, apiErrorMessage: result.apiErrorMessage }));",
+   "new": "routeProblem: classifyRoute.problem || undefined }));",
+   "suites": [
+    "supabase/tests/functions/scribeClassify.twin.mjs"
+   ],
+   "red": "scribeClassify.twin.mjs:3"
+  },
+  {
+   "id": "Z18",
+   "group": "css",
+   "what": "the loss class has no rule (error text in the two admin cards falls back to the body colour)",
+   "file": "css/styles.css",
+   "old": ".admin-ai-loss{color:var(--loss)}\n",
+   "new": "",
+   "suites": [
+    "routingtest.mjs"
+   ],
+   "red": "routingtest.mjs:1"
+  },
+  {
+   "id": "Z19",
+   "group": "css",
+   "what": "an inline style=\"color:var(--loss)\" returns to the routing card's unreadable note",
+   "file": "js/scribe-routes-card.js",
+   "old": "<p class=\"text-xs mb-sm admin-ai-loss\" role=\"alert\">${esc(ROUTES_COPY.UNREADABLE)}",
+   "new": "<p class=\"text-xs mb-sm\" style=\"color:var(--loss)\" role=\"alert\">${esc(ROUTES_COPY.UNREADABLE)}",
+   "suites": [
+    "routingtest.mjs"
+   ],
+   "red": "routingtest.mjs:1"
+  },
+  {
+   "id": "Z20",
+   "group": "css",
+   "what": "the red pill is a solid --loss fill with --on-accent text again (2.77:1 in dark mode)",
+   "file": "css/styles.css",
+   "old": ".badge.admin-ai-pill-loss{background:var(--loss-bg);color:var(--loss);border-color:var(--loss)}",
+   "new": ".badge.admin-ai-pill-loss{background:var(--loss);color:var(--on-accent);border-color:var(--loss)}",
+   "suites": [
+    "contrastscan.mjs"
+   ],
+   "red": "contrastscan.mjs:2"
+  },
+  {
+   "id": "Z21",
+   "group": "askroute",
+   "what": "N1: the soft league cues no longer make a question league-ish (league-position and first-person questions are offered the web again)",
+   "file": "supabase/functions/_shared/scribe-ask-route.mjs",
+   "old": "const leagueish = member || cue || soft;",
+   "new": "const leagueish = member || cue;",
+   "suites": [
+    "askroutetest.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "askroutetest.mjs:2 scribeAsk.twin.mjs:6"
+  },
+  {
+   "id": "Z22",
+   "group": "askroute",
+   "what": "N1: a soft league cue cancels a named outside team (a football question like \"is Texas in first place in the Big 12\" is withheld)",
+   "file": "supabase/functions/_shared/scribe-ask-route.mjs",
+   "old": "const pureLeague = member || strongCue;",
+   "new": "const pureLeague = member || strongCue || soft;",
+   "suites": [
+    "askroutetest.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "askroutetest.mjs:1 scribeAsk.twin.mjs:1"
+  },
+  {
+   "id": "Z23",
+   "group": "askroute",
+   "what": "N1: a soft cue no longer yields to a player-stat word (\"who is leading in passing yards\" is withheld)",
+   "file": "supabase/functions/_shared/scribe-ask-route.mjs",
+   "old": "(soft && !member && !cue && PLAYER_STAT.test(body))",
+   "new": "false",
+   "suites": [
+    "askroutetest.mjs"
+   ],
+   "red": "askroutetest.mjs:1"
+  },
+  {
+   "id": "Z24",
+   "group": "caps",
+   "what": "M-39: the default split no longer totals $25 (chat back to 11: 26)",
+   "file": "js/data-model.js",
+   "old": "  chat: 10, learn: 3, classify: 2, judge: 1, feed: 5, analysis: 1, retrieval: 3,\n});",
+   "new": "  chat: 11, learn: 3, classify: 2, judge: 1, feed: 5, analysis: 1, retrieval: 3,\n});",
+   "suites": [
+    "routingtest.mjs"
+   ],
+   "red": "routingtest.mjs:5"
+  },
+  {
+   "id": "Z25",
+   "group": "caps",
+   "what": "M-39: the lookup class is back to its old $1 share (the default split sums to 23, and a lookup at $1.50 is withheld)",
+   "file": "js/data-model.js",
+   "old": "  chat: 10, learn: 3, classify: 2, judge: 1, feed: 5, analysis: 1, retrieval: 3,\n});",
+   "new": "  chat: 10, learn: 3, classify: 2, judge: 1, feed: 5, analysis: 1, retrieval: 1,\n});",
+   "suites": [
+    "routingtest.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": "routingtest.mjs:5 scribeAsk.twin.mjs:1"
+  },
+  {
+   "id": "Z26",
+   "group": "caps",
+   "what": "M-39: the chat share is $11 and analysis $0 (the total still reads 25, so only the exact split catches it)",
+   "file": "js/data-model.js",
+   "old": "  chat: 10, learn: 3, classify: 2, judge: 1, feed: 5, analysis: 1, retrieval: 3,\n});",
+   "new": "  chat: 11, learn: 3, classify: 2, judge: 1, feed: 5, analysis: 0, retrieval: 3,\n});",
+   "suites": [
+    "routingtest.mjs",
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "supabase/tests/functions/scribeAutonomous.twin.mjs"
+   ],
+   "red": "routingtest.mjs:3 scribeAsk.twin.mjs:1 scribeAutonomous.twin.mjs:1"
+  }
+ ]
+}

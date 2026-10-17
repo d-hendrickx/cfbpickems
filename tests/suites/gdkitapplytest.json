@@ -1,0 +1,22 @@
+{
+  "id": "gdkitapplytest",
+  "script": "gdkitapplytest.mjs",
+  "summary": "strict",
+  "floor": 45,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "tests/kits/gd-consolidated-mutants.json",
+    "tests/kits/gd-mutate.mjs",
+    "css/styles.css",
+    "js/app.js",
+    "js/card-detail.js",
+    "js/chat-ui.js",
+    "js/gameday.js",
+    "js/home.js",
+    "js/nav-gestures.js",
+    "js/next-up.js"
+  ],
+  "note": "S-3: the D1 Game Day consolidated round's mutation kit (tests/kits/gd-consolidated-mutants.json, run by tests/kits/gd-mutate.mjs) still lands: every mutant's old text matches exactly once in the live tree, its suites exist, it says why, and it names the RED it produced. Registered 2026-10-08."
+}

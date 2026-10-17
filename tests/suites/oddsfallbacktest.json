@@ -1,0 +1,24 @@
+{
+  "id": "oddsfallbacktest",
+  "script": "oddsfallbacktest.mjs",
+  "summary": "strict",
+  "floor": 180,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/spread-fallback.js",
+    "js/spread-find-ui.js",
+    "js/odds-lookup-client.js",
+    "js/week-wizard.js",
+    "css/styles.css",
+    "index.html",
+    "service-worker.js",
+    "loadtest.mjs",
+    "minidom.mjs",
+    "supabase/functions/odds-lookup/index.js"
+  ],
+  "note": "W-71 (2026-10-14): Find spreads, the client half - what is missing (PK is not), signedSpreadFrom proven against the game modal's own lines, the source label, cards validated twice and the one write (lockedSpread untouched, a game that gained a spread never overwritten), the ESPN-then-other-source flow with every state's copy, the controller (phases, in-place patching, real-click Include / No thanks, double tap, the quiet automatic check), and the REAL app's wizard Step 3 and Games tab with an ESPN-shaped payload and an injected lookup. Raised 171 -> 180 (2026-10-14, fix/d1-odds-daily-cap, DI-W71.10): daily_limit is its own state and copy (E-5b, E-12b); the automatic check stays quiet on it and a tapped Find shows the one calm muted line with no Try again (F-19g..i, real click dispatcher); the REAL response mapping lookupResultFrom (G-5a..c); the client's and the function's closed REASONS sets are the same six words (G-6, reads odds-lookup/index.js)."
+}

@@ -1,0 +1,1209 @@
+[
+ {
+  "id": "A1 rule asks one late",
+  "why": "the rule uses <= so a slate of exactly its size is NOT asked (the report itself)",
+  "file": "js/slate-add.js",
+  "old": "if (c < target) return { prompt: false };",
+  "new": "if (c <= target) return { prompt: false };",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "R-1 THE BUG: Add on a full slate ASKS - \"The slate has 10 games\", \"Add as game 11\", \"Swap with a game on the slate\" (sheet: none)"
+  }
+ },
+ {
+  "id": "A2 rule ignores the ceiling",
+  "why": "canExtend always true: the NFL at 10 is offered 'Add as game 11'",
+  "file": "js/slate-add.js",
+  "old": "canExtend: max === null || c < max, nextNumber",
+  "new": "canExtend: true, nextNumber",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "1-5 NFL: 10 -> asks and CANNOT extend (maxSize 10) ({\"prompt\":true,\"count\":10,\"target\":10,\"max\":10,\"min\":8,\"canExtend\":true,\"nextNumber\":11})"
+  }
+ },
+ {
+  "id": "A3 rule target fixed at 10",
+  "why": "the target no longer comes from the profile",
+  "file": "js/slate-add.js",
+  "old": "const target = slate && Number.isFinite(slate.size) && slate.size > 0 ? Math.floor(slate.size) : 10;\n  const max",
+  "new": "const target = 10;\n  const max",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "1-9 the target is the PROFILE's size, not a constant 10"
+  }
+ },
+ {
+  "id": "A4 max zero for null",
+  "why": "a null maxSize read as 0 (Number(null)): college would be capped at 0",
+  "file": "js/slate-add.js",
+  "old": "const max = slate && Number.isFinite(slate.maxSize) ? Math.floor(slate.maxSize) : null;",
+  "new": "const max = slate && slate.maxSize !== undefined ? Math.floor(Number(slate.maxSize)) : null;",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "1-10 maxSize null is \"no ceiling\", not zero"
+  }
+ },
+ {
+  "id": "A5 swap deletes first",
+  "why": "the old game is deleted BEFORE the new one is added (a throw would leave the slate one short)",
+  "file": "js/slate-add.js",
+  "old": "    added = addGameToSlate({ weekId, data: inData, deps });\n    deps.deleteGame(outGameId);",
+  "new": "    deps.deleteGame(outGameId);\n    added = addGameToSlate({ weekId, data: inData, deps });",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "3-1 the new game is ADDED first, then the old is deleted (delete:g1 -> save:Three)"
+  }
+ },
+ {
+  "id": "A6 swap no duplicate guard",
+  "why": "an incoming game already on the slate is swapped in anyway",
+  "file": "js/slate-add.js",
+  "old": "  if (slateMatchFor(inData, games)) return { ok: false, reason: 'duplicate' };\n",
+  "new": "",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "3-4 a duplicate incoming game (the join rule) is refused, with NOTHING written"
+  }
+ },
+ {
+  "id": "A7 swap ignores a missing out-game",
+  "why": "a vanished out-game is not refused",
+  "file": "js/slate-add.js",
+  "old": "  if (!week || !out) return { ok: false, reason: 'missing_out' };\n  if (!inData",
+  "new": "  if (!week) return { ok: false, reason: 'missing_out' };\n  if (!inData",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "3-3 an out-game that is no longer on the slate is refused"
+  }
+ },
+ {
+  "id": "A8 swap leaves tiebreaker dangling",
+  "why": "the NFL tiebreaker reference is not kept valid after a swap",
+  "file": "js/slate-add.js",
+  "old": "  try { tb = keepTiebreakerValid({ weekId, goneGameId: outGameId, deps }); } catch",
+  "new": "  try { tb = { moved: false, to: null }; } catch",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "4-1 swapping out the tiebreaker game repoints it to the latest-kickoff game (the incoming one has a later kickoff): g3"
+  }
+ },
+ {
+  "id": "A9 remove leaves tiebreaker dangling",
+  "why": "the reference is not kept valid after a remove",
+  "file": "js/slate-add.js",
+  "old": "  try { tb = keepTiebreakerValid({ weekId, goneGameId: gameId, deps }); } catch",
+  "new": "  try { tb = { moved: false, to: null }; } catch",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "4-2 removing it repoints to the latest remaining kickoff (g3)"
+  }
+ },
+ {
+  "id": "A10 college tiebreaker touched",
+  "why": "a profile with alma-mater affinity (college) gets its week row rewritten",
+  "file": "js/slate-add.js",
+  "old": "  if (profile && profile.affinity) return { moved: false, to: null };\n",
+  "new": "",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "4-5 college (alma-mater affinity) derives its tiebreaker from the slate: the week row is not touched"
+  }
+ },
+ {
+  "id": "A11 slate-long flag lost",
+  "why": "a throw after the add no longer says the slate is one long",
+  "file": "js/slate-add.js",
+  "old": "slateLong: !!added,",
+  "new": "slateLong: false,",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "3-6 a throw AFTER the add leaves the slate one game LONG (3), never one short, and says so"
+  }
+ },
+ {
+  "id": "A12 bulk limit ignores the engine",
+  "why": "the alma-mater widening ('ALL is absolute') is truncated to the sport's size",
+  "file": "js/slate-add.js",
+  "old": "const limit = Math.max(Number(target) || 10, Number(suggestedLength) || 0);",
+  "new": "const limit = Number(target) || 10;",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "7-3 the engine widened the slate for 11 alma-mater games (\"ALL is absolute\"): an empty slate still takes all 11"
+  }
+ },
+ {
+  "id": "A13 bulk ignores existing",
+  "why": "a bulk add counts from zero, so it overshoots a part-built slate",
+  "file": "js/slate-add.js",
+  "old": "let count = Number(existingCount) > 0 ? Math.floor(Number(existingCount)) : 0;",
+  "new": "let count = 0;",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "7-2 7 already on the slate: only 3 more fit under 10 (added 10, held 0)"
+  }
+ },
+ {
+  "id": "A14 choice offers extend at max",
+  "why": "the full-slate sheet still offers Add as game 11",
+  "file": "js/slate-add.js",
+  "old": "  if (d.canExtend) {\n    return actionSheetHTML({\n      escHtml, titleId: 'slate-add-title'",
+  "new": "  if (true) {\n    return actionSheetHTML({\n      escHtml, titleId: 'slate-add-title'",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "10-1 NFL at 10: \"The slate is full\" and the reason (The slate has 10 gamesAdd Away20 @ Home20 as game 11, or swap it for a game that is already on the slate. Ad"
+  }
+ },
+ {
+  "id": "A15 remove copy forgets the picks",
+  "why": "the remove sheet no longer names the picks that will be deleted",
+  "file": "js/slate-add.js",
+  "old": "    message: n > 0 ? SLATE_COPY.removeWithPicks(n) : (hasCounterpart",
+  "new": "    message: false ? SLATE_COPY.removeWithPicks(n) : (hasCounterpart",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "3-1 with picks: the sheet names them (\"Remove Away3 @ Home3?It goes back to Not on slate. Remove from Slate Cancel\")"
+  }
+ },
+ {
+  "id": "A16 swap button forgets picks",
+  "why": "the picker's button no longer names the picks",
+  "file": "js/slate-add.js",
+  "old": "const label = manual ? SLATE_COPY.continueLabel : (n ? SLATE_COPY.swapAndDelete(n) : SLATE_COPY.swapLabelBtn);",
+  "new": "const label = manual ? SLATE_COPY.continueLabel : SLATE_COPY.swapLabelBtn;",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "9-10 the button names the picks that will be deleted: \"Swap\""
+  }
+ },
+ {
+  "id": "A17 swap button enabled with no row",
+  "why": "Swap is not disabled until a row is chosen",
+  "file": "js/slate-add.js",
+  "old": "id=\"swap-picker-go\"${selected ? '' : ' disabled'}>",
+  "new": "id=\"swap-picker-go\">",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "9-6 the primary button reads \"Swap\" and is DISABLED until a row is chosen"
+  }
+ },
+ {
+  "id": "A18 picker leaks the picks",
+  "why": "BLIND RULE: the picker row caption shows which team was picked (a visibility bypass threaded through the render path)",
+  "file": "js/app.js",
+  "old": "caption: `${fmtTime(g.kickoff, g)} · ${line}`, picks,",
+  "new": "caption: `${fmtTime(g.kickoff, g)} · ${line} · ${(getPicks(weekId) || []).filter((p) => p.gameId === g.gameId).map((p) => p.selectedTeam).join('/')}`, picks,",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "9-8 THE BLIND RULE: the picker and the list show matchups, times, lines and COUNTS only - nobody's selection appears anywhere (an OPEN week)"
+  }
+ },
+ {
+  "id": "A19 list leaks the picks",
+  "why": "BLIND RULE: the Games list row shows which team was picked (a visibility bypass threaded through the row context)",
+  "file": "js/app.js",
+  "old": "    venue: (g) => formatVenueDisplay(g) || '',",
+  "new": "    venue: (g) => `${formatVenueDisplay(g) || ''} ${(getPicks(g.weekId) || []).filter((p) => p.gameId === g.gameId).map((p) => p.selectedTeam).join('/')}`,",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "9-8 THE BLIND RULE: the picker and the list show matchups, times, lines and COUNTS only - nobody's selection appears anywhere (an OPEN week)"
+  }
+ },
+ {
+  "id": "L1 join case-sensitive",
+  "why": "the join compares team names case-sensitively",
+  "file": "js/games-list.js",
+  "old": "export function normTeam(s) { return String(s == null ? '' : s).trim().toLowerCase(); }",
+  "new": "export function normTeam(s) { return String(s == null ? '' : s).trim(); }",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "1-1 names match trimmed and case-insensitive"
+  }
+ },
+ {
+  "id": "L2 join by id only",
+  "why": "the join drops the name rule (hand-added games stop matching their pool counterpart)",
+  "file": "js/games-list.js",
+  "old": "    if (home && away && normTeam(g.homeTeam) === home && normTeam(g.awayTeam) === away) return g;\n",
+  "new": "",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "1-1 names match trimmed and case-insensitive"
+  }
+ },
+ {
+  "id": "L3 join by names only",
+  "why": "the join drops the event-id rule",
+  "file": "js/games-list.js",
+  "old": "    if (eid && nonEmpty(g.espnEventId) === eid) return g;\n",
+  "new": "",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "1-2 a non-empty event id matches (number vs string)"
+  }
+ },
+ {
+  "id": "L4 duplicate record hidden",
+  "why": "a second record of the same game on the slate is silently dropped from the list",
+  "file": "js/games-list.js",
+  "old": "    if (used.has(key)) key = `g:${g.gameId}`;",
+  "new": "    if (used.has(key)) continue;",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "1-8 two records of the same game on the slate (the old double-save) are BOTH listed under distinct keys - the commissioner can remove the extra (e:9)"
+  }
+ },
+ {
+  "id": "L5 payload keeps the pool id",
+  "why": "the pool game's own gameId rides onto the new slate game",
+  "file": "js/games-list.js",
+  "old": "  const { gameId, _score, suggestionReasons, createdAt, updatedAt, ...rest } = game || {};",
+  "new": "  const { _score, suggestionReasons, createdAt, updatedAt, ...rest } = game || {};",
+  "suites": [
+   "gameslisttest.mjs",
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "(the suite exited 1 without a failing assertion: ReferenceError: gameId is not defined)"
+  }
+ },
+ {
+  "id": "L6 lock shown in draft",
+  "why": "Lock / Unlock appears on a draft week's rows (it has no effect there)",
+  "file": "js/games-list.js",
+  "old": "return ['edit', ...(pastDraft ? [unlocked ? 'lock' : 'unlock'] : []), 'remove'];",
+  "new": "return ['edit', ...([unlocked ? 'lock' : 'unlock']), 'remove'];",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "2-1 DRAFT: an on-slate row has Edit + Remove (no Lock / Unlock - it has no effect before picks open); a not-on-slate suggested row has Add + Dismiss (row-edit,r"
+  }
+ },
+ {
+  "id": "L7 dismiss on next-best",
+  "why": "Next best rows get a Dismiss",
+  "file": "js/games-list.js",
+  "old": "return row.suggested === 'suggested' ? ['add', 'dismiss'] : ['add'];",
+  "new": "return row.suggested ? ['add', 'dismiss'] : ['add'];",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "5-3 a Next best row has Add and NO Dismiss (as before: optional swap-ins)"
+  }
+ },
+ {
+  "id": "L8 segments swapped",
+  "why": "the On slate segment shows the not-on-slate rows",
+  "file": "js/games-list.js",
+  "old": "if (seg === 'on') return list.filter((r) => r.onSlate);",
+  "new": "if (seg === 'on') return list.filter((r) => !r.onSlate);",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "3-14 the On slate segment shows the 10 on-slate rows and marks itself pressed"
+  }
+ },
+ {
+  "id": "L9 no-spread label lost",
+  "why": "a missing line shows nothing",
+  "file": "js/games-list.js",
+  "old": ": `<span class=\"games-row-nospread\">${escHtml(GAMES_COPY.noSpread)}</span>`;",
+  "new": ": '';",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "2-6 a missing line reads \"No spread\" in the warning tone"
+  }
+ },
+ {
+  "id": "L10 remove button lost",
+  "why": "the on-slate row has no Remove",
+  "file": "js/games-list.js",
+  "old": "    return btn('row-remove', 'Remove', 'btn-ghost games-row-btn--danger');",
+  "new": "    return '';",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "R-3 the on-slate row itself carries Remove (right where you see the game)"
+  }
+ },
+ {
+  "id": "L11 on-slate mark lost",
+  "why": "an on-slate row carries no On slate mark",
+  "file": "js/games-list.js",
+  "old": "${row.onSlate ? `<span class=\"badge badge-open games-row-mark\">",
+  "new": "${false ? `<span class=\"badge badge-open games-row-mark\">",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "2-3 an on-slate row carries the \"On slate\" mark (the existing badge); a not-on-slate row carries none"
+  }
+ },
+ {
+  "id": "L12 row buttons unlabelled",
+  "why": "row buttons stop naming their game for VoiceOver",
+  "file": "js/games-list.js",
+  "old": "aria-label=\"${escHtml(`${label} ${name}`)}\">",
+  "new": "aria-label=\"${escHtml(label)}\">",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "2-12 every row button names its game for VoiceOver (\"Edit\" / \"Remove\")"
+  }
+ },
+ {
+  "id": "L13 summary hint lost",
+  "why": "the summary no longer shows the sport's size when the slate is off it",
+  "file": "js/games-list.js",
+  "old": "  if (onSlate !== target) {\n    hint =",
+  "new": "  if (false) {\n    hint =",
+  "suites": [
+   "slateaddswaptest.mjs",
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "6-10 the summary reads the live count and the sport's size, with no hard-coded \"/10\": \"11 on slate · 1 not on slate\""
+  }
+ },
+ {
+  "id": "L14 names unescaped",
+  "why": "a team name is written into the row without escaping",
+  "file": "js/games-list.js",
+  "old": "${escHtml(ctx.teamName(g, 'home'))}${g.neutralSite",
+  "new": "${ctx.teamName(g, 'home')}${g.neutralSite",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "2-13 hostile team names are escaped in the row markup (they show as TEXT; no element and no handler is created)"
+  }
+ },
+ {
+  "id": "C1 actions ignore danger flag",
+  "why": "an actions[] entry marked danger loses the destructive colour",
+  "file": "js/league-create.js",
+  "old": "actions.map((a) => btn(!!a.danger, a.action, a.label))",
+  "new": "actions.map((a) => btn(false, a.action, a.label))",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "2-3 an action entry with danger:true takes the destructive colour"
+  }
+ },
+ {
+  "id": "C2 actions allowed with danger",
+  "why": "danger and actions no longer exclude each other",
+  "file": "js/league-create.js",
+  "old": "  if (hasList === !!danger) throw new TypeError(",
+  "new": "  if (false) throw new TypeError(",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "2-4 `danger` and `actions` are mutually exclusive: both, or neither, throws"
+  }
+ },
+ {
+  "id": "W1 wizard fetch ignores the engine length",
+  "why": "Build slate truncates the alma-mater widening",
+  "file": "js/week-wizard.js",
+  "old": "Math.max(Math.floor(targetRaw), built.slate.length)",
+  "new": "Math.floor(targetRaw)",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "7-14 Build slate with an engine-widened slate of 11 (size 10) adds all 11 and holds none (added 10, held 1)"
+  }
+ },
+ {
+  "id": "W2 wizard fetch never holds",
+  "why": "Build slate keeps adding past the slate size",
+  "file": "js/week-wizard.js",
+  "old": "    if (getGames(week.weekId).length >= limit) { held += 1; continue; }\n",
+  "new": "",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "7-12 with the dep it stops at 10: added 10, held 0, target 10"
+  }
+ },
+ {
+  "id": "P1 door never asks",
+  "why": "an add on a full slate saves at once (the reported bug)",
+  "file": "js/app.js",
+  "old": "  if (!decision.prompt) {\n    if (origin === 'manual') return { status: 'open-form' };",
+  "new": "  if (true) {\n    if (origin === 'manual') return { status: 'open-form' };",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "R-1 THE BUG: Add on a full slate ASKS - \"The slate has 10 games\", \"Add as game 11\", \"Swap with a game on the slate\" (sheet: none)"
+  }
+ },
+ {
+  "id": "P2 door no duplicate guard",
+  "why": "a game already on the slate is added again",
+  "file": "js/app.js",
+  "old": "  if (origin === 'pool' && data && slateMatchFor(data, games)) {",
+  "new": "  if (false) {",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "5-late-5 the add door refuses a game already on the slate even at 9 (status added, 10 on the slate)"
+  }
+ },
+ {
+  "id": "P3 extend uses a stale number",
+  "why": "Extend reports a fixed game number instead of the live count",
+  "file": "js/app.js",
+  "old": "  showToast(SLATE_COPY.addedAs(games.length + 1), 'success');",
+  "new": "  showToast(SLATE_COPY.addedAs(11), 'success');",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "5-late-1 Extend re-reads the slate when it lands: 9 on the slate now, so it is \"Added as game 10.\" (Added as game 11.)"
+  }
+ },
+ {
+  "id": "P4 stale add is silent",
+  "why": "a stale Add on a game that is on the slate now says nothing",
+  "file": "js/app.js",
+  "old": "  if (row && row.onSlate && !wantOnSlate) showToast(SLATE_COPY.alreadyOn(slateName(row.game)), 'warning');",
+  "new": "  if (row && row.onSlate && !wantOnSlate) { /* silent */ }",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "5-late-2 a stale Add on a game that is on the slate now adds NOTHING, shows no sheet, and says so ()"
+  }
+ },
+ {
+  "id": "P5 section binds twice",
+  "why": "a repeat bind on the same node doubles every listener",
+  "file": "js/app.js",
+  "old": "  if (root && !root._gamesBound) {",
+  "new": "  if (root) {",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "11-0 binding the section three times on one node still saves ONE game and says ONE thing per tap (4 -> 5; toasts: Added Away20 @ Home20. | Away20 @ Home20 is al"
+  }
+ },
+ {
+  "id": "P6 hold timer not superseded",
+  "why": "a pending collapse timer is left to fire when a newer state arrives",
+  "file": "js/app.js",
+  "old": "  if (_gamesListTimer) { clearTimeout(_gamesListTimer); _gamesListTimer = null; }",
+  "new": "",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "10-4a exactly ONE hold is armed for the 200 ms collapse (A's superseded timer was cleared, not left to fire): [{\"id\":42,\"in\":200},{\"id\":44,\"in\":200}]"
+  }
+ },
+ {
+  "id": "P7 other tabs never marked stale",
+  "why": "an in-place slate change does not mark the other Comm tabs for a repaint",
+  "file": "js/app.js",
+  "old": "  markCommStale();\n}\n\n/** The Week tab's entry card",
+  "new": "}\n\n/** The Week tab's entry card",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "11-0b an in-place slate change marks the other Comm tabs stale (they repaint when the commissioner leaves Games)"
+  }
+ },
+ {
+  "id": "P8 choice sheet plays a warning",
+  "why": "the add-or-swap choice plays the warning haptic on open",
+  "file": "js/app.js",
+  "old": "  if (ctx.noHaptic !== true) haptic('warning');",
+  "new": "  haptic('warning');",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "6-5 native: NOTHING plays when the choice sheet opens (a choice is not a warning) (notification:WARNING)"
+  }
+ },
+ {
+  "id": "P9 manual swap swaps at once",
+  "why": "the manual-origin picker swaps before the form is saved",
+  "file": "js/app.js",
+  "old": "  if (sp.origin === 'manual') {\n    const { weekId, outId } = sp;",
+  "new": "  if (false) {\n    const { weekId, outId } = sp;",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "9-35 Continue closes the picker and opens the form - NOTHING has been swapped yet"
+  }
+ },
+ {
+  "id": "P10 picker toast not deferred",
+  "why": "the swap toast shows while the picker is still sliding out",
+  "file": "js/app.js",
+  "old": "announce: false });\n  if (res && res.ok)",
+  "new": "announce: true });\n  if (res && res.ok)",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "9-18 the toast waits for the sheet's slide-out (not shown while the picker is still on screen)"
+  }
+ },
+ {
+  "id": "P11 picker forgets focus",
+  "why": "closing the picker does not return focus to the control that opened the flow",
+  "file": "js/app.js",
+  "old": "    if (restoreFocus && inv && inv.isConnected !== false) { try { inv.focus?.({ preventScroll: true }); } catch { /* courtesy */ } }\n    if (typeof then",
+  "new": "    if (typeof then",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "9-23 …and focus returns to the control that raised the sheet"
+  }
+ },
+ {
+  "id": "P12 bulk add ignores the plan",
+  "why": "Add k suggested adds every suggestion",
+  "file": "js/app.js",
+  "old": "  for (const game of plan.toAdd) {\n    if (slateMatchFor(game, getGames(m.weekId))) continue;",
+  "new": "  for (const game of m.built.slate) {\n    if (slateMatchFor(game, getGames(m.weekId))) continue;",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "7-9 it adds 3, stops at 10 and says so (17 on the slate; Added 10 games. The slate is at 10; add more one at a time.)"
+  }
+ },
+ {
+  "id": "P13 requests Add reads a stored snapshot",
+  "why": "the Player Requests Add adds from the request row's own fields instead of the live pool game",
+  "file": "js/app.js",
+  "old": "  const pooled = eid ? model.pool.find((g) => g && g.espnEventId != null && String(g.espnEventId) === eid) : null;",
+  "new": "  const pooled = eid ? { homeTeam: 'Stale', awayTeam: 'Snapshot', espnEventId: eid } : null;",
+  "suites": [
+   "slateaddswaptest.mjs",
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "5-requests-9: at 9 the requests Add is ONE tap - added at once, no sheet (9 -> 10)"
+  }
+ },
+ {
+  "id": "P14 remove skips the sheet",
+  "why": "Remove deletes at once (the old confirm gone, no replacement)",
+  "file": "js/app.js",
+  "old": "  lsShowActionSheet('slate-remove', removeSheetHTML({ escHtml, name: slateName(g), pickCount: countPicksForGame(gameId), hasCounterpart }), { weekId, gameId, invoker });",
+  "new": "  runSlateRemove({ weekId, gameId });",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "R-4 THE BROWSER DIALOG: Remove asks in the app's own action sheet (a layer is up: false), calls no browser confirm() (calls: 0), and deletes nothing until confi"
+  }
+ },
+ {
+  "id": "P15 filters repaint the page",
+  "why": "a filter change repaints the whole Comm page instead of patching the list",
+  "file": "js/app.js",
+  "old": "    default: return;\n  }\n  patchGamesSection({ animate: false });",
+  "new": "    default: return;\n  }\n  renderCommPage();",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "4-7a a filter change patches the list in place: the same section node, the same chip node (the page is not repainted)"
+  }
+ },
+ {
+  "id": "P16 stale remove sheet empty",
+  "why": "Remove on a vanished game opens an empty sheet instead of saying so",
+  "file": "js/app.js",
+  "old": "  if (!g) { showToast(SLATE_COPY.swapGone, 'error'); afterSlateChange(); return; }\n  lsShowActionSheet('slate-remove'",
+  "new": "  lsShowActionSheet('slate-remove'",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "11-2b the remove ask for a vanished game says so and opens NO sheet ()"
+  }
+ },
+ {
+  "id": "P17 wizard step 2 count line lost",
+  "why": "Step 2 stops showing the slate's count",
+  "file": "js/app.js",
+  "old": "<div class=\"wiz-slate-count text-sm mt-sm\" id=\"wiz-step2-count\">",
+  "new": "<div class=\"wiz-slate-count text-sm mt-sm\" id=\"wiz-step2-count-off\">",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "R-4 THE BUG: Step 2 SHOWS the slate's count - \"10 games on your slate\" (got \"\")"
+  }
+ },
+ {
+  "id": "P18 wizard step 2 status lost",
+  "why": "Step 2 does not say what the add did",
+  "file": "js/app.js",
+  "old": "  const note = _weekWizardStep2Note;\n  _weekWizardStep2Note = '';",
+  "new": "  const note = '';\n  _weekWizardStep2Note = '';",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "R-9 THE BUG: the step SAYS what happened - \"Added Memphis @ Tulane. 11 games on your slate.\" (got \"\")"
+  }
+ },
+ {
+  "id": "P19 wizard step 3 no empty gate",
+  "why": "Next stays enabled with an empty slate",
+  "file": "js/app.js",
+  "old": "id=\"wiz-step3-next\"${games.length ? '' : ' disabled'}>",
+  "new": "id=\"wiz-step3-next\">",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "9-12 …and Next is disabled (the Step 2 rule: at least one game to continue)"
+  }
+ },
+ {
+  "id": "P20 wizard remove no sheet",
+  "why": "Step 3's Remove deletes without asking",
+  "file": "js/app.js",
+  "old": "      lsShowActionSheet('slate-remove', removeSheetHTML({ escHtml, name: slateName(g), pickCount: countPicksForGame(gid), hasCounterpart: getAvailableGames(week.weekId).some((p) => slateMatchFor(p, [g])) }), {",
+  "new": "      runSlateRemove({ weekId: week.weekId, gameId: gid, onDone: () => { collapseWizardRowThenRepaint(bodyEl, gid); } }); if (false) lsShowActionSheet('slate-remove', removeSheetHTML({ escHtml, name: slateName(g), pickCount: countPicksForGame(gid), hasCounterpart: false }), {",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "9-6 Remove raises the app's sheet naming the game ()"
+  }
+ },
+ {
+  "id": "P21 wizard hold repaint is cancelable",
+  "why": "a second wizard remove inside the hold no longer supersedes the first",
+  "file": "js/app.js",
+  "old": "function collapseWizardRowThenRepaint(bodyEl, gameId) {\n  if (_wizRemoveTimer) { clearTimeout(_wizRemoveTimer); _wizRemoveTimer = null; }\n",
+  "new": "function collapseWizardRowThenRepaint(bodyEl, gameId) {\n",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "10-9a the second wizard Remove supersedes the first hold: exactly ONE 200 ms repaint is armed ([{\"id\":50,\"in\":200},{\"id\":52,\"in\":200}])"
+  }
+ },
+ {
+  "id": "S1 picker not in gesturesSuspended",
+  "why": "a week swipe / pull-to-refresh can arm under the picker",
+  "file": "js/nav-gestures.js",
+  "old": "  if (document.getElementById?.('swap-picker-sheet-wrap')) return true;\n",
+  "new": "",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "9-27 gesturesSuspended() lists swap-picker-sheet-wrap"
+  }
+ },
+ {
+  "id": "S2 picker not in the drawer's list",
+  "why": "the drawer's edge swipe can arm under the picker",
+  "file": "js/control-center.js",
+  "old": "  if (document.getElementById?.('swap-picker-sheet-wrap')) return true;\n",
+  "new": "",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "9-28 the drawer's isBlockedByOtherSurface() lists it"
+  }
+ },
+ {
+  "id": "S3 picker not in the dismiss list",
+  "why": "other swipe-downs ignore the picker",
+  "file": "js/app.js",
+  "old": "  if (!excludeSwap && document.getElementById('swap-picker-sheet-wrap')) return true;\n",
+  "new": "",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "9-29 _dismissBlockingSurfaceUp() lists it, with its own carve-out for its own swipe-down"
+  }
+ },
+ {
+  "id": "B1 row buttons shrink to 34 pt",
+  "why": "the global .btn-sm size wins again: the Games list's Add / Remove / controls fall under 44 pt (P-8, DI-W69.5)",
+  "file": "css/styles.css",
+  "old": ".btn.games-ctl,.btn.games-row-btn{min-height:44px;",
+  "new": ".btn.games-ctl,.btn.games-row-btn{min-height:34px;",
+  "suites": [
+   "gameslistbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "gameslistbrowsertest.mjs",
+   "label": "2-light-320x1: light, 320 pt wide at 1x text — FAILS: every control >= 44 — display flex/column, gap 8px, padding 12/16, radius 14, mb 8, smallest control 34, g"
+  }
+ },
+ {
+  "id": "B2 row gap 8 becomes 4",
+  "why": "the card's internal rhythm leaves the 8 pt grid",
+  "file": "css/styles.css",
+  "old": ".games-row{display:flex;flex-direction:column;gap:8px;",
+  "new": ".games-row{display:flex;flex-direction:column;gap:4px;",
+  "suites": [
+   "gameslistbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "gameslistbrowsertest.mjs",
+   "label": "2-light-320x1: light, 320 pt wide at 1x text — FAILS: gap 8 — display flex/column, gap 4px, padding 12/16, radius 14, mb 8, smallest control 44, gaps row 8 ctl "
+  }
+ },
+ {
+  "id": "B3 Remove loses the destructive colour",
+  "why": "a destructive row button without --loss",
+  "file": "css/styles.css",
+  "old": ".btn.games-row-btn--danger{color:var(--loss)}",
+  "new": ".btn.games-row-btn--danger{color:var(--text-primary)}",
+  "suites": [
+   "gameslistbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "gameslistbrowsertest.mjs",
+   "label": "2-light-320x1: light, 320 pt wide at 1x text — FAILS: Remove is --loss — display flex/column, gap 8px, padding 12/16, radius 14, mb 8, smallest control 44, gaps"
+  }
+ },
+ {
+  "id": "B4 choice sheet drops under the wizard",
+  "why": "the action-sheet layer's z-index below the week wizard sheet: the manual add on Step 2 is covered (DI-W68.2)",
+  "file": "css/styles.css",
+  "old": "#ls-action-layer{position:fixed;inset:0;z-index:8100}",
+  "new": "#ls-action-layer{position:fixed;inset:0;z-index:7900}",
+  "suites": [
+   "gameslistbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "gameslistbrowsertest.mjs",
+   "label": "3-2: the choice sheet (2 actions + Cancel) — position fixed, z-index 7900 (above the wizard's 8000 and the picker's), margins L8 R8 B10, top 562.21875, actions "
+  }
+ },
+ {
+  "id": "B5 no divider between sheet actions",
+  "why": "the second action of the choice sheet loses its divider",
+  "file": "css/styles.css",
+  "old": ".lc-as-act+.lc-as-act{border-top:1px solid var(--border)}",
+  "new": ".lc-as-act+.lc-as-act{border-top:none}",
+  "suites": [
+   "gameslistbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "gameslistbrowsertest.mjs",
+   "label": "3-2: the choice sheet (2 actions + Cancel) — position fixed, z-index 8100 (above the wizard's 8000 and the picker's), margins L8 R8 B10, top 562.21875, actions "
+  }
+ },
+ {
+  "id": "B6 picker rows lose the flex layout",
+  "why": "the radio rows are no longer a flex row: the dot and the picks chip fall out of the right-hand column (the 56 pt min-height alone is a floor the rows' two text lines already exceed, so a min-height-only mutant is equivalent here)",
+  "file": "css/styles.css",
+  "old": ".swap-pk-opt{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;",
+  "new": ".swap-pk-opt{display:block;align-items:center;justify-content:space-between;gap:8px;width:100%;",
+  "suites": [
+   "gameslistbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "gameslistbrowsertest.mjs",
+   "label": "4-3: the picker — wrap fixed z 8000, sheet bottom gap 0, body overflow auto / contain, page locked (html overflow hidden), rows 10 x >= 82.078125 pt, list radiu"
+  }
+ },
+ {
+  "id": "B7 picker does not lock the page",
+  "why": "html:has(#swap-picker-sheet-wrap) loses overflow:hidden: the page scrolls behind the sheet",
+  "file": "css/styles.css",
+  "old": "html:has(#swap-picker-sheet-wrap){overflow:hidden}",
+  "new": "html:has(#swap-picker-sheet-wrap){overflow:visible}",
+  "suites": [
+   "gameslistbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "gameslistbrowsertest.mjs",
+   "label": "4-3: the picker — wrap fixed z 8000, sheet bottom gap 0, body overflow auto / contain, page locked (html overflow visible), rows 10 x >= 60.078125 pt, list radi"
+  }
+ },
+ {
+  "id": "B8 removed row does not collapse",
+  "why": "the 200 ms collapse transition dropped: a row vanishes with no animation",
+  "file": "css/styles.css",
+  "old": "  transition:max-height 200ms var(--ease-native),opacity 200ms ease-out,margin-bottom 200ms var(--ease-native),padding 200ms var(--ease-native)}",
+  "new": "  transition:none}",
+  "suites": [
+   "gameslistbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "gameslistbrowsertest.mjs",
+   "label": "5-7a: the collapse started (a max-height and an opacity transition were created on the row)"
+  }
+ },
+ {
+  "id": "B9 row flip fade removed",
+  "why": ".games-row--flip no longer animates: the in-place flip is abrupt",
+  "file": "css/styles.css",
+  "old": ".games-row--flip{animation:games-row-flip var(--motion-fast) ease-out}",
+  "new": ".games-row--flip{animation:none}",
+  "suites": [
+   "gameslistbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "gameslistbrowsertest.mjs",
+   "label": "5-5: the flip plays the 150 ms fade (--motion-fast), captured at its animationstart: animation \"none\", duration null"
+  }
+ },
+ {
+  "id": "B10 picker button shrinks",
+  "why": "the swap picker's primary button falls under 50 pt",
+  "file": "css/styles.css",
+  "old": ".btn.swap-pk-go{min-height:50px}",
+  "new": ".btn.swap-pk-go{min-height:36px}",
+  "suites": [
+   "gameslistbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "gameslistbrowsertest.mjs",
+   "label": "4-3: the picker — wrap fixed z 8000, sheet bottom gap 0, body overflow auto / contain, page locked (html overflow hidden), rows 10 x >= 60.078125 pt, list radiu"
+  }
+ },
+ {
+  "id": "B11 Paper explicit list loses the row",
+  "why": "the Paper-dark scope (data-color-scheme=dark) stops naming .games-row: light text on a paper card (killed by themetest [T10]: both triggers must list identical roots; the row also inherits the colour variables from its listed ancestors, so the browser cannot see this one)",
+  "file": "css/styles.css",
+  "old": "  .game-admin-card,\n  .games-row,\n  .toast,",
+  "new": "  .game-admin-card,\n  .toast,",
+  "suites": [
+   "themetest.mjs"
+  ],
+  "red": {
+   "suite": "themetest.mjs",
+   "label": "[T6] every media block has a manual twin and vice versa — media-only: :where(body.theme-paper@@) :where( .card, .game-card, .dc-game, .week-status-card, .info-b"
+  }
+ },
+ {
+  "id": "B12 Paper media list loses the row",
+  "why": "the Paper scope's prefers-color-scheme list stops naming .games-row (killed by themetest [T10]: both triggers must list identical roots; the row also inherits the colour variables from its listed ancestors, so the browser cannot see this one)",
+  "file": "css/styles.css",
+  "old": "    .game-admin-card,\n    .games-row,\n    .toast,",
+  "new": "    .game-admin-card,\n    .toast,",
+  "suites": [
+   "themetest.mjs"
+  ],
+  "red": {
+   "suite": "themetest.mjs",
+   "label": "[T6] every media block has a manual twin and vice versa — media-only: :where(body.theme-paper@@) :where( .card, .game-card, .dc-game, .week-status-card, .info-b"
+  }
+ },
+ {
+  "id": "B13 picker footer button not full width",
+  "why": "the primary button loses btn-block width (CSS: swap-pk-go is a block, the footer is a flex column)",
+  "file": "css/styles.css",
+  "old": ".swap-pk-footer{flex:none;padding:16px 4px 0;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:8px}",
+  "new": ".swap-pk-footer{flex:none;padding:16px 4px 0;border-top:1px solid var(--border);display:flex;flex-direction:row;gap:8px}",
+  "suites": [
+   "gameslistbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "gameslistbrowsertest.mjs",
+   "label": "4-9: the picks warning is a flex box with a 16 pt icon and a fill, ABOVE the button (false), and the button is still full width under it (false) (\"3 submitted p"
+  }
+ },
+ {
+  "id": "B14 games section controls touch",
+  "why": "the controls row loses its 16 pt bottom margin: Add a game collides with the list",
+  "file": "css/styles.css",
+  "old": ".games-controls{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}",
+  "new": ".games-controls{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:0}",
+  "suites": [
+   "gameslistbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "gameslistbrowsertest.mjs",
+   "label": "2-light-320x1: light, 320 pt wide at 1x text — FAILS: controls 16 below — display flex/column, gap 8px, padding 12/16, radius 14, mb 8, smallest control 44, gap"
+  }
+ },
+ {
+  "id": "L15 final score transposed",
+  "why": "the row prints FINAL home-away instead of away-home: a transposed display (orienttest's contract)",
+  "file": "js/games-list.js",
+  "old": "FINAL ${ctx.num(g.awayScore)}–${ctx.num(g.homeScore)}",
+  "new": "FINAL ${ctx.num(g.homeScore)}–${ctx.num(g.awayScore)}",
+  "suites": [
+   "orienttest.mjs"
+  ],
+  "red": {
+   "suite": "orienttest.mjs",
+   "label": "3d: THE BUG — the Games row's FINAL score must read AWAY–HOME to match the \"away @ home\" header directly above it"
+  }
+ },
+ {
+  "id": "R1-F1 picker swipe blocked by the wizard",
+  "why": "the picker's own swipe-down yields to the week wizard it was raised over: it cannot be dismissed by a swipe (review F-1)",
+  "file": "js/app.js",
+  "old": "_dismissBlockingSurfaceUp({ excludeSwap: true, excludeWizard: true }) || sp.busy",
+  "new": "_dismissBlockingSurfaceUp({ excludeSwap: true }) || sp.busy",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "10b-3 F-1: a swipe-down on the picker header OVER the wizard dismisses the picker (the wizard is not an \"other surface\" to it), leaves the wizard up and changes"
+  }
+ },
+ {
+  "id": "R1-F2 Step 2 note stored whenever",
+  "why": "afterSlateChange stores the note even with the wizard closed: Step 2 greets the next open with a stale line (review F-2)",
+  "file": "js/app.js",
+  "old": "_weekWizardStep2Note = (note && document.getElementById('week-wizard-sheet-wrap') && _weekWizardStep === 2) ? note : '';",
+  "new": "_weekWizardStep2Note = note;",
+  "suites": [
+   "slateaddswaptest.mjs"
+  ],
+  "red": {
+   "suite": "slateaddswaptest.mjs",
+   "label": "10b-5 F-2: Step 2's first paint carries no stale note (\"Added Away20 @ Home20. 10 games on your slate.\")"
+  }
+ },
+ {
+  "id": "R1-F3 wizard text buttons 34 pt",
+  "why": "the wizard's slate-step text buttons lose their 44 pt rule (review F-3)",
+  "file": "css/styles.css",
+  "old": ".btn.wiz-slate-btn,.wiz-review-slate{min-height:44px}",
+  "new": ".wiz-review-slate{min-height:44px}",
+  "suites": [
+   "gameslistbrowsertest.mjs"
+  ],
+  "red": {
+   "suite": "gameslistbrowsertest.mjs",
+   "label": "6-18 F-3 Step 3 empty: \"Back to add games\" 34 pt and \"Edit slate in Games tab\" 44 pt (>= 44), the closest two buttons are 8 pt apart (>= 8)"
+  }
+ },
+ {
+  "id": "R1-F4a data-quality chip dropped",
+  "why": "an on-slate row no longer carries the data-quality chip (review F-4)",
+  "file": "js/games-list.js",
+  "old": "${row.onSlate && ctx.sourceBadge ? ctx.sourceBadge(slateGame) : ''}",
+  "new": "${''}",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "2-14 F-4: an on-slate game with a non-ordinary data source carries its data-quality chip in the matchup line (\"\" / \"\")"
+  }
+ },
+ {
+  "id": "R1-F4b ESPN id chip dropped",
+  "why": "a row no longer carries the ESPN id chip (review F-4)",
+  "file": "js/games-list.js",
+  "old": "${espnId ? `<code class=\"games-row-espn\">ESPN:${escHtml(espnId)}</code>` : ''}",
+  "new": "${''}",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "2-15 F-4: the ESPN id sits in the meta line of an on-slate row and of a Not-on-slate row (\"\" / \"\")"
+  }
+ },
+ {
+  "id": "R1-F4c chip not wired in the app",
+  "why": "the app does not hand the row its sourceBadge helper (review F-4)",
+  "file": "js/app.js",
+  "old": "    sourceBadge: (g) => renderSourceBadge(g),   // the data-quality chip",
+  "new": "    // the data-quality chip",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "2-14 F-4: an on-slate game with a non-ordinary data source carries its data-quality chip in the matchup line (\"\" / \"\")"
+  }
+ },
+ {
+  "id": "R1-F5 Next advances on an empty slate",
+  "why": "wizard Step 3's Next does not re-read the slate when the tap lands: a Next tapped during the last row's collapse reaches Step 4 with no games (review F-5)",
+  "file": "js/app.js",
+  "old": "    if (week && getGames(week.weekId).length === 0) {\n      if (_wizRemoveTimer)",
+  "new": "    if (false) {\n      if (_wizRemoveTimer)",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "10-13 F-5: Next with an EMPTY slate does not advance to Step 4: Step 3 repaints at once to its empty state (Back to add games, Next disabled)"
+  }
+ },
+ {
+  "id": "R1-I1 duplicate precache entry",
+  "why": "a module is listed twice in STATIC_ASSETS: cache.addAll() rejects the batch and the worker never installs (review I-1)",
+  "file": "service-worker.js",
+  "old": "  './js/games-list.js',\n  './js/slate-add.js',",
+  "new": "  './js/games-list.js',\n  './js/games-list.js',\n  './js/slate-add.js',",
+  "suites": [
+   "notifytest.mjs"
+  ],
+  "red": {
+   "suite": "notifytest.mjs",
+   "label": "[25e] STATIC_ASSETS has no duplicate entry (duplicates: [\"./js/games-list.js\"]) - cache.addAll() rejects a duplicate request, so the worker would fail to instal"
+  }
+ },
+ {
+  "id": "M1 NFL keeps the alma chip",
+  "why": "the Games filter bar offers 'Alma mater games only' on a sport with no alma-mater affinity (createdleaguetest [1b], DI-551.3)",
+  "file": "js/app.js",
+  "old": "return !!(prof && prof.affinity);",
+  "new": "return true;",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "2-16 an NFL week's filter bar has no \"Alma mater games only\" chip (the other chips stay)"
+  }
+ },
+ {
+  "id": "M2 stale alma-only flag kept",
+  "why": "an alma-only flag left over from a college week stays on in an NFL week and hides every game",
+  "file": "js/app.js",
+  "old": "if (!gamesOfferAlmaChip(model) && state.availFilter.almaOnly) state.availFilter.almaOnly = false;",
+  "new": "",
+  "suites": [
+   "gameslisttest.mjs"
+  ],
+  "red": {
+   "suite": "gameslisttest.mjs",
+   "label": "2-16a …and an alma-only flag left over from a college week is dropped, not left hiding every NFL game (0 rows)"
+  }
+ }
+]

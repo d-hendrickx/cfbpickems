@@ -180,7 +180,8 @@ export const WIZARD_COPY = Object.freeze({
   // textarea bound to week.blurb — a blank field is not a confirm-guarded
   // action the way an unsent announcement draft was. (Was: 'You can send an
   // announcement anytime from the Week tab — skip for now?')
-  OPEN_SUCCESS: (weekNumber) => `Week ${weekNumber} is open — picks unlock now.`,
+  // D1 (DI-533): `sport` ('NFL') prefixes the line in a multi-sport league; '' (every one-sport league) is today's exact string.
+  OPEN_SUCCESS: (weekNumber, sport = '') => `${sport ? sport + ' ' : ''}Week ${weekNumber} is open — picks unlock now.`,
   EVERYONE_PICKED: "Everyone's picked — nothing to nudge.",
   // DI-358 — the three-way open-mode control at Step 6.
   SCHEDULE_MISSING_DATETIME: 'Pick a date and time, or choose Open now.',
@@ -508,11 +509,13 @@ export function createWeekFromWizard({ fields, deps, existingWeek = null }) {
   // otherwise an existing week KEEPS its own mode (nothing to fix, nothing
   // was asked to change); only a brand-new week with no `existingWeek` and
   // no `fields.dataSourceMode` falls all the way to the 'espn_live' default.
-  const { season, weekNumber, roundLabel = '', startDate = '', endDate = '', dataSourceMode: fieldsDataSourceMode } = fields;
+  const { season, weekNumber, roundLabel = '', startDate = '', endDate = '', dataSourceMode: fieldsDataSourceMode, competitionId = null, profile = null } = fields;
   const dataSourceMode = fieldsDataSourceMode ?? existingWeek?.dataSourceMode ?? 'espn_live';
+  // D1 (DI-533 #2): `competitionId` (null for the league's default competition) and the sport `profile` go to createWeek() ONLY for a brand-new week; re-saving Step 1 on an
+  // existing draft keeps the competition it was created in. With neither (every one-sport league), createWeek() is called exactly as before.
   const week = existingWeek
     ? { ...existingWeek, season, weekNumber, roundLabel, startDate, endDate, dataSourceMode }
-    : { ...createWeek(season, weekNumber, startDate, endDate), dataSourceMode, roundLabel };
+    : { ...createWeek(season, weekNumber, startDate, endDate, ...(competitionId || profile ? [{ competitionId, profile }] : [])), dataSourceMode, roundLabel };
   saveWeek(week);
   setActiveWeekId(week.weekId);
   return week;
@@ -547,14 +550,20 @@ export async function fetchAndApplySuggestedSlate({ week, deps }) {
     fetchByDateRange, saveAvailableGames, clearAvailableGames, getAvailableGames,
     isSuggestionRejected, saveFetchProof, scoreCandidateGames,
     buildSuggestedSlate, getGames, saveGame, createGame, claimedAlmaMaters,
+    profileForWeek, suggestSlateFor, slateTargetFor,
   } = deps;
   if (!week || !week.startDate) {
     return { ok: false, reason: 'no_start_date', added: 0 };
   }
   const endDate = week.endDate || week.startDate;
+  // D1 (DI-533 #3/#4): a week of a sport OTHER than college football fetches ITS scoreboard (`sport`), flags no alma-mater games (the NFL has no affinity rule, D-31), and builds its
+  // slate by kickoff on the profile's days with the profile's own size. A college week - and every call with no `profileForWeek` dep - runs exactly the code below it always did.
+  const profile = profileForWeek ? profileForWeek(week) : null;
+  const otherSport = !!profile && profile.key !== 'cfb';
   const result = await fetchByDateRange({
     startDate: week.startDate, endDate, season: week.season,
-    almaMaters: claimedAlmaMaters ? claimedAlmaMaters() : [],
+    almaMaters: otherSport && !profile.affinity ? [] : (claimedAlmaMaters ? claimedAlmaMaters() : []),
+    ...(otherSport ? { sport: profile.key } : {}),
   });
   if (result.qualityReport && saveFetchProof) saveFetchProof(result.qualityReport);
   if (result.error || !result.games || !result.games.length) {
@@ -564,16 +573,24 @@ export async function fetchAndApplySuggestedSlate({ week, deps }) {
   saveAvailableGames(week.weekId, result.games);
   const pool = getAvailableGames ? getAvailableGames(week.weekId) : result.games;
   const candidatePool = isSuggestionRejected ? pool.filter((g) => !isSuggestionRejected(week.weekId, g)) : pool;
-  const scored = candidatePool.length ? scoreCandidateGames(candidatePool, week.weekId) : [];
-  const built = buildSuggestedSlate(scored, 10);
-  let added = 0;
+  const byKickoff = otherSport && !profile.affinity && typeof suggestSlateFor === 'function';
+  const scored = !byKickoff && candidatePool.length ? scoreCandidateGames(candidatePool, week.weekId) : [];
+  const built = byKickoff ? suggestSlateFor({ profile, candidates: candidatePool }) : buildSuggestedSlate(scored, 10);
+  // D1 (W-68, DI-W68.6, R-3): the bulk add stops at the sport's slate size instead of silently growing the slate past it. With no `slateTargetFor` dep there is no limit and this loop is exactly
+  // what it was. The limit is the sport's size OR the suggestion engine's own length when it widened the slate for alma-mater games ("ALL is absolute", Drew's standing ruling), so an empty slate
+  // always takes the whole suggestion, as before.
+  const targetRaw = typeof slateTargetFor === 'function' ? Number(slateTargetFor(week)) : NaN;
+  const limit = Number.isFinite(targetRaw) && targetRaw > 0 ? Math.max(Math.floor(targetRaw), built.slate.length) : Infinity;
+  let added = 0, held = 0;
   for (const game of built.slate) {
     const already = getGames(week.weekId).some((g) => g.homeTeam === game.homeTeam && g.awayTeam === game.awayTeam);
-    if (!already) { saveGame(createGame(week.weekId, { ...game, weekId: week.weekId })); added += 1; }
+    if (already) continue;
+    if (getGames(week.weekId).length >= limit) { held += 1; continue; }
+    saveGame(createGame(week.weekId, { ...game, weekId: week.weekId })); added += 1;
   }
   return {
-    ok: true, added, fetched: result.games.length, suggested: built.slate.length,
-    partial: result.games.length < 10,
+    ok: true, added, held, target: Number.isFinite(targetRaw) && targetRaw > 0 ? Math.floor(targetRaw) : null, fetched: result.games.length, suggested: built.slate.length,
+    partial: result.games.length < (byKickoff && profile.slate && profile.slate.minSize ? profile.slate.minSize : 10),
   };
 }
 
@@ -594,9 +611,9 @@ export function openForPicksFromWizard({ week, gamesCount, missingSpreadCount, t
   // on both open paths.
   const blurbRefusal = blurbRefusalFor(week);
   if (blurbRefusal) return { ...blurbRefusal, gate };
-  const { applyWeekStatusChange, showToast, nativeHapticImpact, isNativeShell } = deps;
+  const { applyWeekStatusChange, showToast, nativeHapticImpact, isNativeShell, sportLabelFor } = deps;
   const updated = applyWeekStatusChange(week, 'open');
-  if (showToast) showToast(WIZARD_COPY.OPEN_SUCCESS(week.weekNumber), 'success');
+  if (showToast) showToast(WIZARD_COPY.OPEN_SUCCESS(week.weekNumber, sportLabelFor ? sportLabelFor(week) : ''), 'success');
   if (isNativeShell && isNativeShell() && nativeHapticImpact) nativeHapticImpact('LIGHT');
   return { ok: true, week: updated, gate };
 }
@@ -798,6 +815,98 @@ export function dueForScheduledOpen({ week, now = Date.now(), gamesCount, missin
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// PF-1 / UN-410, UN-411 / DI Amendment 1 (A1.1, 2026-10-01) — LATE ENTRY: "Re-open Picks" on a week whose lock instant has PASSED.
+//
+// Drew: "No we do not use it after lock time to let someone enter late, but theoretically the commissioner should have that power." From migration 0043 the server closes a week
+// at its lock instant and re-locks a re-opened one within a minute, so a bare "Re-open Picks" after the instant would be a lock with no door. The door is a NEW lock time: the
+// commissioner picks one (now + 30 min by default, later than now, no later than the week's last kickoff), the app writes weeks.picks_lock_at while the week is still locked and
+// THEN re-opens it through the existing transition; the guard and the job honour an explicit picks_lock_at exactly, so the server neither refuses writes nor re-locks until then.
+// Before the instant, Re-open Picks behaves exactly as it always did. Pure and import-free like the rest of this file: the caller passes the effective lock time and the games.
+// ══════════════════════════════════════════════════════════════════════════
+
+export const LATE_ENTRY_COPY = Object.freeze({
+  TITLE: 'Re-open picks',
+  FIELD_LABEL: 'New lock time',
+  /** The sentence the sheet shows BEFORE the commissioner confirms — what the action does, in the league's own terms. `timeText` is already formatted (and is escaped by the caller). */
+  consequence: (timeText) => `Picks and guesses reopen for everyone until ${timeText}.`,
+  CONFIRM: 'Re-open Picks',
+  CANCEL: 'Cancel',
+  ERR_INVALID: 'Enter a date and time.',
+  ERR_PAST: 'Pick a time after now.',
+  ERR_AFTER_LAST_KICKOFF: "Pick a time no later than the week's last kickoff.",
+  ERR_NO_WINDOW: 'Every game has already kicked off, so there is no time left to re-open picks for.',
+  /** N3 (reviewer BLOCK #1, 2026-10-01): appended to the consequence line when the chosen time is AFTER the week's first kickoff — guesses (and any game that has not kicked off) reopen while others are underway. */
+  WARN_STARTED: 'Some games will already have started.',
+  SAVE_FAILED: "Couldn't set the new lock time. The week was not re-opened. Check your connection and try again.",
+  /** Reason `not_locked`: the week left LOCKED while the sheet was open (it went live at first kickoff, or another device moved it). Only a locked, unrevealed week can be re-opened, so nothing was written. */
+  NOT_LOCKED: "This week is no longer locked, so it can't be re-opened.",
+  OPENED: (timeText) => `Picks re-opened until ${timeText}.`,
+});
+export const LATE_ENTRY_DEFAULT_MS = 30 * 60 * 1000;
+
+/** Does "Re-open Picks" need a new lock time? True only when the week has a lock instant (`lockAtMs`, the effective one: picksLockAt, else first kickoff minus the offset) and it has passed. */
+export function lateEntryApplies({ lockAtMs = null, now = Date.now() } = {}) {
+  return typeof lockAtMs === 'number' && Number.isFinite(lockAtMs) && now >= lockAtMs;
+}
+/** The week's LAST kickoff in ms (the bound the new lock time may not pass), ignoring games with no usable kickoff — the same filter as scoring.js computeLastKickoff. `null` when there is none. */
+export function lateEntryLastKickoffMs(games) {
+  const times = (games || []).map((g) => (g && g.kickoff ? new Date(g.kickoff).getTime() : null)).filter((t) => typeof t === 'number' && !Number.isNaN(t));
+  return times.length ? Math.max(...times) : null;
+}
+/** The week's FIRST kickoff in ms, ignoring games with no usable kickoff (the same filter as scoring.js computeFirstKickoff). `null` when there is none. */
+export function lateEntryFirstKickoffMs(games) {
+  const times = (games || []).map((g) => (g && g.kickoff ? new Date(g.kickoff).getTime() : null)).filter((t) => typeof t === 'number' && !Number.isNaN(t));
+  return times.length ? Math.min(...times) : null;
+}
+/** N3: the clause the consequence line gains when the chosen lock time is AFTER the week's first kickoff (strictly: a lock exactly at kickoff closes as the first game starts). `''` otherwise, and when no kickoff is known. */
+export function lateEntryStartedWarning({ atMs, firstKickoffMs = null } = {}) {
+  return typeof atMs === 'number' && Number.isFinite(atMs) && typeof firstKickoffMs === 'number' && Number.isFinite(firstKickoffMs) && atMs > firstKickoffMs ? LATE_ENTRY_COPY.WARN_STARTED : '';
+}
+/**
+ * N1 (reviewer BLOCK #1, 2026-10-01): did the picks_lock_at write REACH the server? The adapter's flush() result has a dozen shapes and only some of them mean "sent": `{held:true}` (stale
+ * mirror), `{skipped:true}` (no client), `{refused:[..]}`, `{heldOffline:[..]}`, `{retrying:[..]}` (a retryable failure: the batch STOPS at the failing operation, so a week write queued after it never
+ * went either), `{refusedStale:[..]}` (dropped), `{stillRefused:[..]}` (latched), `{abandoned:true}`, and a thrown error (null here). A result that merely does not NAME `cfbp_weeks` is therefore NOT
+ * evidence it was sent; `pending` is the evidence the result cannot give — it answers "is the lock-time patch for this week still waiting to be written?" (app.js asks the adapter's own planner).
+ * Counting any of those as success let the planner send `transition_week(open)` BEFORE the picks_lock_at patch (the weeks key plans its status leg ahead of its row patches), which is the two-step
+ * ordering this write exists to protect. Pure; `pending` is a boolean the caller computed AFTER the flush settled.
+ */
+export function lateEntryLockWriteLanded(res, { pending = false } = {}) {
+  if (!res || typeof res !== 'object') return false;
+  if (res.abandoned === true || res.held === true || res.skipped === true) return false;
+  for (const k of ['refused', 'heldOffline', 'retrying', 'refusedStale', 'stillRefused']) {
+    if (Array.isArray(res[k]) && res[k].includes('cfbp_weeks')) return false;
+  }
+  return pending !== true;
+}
+/** The default new lock time: now + 30 minutes, clamped to the last kickoff when that comes sooner; `null` when no time is left (every game has kicked off). */
+export function lateEntryDefaultMs({ now = Date.now(), lastKickoffMs = null } = {}) {
+  if (lastKickoffMs !== null && lastKickoffMs <= now) return null;
+  const d = now + LATE_ENTRY_DEFAULT_MS;
+  return lastKickoffMs !== null && d > lastKickoffMs ? lastKickoffMs : d;
+}
+/**
+ * Is a typed new lock time acceptable? `atMs` is NaN for a blank or garbled field. Order of the checks is the order the commissioner would fix them in: nothing left to choose
+ * (`no_window`), then unreadable (`invalid`), then not after now (`past`), then past the last kickoff (`after_last_kickoff`). With no dated game there is no upper bound.
+ */
+export function validateLateEntryAt({ atMs, now = Date.now(), lastKickoffMs = null } = {}) {
+  if (lastKickoffMs !== null && lastKickoffMs <= now) return { ok: false, reason: 'no_window' };
+  if (typeof atMs !== 'number' || !Number.isFinite(atMs)) return { ok: false, reason: 'invalid' };
+  if (atMs <= now) return { ok: false, reason: 'past' };
+  if (lastKickoffMs !== null && atMs > lastKickoffMs) return { ok: false, reason: 'after_last_kickoff' };
+  return { ok: true, reason: null };
+}
+/** The sheet's inline message for a refusal reason from validateLateEntryAt (`''` for none). */
+export function lateEntryErrorCopy(reason) {
+  switch (reason) {
+    case 'invalid': return LATE_ENTRY_COPY.ERR_INVALID;
+    case 'past': return LATE_ENTRY_COPY.ERR_PAST;
+    case 'after_last_kickoff': return LATE_ENTRY_COPY.ERR_AFTER_LAST_KICKOFF;
+    case 'no_window': return LATE_ENTRY_COPY.ERR_NO_WINDOW;
+    default: return '';
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // DI-359 — FINALIZE WEEK, a guided flow sequencing three already-built
 // actions behind one sheet. NO NEW MATH anywhere below: every function here
 // is a thin wrapper calling exactly the function today's three separate
@@ -810,10 +919,167 @@ export function dueForScheduledOpen({ week, now = Date.now(), gamesCount, missin
 export const FINALIZE_STEPS = Object.freeze([
   { step: 1, id: 'approve-scores', title: 'Approve Scores' },
   { step: 2, id: 'confirm-tiebreaker', title: 'Confirm Tiebreaker' },
-  { step: 3, id: 'confirm-extra-point', title: 'Confirm Extra Point' },
+  // FB-027 / DI-519 (2026-10-07) — Step 3's title is the DI's copy. The id is unchanged (weekwizardtest [15-1] pins the ids), and the step is shown only
+  // when the week runs the contest (finalizeStepsFor(), below).
+  { step: 3, id: 'confirm-extra-point', title: 'Longest field goal (Extra Point)' },
   { step: 4, id: 'finalize', title: 'Finalize' },
 ]);
 export const FINALIZE_STEP_COUNT = FINALIZE_STEPS.length;
+
+// ── FB-027 / UN-417 / PF-417 (bug batch W, 2026-10-07) — DI-518 / DI-519 ──────────────────────────────────────────────────
+// The defect: the guided flow below was reachable only when `week.pendingFinalization` was set (a flag the background tick raises), and the status-row
+// "Finalize" applied `final` directly — so a commissioner finalized without the tiebreaker or the longest field goal. These are the DOM-free decisions the
+// fix needs; js/app.js renders them. Copy quoted from DESIGN_D1_A §4.3.
+export const FINALIZE_COPY = Object.freeze({
+  ENTRY_FINALIZE: 'Finalize Week',
+  ENTRY_REVIEW: 'Review & finalize',
+  ALL_FINAL_LEAD: 'All games are final.',
+  ALL_FINAL_ASK: 'Ready to close this week and lock standings?',
+  NOT_YET: 'Not yet',
+  TB_REQUIRED: "Enter the final value to finalize. The tiebreaker can't be skipped once players have guessed.",
+  CHIP_CALCULATED: 'Calculated',
+  CHIP_MANUAL: 'Commissioner-set',
+  MISSING: 'Missing',
+  NOT_USED: 'Not used this week',
+  EP_LABEL: 'Actual longest field goal (yards)',
+  // R3 (review round 1) — Step 3's Detect, the Comm card's ep-detect-btn reached from inside the wizard.
+  EP_DETECT: 'Detect',
+  EP_DETECTING: 'Fetching scoring plays…',
+  EP_DETECT_NONE: 'No made field goals found yet.',
+  EP_DETECT_FAILED: "Couldn't fetch scoring plays. Check your connection and try again.",
+  // B1 (review round 1; DI-519 amended inline by the coordinator, 2026-10-07) — what the sheet says while and after it waits for the server.
+  // "Nothing was saved" is never said: a PENDING finalize is queued on this device (which already shows the week final) and the adapter sends it
+  // by itself; only a REFUSAL is final.
+  // PF-416 / FB-026 follow-up, item 2 (thread 100726-D1, 2026-10-07; copy for the coordinator's inline approval) — the refused row is TRUTHFUL and
+  // TERMINAL. It said "Reload and try again." and its Reload was a re-sync, which a refused week write survives by the adapter's design: the next
+  // press re-sent the same refused finalize and was refused again, as often as the commissioner tried. It now says what is true and offers the one
+  // real next step: reloading the app, which ends the refused write this device was still holding, so the week reads here as it does for everyone.
+  FINALIZING: 'Finalizing…',
+  NOT_SENT: "Not sent yet. It will finish when you're back online.",
+  REFUSED: "Couldn't finalize. The server didn't accept it, so the week is still live for everyone.",
+  RETRY: 'Retry',
+  RELOAD: 'Reload app',
+  SUCCESS: (weekNumber) => `Week ${weekNumber} is final.`,
+  // PF-416 review follow-up (coordinator decision, 2026-10-08) — the success that reloads the app (the adapter still holds a refused week write)
+  // says so, so the reload does not look like a crash. Every other success keeps SUCCESS.
+  SUCCESS_REFRESHING: (weekNumber) => `Week ${weekNumber} is final. Refreshing…`,
+});
+
+/**
+ * B1 (review round 1) — what a press of Finalize Week (or Retry) DOES, decided before anything is written:
+ *   'confirmed'  the SERVER already holds the week final (an earlier press landed, or another device finalized it): success, and never a second
+ *                finalize — re-running it would re-stamp finalizedAt and re-write results the server now refuses outside finalize_week();
+ *   'reask'      THIS DEVICE already shows the week final (an earlier press is queued or still in flight): only ask the server again;
+ *   'blocked'    the review card is missing a required value: nothing is written;
+ *   'finalize'   the one first-time finalize.
+ */
+export function finalizePressAction({ serverFinal = false, deviceStatus = null, blocked = false } = {}) {
+  if (serverFinal) return 'confirmed';
+  if (deviceStatus === 'final') return 'reask';
+  if (blocked) return 'blocked';
+  return 'finalize';
+}
+
+/** B1 — the server's answer, as the sheet shows it: 'saved' succeeds; 'pending' is "Not sent yet" with Retry (re-ask only); anything else (refused,
+ *  an error) is the terminal refused row (PF-416 follow-up, item 2): "Couldn't finalize. The server didn't accept it, so the week is still live for
+ *  everyone." with Reload app — never a Retry, since a refused write cannot succeed by being sent again. */
+export function finalizeOutcomeView(state) {
+  if (state === 'saved') return { kind: 'success', text: '', action: null, actionLabel: '' };
+  if (state === 'pending') return { kind: 'not-sent', text: FINALIZE_COPY.NOT_SENT, action: 'retry', actionLabel: FINALIZE_COPY.RETRY };
+  return { kind: 'refused', text: FINALIZE_COPY.REFUSED, action: 'reload', actionLabel: FINALIZE_COPY.RELOAD };
+}
+
+/**
+ * PF-416 / FB-026 follow-up, item 3 (thread 100726-D1, 2026-10-07) — where a Finalize entry opens. `committed`: this device already shows the week
+ * final and the server does not hold it final yet (a press is queued, or refused). Such a finalize re-enters at Step 4 with the server's last answer:
+ * 'refused' when the week write is latched refused, otherwise 'pending' ("Not sent yet" + Retry, a re-ask). Never Step 1: walking Steps 1-3 again
+ * would offer a tiebreaker and a longest field goal that the queued finalize never carries. Otherwise Step 1, as always.
+ */
+export function finalizeEntryState({ committed = false, refused = false } = {}) {
+  if (!committed) return { step: FINALIZE_STEPS[0].step, outcome: null };
+  return { step: FINALIZE_STEPS[FINALIZE_STEPS.length - 1].step, outcome: refused ? 'refused' : 'pending' };
+}
+
+/**
+ * DI-518 — the Manage screen's Finalize entry. Offered only while the week is LIVE (the caller passes the SERVER-confirmed status, RG-251, the same one
+ * the status row is built from). Every game final ⇒ "Finalize Week" plus the all-final banner; otherwise "Review & finalize" (Step 1 names what blocks).
+ * In a multi-sport league the label names the sport and week ("Finalize NFL Week 6"). Never keyed to `pendingFinalization`.
+ */
+export function finalizeEntry({ status, games, sportCode = null, weekNumber = null, multiSport = false } = {}) {
+  const list = games || [];
+  const show = status === 'live';
+  const allFinal = show && list.length > 0 && list.every((g) => g && g.status === 'final');
+  const named = multiSport && sportCode && weekNumber != null ? ` ${sportCode} Week ${weekNumber}` : '';
+  const label = allFinal
+    ? (named ? `Finalize${named}` : FINALIZE_COPY.ENTRY_FINALIZE)
+    : `${FINALIZE_COPY.ENTRY_REVIEW}${named}`;
+  return { show, allFinal, label };
+}
+
+/**
+ * DI-518 AMENDMENT (coordinator, inline, 2026-10-07: "PF-417 means finalize from the Week Wizard, and a hidden entry fails it"). When the wizard opens
+ * on a next-week DRAFT, the live week's Manage screen — the only home of its Finalize entry — is unreachable (openWeekWizardSheet() routes to the lone
+ * continuable draft). This names the week that is hiding: a LIVE week of the SAME sport as the draft, other than the draft itself; the lowest-numbered
+ * when there are several. Any live week qualifies, not only an earlier-numbered one: a draft numbered below a live week hides Finalize the same way.
+ * `statusOf` is the caller's status reader (app.js passes the SERVER-confirmed one, RG-251, as the Manage screen does); `sameSport(a, b)` is the
+ * caller's competition comparison (app.js: competitionForWeek()). Pure; `null` when nothing is hiding.
+ */
+export function liveWeekBehindDraft({ draft, weeks, statusOf = (w) => w && w.status, sameSport = () => true } = {}) {
+  if (!draft || draft.status !== 'draft') return null;
+  const hits = (weeks || []).filter((w) => w && w.weekId !== draft.weekId && statusOf(w) === 'live' && sameSport(w, draft));
+  hits.sort((a, b) => (Number(a.weekNumber) || 0) - (Number(b.weekNumber) || 0));
+  return hits[0] || null;
+}
+/** DI-518 amendment — the draft view's row: "Week N is live" and its button, "Finalize Week N" ("Finalize NFL Week N" in a multi-sport league). */
+export function liveWeekRowCopy({ weekNumber, sportCode = null, multiSport = false } = {}) {
+  return { text: `Week ${weekNumber} is live`, button: `Finalize ${multiSport && sportCode ? `${sportCode} ` : ''}Week ${weekNumber}` };
+}
+
+/** DI-518 — the visible steps: Step 3 only when the week runs the longest-field-goal contest (`extraPointEnabled`, opt-out: `!== false`, extra-point.js). */
+export function finalizeStepsFor(week) {
+  const epOn = !(week && week.extraPointEnabled === false);
+  return FINALIZE_STEPS.filter((s) => s.id !== 'confirm-extra-point' || epOn);
+}
+/** The visible step after / before `step` (`null` at either end), and `step`'s 1-based place among the visible steps (for the tracker). A step that is
+ *  no longer visible (the contest was switched off mid-flow) normalizes to the next visible one. */
+export function finalizeNextStep(step, week) {
+  const steps = finalizeStepsFor(week).map((s) => s.step);
+  return steps.find((n) => n > step) ?? null;
+}
+export function finalizePrevStep(step, week) {
+  const steps = finalizeStepsFor(week).map((s) => s.step);
+  return [...steps].reverse().find((n) => n < step) ?? null;
+}
+export function finalizeNormalizeStep(step, week) {
+  const steps = finalizeStepsFor(week).map((s) => s.step);
+  return steps.includes(step) ? step : (steps.find((n) => n > step) ?? steps[steps.length - 1]);
+}
+export function finalizeStepPosition(step, week) {
+  const steps = finalizeStepsFor(week).map((s) => s.step);
+  return { index: steps.indexOf(finalizeNormalizeStep(step, week)) + 1, count: steps.length };
+}
+
+/** DI-519 — is the tiebreaker REQUIRED to finalize? Only when the week asks a question AND at least one entrant guessed; otherwise a blank value stays
+ *  legal (the existing path). `guessCount` is the caller's count of entrants with a guess on file (blind-gated in app.js). */
+export function tiebreakerRequirement({ week, guessCount = 0 } = {}) {
+  const hasQuestion = !!(week && typeof week.tiebreakerQuestion === 'string' && week.tiebreakerQuestion.trim());
+  return { hasQuestion, guessCount, required: hasQuestion && guessCount > 0 };
+}
+
+/**
+ * DI-519 + DI-516 (D1 integration, 2026-10-07) — the tiebreaker value's source chip, from DI-516's ONE answer (`effectiveTiebreakerActual()`,
+ * js/live-tiebreak.js, passed in by the caller: this module keeps zero imports). FB-027 first shipped its own comparison here ("the value equals the
+ * Auto-Calc total"); its own comment said DI-516 supersedes it, so the integration keeps DI-516's `matchesCalculated` (a stored value equal to a
+ * COMPLETE calculated total) and the guided flow, the review card and the Comm card share one rule:
+ *   no value                                          ⇒ ''                  (no chip)
+ *   a stored value that is not the complete total      ⇒ 'Commissioner-set'
+ *   a stored value equal to the complete total, or the live calculated total itself ⇒ 'Calculated'
+ */
+export function tiebreakerSourceChip(effective) {
+  const e = effective || {};
+  if (e.value === null || e.value === undefined || e.value === '' || !Number.isFinite(Number(e.value)) || e.source === 'none') return '';
+  return e.source === 'manual' && !e.matchesCalculated ? FINALIZE_COPY.CHIP_MANUAL : FINALIZE_COPY.CHIP_CALCULATED;
+}
 
 // ── Step 1 — Approve Scores ─────────────────────────────────────────────
 
@@ -830,10 +1096,19 @@ export function finalizeApproveScoresSummary(games) {
   const missingLockedSpread = list.filter((g) => g && (g.lockedSpread === null || g.lockedSpread === undefined));
   return {
     gamesCount: list.length,
+    finalCount: list.length - notFinal.length,   // FB-027 / DI-519 — Step 1's count line and the review's Scores row
     notFinalCount: notFinal.length,
     missingLockedSpreadCount: missingLockedSpread.length,
     blocked: list.length === 0 || notFinal.length > 0 || missingLockedSpread.length > 0,
   };
+}
+
+/** DI-519 — Step 1's count line: `{F} of {N} games final · spreads locked` (or how many spreads are not locked). */
+export function finalizeScoresCountLabel(summary) {
+  const s = summary || {};
+  const head = `${s.finalCount || 0} of ${s.gamesCount || 0} games final`;
+  const m = s.missingLockedSpreadCount || 0;
+  return m ? `${head} · ${m} spread${m === 1 ? '' : 's'} not locked` : `${head} · spreads locked`;
 }
 
 /**
@@ -907,9 +1182,17 @@ export function tiebreakerConfirmSummary({ week, autoCalcValue = null } = {}) {
  * that handler's own "⚠️ No final alma mater scores yet." branch.
  */
 export function finalizeAutoCalcTiebreaker({ week, deps }) {
-  const { calculateAlmaMaterTotal, almaMatersForAutoCalc, getGames } = deps;
-  const roster = almaMatersForAutoCalc ? almaMatersForAutoCalc(week) : [];
+  const { calculateAlmaMaterTotal, almaMatersForAutoCalc, getGames, effectiveTiebreakerActual } = deps;
   const games = getGames ? getGames(week.weekId) : [];
+  // D1 / DI-516 (FB-002) — the suggestion comes from the SAME live module every ranking surface uses (js/live-tiebreak.js, via the app's effectiveTiebreakerActualForWeek), so a week
+  // whose tiebreaker is not the alma-mater total (the NFL's designated game) is suggested correctly instead of summing no schools and answering null. `finalValue` is the FINAL-games-only
+  // total, i.e. exactly calculateAlmaMaterTotal's number (livetiebreaktest proves the parity), and it is read even when a stored override exists: the step suggests the CALCULATED value.
+  if (typeof effectiveTiebreakerActual === 'function') {
+    const calc = (effectiveTiebreakerActual(week, games) || {}).calculated;
+    const value = calc && calc.finalValue !== undefined ? calc.finalValue : null;
+    return { ok: value !== null, value };
+  }
+  const roster = almaMatersForAutoCalc ? almaMatersForAutoCalc(week) : [];
   const total = calculateAlmaMaterTotal(games, roster, week.tiebreakerCalculationMode || 'selectedSlateOnly');
   return { ok: total !== null, value: total };
 }
@@ -946,9 +1229,15 @@ export function finalizeAutoCalcTiebreaker({ week, deps }) {
  * string) rather than writing garbage — `null` STAYS LEGAL (an explicit
  * "no tiebreaker value yet," `tiebreakerFinalized` correctly stays false).
  */
-export function confirmFinalizeTiebreaker({ week, actualValue, deps }) {
+/*
+ * FB-027 / DI-519 (2026-10-07) — `required` (from tiebreakerRequirement(): the week asks a question and an entrant guessed) refuses a missing value with
+ * reason `'required'`, and so does `provisional` (a value that is not final yet — DI-516's live total). Neither is passed by a caller that has no such
+ * rule, so the old "null stays legal" contract (weekwizardtest [15-19g]) holds exactly where the DI keeps it: no question, or nobody guessed.
+ */
+export function confirmFinalizeTiebreaker({ week, actualValue, required = false, provisional = false, deps }) {
   const invalidValue = actualValue !== null && actualValue !== undefined && !Number.isFinite(actualValue);
   if (invalidValue) return { ok: false, reason: 'invalid_value' };
+  if (required && (actualValue === null || actualValue === undefined || provisional)) return { ok: false, reason: 'required' };
   const { saveWeek, finalizeWeek, getWeek } = deps;
   const cur = (getWeek && getWeek(week.weekId)) || week;
   const updated = { ...cur, actualTiebreakerValue: actualValue, tiebreakerFinalized: actualValue != null };
@@ -1021,8 +1310,9 @@ export function unresolvedTieWarning({ week, players, picks, games, deps }) {
   const { weekHasUnresolvedTie, finalizeTieNotice } = deps;
   // SP-54 / DI-469 — prefer the dynamic notice (it names the stage the preview actually reaches and covers the Extra Point-missing case). It arrives by
   // INJECTION: this module keeps zero imports. A caller with no such dependency gets today's body exactly (weekwizardtest [15-26], [16-12]).
+  // FB-027 / DI-518 (2026-10-07) — no variant argument any more: this inline box is the notice's one surface (the browser-dialog variant is retired).
   if (typeof finalizeTieNotice === 'function') {
-    const n = finalizeTieNotice(week, players, picks, games, 'wizard');
+    const n = finalizeTieNotice(week, players, picks, games);
     return { show: !!(n && n.show), text: n && n.show ? String(n.text || '') : '' };
   }
   const show = !!(weekHasUnresolvedTie && weekHasUnresolvedTie(week, players, picks, games));
@@ -1055,6 +1345,71 @@ export function confirmFinalizeWeek({ week, deps }) {
   // says (`settling`); every later read goes by the stamp. A finalizeWeek dependency that ignores the second argument behaves exactly as before.
   if (finalizeWeek) finalizeWeek(updated, { settling: true });
   return { ok: true, week: updated };
+}
+
+/**
+ * FB-027 / DI-519 — the review card (Step 4): one row per required value, in the DI's order, and whether anything required is missing. Pure: every input
+ * is a value the caller already read (the slate, the count of entrants who guessed — blind-gated in app.js — DI-516's answer for the week (`effective`,
+ * effectiveTiebreakerActual(): it names the chip), the Extra Point grading from gradeWeekExtraPoint(), the entrant and member counts). A missing value
+ * reads `Missing`, never 0 (a null actual is never coerced). The chip describes the value SHOWN: an `effective` for some other value (or none) reads
+ * "Commissioner-set", the conservative label.
+ *   rows[i] = { id, label, parts: string[], ok }   (rendered `label · part · part`)
+ *   blocked = some row is not ok  →  Finalize Week stays disabled.
+ */
+export function finalizeReview({ week, games, guessCount = 0, effective = null, provisional = false, epGraded = null, entrants = 0, members = 0 } = {}) {
+  const w = week || {};
+  const finite = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
+  const scores = finalizeApproveScoresSummary(games);
+  const rows = [{ id: 'scores', label: 'Scores', parts: [`${scores.finalCount} of ${scores.gamesCount} final`], ok: !scores.blocked }];
+
+  const tb = tiebreakerRequirement({ week: w, guessCount });
+  if (!tb.hasQuestion) {
+    rows.push({ id: 'tiebreaker', label: 'Tiebreaker', parts: [FINALIZE_COPY.NOT_USED], ok: true });
+  } else {
+    const missing = !finite(w.actualTiebreakerValue) || provisional;
+    const value = missing ? null : Number(w.actualTiebreakerValue);
+    const chip = missing ? '' : tiebreakerSourceChip(effective && Number(effective.value) === value ? effective : { value, source: 'manual', matchesCalculated: false });
+    rows.push({
+      id: 'tiebreaker', label: 'Tiebreaker',
+      parts: [w.tiebreakerQuestion.trim(), ...(missing ? [FINALIZE_COPY.MISSING] : [String(value), ...(chip ? [chip] : [])])],
+      ok: !(tb.required && missing),
+    });
+  }
+
+  if (w.extraPointEnabled === false) {
+    rows.push({ id: 'extra-point', label: 'Longest field goal', parts: [FINALIZE_COPY.NOT_USED], ok: true });
+  } else if (!finite(w.extraPointActual)) {
+    rows.push({ id: 'extra-point', label: 'Longest field goal', parts: [FINALIZE_COPY.MISSING], ok: false });
+  } else {
+    // `epGraded` null = the grading is not visible (the caller's blind gate): the row says the yards and nothing about who was closest.
+    const graded = epGraded && Array.isArray(epGraded.winners) && Array.isArray(epGraded.rows);
+    const names = graded ? epGraded.winners.map((id) => (epGraded.rows.find((r) => r.playerId === id) || {}).displayName).filter(Boolean) : [];
+    rows.push({
+      id: 'extra-point', label: 'Longest field goal',
+      parts: [`${Number(w.extraPointActual)} yd`, ...(graded ? [`closest without going over: ${names.length ? names.join(', ') : 'no one'}`] : [])],
+      ok: true,
+    });
+  }
+
+  rows.push({ id: 'players', label: 'Players counted', parts: [`${entrants} of ${members}`], ok: true });
+  return { rows, blocked: rows.some((r) => !r.ok), missing: rows.filter((r) => !r.ok).map((r) => r.id) };
+}
+
+/**
+ * FB-027 / DI-519 — the Finalize Week action with the server's answer awaited. Runs confirmFinalizeWeek() (the EXACT sequence it always ran), then asks
+ * `deps.confirmSaved(week)` whether the server has it: `'saved'` is the only success; `'refused'`, `'pending'` (still queued, offline) or a throw is
+ * shown by the caller through finalizeOutcomeView() — never a success toast. A caller with no `confirmSaved` (local mode) succeeds at once. A blocked
+ * review is refused before anything is written. This is the FIRST-TIME finalize only: a week this device already shows final is never handed here
+ * again (finalizePressAction() → 'reask' / 'confirmed'; review round 1, B1).
+ */
+export async function finalizeWeekFromWizard({ week, blocked = false, deps }) {
+  if (blocked) return { ok: false, state: 'blocked', week };
+  const { week: updated } = confirmFinalizeWeek({ week, deps });
+  let state = 'saved';
+  if (typeof deps.confirmSaved === 'function') {
+    try { state = await deps.confirmSaved(updated); } catch (e) { state = 'pending'; }
+  }
+  return { ok: state === 'saved', state, week: updated };
 }
 
 /**
@@ -1097,5 +1452,7 @@ export function createWeekWizard(deps = {}) {
     confirmFinalizeExtraPoint: (args) => confirmFinalizeExtraPoint({ ...args, deps }),
     unresolvedTieWarning: (args) => unresolvedTieWarning({ ...args, deps }),
     confirmFinalizeWeek: (week) => confirmFinalizeWeek({ week, deps }),
+    // FB-027 / DI-519 — Step 4 with the server's answer awaited (deps.confirmSaved).
+    finalizeWeekFromWizard: (args) => finalizeWeekFromWizard({ ...args, deps }),
   };
 }

@@ -1,0 +1,11 @@
+{
+  "id": "groundingtest",
+  "script": "groundingtest.mjs",
+  "summary": "strict",
+  "floor": 66,
+  "tags": [
+    "smoke"
+  ],
+  "expectedMs": 100,
+  "note": "D1 Lane C DI-631/632/635: evidence packets (no pick can ride one - the blind rule, mutation-proved) and the deterministic grounding check (numbers only, a score either way round only when the fact is unordered), plus the byte-stable structured fallback. Registered 2026-10-08 (Lane C 3.A)."
+}

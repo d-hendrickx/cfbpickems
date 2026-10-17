@@ -18,12 +18,23 @@
  *      free text can reach it.
  *   5. The output is balanced markup, or '' on bad input (a non-object, a missing id / headline / source, an unknown sport, an unparseable time).
  *
- * Import allow-list (DI-382, asserted by newstest): ./haptics.js and ./platform.js (this file needs no icon). Nothing else.
+ * Import allow-list (DI-382, asserted by newstest): ./haptics.js, ./platform.js and ./newsRules.js (the shared URL / picture validators). Nothing else.
+ *
+ * ── D1 (DI-671…673, C10, C18; 2026-10-08) ─────────────────────────────────────────────────────────────────────────────
+ *   · An item from the SERVER carries its source's own `linkHosts` / `imageHosts` (news_sources_for): the article URL is re-validated against THOSE at render-adjacent
+ *     tap time and the picture against those at render. An item with none (the ESPN contingency) keeps the ESPN lists below.
+ *   · The byline is `{via} via {publisher}` or `{publisher}`; a publisher's later update shows as "Updated Oct 6" when it is at least 30 minutes after publication.
+ *   · DI-672: a card whose duplicate coverage was grouped shows "Also from CBS Sports and Yahoo Sports" as a separate 44 pt button; it opens a bottom sheet whose rows
+ *     are built HERE (`renderAlsoFromSheet`), never by the caller. C10: the via, every "Also from" headline and publisher go through THIS file's `esc()` only, in
+ *     markup whose every attribute is double-quoted.
+ *   · DI-663: a STORYLINE card is a news item with a deterministic game / team tag, drawn by `renderStorylineCard` (C18: the headline exactly as published, the
+ *     publisher, the article's own date, the tag, the pinned picture). No model text, ever.
  * iOS 15.0 safe (no Object.hasOwn, no .at()).
  */
 
 import { haptic } from './haptics.js';
 import { openExternalUrl } from './platform.js';
+import { parseArticleUrl as parseArticleUrlFor, isAllowedImageUrl } from './newsRules.js';
 
 // ─── escaping: ONE local, quote-complete escaper (S-C3) ───────────────────────────────────────────────────────────────
 
@@ -66,18 +77,11 @@ const HOST_CHARS = /^[a-z0-9.-]+$/;
  * userinfo, and any host that is not espn.com or a subdomain of it (`espn.com.evil.example` and a trailing-dot `www.espn.com.` both fail).
  * What is returned is `u.href`, never `raw`.
  */
-export function parseArticleUrl(raw) {
+/** The ESPN article hosts (option A, the contingency, and any item that carries no host list of its own). */
+export const ESPN_LINK_HOSTS = Object.freeze(['espn.com', '.espn.com']);
+export function parseArticleUrl(raw, hosts = ESPN_LINK_HOSTS) {
   if (typeof raw !== 'string' || raw.length === 0 || raw.length > URL_MAX) return null;
-  if (/[\s\u0000-\u001F\u007F\\]/.test(raw)) return null;
-  let u;
-  try { u = new URL(raw); } catch { return null; }
-  if (u.protocol !== 'https:') return null;
-  if (u.port) return null;                                  // an ESPN article never needs a non-default port
-  if (u.username || u.password) return null;                // userinfo is refused outright, never out-guessed
-  const host = u.hostname.toLowerCase();
-  if (!HOST_CHARS.test(host)) return null;                  // after parsing, a hostname is letters, digits, dots and hyphens ONLY (security C3: WHATWG tolerates `a"b.espn.com`)
-  if (host !== 'espn.com' && !host.endsWith('.espn.com')) return null;
-  return u.href;
+  return parseArticleUrlFor(raw, Array.isArray(hosts) && hosts.length ? hosts : ESPN_LINK_HOSTS);   // D1: ONE validator, newsRules.js (S-C1 vectors unchanged)
 }
 
 // ─── the image host allow-list (S-C6) ─────────────────────────────────────────────────────────────────────────────────
@@ -97,17 +101,10 @@ export const NEWS_IMAGE_HOSTS = Object.freeze({
  * and a host on NEWS_IMAGE_HOSTS. Shared by the transport (normalize) and the renderer (render), so a NewsItem built any other way is
  * still checked once more before it can become a request to a third party.
  */
-export function isAllowedNewsImageUrl(raw) {
+const ESPN_IMAGE_LIST = Object.freeze([...NEWS_IMAGE_HOSTS.exact, ...NEWS_IMAGE_HOSTS.suffixes]);
+export function isAllowedNewsImageUrl(raw, hosts = null) {
   if (typeof raw !== 'string' || raw.length === 0 || raw.length > IMAGE_URL_MAX) return null;
-  if (/[\s\u0000-\u001F\u007F\\]/.test(raw)) return null;
-  let u;
-  try { u = new URL(raw); } catch { return null; }
-  if (u.protocol !== 'https:' || u.port || u.username || u.password) return null;
-  const host = u.hostname.toLowerCase();
-  if (!HOST_CHARS.test(host)) return null;                                                  // letters, digits, dots and hyphens only (security C3)
-  if (host.charAt(0) === '[' || /^[0-9.]+$/.test(host)) return null;                       // an IP literal is never a CDN
-  const ok = NEWS_IMAGE_HOSTS.exact.indexOf(host) >= 0 || NEWS_IMAGE_HOSTS.suffixes.some((s) => host.endsWith(s));
-  return ok ? u.href : null;
+  return isAllowedImageUrl(raw, Array.isArray(hosts) ? hosts : ESPN_IMAGE_LIST);           // D1: ONE validator, newsRules.js; a server item passes its source's pinned hosts
 }
 
 // ─── relative time ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -130,25 +127,109 @@ export function relativeTime(iso, now = Date.now()) {
  * One NewsItem -> one card's HTML, or '' on bad input. See the contract in the header. The metadata row (publisher, time, sport chip) is
  * ALWAYS present: the publisher is never conditional (UN-344). No image -> no <img> and no placeholder box; the headline moves to the top.
  */
+/** "Oct 6" in the viewer's zone — the "Updated" caption's date (DI-672). */
+function shortDate(iso) {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return '';
+  try { return new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); } catch { return ''; }
+}
+/** A publisher's later update counts only when it is at least this long after publication (DI-672). */
+export const NEWS_UPDATED_MIN_MS = 30 * 60 * 1000;
+/** "Also from CBS Sports and Yahoo Sports" (names from the registry, never feed text). */
+export function alsoFromLabel(names) {
+  const list = (Array.isArray(names) ? names : []).map((n) => cleanText(n, SOURCE_MAX)).filter(Boolean);
+  const uniq = list.filter((n, i) => list.indexOf(n) === i).slice(0, 4);
+  if (!uniq.length) return '';
+  if (uniq.length === 1) return `Also from ${uniq[0]}`;
+  return `Also from ${uniq.slice(0, -1).join(', ')} and ${uniq[uniq.length - 1]}`;
+}
+/** The byline: `{via} via {publisher}` or `{publisher}` (the via is the guarded Yahoo credit; it was checked server-side AND by the transport). */
+export function bylineOf(item) {
+  const publisher = cleanText(item && (item.publisher || item.source), SOURCE_MAX);
+  const via = cleanText(item && item.via, 60);
+  return via && publisher && via.toLowerCase() !== publisher.toLowerCase() ? `${via} via ${publisher}` : publisher;
+}
+
+/** The shared card body (one sink for the news card and the storyline card). `tag` is the DI-663 storyline tag or ''. */
+function newsCardHTML(item, { tag = '' } = {}) {
+  if (!item || typeof item !== 'object') return '';
+  const id = cleanText(item.id, ID_MAX);
+  const headline = cleanText(item.headline, HEADLINE_MAX);
+  const byline = bylineOf(item);
+  if (!id || !headline || !byline) return '';
+  const sportLabel = Object.prototype.hasOwnProperty.call(SPORT_CHIP_LABELS, item.sport) ? SPORT_CHIP_LABELS[item.sport] : '';
+  if (!sportLabel) return '';
+  const pubMs = Date.parse(item.publishedAt);
+  if (!Number.isFinite(pubMs)) return '';
+  const reason = !tag && NEWS_CARD_REASONS.indexOf(item.reason) >= 0 ? item.reason : '';
+  const imageSrc = isAllowedNewsImageUrl(item.imageUrl, Array.isArray(item.imageHosts) ? item.imageHosts : null);
+  const when = relativeTime(item.publishedAt);
+  const updMs = Date.parse(item.updatedAt);
+  const updated = Number.isFinite(updMs) && updMs - pubMs >= NEWS_UPDATED_MIN_MS ? shortDate(item.updatedAt) : '';
+  const tagText = cleanText(tag, 120);
+  const pill = reason ? `<span class="national-tv-badge news-card__reason">${esc(reason)}</span>` : '';
+  const eyebrow = tagText ? `<p class="news-card__eyebrow"><span class="news-card__kind">Storyline</span><span aria-hidden="true">·</span><span class="news-card__tag">${esc(tagText)}</span></p>` : '';
+  const image = imageSrc ? `<img class="news-card__image" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" src="${esc(imageSrc)}">` : '';
+  const upd = updated ? `<span aria-hidden="true">·</span><span class="news-card__updated">Updated ${esc(updated)}</span>` : '';
+  const also = alsoFromLabel(Array.isArray(item.alsoFrom) ? item.alsoFrom.map((a) => a && a.publisher) : []);
+  const label = `${tagText ? `Storyline, ${tagText}: ` : ''}${headline}, ${byline}`;
+  const main = `${image}<div class="news-card__body">${eyebrow}${pill}<p class="news-card__headline">${esc(headline)}</p><div class="news-card__meta"><span class="news-card__pub">${esc(byline)}</span><span aria-hidden="true">·</span><span>${esc(when)}</span>${upd}<span class="national-tv-badge news-card__sport">${esc(sportLabel)}</span></div></div>`;
+  const kindClass = tagText ? ' news-card--storyline' : '';
+  if (!also) return `<div class="card news-card${kindClass}" data-news-id="${esc(id)}" role="link" tabindex="0" aria-label="${esc(label)}">${main}</div>`;
+  // DI-672: the grouped card. The link role moves to the main block, so the "Also from" button is a SIBLING (never a control nested inside a link).
+  return `<div class="card news-card news-card--grouped${kindClass}"><div class="news-card__main" data-news-id="${esc(id)}" role="link" tabindex="0" aria-label="${esc(label)}">${main}</div><div class="news-card__also-row"><button type="button" class="news-card__also" data-news-also="${esc(id)}">${esc(also)}</button></div></div>`;
+}
+
 export function renderNewsCard(item) {
+  try { return newsCardHTML(item); } catch { return ''; }
+}
+
+/** DI-663 / C18: a storyline card (a news item with its deterministic tag). '' when the tag is missing — the item is then an ordinary News card, drawn by renderNewsCard. */
+export function renderStorylineCard(item) {
   try {
-    if (!item || typeof item !== 'object') return '';
-    const id = cleanText(item.id, ID_MAX);
-    const headline = cleanText(item.headline, HEADLINE_MAX);
-    const source = cleanText(item.source, SOURCE_MAX);
-    if (!id || !headline || !source) return '';
-    const sportLabel = Object.prototype.hasOwnProperty.call(SPORT_CHIP_LABELS, item.sport) ? SPORT_CHIP_LABELS[item.sport] : '';
-    if (!sportLabel) return '';
-    if (!Number.isFinite(Date.parse(item.publishedAt))) return '';
-    const reason = NEWS_CARD_REASONS.indexOf(item.reason) >= 0 ? item.reason : '';
-    const imageSrc = isAllowedNewsImageUrl(item.imageUrl);
-    const when = relativeTime(item.publishedAt);
-    const pill = reason ? `<span class="national-tv-badge news-card__reason">${esc(reason)}</span>` : '';
-    const image = imageSrc ? `<img class="news-card__image" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" src="${esc(imageSrc)}">` : '';
-    return `<div class="card news-card" data-news-id="${esc(id)}" role="link" tabindex="0" aria-label="${esc(headline)}, ${esc(source)}">${image}<div class="news-card__body">${pill}<p class="news-card__headline">${esc(headline)}</p><div class="news-card__meta"><span class="news-card__pub">${esc(source)}</span><span aria-hidden="true">·</span><span>${esc(when)}</span><span class="national-tv-badge news-card__sport">${esc(sportLabel)}</span></div></div></div>`;
-  } catch {
-    return '';
-  }
+    const tag = item && item.storyline && typeof item.storyline.tag === 'string' ? item.storyline.tag : '';
+    return tag ? newsCardHTML(item, { tag }) : '';
+  } catch { return ''; }
+}
+
+/**
+ * DI-672 / C10: the "Also from" sheet's body — one 44 pt row per OTHER source in the group: its headline, publisher, time and "Open". Built HERE through `esc()` so
+ * the caller never interpolates a publisher or headline. Each row carries only the alternate's id; a tap resolves it against the group the sheet was opened for.
+ */
+export function renderAlsoFromSheet(item) {
+  try {
+    const rows = (item && Array.isArray(item.alsoFrom) ? item.alsoFrom : []).slice(0, 8).map((a) => {
+      if (!a || typeof a !== 'object') return '';
+      const aid = cleanText(a.id, ID_MAX), h = cleanText(a.headline, HEADLINE_MAX), pub = bylineOf(a);
+      if (!aid || !h || !pub || !Number.isFinite(Date.parse(a.publishedAt))) return '';
+      return `<li class="news-also-item"><button type="button" class="news-also-open" data-news-also-open="${esc(aid)}" aria-label="${esc(h)}, ${esc(pub)}, open"><span class="news-also-text"><span class="news-also-headline">${esc(h)}</span><span class="news-also-meta">${esc(pub)} · ${esc(relativeTime(a.publishedAt))}</span></span><span class="news-also-go">Open</span></button></li>`;
+    }).filter(Boolean);
+    if (!rows.length) return '';
+    return '<ul class="news-also-list">' + rows.join('') + '</ul>';   // every row was built above through esc(); joined, never re-interpolated
+  } catch { return ''; }
+}
+
+/**
+ * DI-672: the "Also from" sheet's ONE dispatcher. A tap on a row resolves the row's alternate id against `item.alsoFrom` (the group the sheet was opened for), re-validates
+ * that alternate's url against ITS OWN source's link hosts (an ESPN-contingency alternate, which carries none, against ESPN's), and hands `onOpen` only the validated
+ * href. An unknown id or a refused url opens nothing. Returns an unbind. app.js mounts the sheet shell and calls this; tests call it with a real DOM.
+ */
+export function bindAlsoFromSheetEvents(rootEl, item, { onOpen } = {}) {
+  if (!rootEl || typeof rootEl.addEventListener !== 'function') return () => {};
+  const open = typeof onOpen === 'function' ? onOpen : openNewsArticle;
+  const onClick = (e) => {
+    const t = e && e.target;
+    const row = t && typeof t.closest === 'function' ? t.closest('[data-news-also-open]') : null;
+    if (!row || typeof row.getAttribute !== 'function') return;
+    const id = row.getAttribute('data-news-also-open');
+    const alt = item && Array.isArray(item.alsoFrom) ? item.alsoFrom.find((a) => a && a.id === id) : null;
+    if (!alt) return;
+    const href = parseArticleUrl(alt.url, Array.isArray(alt.linkHosts) ? alt.linkHosts : ESPN_LINK_HOSTS);
+    if (!href) return;                                        // fails closed
+    try { open(href, alt); } catch (err) { console.warn('[news] opening an article failed', err && err.name); }
+  };
+  rootEl.addEventListener('click', onClick);
+  return () => { try { rootEl.removeEventListener('click', onClick); } catch { /* detached */ } };
 }
 
 // ─── the tap ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -167,14 +248,16 @@ const bound = new WeakMap();
  * with parseArticleUrl, and hands `onOpen` the validated href — never a URL read from the DOM, never `item.url` itself. A card whose id is
  * unknown, or whose url fails, opens nothing. Binding the same root twice REPLACES the earlier binding (no double open). Returns an unbind.
  */
-export function bindNewsCardEvents(rootEl, { items, onOpen } = {}) {
+export function bindNewsCardEvents(rootEl, { items, onOpen, onAlsoFrom } = {}) {
   if (!rootEl || typeof rootEl.addEventListener !== 'function') return () => {};
   if (bound.has(rootEl)) { try { bound.get(rootEl)(); } catch { /* detached */ } }
   const getItems = typeof items === 'function' ? items : () => items;
   const open = typeof onOpen === 'function' ? onOpen : openNewsArticle;
+  const alsoFrom = typeof onAlsoFrom === 'function' ? onAlsoFrom : null;
   const cardOf = (e) => {
     const t = e && e.target;
-    return t && typeof t.closest === 'function' ? t.closest('.news-card') : null;
+    if (!t || typeof t.closest !== 'function') return null;
+    return t.closest('[data-news-id]') || t.closest('.news-card');                        // the card itself, or a grouped card's main block (DI-672)
   };
   const idOf = (card) => {
     if (card.dataset && typeof card.dataset.newsId === 'string') return card.dataset.newsId;
@@ -188,11 +271,26 @@ export function bindNewsCardEvents(rootEl, { items, onOpen } = {}) {
     try { list = getItems(); } catch { return; }
     const item = (Array.isArray(list) ? list : []).find((i) => i && i.id === id);
     if (!item) return;
-    const href = parseArticleUrl(item.url);                   // re-validated at tap time (S-C1)
+    const href = parseArticleUrl(item.url, Array.isArray(item.linkHosts) ? item.linkHosts : ESPN_LINK_HOSTS);   // re-validated at tap time against the item's OWN source hosts (S-C1)
     if (!href) return;                                        // fails closed: nothing opens
     try { open(href); } catch (err) { console.warn('[news] opening an article failed', err && err.name); }
   }
-  const onClick = (e) => activate(cardOf(e));
+  const onClick = (e) => {
+    const t = e && e.target;
+    const btn = t && typeof t.closest === 'function' ? t.closest('[data-news-also]') : null;
+    const alsoId = btn && btn.dataset && typeof btn.dataset.newsAlso === 'string' ? btn.dataset.newsAlso
+      : btn && typeof btn.getAttribute === 'function' ? btn.getAttribute('data-news-also') : null;
+    if (alsoId) {                                                  // DI-672: the "Also from" row opens its sheet, never the article
+      if (!alsoFrom) return;
+      const id = alsoId;
+      let list = [];
+      try { list = getItems(); } catch { return; }
+      const item = (Array.isArray(list) ? list : []).find((i) => i && i.id === id);
+      if (item && Array.isArray(item.alsoFrom) && item.alsoFrom.length) { try { haptic('light'); alsoFrom(item); } catch (err) { console.warn('[news] the also-from sheet failed', err && err.name); } }
+      return;
+    }
+    activate(cardOf(e));
+  };
   const onKeydown = (e) => {
     if (!e || (e.key !== 'Enter' && e.key !== ' ')) return;
     const card = cardOf(e);

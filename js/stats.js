@@ -197,6 +197,88 @@ export function almaMaterResultForWeek(alma, weekId, games) {
   return week.length === 1 ? { team: week[0].team, result: week[0].result } : null;
 }
 
+// ── the viewer's own week line (D1 Lane B, DI-583, 2026-10-07) ────────────────────────────────────────────────
+/**
+ * The viewer's RAW record for ONE week record, over their OWN picks and the games that are FINAL — the Home card's "Your week" and the `game.final` detail's
+ * "that puts you at W–L". It is the same RAW pair the weekly-update (`player.week`) card prints (`correctCount ?? correctPicks`, never the weighted tally —
+ * CONVENTIONS #22): `calculateWeeklyResults` counts a pick only once its game is final, with `evaluatePick`, and so does this. A push is its own count and in
+ * neither W nor L. A live or unstarted game is not yet a result. Parity against calculateWeeklyResults is proven in viewerlinetest.mjs.
+ *
+ * Fail closed (S-C3): no viewer id, or a non-string one, is `null` — the line is never built from "the first pick found", and another member's pick is never read
+ * (a pick counts only when `p.playerId === viewerId`). Pure; reads only what it is handed.
+ *
+ * @returns {{wins:number, losses:number, pushes:number, graded:number, picked:number}|null}
+ */
+export function viewerWeekLine({ week, games = [], picks = [], viewerId = null } = {}) {
+  if (!week || typeof viewerId !== 'string' || viewerId === '') return null;
+  const byId = new Map((games || []).filter(g => g && g.weekId === week.weekId).map(g => [g.gameId, g]));
+  let wins = 0, losses = 0, pushes = 0, picked = 0;
+  for (const p of picks || []) {
+    if (!p || p.weekId !== week.weekId || p.playerId !== viewerId) continue;
+    const g = byId.get(p.gameId);
+    if (!g) continue;
+    picked++;
+    if (g.status !== 'final') continue;
+    const r = evaluatePick(p, g);
+    if (r === 'win') wins++; else if (r === 'loss') losses++; else if (r === 'no_decision') pushes++;
+  }
+  return { wins, losses, pushes, graded: wins + losses + pushes, picked };
+}
+
+// ── head to head (D1 Lane B, DI-595, 2026-10-08) ─────────────────────────────────────────────────────────────
+/**
+ * How two members' picks compared on FINISHED games — the client twin of the SCRIBE tool `toolGetHeadToHeadRecord` (supabase/functions/_shared/scribe-tools.mjs), so the app and
+ * the room's `@scribe` can never give two answers (comparetest imports BOTH and asserts equality on shared fixtures, including an Open and a Locked week that must contribute
+ * nothing). A game counts when its week is PUBLIC, the game is FINAL, and BOTH members hold a pick on it; then `evaluatePick` is applied to each:
+ *   agreed       the same team           bothRight / bothWrong   both covered / neither did (a push or an ungradable line is "not right")
+ *   aRightBWrong / bRightAWrong          exactly one covered (only a game they SPLIT can produce either)
+ *
+ * THE REVEAL RULE (Std-8). The caller hands in the competition's weeks, games and picks and a REQUIRED `isPublic(week)` predicate: a week it does not call public contributes nothing,
+ * whatever the rows hold. No predicate (or a non-function) compares nothing, so a caller that forgets the gate leaks nothing (fail closed). The app passes `arePicksPublic` AND the S-C10
+ * "the other members' rows have landed" check; this function adds no storage import (the module's rule). It also reads only the two members' own picks: nobody else's pick is touched.
+ *
+ * `finished` (the finished games of the public weeks, picked or not) and `through` (the latest public week with one: `{ weekId, weekNumber, label }`) are the extras the header needs
+ * to name its denominator in words. `splits` is the extra the screen needs and the tool does not return: the games they SPLIT on, newest first (week order descending, then kickoff descending, then game id), each
+ * `{ weekId, gameId, aTeam, bTeam, aResult, bResult }` with the results as `evaluatePick` words. It is derived from the same loop, so it can never disagree with the counts.
+ *
+ * @param {string} a  member id (the viewer on the comparison screen)
+ * @param {string} b  member id (the rival)
+ * @param {{weeks:Array, games:Array, picks:Array, isPublic:Function}} view
+ */
+export function headToHeadRecord(a, b, { weeks = [], games = [], picks = [], isPublic = null } = {}) {
+  const out = { playerA: a, playerB: b, gamesCompared: 0, agreed: 0, bothRight: 0, bothWrong: 0, aRightBWrong: 0, bRightAWrong: 0, finished: 0, through: null, splits: [] };
+  if (typeof a !== 'string' || typeof b !== 'string' || a === '' || b === '' || a === b) return out;
+  if (typeof isPublic !== 'function') return out;
+  const found = [];
+  for (const w of sortWeeks(weeks)) {
+    let open = false;
+    try { open = isPublic(w) === true; } catch { open = false; }
+    if (!open) continue;
+    const finals = (games || []).filter(g => g && g.weekId === w.weekId && g.status === 'final');
+    out.finished += finals.length;
+    if (finals.length) out.through = { weekId: w.weekId, weekNumber: w.weekNumber, label: w.label };
+    for (const game of finals) {
+      const pa = (picks || []).find(p => p && p.weekId === w.weekId && p.gameId === game.gameId && p.playerId === a);
+      const pb = (picks || []).find(p => p && p.weekId === w.weekId && p.gameId === game.gameId && p.playerId === b);
+      if (!pa || !pb) continue;
+      out.gamesCompared++;
+      const ra = evaluatePick(pa, game), rb = evaluatePick(pb, game);
+      if (pa.selectedTeam === pb.selectedTeam) out.agreed++;
+      if (ra === 'win' && rb === 'win') out.bothRight++;
+      else if (ra !== 'win' && rb !== 'win') out.bothWrong++;
+      else if (ra === 'win') out.aRightBWrong++;
+      else if (rb === 'win') out.bRightAWrong++;
+      if (pa.selectedTeam !== pb.selectedTeam) found.push({ week: w, game, row: { weekId: w.weekId, gameId: game.gameId, aTeam: String(pa.selectedTeam ?? ''), bTeam: String(pb.selectedTeam ?? ''), aResult: ra, bResult: rb } });
+    }
+  }
+  const order = new Map(sortWeeks(weeks).map((w, i) => [w.weekId, i]));
+  const kick = (g) => { const t = Date.parse(g.kickoff); return Number.isFinite(t) ? t : 0; };
+  out.splits = found
+    .sort((x, y) => (order.get(y.week.weekId) - order.get(x.week.weekId)) || (kick(y.game) - kick(x.game)) || String(y.game.gameId).localeCompare(String(x.game.gameId)))
+    .map(f => f.row);
+  return out;
+}
+
 // ── the stats ────────────────────────────────────────────────────────────────
 
 /**

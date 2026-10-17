@@ -1,0 +1,12 @@
+{
+  "id": "scribeLearn.twin",
+  "script": "supabase/tests/functions/scribeLearn.twin.mjs",
+  "label": "81r2",
+  "summary": "loose",
+  "floor": 219,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 300,
+  "note": "SCRIBE v3 Package C (DI-273…276, 2026-09-24) — the instant-learn Edge Function driven end to end against the fake client: job-secret before body, webhook-row shape, the eligibility filter (six reason-bearing shapes in, bare ratings out, retracted ratings out), Locked never runs …"
+}

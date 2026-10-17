@@ -1,0 +1,12 @@
+{
+  "id": "shellstatetest",
+  "script": "shellstatetest.mjs",
+  "label": "92",
+  "summary": "strict",
+  "floor": 10,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "— a near-zero count would mean the guard is vacuous)"
+}

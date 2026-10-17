@@ -1,0 +1,19 @@
+{
+  "id": "newstest",
+  "script": "newstest.mjs",
+  "label": "133",
+  "summary": "strict",
+  "floor": 587,
+  "forbid": [
+    {
+      "regex": "ERR_MODULE_NOT_FOUND",
+      "flags": "",
+      "label": "newstest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)"
+    }
+  ],
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 400,
+  "note": "RAISED from 582 by D1 Lane C (2026-10-08): 1-7b/1-7c/1-7d pin the D1 import allow-lists and the server path (+3). RAISED from 581 by the v0.29.0 Home wiring window (2026-10-01): 2-8b: the [BET-KEEP] scan now reaches newsCard.js (renderNewsCard) and home.js (the news splice) (+1); before that, floor 581 — LOWERED from 619 on 2026-10-01 by Drew's own ruling (\"ok to remove betting filter\" / \"I …"
+}

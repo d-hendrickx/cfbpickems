@@ -1,0 +1,12 @@
+{
+  "id": "brandtest",
+  "script": "brandtest.mjs",
+  "label": "90",
+  "summary": "strict",
+  "floor": 144,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 500,
+  "note": "a near-zero count would mean the guard is vacuous)"
+}

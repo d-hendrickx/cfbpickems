@@ -1,0 +1,16 @@
+{
+  "id": "core-load",
+  "kind": "core",
+  "script": "loadtest.mjs",
+  "label": "core-load",
+  "summary": "strict",
+  "floor": 110,
+  "tags": [
+    "smoke"
+  ],
+  "env": {
+    "CFBP_CORE": "load"
+  },
+  "expectedMs": 3000,
+  "note": "MERGE int deeb4e7d into feat/d1-history (2026-10-14): floor = the merged tree's measured 110 (this branch 103, int 92). | RAISED from 101 to the measured 103 (2026-10-14, D1 Lane B history merged with Game Day): js/compare.js and js/week-detail.js (DI-595 / DI-596) join section [1]'s import list. | RAISED from 91 to the measured 101 (2026-10-08, D1 Game Day consolidated round): js/chat-share.js (DI-597) joins section [1]'s import list. | MERGED int/v0.30.0 (d6e8ac5a) into feat/d1-gameday 2026-10-08: floor = the higher side's (82 / 91), to be re-measured on the merged tree. | RAISED from 81 by D1 Game Day fix round 2 (DI-599, 2026-10-08): js/next-up.js joins section [1]'s import list. | RAISED to 81, the Game Day merge of int/v0.30.0 (2026-10-08): measured on the merged tree. | (D1 combine, 2026-10-08: RAISED from 73 to 84 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - Section [1] only: every js/ module imports cleanly (RG-03). The --quick tier. `core` includes it, so a tier never runs both."
+}

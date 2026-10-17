@@ -1,0 +1,12 @@
+{
+  "id": "leaguesettingsuitest",
+  "script": "leaguesettingsuitest.mjs",
+  "label": "127",
+  "summary": "loose",
+  "floor": 422,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 11600,
+  "note": "MERGE int/v0.30.0 into feat/d1-creation-integrity (2026-10-08): floor re-measured on the merged tree = 422. D1 Lane A (2026-10-08, G1): RAISED to 421 by the app-level two-sport Leave cases ([4e-5..8]). Before that: D1 Lane A (2026-10-08, W-21/DI-542): RAISED to 408 by the two-sport Leave sentence cases. Before that: RAISED from 362 by the batch-5b MC-1 fix (2026-10-01): [3t-2] and three wired [4e-1] cases for the G-6 bound through the games pass-through; earlier: floor 362 — raised from 351 by the security fix (C-U1, 2026-10-01): [4i-1..11], a membership refresh that answers null (\"could … MERGE OF int/v0.30.0 (2026-10-08): PF-416 / FB-026 follow-up item 5 (2026-10-07): RAISED 407 -> 408 by [7w3] (lock-closed / status-moved notices are not a sync failure). RAISED from 362 by the batch-5b MC-1 fix (2026-10-01): [3t-2] and three wired [4e-1] cases for the G-6 bound through the games pass-through; earlier: floor 362 — raised from 351 by the security fix (C-U1, 2026-10-01): [4i-1..11], a membership refresh that answers null (\"could …"
+}

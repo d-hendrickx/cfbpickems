@@ -676,7 +676,7 @@ console.log('\n[5] One source of truth — isWeekShownInStandings()…');
     // the predicate itself
     { name: 'isWeekShownInStandings() body', re: /return week\.showInHistory !== false && week\.dataSourceMode !== 'demo';/ },
     // NOT standings: the Picks-tab week browser (drafts out, demo commissioner-only)
-    { name: 'picksNavWeeks() week browser', re: /getWeeks\(\)\.filter\(w => w\.showInHistory !== false && w\.status !== WEEK_STATUS\.DRAFT &&/ },
+    { name: 'picksNavWeeks() week browser', re: /getContextWeeks\(\)\.filter\(w => w\.showInHistory !== false && w\.status !== WEEK_STATUS\.DRAFT &&/ },
     // NOT a filter: the admin "Show in history" checkbox's checked state
     { name: 'admin show-history checkbox', re: /\$\{week\.showInHistory!==false\?'checked':''\}/ },
     // NOT a filter: the raw All-Weekly-Results audit CSV's yes/no column
@@ -728,8 +728,10 @@ console.log('\n[5] One source of truth — isWeekShownInStandings()…');
   // CSV above — it must call seasonStandingsRows() and compute no season
   // standings of its own (a private calculateSeasonStandings() or
   // getWeeklyResults() read is how its scope and its grouping both drifted).
-  assert(/seasonStandingsRows\(\)/.test(code(dig)) && !/calculateSeasonStandings\(|getWeeklyResults\(/.test(code(dig)),
-    'buildWeeklySummary()\'s season block renders seasonStandingsRows() — the Standings page\'s own rows — and reads/computes no season results of its own');
+  // RE-DERIVED 2026-10-08 (D1 Part 2 item 2): the call now names the WEEK's competition - `seasonStandingsRows({ competitionId: weekCompetitionId(week) })` - because the no-argument form answers for the
+  // player's sport pointer and printed the college table under an NFL recap. Still the Standings page's own function, still no private season computation.
+  assert(/seasonStandingsRows\(\{ competitionId: weekCompetitionId\(week\) \}\)/.test(code(dig)) && !/calculateSeasonStandings\(|getWeeklyResults\(/.test(code(dig)),
+    'buildWeeklySummary()\'s season block renders seasonStandingsRows() (of the week\'s own sport) — the Standings page\'s own rows — and reads/computes no season results of its own');
   // Canary — the comment-stripper really strips: a body that only MENTIONS the
   // predicate in comments does not pass.
   assert(!USES_PRED.test(code("  // weeks go through .filter(isWeekShownInStandings) elsewhere\n  const x = 1; // .filter(isWeekShownInStandings)\n   * .filter(isWeekShownInStandings)")),

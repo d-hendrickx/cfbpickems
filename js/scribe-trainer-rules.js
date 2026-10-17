@@ -860,6 +860,26 @@ export function provisionalExpiresAt(nowMs = Date.now()) {
 }
 
 /**
+ * D1 / DI-681 (Drew R-11, D-44; security C15a) — IS THIS LEARNING HUMAN-APPROVED? Only when a human tapped it.
+ *
+ * THE STAMP IS THE EVIDENCE, and nothing else is. A learning is human-approved when its payload carries BOTH `approvedBy` (the
+ * approving member's id) and `approvedAt` (a parseable time): stamped by the commissioner's own approve action (the database's
+ * `scribe_guard`, on a status flip made under a commissioner's JWT — migration 0052) or by `scribe_learning_add_human` (the
+ * commissioner's own act). An auto-applied row — the instant path, or the Trainer at its auto-approve threshold — has neither, and
+ * a service job cannot give it one (a service-role write has no `auth.uid()`, so the guard stamps nothing). `origin`, `status` and
+ * `confidence` are NOT evidence of a human: `status = 'approved'` is exactly what an auto-apply also writes.
+ *
+ * Everything R-11 promises — active whatever the confidence, never expires, never retired by the cap or by a newer row — applies to
+ * human-approved rows ONLY. An instant learning keeps its seven-day decay until a person taps Approve.
+ */
+export function isHumanApproved(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  const by = payload.approvedBy;
+  const at = payload.approvedAt;
+  return typeof by === 'string' && by.trim() !== '' && typeof at === 'string' && Number.isFinite(Date.parse(at));
+}
+
+/**
  * Applied at READ time (the loader) AND at WRITE time (the Trainer's retire
  * pass) — belt and braces on purpose, for `scribe-context.mjs`'s own stated
  * reason: correctness must not depend on a cron having already run. A
@@ -869,8 +889,12 @@ export function provisionalExpiresAt(nowMs = Date.now()) {
  * A CONFIRMED ROW NEVER EXPIRES. `provisional !== true` returns false whatever
  * `expiresAt` says, so confirming a learning (setting `provisional:false`) is
  * all it takes to make it permanent — there is no second field to remember.
+ *
+ * D1 / DI-681 — AND NEITHER DOES A HUMAN-APPROVED ONE, WHATEVER ELSE THE PAYLOAD SAYS: a row a person tapped is never aged out, even if a
+ * stray `provisional: true` and an old `expiresAt` survived on it.
  */
 export function isLearningExpired(payload, nowMs = Date.now()) {
+  if (isHumanApproved(payload)) return false;
   if (!payload || payload.provisional !== true) return false;
   const exp = Date.parse(payload.expiresAt || '');
   return Number.isFinite(exp) && Number(nowMs) > exp;
@@ -902,13 +926,38 @@ export const LEARNING_STATUS_EXPIRED = 'expired';
  * ENFORCED AT WRITE TIME ONLY. A read-time cap would have to pick which active
  * row to hide, and that is a decision, not a filter.
  *
- * @param {Array<{id:string, category:string, createdAt:string}>} existingActive
+ * ── D1 / DI-681 (Drew R-11, D-44; security C15b) — NEITHER RULE MAY RETIRE A HUMAN-APPROVED ROW. ──────────────────────────────
+ * A row a person approved is never silently replaced by the unattended path. A caller marks it (`humanApproved: true` on the
+ * existing-active entry, from `isHumanApproved(payload)`); then:
+ *
+ *   • CATEGORY CONFLICT with a human-approved row ⇒ nothing is retired and the NEW row is held for review: `holdPending: true`,
+ *     `holdReason: 'category'`, `replaces: <that row's id>`. Approving it later is what replaces the old one (migration 0052's guard,
+ *     once, under the commissioner's JWT).
+ *   • THE CAP, when the rows that may be retired (the ones no human approved) cannot make room ⇒ nothing is retired and the new row
+ *     is held: `holdPending: true`, `holdReason: 'cap'`, `replaces: null`.
+ *   • A hold retires NOTHING. A row that goes pending displaces nothing, so no auto-applied row is sacrificed for a row that is not
+ *     going live; the result's counts are 0.
+ *
+ * `holdPending` is also the answer for a row that is ALREADY pending (a low-confidence proposal in the same category as a human-
+ * approved row): the caller still records `replaces`, so the pane can say "Proposed replacement for: …" and Approve means Replace.
+ * Auto-applied rows keep today's behaviour: they may still be retired by the cap or by a newer row.
+ *
+ * @param {Array<{id:string, category:string, createdAt:string, humanApproved?:boolean}>} existingActive
  * @param {{category:string}} newLearning
- * @returns {{retireIds:string[], supersededByCategory:number, retiredForCap:number}}
+ * @returns {{retireIds:string[], supersededByCategory:number, retiredForCap:number,
+ *            holdPending:boolean, holdReason:('category'|'cap'|null), replaces:(string|null)}}
  */
 export function enforceActiveLearningCap(existingActive, newLearning, { cap = ACTIVE_LEARNING_CAP } = {}) {
   const rows = (existingActive || []).filter((r) => r && r.id);
   const newCat = String((newLearning && newLearning.category) || '');
+  const hold = (holdReason, replaces) => ({
+    retireIds: [], supersededByCategory: 0, retiredForCap: 0, holdPending: true, holdReason, replaces,
+  });
+  // Rule 1 meets a human-approved row: the new row waits for a human, and the row stays as it is.
+  if (newCat) {
+    const human = rows.find((r) => r.humanApproved === true && String(r.category || '') === newCat);
+    if (human) return hold('category', human.id);
+  }
   const retire = new Set();
   let supersededByCategory = 0;
   if (newCat) {
@@ -919,22 +968,28 @@ export function enforceActiveLearningCap(existingActive, newLearning, { cap = AC
   // Oldest first, so the cap retires the stalest lesson rather than an
   // arbitrary one. A missing/unparseable createdAt sorts OLDEST — a row we
   // cannot date is a row we cannot defend keeping over one we can.
-  const survivors = rows.filter((r) => !retire.has(r.id))
-    .slice()
-    .sort((a, b) => {
-      const ta = Date.parse(a.createdAt || ''), tb = Date.parse(b.createdAt || '');
-      const na = Number.isFinite(ta) ? ta : -Infinity, nb = Number.isFinite(tb) ? tb : -Infinity;
-      if (na !== nb) return na - nb;
-      return String(a.id).localeCompare(String(b.id));
-    });
-  let retiredForCap = 0;
+  const byAge = (a, b) => {
+    const ta = Date.parse(a.createdAt || ''), tb = Date.parse(b.createdAt || '');
+    const na = Number.isFinite(ta) ? ta : -Infinity, nb = Number.isFinite(tb) ? tb : -Infinity;
+    if (na !== nb) return na - nb;
+    return String(a.id).localeCompare(String(b.id));
+  };
+  const survivors = rows.filter((r) => !retire.has(r.id)).slice().sort(byAge);
   const limit = Math.max(0, Number(cap) || 0);
-  // `+ 1` — the new row is about to join them.
-  while (survivors.length + 1 > limit && survivors.length) {
-    retire.add(survivors.shift().id);
+  // `+ 1` — the new row is about to join them. Only a row no human approved may make room, oldest first.
+  let remaining = survivors.length;
+  let retiredForCap = 0;
+  const planned = [];
+  for (const r of survivors.filter((x) => x.humanApproved !== true)) {
+    if (remaining + 1 <= limit) break;
+    planned.push(r.id);
+    remaining -= 1;
     retiredForCap += 1;
   }
-  return { retireIds: [...retire], supersededByCategory, retiredForCap };
+  // Still over, with rows left that this rule may not touch: the human-approved ones fill the league. The new row waits.
+  if (remaining + 1 > limit && remaining > 0) return hold('cap', null);
+  for (const id of planned) retire.add(id);
+  return { retireIds: [...retire], supersededByCategory, retiredForCap, holdPending: false, holdReason: null, replaces: null };
 }
 
 // ══════════════════════════════════════════════════════════════════════════

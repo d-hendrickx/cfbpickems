@@ -1,0 +1,12 @@
+{
+  "id": "keepalive.twin",
+  "script": "supabase/tests/functions/keepalive.twin.mjs",
+  "label": "81c",
+  "summary": "loose",
+  "floor": 56,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 200,
+  "note": "DI-T6.7 — the only class-S function in this phase, and the job_runs retention rule that rides it (floor raised from 42 by RG-203 (2026-09-22): §[7] is the full league-resolution matrix — body used, body absent + CFBP_LEAGUE_ID used, both absent ⇒ not_configured, a non-UUID …"
+}

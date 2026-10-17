@@ -1,0 +1,12 @@
+{
+  "id": "scribeToolsTwin",
+  "script": "scribeToolsTwin.mjs",
+  "label": "67",
+  "summary": "strict",
+  "floor": 10,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "— a near-zero count would mean the drift guard is vacuous)"
+}

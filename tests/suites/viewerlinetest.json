@@ -1,0 +1,19 @@
+{
+  "id": "viewerlinetest",
+  "script": "viewerlinetest.mjs",
+  "summary": "strict",
+  "floor": 96,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/home.js",
+    "js/stats.js",
+    "js/game-state.js",
+    "js/game-order.js",
+    "d1homeenv.mjs",
+    "statsfixtures.mjs",
+    "minidom.mjs"
+  ],
+  "note": "RAISED from 94 (2026-10-14, security nit): 6p/6q Share's targets use the SERVER-confirmed week status (viewableWeek, the same rule as resolveGameView). | RAISED from 79 by the D1 Game Day consolidated round (2026-10-08): [6] the Lane A seam — competitions from the feed contexts, R1 week sport by competition, C4 Season of N among a competition's entrants, C1 per-week entry, What's next skips an unheld week, the card detail's view through a week stays in its competition. | D1 Lane B DI-577/582/583 + X1: viewerWeekLine parity, normalizeCompetitions, viewerStatsFor (Your week / Season, per competition, nothing blended), liveScope (blind per part, game order), with mutation proofs. Registered 2026-10-07."
+}

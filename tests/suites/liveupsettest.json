@@ -1,0 +1,12 @@
+{
+  "id": "liveupsettest",
+  "script": "liveupsettest.mjs",
+  "label": "88c",
+  "summary": "loose",
+  "floor": 267,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "raised 193 -> 267 by the reviewer BLOCK N1 fix (2026-09-30, third pass): the alma fallback pool is chosen from the team's CURRENT state (losing straight-up now -> almaTrailing; only failing the number -> almaNotCovering; neither -> no line), never from the condition that turned …"
+}

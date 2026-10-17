@@ -1,0 +1,13 @@
+{
+  "id": "spacingtest",
+  "script": "spacingtest.mjs",
+  "label": "134",
+  "summary": "strict",
+  "floor": 309,
+  "tags": [
+    "browser",
+    "tz"
+  ],
+  "expectedMs": 2400,
+  "note": "RAISED from 272 by the v0.29.0 Home wiring window (2026-10-01): the News feed's article card ('card news-card', padding 0/0/0/0 because the picture is full-bleed) is pinned by exact class list, and [2i] x5 (its .news-card__body keeps >= 16 pt on every side, light 320/375/430/600 …"
+}

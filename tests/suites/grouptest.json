@@ -1,0 +1,16 @@
+{
+  "id": "grouptest",
+  "script": "grouptest.mjs",
+  "summary": "strict",
+  "floor": 36,
+  "tags": [
+    "smoke"
+  ],
+  "deps": [
+    "js/scoring.js",
+    "js/data-model.js",
+    "js/storage.js"
+  ],
+  "expectedMs": 100,
+  "note": "UN-118/UN-125: multi-part week grouping through the REAL calculateWeeklyResults / calculateSeasonStandings — who owes whom. Registered 2026-10-07 (W-11); it had no manifest, so no tier ran it."
+}

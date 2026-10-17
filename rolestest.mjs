@@ -122,6 +122,9 @@ console.log('\n── canOperateCard() — DI-320 per-card operability table ─
     // Comm→SCRIBE, all three 'admin' scope (see this file's own
     // CARD_OPERABILITY comment for why none is commissioner-RLS-gated).
     'scribe-digest-export', 'scribe-post-queue', 'chat-diagnostics',
+    // D1 Lane C (DI-634, DI-637, 2026-10-08) — the administrator's routing card (read: platform admins; the WRITE is Super Admin only, gated in the card and by the setter) and the
+    // content and AI status card (read-only). Both 'admin' scope: neither writes the league's settings blob.
+    'scribe-routes', 'content-ai-status',
   ];
   const COMMISSIONER_ROWS = [
     'data-source-mode', 'demo-simulation', 'account-linking', 'auto-refresh',
@@ -141,7 +144,7 @@ console.log('\n── canOperateCard() — DI-320 per-card operability table ─
 
   assert(ADMIN_ONLY_ROWS.length + COMMISSIONER_ROWS.length + 1 /* scribe-training, pilot-gated */
     === Object.keys(CARD_OPERABILITY).length,
-    'fixture check — the two lists above (24 total: 11 admin-operable [8 + DI-425\'s 3] + 13 commissioner-operable, scribe-model among the latter since reviewer round 2, 2026-09-25) plus the one pilot-gated card account for every row in CARD_OPERABILITY',
+    'fixture check — the two lists above (26 total: 13 admin-operable [8 + DI-425\'s 3 + D1 Lane C\'s 2] + 13 commissioner-operable, scribe-model among the latter since reviewer round 2, 2026-09-25) plus the one pilot-gated card account for every row in CARD_OPERABILITY',
     `table has ${Object.keys(CARD_OPERABILITY).length} rows, fixture covers ${ADMIN_ONLY_ROWS.length + COMMISSIONER_ROWS.length + 1}`);
 
   const leagueA = { id: 'LA', pilot: false };
@@ -1307,10 +1310,12 @@ console.log('\n── SQL drafts: both GUC escapes are bounded by their SET list
           if (/set_config\(\s*'app\.account_anonymize'\s*,\s*'1'/.test(strip(fm[2]))) armers.push(`${f.slice(0, 4)}:${fm[1]}`);
         }
       }
+      // RE-DERIVED 2026-10-08 (D1 Lane A, 0048 — the re-entry bound and the audit scrub): 0048 re-creates leave_league and anonymize_own_account once more (0042's bodies + marked additions), so the census
+      // grows by exactly those two, and the SAME boundary scan runs on THEM in the R-c/0048 pass below (the block that scans 0042 is now a loop over both files).
       // RE-DERIVED 2026-10-01 (SP-53 release gates, 0042): the F3 redefinition HAS landed — 0042 re-creates anonymize_own_account (0035's body + the SC-L1 lock) and leave_league (0037's body + the G-6
       // bound) — so the census grows by exactly those two, in file order, and each is scanned in the R-c/0042 block below. Any further armer is still a deliberate, reviewed edit to this list.
-      assert(JSON.stringify(armers) === JSON.stringify(['0029:anonymize_own_account', '0035:anonymize_own_account', '0037:leave_league', '0042:leave_league', '0042:anonymize_own_account']),
-        `R-c/0037 — app.account_anonymize is armed by exactly {0029 anonymize_own_account, 0035 anonymize_own_account (superseded by 0042's), 0037 leave_league (superseded by 0042's), 0042 leave_league, 0042 anonymize_own_account}; a further armer is a deliberate, reviewed edit to this list — and must be scanned here too (found ${JSON.stringify(armers)})`);
+      assert(JSON.stringify(armers) === JSON.stringify(['0029:anonymize_own_account', '0035:anonymize_own_account', '0037:leave_league', '0042:leave_league', '0042:anonymize_own_account', '0048:leave_league', '0048:anonymize_own_account']),
+        `R-c/0037 — app.account_anonymize is armed by exactly {0029 anonymize_own_account, 0035 anonymize_own_account (superseded by 0042's), 0037 leave_league (superseded by 0042's), 0042 leave_league (superseded by 0048's), 0042 anonymize_own_account (superseded by 0048's), 0048 leave_league, 0048 anonymize_own_account}; a further armer is a deliberate, reviewed edit to this list — and must be scanned here too (found ${JSON.stringify(armers)})`);
 
       // admin_set_member_role — RE-POINTED to the latest body (0037), the same scan as the 0026 one above.
       const a = /^create or replace function public\.admin_set_member_role\([\s\S]*?\$\$([\s\S]*?)\$\$;/m.exec(sql0037);
@@ -1335,10 +1340,10 @@ console.log('\n── SQL drafts: both GUC escapes are bounded by their SET list
   // The 0037 and 0035 scans above stand as the history; the LATEST bodies are 0042's, so the same boundary — each function's own `update … set` lists — is scanned on THEM. The escape
   // `app.account_anonymize` opens the whole commissioner-only column set in the guard, so neither list may ever assign `role`, `phone_verified`, `created_at` (or, for leave_league, `linked_at`).
   // The lock is the new statement in both: it comes straight after `not_authenticated` and BEFORE either refusal-bearing read, either GUC and every write.
-  {
+  for (const [mig, file] of [['0042', '0042_sp53_release_gates.sql'], ['0048', '0048_join_bound_and_scrub.sql']]) {
     let sql0042 = '';
-    try { sql0042 = await readFile(join(__dirname, 'supabase', 'migrations', '0042_sp53_release_gates.sql'), 'utf8'); }
-    catch (e) { fail++; console.error('  ❌ Migration 0042 not found —', e.message); }
+    try { sql0042 = await readFile(join(__dirname, 'supabase', 'migrations', file), 'utf8'); }
+    catch (e) { fail++; console.error(`  ❌ Migration ${mig} not found —`, e.message); }
     if (sql0042) {
       const strip = (t) => t.split('\n').map((l) => l.replace(/--.*$/, '')).join('\n');
       const bodyOf = (name) => { const m = new RegExp(`^create or replace function public\\.${name}\\([\\s\\S]*?\\$\\$([\\s\\S]*?)\\$\\$;`, 'm').exec(sql0042); return m ? strip(m[1]) : ''; };
@@ -1346,33 +1351,33 @@ console.log('\n── SQL drafts: both GUC escapes are bounded by their SET list
       const LOCK = /perform 1 from public\.leagues where id in \(select league_id from public\.league_members where user_id = auth\.uid\(\) and active\) order by id for no key update;/;
       const lv = bodyOf('leave_league');
       const an = bodyOf('anonymize_own_account');
-      assert(!!lv && !!an, 'R-c/0042 — leave_league() and anonymize_own_account() found in migration 0042 (fixture check)');
+      assert(!!lv && !!an, `R-c/${mig} — leave_league() and anonymize_own_account() found in migration ${mig} (fixture check)`);
       const lvLists = listsOf(lv);
       const anLists = listsOf(an);
       assert(lvLists.length === 2 && anLists.length === 2,
-        `R-c/0042 — the scan isolates EVERY \`update public.league_members set … where …\` in the re-created leave_league (TWO: kept seat, ordinary seat) and anonymize_own_account (TWO: kept seats, every other seat): a third would be a write surface under the escape GUC that nobody scanned (found ${lvLists.length} and ${anLists.length})`);
+        `R-c/${mig} — the scan isolates EVERY \`update public.league_members set … where …\` in the re-created leave_league (TWO: kept seat, ordinary seat) and anonymize_own_account (TWO: kept seats, every other seat): a third would be a write surface under the escape GUC that nobody scanned (found ${lvLists.length} and ${anLists.length})`);
       assert([...lvLists, ...anLists].every((l) => /\buser_id\s*=\s*null/.test(l) && /\bemail\s*=\s*null/.test(l) && /\bphone\s*=\s*''/.test(l)),
-        'R-c/0042 — all four lists really are the unlink ones (user_id and email nulled, phone reset to empty) — a non-vacuity check on the capture');
+        `R-c/${mig} — all four lists really are the unlink ones (user_id and email nulled, phone reset to empty) — a non-vacuity check on the capture`);
       assert([...lvLists, ...anLists].every((l) => !/\brole\b/.test(l) && !/\bphone_verified\b/.test(l) && !/\bcreated_at\b/.test(l)) && lvLists.every((l) => !/\blinked_at\b/.test(l)),
-        'R-c/0042 — NONE of the four lists assigns `role`, `phone_verified` or `created_at`, and leave_league\'s never assigns `linked_at` either: the escape opens the whole commissioner-only column set, so the caller must never be able to self-promote or rewrite a verification fact on the way out');
+        `R-c/${mig} — NONE of the four lists assigns 'role', 'phone_verified' or 'created_at', and leave_league\'s never assigns 'linked_at' either: the escape opens the whole commissioner-only column set, so the caller must never be able to self-promote or rewrite a verification fact on the way out`);
       assert(lvLists.filter((l) => /\bactive\s*=\s*false/.test(l)).length === 1 && !/\bactive\b/.test(lvLists[0]) && /\bactive\s*=\s*false/.test(lvLists[1])
           && anLists.filter((l) => /\bactive\s*=\s*false/.test(l)).length === 1 && !/\bactive\b/.test(anLists[0]) && /\bactive\s*=\s*false/.test(anLists[1]),
-        'R-c/0042 — in EACH function exactly one list contains `active = false` (the ordinary seat, second); the KEPT-seat list (first) never names `active` (a kept seat keeps role AND active, or both last-commissioner triggers refuse it)');
+        `R-c/${mig} — in EACH function exactly one list contains 'active = false' (the ordinary seat, second); the KEPT-seat list (first) never names 'active' (a kept seat keeps role AND active, or both last-commissioner triggers refuse it)`);
       const flat = (t) => t.replace(/\s+/g, ' ');
       assert(LOCK.test(flat(lv)) && LOCK.test(flat(an)) && (lv.match(/for no key update/g) || []).length === 1 && (an.match(/for no key update/g) || []).length === 1,
-        'G-2 / SC-L1 — BOTH re-created functions carry the SAME lock-set statement, verbatim, exactly once (every league the caller holds an active seat in, ascending id, one statement)');
+        `[${mig}] G-2 / SC-L1 — BOTH re-created functions carry the SAME lock-set statement, verbatim, exactly once (every league the caller holds an active seat in, ascending id, one statement)`);
       assert(lv.indexOf("raise exception 'not_authenticated'") > -1 && lv.indexOf("raise exception 'not_authenticated'") < lv.indexOf('for no key update') && lv.indexOf('for no key update') < lv.indexOf('account_exit_leagues')
           && lv.indexOf('for no key update') < lv.indexOf("set_config('app.account_anonymize', '1'") && lv.indexOf('for no key update') < lv.indexOf('update public.league_members')
           && an.indexOf("raise exception 'not_authenticated'") > -1 && an.indexOf("raise exception 'not_authenticated'") < an.indexOf('for no key update') && an.indexOf('for no key update') < an.indexOf('account_exit_leagues')
           && an.indexOf('for no key update') < an.indexOf("set_config('app.account_anonymize', '1'") && an.indexOf('for no key update') < an.indexOf('update public.league_members'),
-        'G-2 / SC-L1 — in BOTH functions the lock comes AFTER `not_authenticated` and BEFORE the first account_exit_leagues() read, the escape GUC and the first write (an unauthenticated caller locks nothing; a stale read cannot slip in before the lock)');
+        `[${mig}] G-2 / SC-L1 — in BOTH functions the lock comes AFTER 'not_authenticated' and BEFORE the first account_exit_leagues() read, the escape GUC and the first write (an unauthenticated caller locks nothing; a stale read cannot slip in before the lock)`);
       assert(["raise exception 'not_authenticated'", "raise exception 'not_a_member'", "raise exception 'week_in_progress'", "raise exception 'last_commissioner'", "raise exception 'archive_confirm_required'"]
           .every((r) => lv.indexOf(r) > -1 && lv.indexOf(r) < lv.indexOf("set_config('app.member_link', '1', true)") && lv.indexOf(r) < lv.indexOf("set_config('app.account_anonymize', '1', true)"))
           && lv.lastIndexOf("set_config('app.account_anonymize', '', true)") > lv.lastIndexOf('update public.league_members') && lv.lastIndexOf("set_config('app.member_link', '', true)") > lv.lastIndexOf('update public.league_members')
           && an.indexOf("raise exception 'not_authenticated'") < an.indexOf("set_config('app.account_anonymize', '1'") && an.indexOf("raise exception 'last_commissioner'") < an.indexOf("set_config('app.account_anonymize', '1'"),
-        'R-c/0042 — every refusal of leave_league (incl. the G-6-bounded week_in_progress) and both refusals of anonymize_own_account precede the escape GUC, and leave_league resets both GUCs after its last update: a refused caller never holds the escape');
+        `R-c/${mig} — every refusal of leave_league (incl. the G-6-bounded week_in_progress) and both refusals of anonymize_own_account precede the escape GUC, and leave_league resets both GUCs after its last update: a refused caller never holds the escape`);
       assert(!/set_config\('app\.role_change'/.test(lv + an) && !/set_config\('app\.league_status_change'/.test(lv + an) && !/anonymize_own_account|push/i.test((/^create or replace function public\.leave_league\([\s\S]*?\$\$;/m.exec(sql0042) || ['x'])[0]),
-        'R-c/0042 — neither function arms app.role_change or app.league_status_change, and leave_league (raw text, comments included) names neither the account-deletion function nor any push call');
+        `R-c/${mig} — neither function arms app.role_change or app.league_status_change, and leave_league (raw text, comments included) names neither the account-deletion function nor any push call`);
     }
   }
 }

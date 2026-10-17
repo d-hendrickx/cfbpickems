@@ -1,0 +1,25 @@
+{
+  "id": "commnavbrowsertest",
+  "script": "commnavbrowsertest.mjs",
+  "summary": "strict",
+  "floor": 138,
+  "tags": [
+    "browser",
+    "slow"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/sw-register.js",
+    "css/**",
+    "index.html",
+    "service-worker.js",
+    "manifest.json",
+    "config.json",
+    "icons/**",
+    "vendor/**",
+    "reveal/**",
+    "favicon.*"
+  ],
+  "expectedMs": 60000,
+  "note": "W-70 (2026-10-14): native navigation in Comm, engine-measured with real touches - Comm tab pager (preview, exit layer, arbitration with the drawer, field and strip), the wizard's swipe-down on a touch device in the web app, the discard ask on every close path, the step pager inside the transformed sheet, Reduce Motion, computed style, and the iPhone shell emulated with a recording Haptics plugin."
+}

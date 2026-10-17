@@ -199,6 +199,28 @@ assert(!/id="scribe-autonomous-toggle" checked/.test(dialOff), 'OFF state: the m
 setScribeAutonomousEnabled(true);
 assert(/id="scribe-autonomous-toggle" checked/.test(renderScribeParticipationCardHTML()), 'SET state: the master checkbox renders checked again');
 
+// D1 Lane C (DI-656, 2026-10-08) — the scan's commissioner help line under the dial: the approved sentence verbatim, shown only while one of the two scan switches
+// (`serverJobs.scribeScan`, `serverJobs.scribeCallout`) is on, so the card never promises a scan that is not running. Only the literal boolean switches it on.
+{
+  const HELP = 'SCRIBE checks for post-worthy moments every few minutes while a week is live. It may also notice when a member hasn\'t picked or hasn\'t posted in days. It posts only when something real happened, and often stays quiet.';
+  const before = storage.getSettings().serverJobs;
+  const escaped = HELP.replace(/'/g, '&#39;');
+  const shows = (html) => /id="scribe-scan-help"/.test(html) && (html.includes(HELP) || html.includes(escaped));
+  assert(app.SCRIBE_SCAN_HELP_COPY === HELP, 'DI-656: the help line is the approved sentence verbatim');
+  storage.saveSetting('serverJobs', { scribeAutonomous: true });
+  assert(!/id="scribe-scan-help"/.test(renderScribeParticipationCardHTML()), 'DI-656: with both scan switches off (the default) the card says nothing about a scan');
+  storage.saveSetting('serverJobs', { scribeScan: true });
+  const onScan = renderScribeParticipationCardHTML();
+  assert(shows(onScan), 'DI-656: with the moment scan on, the help line renders under the dial');
+  assert(onScan.indexOf('id="scribe-scan-help"') > onScan.indexOf('class="scribe-freq-dial') && onScan.indexOf('id="scribe-scan-help"') < onScan.indexOf('id="scribe-pacing-group"'),
+    'DI-656: …directly under the Participation dial, above the pacing group');
+  storage.saveSetting('serverJobs', { scribeCallout: true });
+  assert(shows(renderScribeParticipationCardHTML()), 'DI-656: with the deadline call-out on, the help line renders too');
+  storage.saveSetting('serverJobs', { scribeScan: 'true', scribeCallout: 1 });
+  assert(!/id="scribe-scan-help"/.test(renderScribeParticipationCardHTML()), 'DI-656: a string "true" or a 1 is not on (only the literal boolean, the same rule the fan-in reads)');
+  storage.saveSetting('serverJobs', before === undefined ? {} : before);
+}
+
 // ═════════════════════════════════════════════════════════════════════════
 // 2. DI-D1 — the write goes through the seam and is field-declared
 // ═════════════════════════════════════════════════════════════════════════
@@ -707,12 +729,13 @@ console.log('\n[11] DI-D1 — the (one) detector call site: blind rule, standing
   {
     const src = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
     const fn = src.slice(src.indexOf('export function finalizeWeek'), src.indexOf('export function finalizeWeek') + 6000);
-    assert(/const scribeStandingsBefore=seasonStandingsRows\(\);/.test(fn),
-      '[structural] "before" is captured at the TOP of finalizeWeek, ahead of saveAllWeeklyResults() — there is no second chance to read it');
+    // RE-DERIVED 2026-10-08 (D1 Part 2 item 2): both snapshots are of the WEEK'S OWN sport (`{ competitionId: scribeCid }`) - seasonStandingsRows() answers for the player's pointer unless handed a competition.
+    assert(/const scribeStandingsBefore=seasonStandingsRows\(\{ competitionId: scribeCid \}\);/.test(fn) && /const scribeCid=weekCompetitionId\(week\);/.test(fn),
+      '[structural] "before" is captured at the TOP of finalizeWeek, ahead of saveAllWeeklyResults() — there is no second chance to read it — and it is the week\'s own sport\'s standings');
     assert(fn.indexOf('const scribeStandingsBefore') < fn.indexOf('saveAllWeeklyResults(week.weekId,results)'),
       '[structural] …and provably before that WRITE CALL (not the comment that mentions it), so "before" is genuinely before');
-    assert(/standingsAfter: seasonStandingsRows\(\)/.test(fn),
-      '[structural] "after" is read at the call site, once the results have landed — two genuine snapshots of the same function');
+    assert(/standingsAfter: seasonStandingsRows\(\{ competitionId: scribeCid \}\)/.test(fn),
+      '[structural] "after" is read at the call site, once the results have landed — two genuine snapshots of the same function (re-derived 2026-10-08: of the same sport as "before")');
     assert((src.match(/\n\s*fireScribeWeekSignals\(/g) || []).length === 1,
       '[structural] F2: there is exactly ONE call site in app.js — the finalize one. The lock-phase call the DI originally specified is removed, not merely inert');
     const lockFn = src.slice(src.indexOf('export function applyWeekStatusChange'), src.indexOf('export function applyWeekStatusChange') + 6000);
@@ -1072,7 +1095,8 @@ console.log('\n[15] DI-252 — SCRIBE pacing: the hourly cap and the cooldown ar
   // hand-typed table: a client that disagrees with `resolveAutonomousHourlyCap`
   // about what "4" or "0" or "\"4\"" means shows the commissioner a number the
   // server is not obeying, which is the one failure a settings screen owns.
-  const fnSrc = await readFile(new URL('./supabase/functions/scribe-autonomous/index.js', import.meta.url), 'utf8');
+  // D1 Lane C (DI-653): the two defaults moved with the post body into the shared pipeline both scribe-autonomous and scribe-scan run.
+  const fnSrc = await readFile(new URL('./supabase/functions/_shared/scribe-autonomous-core.mjs', import.meta.url), 'utf8');
   assert(/const DEFAULT_HOURLY_CAP = 4;/.test(fnSrc) && /const DEFAULT_GLOBAL_COOLDOWN_MINUTES = 10;/.test(fnSrc),
     '15a fixture: the server still defaults to 4/hour and a 10-minute gap (if this moves, the client defaults below move with it)');
   for (const [raw, want, why] of [
@@ -1358,11 +1382,13 @@ console.log('\n[16] DI-263/DI-267 — the Heat card, the tolerance note, the one
 console.log('\n[17] DI-282 — the SCRIBE Model toggle…');
 {
   const { renderScribeModelCardHTML, getScribeModel, setScribeModel } = app;
-  const { SCRIBE_MODEL_CHOICES } = await import('./js/data-model.js');
+  const { SCRIBE_MODEL_CHOICES, SCRIBE_MODEL_CATALOG } = await import('./js/data-model.js');
+  // D1 Lane C (DI-633) — the ids are the CATALOG's, never typed here: the card's choices and the server's rate card both derive from it.
+  const SONNET = SCRIBE_MODEL_CATALOG.sonnet.id, OPUS = SCRIBE_MODEL_CATALOG.opus.id;
 
   // ── The default-when-missing story, first: no `model` key at all. ──
   storage.saveSetting('scribe', { autonomousHourlyLimit: 4, autonomousCooldownMinutes: 10, monthlyBudgetUsd: 25 });
-  assert(getScribeModel() === 'claude-sonnet-5' && getScribeModel() === SCRIBE_MODEL_CHOICES[0],
+  assert(getScribeModel() === SONNET && getScribeModel() === SCRIBE_MODEL_CHOICES[0],
     `17-1: an UNSET model reads as Sonnet — today's behaviour and the cheaper of the two (CONVENTIONS #10). A missing value must never resolve to the option that multiplies the bill (got ${getScribeModel()})`);
 
   const card = renderScribeModelCardHTML();
@@ -1379,12 +1405,12 @@ console.log('\n[17] DI-282 — the SCRIBE Model toggle…');
     `17-4: BOTH ids are selectable, and they are the ids the server prices — the card cannot offer a model rateSettings() would refuse (got ${JSON.stringify(SCRIBE_MODEL_CHOICES)})`);
   assert((card.match(/scribe-freq-opt selected/g) || []).length === 1,
     '17-5: exactly ONE option is selected — radio behaviour, never two and never zero');
-  assert(/class="scribe-freq-opt selected"[\s\S]{0,180}data-scribe-model="claude-sonnet-5"/.test(card),
+  assert(new RegExp(`class="scribe-freq-opt selected"[\\s\\S]{0,180}data-scribe-model="${SONNET}"`).test(card),
     '17-6: …and with nothing stored it is Sonnet, matching getScribeModel()');
   assert(/Sonnet/.test(card) && /Opus/.test(card),
     '17-7: the two options are labelled in English — "Sonnet" and "Opus", not the wire ids a commissioner has no reason to read');
-  assert(card.includes('Opus is sharper and costs about 2.5× as much per reply'),
-    '17-8: DI-282\'s cost sentence is present verbatim. The whole decision is sharpness against money, and the multiplier is the only number that makes it a decision');
+  assert(card.includes('Opus is sharper and costs about 2× as much per reply'),
+    '17-8: DI-282\'s cost sentence is present, with the multiplier COMPUTED from the catalog\'s prices ($4+$20 over $2+$10 = 2, D1 DI-633; it was typed as 2.5 against the old rate card). The whole decision is sharpness against money, and the multiplier is the only number that makes it a decision');
   assert(/@SCRIBE replies, unprompted posts and the Trainer/.test(card),
     '17-9: …and it names all THREE consumers. A toggle that silently governed only the chat replies would be a lie by omission — the Trainer is the most expensive of the three');
   assert(/role="radiogroup"/.test(card) && (card.match(/role="radio"/g) || []).length === 2,
@@ -1396,21 +1422,27 @@ console.log('\n[17] DI-282 — the SCRIBE Model toggle…');
 
   // ── The write: through the bag, preserving everything else in it. ──
   const before = { ...(storage.getSettings().scribe || {}) };
-  const wrote = setScribeModel('claude-opus-5');
+  const wrote = setScribeModel(OPUS);
   const bag = storage.getSettings().scribe || {};
-  assert(wrote.ok === true && bag.model === 'claude-opus-5' && getScribeModel() === 'claude-opus-5',
+  assert(wrote.ok === true && bag.model === OPUS && getScribeModel() === OPUS,
     `17-13: tapping Opus writes settings.scribe.model through the seam — the SAME field _shared/scribe-rate.js's rateSettings() reads, not a top-level key nothing on the server would ever look at (got ${JSON.stringify(bag)})`);
   assert(bag.autonomousHourlyLimit === before.autonomousHourlyLimit
     && bag.autonomousCooldownMinutes === before.autonomousCooldownMinutes
     && bag.monthlyBudgetUsd === before.monthlyBudgetUsd,
     '17-14: …and the REST OF THE BAG survives. saveSetting(\'scribe\', …) replaces value.scribe as a whole unit (_kvFieldPatch does not deep-merge), so a write without the spread would silently and permanently delete monthlyBudgetUsd and both pacing integers — none of which has another client writer to restore them');
-  assert(/class="scribe-freq-opt selected"[\s\S]{0,180}data-scribe-model="claude-opus-5"/.test(renderScribeModelCardHTML()),
+  assert(new RegExp(`class="scribe-freq-opt selected"[\\s\\S]{0,180}data-scribe-model="${OPUS}"`).test(renderScribeModelCardHTML()),
     '17-15: moving the stored value moves the selected state with it — the card renders from storage, never from the click');
 
   const refused = setScribeModel('claude-opus-4-1');
   assert(refused.ok === false && refused.error === 'unknown_model'
-    && (storage.getSettings().scribe || {}).model === 'claude-opus-5',
+    && (storage.getSettings().scribe || {}).model === OPUS,
     `17-16: an off-list id is REFUSED rather than stored. This string is sent to Anthropic, so an unrecognised value is a live 400 on the next SCRIBE post (RG-222's own failure mode) — and the stored value is left exactly as it was (got ${JSON.stringify(refused)})`);
+  // D1 Lane C (DI-633) — A STORED LEGACY ID (written before the catalog) keeps working: it reads as the tier that replaced it, so the card shows Opus selected and the
+  // server (which resolves it the same way through legacyModelToTier) sends Opus. It is READ, never written back as a legacy id.
+  storage.saveSetting('scribe', { ...(storage.getSettings().scribe || {}), model: 'claude-opus-5' });
+  assert(getScribeModel() === OPUS,
+    '17-16b: a stored LEGACY id (claude-opus-5) reads as Opus on the card — CONVENTIONS #10, an old settings blob keeps its choice');
+  storage.saveSetting('scribe', { ...(storage.getSettings().scribe || {}), model: OPUS });
   for (const junk of ['', null, undefined, 'constructor', '__proto__', 'CLAUDE-OPUS-5']) {
     assert(setScribeModel(junk).ok === false,
       `17-17: …and so is every other unusable value (${JSON.stringify(junk)}) — including prototype keys, because \`includes()\` on a frozen array answers membership rather than truthiness (F-1's rule, one table over)`);

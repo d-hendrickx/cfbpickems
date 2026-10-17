@@ -1,0 +1,12 @@
+{
+  "id": "leaguecreatetest",
+  "script": "leaguecreatetest.mjs",
+  "label": "114",
+  "summary": "loose",
+  "floor": 328,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 200,
+  "note": "D1 Lane A (2026-10-08, DI-550/548 #10): RAISED 318 -> 328 - the creation-scope door (leagueCreationAvailable), the scope cache, the three new refusal sentences, the admins-only banner. Before that: the New League flow: copy verbatim, codes, state machine, picker, renderers + escHtml, twin with 0034, the gate default, golden stub, League Page empty state, pending join, the real reconcile sweep, share, tripwires, CSS, storage inventory, the pilot-only registry"
+}

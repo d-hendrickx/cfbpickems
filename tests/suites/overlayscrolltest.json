@@ -1,0 +1,26 @@
+{
+  "id": "overlayscrolltest",
+  "script": "overlayscrolltest.mjs",
+  "label": "131",
+  "summary": "strict-combined",
+  "floor": 85,
+  "tags": [
+    "browser",
+    "slow"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/sw-register.js",
+    "css/**",
+    "index.html",
+    "service-worker.js",
+    "manifest.json",
+    "config.json",
+    "icons/**",
+    "vendor/**",
+    "reveal/**",
+    "favicon.*"
+  ],
+  "expectedMs": 37400,
+  "note": "set 2026-10-01 at its first green run (RED before the fix: 47 passed, 38 failed): [0] 9 engine/server checks; [1] 6 fixtures; [M]/[C]/[L]/[H] 13 each — fixture, root lock, M1 bounce pair, two swipes, a wheel, own-scroller containment, own content overflows + scrolls …"
+}

@@ -1,0 +1,26 @@
+{
+  "id": "weekswipetest",
+  "script": "weekswipetest.mjs",
+  "label": "112o",
+  "summary": "strict-noverdict",
+  "floor": 99,
+  "tags": [
+    "browser",
+    "slow"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/sw-register.js",
+    "css/**",
+    "index.html",
+    "service-worker.js",
+    "manifest.json",
+    "config.json",
+    "icons/**",
+    "vendor/**",
+    "reveal/**",
+    "favicon.*"
+  ],
+  "expectedMs": 38500,
+  "note": "RAISED from 98 by W-22 (2026-10-08): 1-2b, the boot race — with the config answer held back 1.5 s the harness still ends on the Dashboard (it waits for the boot's own Home render); 96 -> 98 A-20b, 92 -> 96 A-4b / A-8b (review N2)."
+}

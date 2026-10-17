@@ -1,0 +1,15 @@
+{
+  "id": "themetest-tz-America-Los-Angeles",
+  "script": "themetest.mjs",
+  "label": "125b",
+  "summary": "strict-single",
+  "floor": 334,
+  "tags": [
+    "quick"
+  ],
+  "env": {
+    "TZ": "America/Los_Angeles"
+  },
+  "expectedMs": 1000,
+  "note": "themetest.mjs (TZ=America/Los_Angeles) reports ALL PASS with the same floor (got: )"
+}

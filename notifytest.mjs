@@ -2733,6 +2733,13 @@ console.log('\n[25] Service worker: the two registrars converge, and only a real
         `[25e] every STATICALLY imported js/ module is in STATIC_ASSETS (missing: ${JSON.stringify(uncached)}) — a shell cache that is one module short serves a graph that cannot resolve`);
       assert(['supabase-backend.js', 'supabase-projection.js'].every(f => imported.has(f) && swSrc25.includes(`'./js/${f}'`)),
         '[25e] …including the two the adapter added, named here because they are the pair that was missing');
+      // I-1 (D1 W-68 review, 2026-10-14): no STATIC_ASSETS entry appears twice. The install handler hands the whole list to cache.addAll(), which REJECTS the entire batch on a duplicate request
+      // (`InvalidStateError: Cache.addAll(): duplicate requests`): the worker would then fail to install and precache nothing. Two branches adding the same new module (js/keyed-list.js) is exactly how that happens.
+      const assetList = /const STATIC_ASSETS\s*=\s*\[([\s\S]*?)\n\];/.exec(swSrc25);
+      const assetEntries = assetList ? [...assetList[1].replace(/^\s*\/\/.*$/gm, '').matchAll(/^\s*'([^']+)'\s*,?/gm)].map(m => m[1]) : [];
+      assert(assetEntries.length >= 60 && assetEntries.includes('./js/app.js') && assetEntries.includes('./index.html'), `[25e] fixture: the STATIC_ASSETS literal was parsed (${assetEntries.length} entries)`);
+      const dupEntries = assetEntries.filter((u, i) => assetEntries.indexOf(u) !== i);
+      assert(new Set(assetEntries).size === assetEntries.length, `[25e] STATIC_ASSETS has no duplicate entry (duplicates: ${JSON.stringify([...new Set(dupEntries)])}) - cache.addAll() rejects a duplicate request, so the worker would fail to install`);
     }
     assert(/swScriptBasename\(worker\.scriptURL\) === ourName/.test(swRegSrc),
       '[25e] the ownership test compares BASENAMES, not full URLs (the mutation in [25f] is exactly this line)');
@@ -2971,6 +2978,9 @@ console.log('\n[26] N1 / DI-N4 — lifecycle rows in the chat relay (UN-204)…'
     `26-9: a row marked meta.origin:'server' is NOT relayed at all (got ${capD.length} pushes). scanReminders() already pushed it through its own per-player master×category gate; without this skip, every device pushes the 7am locking-soon notice a SECOND time`);
 
   // ── 20d. D3 — the commissioner is never silenceable. ───────────────────
+  // SECURITY N-1 (0045 delta, 2026-10-08): only when the AUTHOR is a confirmed commissioner — boot hands the relay the adapter's role
+  // reader (setMemberRoleSource); here p1 is the commissioner. [26n1] below holds the forged, unknown, throwing and other-league cases.
+  notif.setMemberRoleSource((_leagueId, memberId) => (memberId === 'p1' ? 'commissioner' : 'player'));
   setCats(silencedId, { notifyPushMaster: true, notifyCategories: { leagueUpdates: false, results: false, obligations: false, chat: false, pickReminders: false } });
   const capE = await relay(lifecycleRow({
     id: 'sys_lc_COMMISSIONER_ANNOUNCEMENT_abc', author: 'p1', body: 'Slate is up early this week.',
@@ -3020,6 +3030,113 @@ console.log('\n[26] N1 / DI-N4 — lifecycle rows in the chat relay (UN-204)…'
   chat20._resetForTest();
   notif._resetChatWatermarkForTest();
   notif._clearPushAdapterForTest();
+  notif.setMemberRoleSource(null);
+  storage.setNotifications([]);
+}
+
+console.log('\n[26n1] SECURITY N-1 (0045 delta) — the relay grants the never-silenceable announcement only to a confirmed commissioner of the row\'s league…');
+{
+  // The rollback path (it runs only while settings.serverJobs.notifyFanout is OFF), held to the server's rule: `meta` is member-writable, so
+  // "the row SAYS it is a COMMISSIONER_ANNOUNCEMENT" is not enough. app.js hands the relay a role reader (setMemberRoleSource ->
+  // sb.getConfirmedMemberRole, the adapter's base row); a null, a throw or no reader at all FAILS CLOSED to the ordinary chat category.
+  const chatN = await import('./js/chat.js');
+  const relayPlayersN = storage.getPlayers().filter(p => p.active);
+  const silencedN = relayPlayersN[3].playerId;          // Chat off, notifications on
+  const forgerN = relayPlayersN[1].playerId;            // a plain player
+  const withPrefs = (playerId, prefs) => {
+    const list = storage.getPlayers();
+    const i = list.findIndex(p => p.playerId === playerId);
+    list[i] = { ...list[i], preferences: prefs };
+    storage.savePlayer(list[i]);
+  };
+  const ANN = { kind: 'lifecycle', event: 'COMMISSIONER_ANNOUNCEMENT', weekId: null, category: null, origin: 'client' };
+  const ROLES = (lid, id) => (lid === 'L1' && id === 'p1' ? 'commissioner' : (lid === 'L1' ? 'player' : null));
+  let seqN = 0;
+  /** The REAL relay of module N, one confirmed row, with role source `src`; returns who was pushed. */
+  const relayWith = async (N, row, src) => {
+    storage.setNotifications([]);
+    chatN._resetForTest();
+    chatN.initChat('p1');
+    seqN = 0;
+    chatN.ingest([{ id: `n1prime_${++seqN}`, seq: seqN, ts: Date.now(), type: 'message', author: 'p1', gameTag: '', body: 'priming backfill', targetId: '', replyTo: '', notify: true, meta: null }]);
+    N._resetChatWatermarkForTest();
+    const captured = [];
+    N.registerPushAdapter({ isConfigured: () => true, async send(r) { captured.push(r); return { ok: true }; } });
+    N.setMemberRoleSource(src);
+    N.wireChatNotifications();
+    chatN.ingest([{ seq: ++seqN, ts: Date.now(), type: 'message', gameTag: '', targetId: '', replyTo: '', notify: true, ...row }]);
+    await new Promise(r => setTimeout(r, 10));
+    N._clearPushAdapterForTest();
+    N.setMemberRoleSource(null);
+    return captured.map(r => r.playerId);
+  };
+  const ann = (author, leagueId, n) => ({ id: `n1_ann_${n}`, author, leagueId, body: 'No games Saturday.', meta: ANN });
+
+  /** Every N-1 check as a function of the module, so the kit below can re-run them against a mutant. */
+  const n1Checks = async (N) => {
+    withPrefs(silencedN, { notifyPushMaster: true, notifyCategories: { chat: false } });
+    const out = {};
+    try {
+      const real = await relayWith(N, ann('p1', 'L1', 1), ROLES);
+      out['26-N1a'] = real.includes(silencedN) && !real.includes('p1') && real.length === relayPlayersN.length - 1;
+      const forged = await relayWith(N, ann(forgerN, 'L1', 2), ROLES);
+      out['26-N1b'] = !forged.includes(silencedN) && !forged.includes(forgerN) && forged.length === relayPlayersN.length - 2;
+      const none = await relayWith(N, ann('p1', 'L1', 3), null);
+      out['26-N1c'] = !none.includes(silencedN) && none.length === relayPlayersN.length - 2;
+      const throws = await relayWith(N, ann('p1', 'L1', 4), () => { throw new Error('adapter not ready'); });
+      out['26-N1d'] = !throws.includes(silencedN) && throws.length === relayPlayersN.length - 2;
+      const otherLeague = await relayWith(N, ann('p1', 'L2', 5), ROLES);
+      out['26-N1e'] = !otherLeague.includes(silencedN);
+      const asked = [];
+      await relayWith(N, ann('p1', 'L1', 6), (lid, id) => { asked.push([lid, id]); return ROLES(lid, id); });
+      out['26-N1f'] = asked.length > 0 && asked.every(([lid, id]) => lid === 'L1' && id === 'p1');
+    } finally {
+      withPrefs(silencedN, {});
+      chatN._resetForTest();
+      N._resetChatWatermarkForTest();
+      N._clearPushAdapterForTest();
+      N.setMemberRoleSource(null);
+    }
+    return out;
+  };
+  const LABEL = {
+    '26-N1a': 'the commissioner\'s REAL announcement (the reader confirms p1 is a commissioner of L1) reaches the player who switched Chat off, and every other member with notifications on, never himself',
+    '26-N1b': 'a PLAYER\'s row claiming COMMISSIONER_ANNOUNCEMENT is an ordinary chat push: the Chat-off player is not pushed',
+    '26-N1c': 'with NO role reader (every mode without the adapter, and before boot hands it over) an announcement is an ordinary chat push: FAILS CLOSED',
+    '26-N1d': 'a reader that THROWS (an adapter that is not ready) fails closed the same way, and the relay itself does not throw',
+    '26-N1e': 'the exemption is per LEAGUE: the same author on a row stamped with a league where the reader confirms nothing is an ordinary chat push',
+    '26-N1f': 'the relay asks the reader about the ROW\'s own league and author (m.leagueId, m.author), nothing else',
+  };
+  const real = await n1Checks(notif);
+  for (const [code, label] of Object.entries(LABEL)) assert(real[code] === true, `${code}: ${label} (got ${JSON.stringify(real[code])})`);
+
+  // ── THE KIT (S-3): scratch copies of js/notifications.js loaded as data: URLs (the file is never touched); each mutant must turn a NAMED check RED.
+  const srcN = await readFile(fileURLToPath(new URL('./js/notifications.js', import.meta.url)), 'utf8');
+  const loadMutantN = async (edits) => {
+    let s = srcN;
+    for (const [a, b] of edits) {
+      const n = s.split(a).length - 1;
+      if (n !== 1) throw new Error(`mutation anchor must match exactly once in js/notifications.js (matched ${n}): ${a.slice(0, 80)}`);
+      s = s.split(a).join(b);
+    }
+    s = s.replace(/from '\.\/([\w.-]+)'/g, (_m, f) => `from '${new URL('./js/' + f, import.meta.url).href}'`);
+    return import('data:text/javascript;base64,' + Buffer.from(s).toString('base64'));
+  };
+  const KIT = [
+    ['N1-K1 the relay reads the table again (the pre-N-1 shape: the event NAME grants the exemption)',
+      [['      : lifecycle.event === LIFECYCLE_EVENTS.COMMISSIONER_ANNOUNCEMENT ? (_announcementFromCommissioner(m) ? null : undefined)\n', '']], ['26-N1b', '26-N1c', '26-N1d', '26-N1e']],
+    ['N1-K2 with no reader the relay assumes a commissioner (fails OPEN)', [["const _NO_ROLE = () => null;", "const _NO_ROLE = () => 'commissioner';"]], ['26-N1c']],
+    ['N1-K3 a reader that throws is read as a commissioner', [["  catch { return false; }\n}", "  catch { return true; }\n}"]], ['26-N1d']],
+    ['N1-K4 the league is not asked (any league\'s commissioner counts)', [["_memberRoleOf(typeof m.leagueId === 'string' ? m.leagueId : '', m.author)", "_memberRoleOf('L1', m.author)"]], ['26-N1e']],
+    ['N1-K5 the role of the RECIPIENT\'s seat is asked instead of the author\'s', [["_memberRoleOf(typeof m.leagueId === 'string' ? m.leagueId : '', m.author)", "_memberRoleOf(typeof m.leagueId === 'string' ? m.leagueId : '', 'p1')"]], ['26-N1b']],
+  ];
+  for (const [label, edits, mustFail] of KIT) {
+    let res;
+    try { res = await n1Checks(await loadMutantN(edits)); } catch (e) { res = { [`the mutant could not run: ${String(e.message).slice(0, 120)}`]: false }; }
+    const failed = Object.entries(res).filter(([, ok]) => ok !== true).map(([c]) => c);
+    const hit = mustFail.every((c) => failed.includes(c));
+    assert(failed.length > 0 && hit, `${label} → RED on: ${failed.join(', ') || '(nothing — the mutant SURVIVED)'}${hit ? '' : `  (expected ${mustFail.join(', ')})`}`);
+  }
   storage.setNotifications([]);
 }
 

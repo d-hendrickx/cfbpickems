@@ -1,0 +1,12 @@
+{
+  "id": "trainer.twin",
+  "script": "supabase/tests/functions/trainer.twin.mjs",
+  "label": "81h",
+  "summary": "loose",
+  "floor": 305,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 300,
+  "note": "raised 244 -> 247 by the coordinator's security finding 1 (2026-09-24): §[20]'s 20-13a..c drive the LIVE handler with a model-supplied learning_id that coincidentally ends in the reserved suffix and prove the row still lands PUBLIC (no visible_to, empty meta.playerId) — the real …"
+}

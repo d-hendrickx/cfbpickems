@@ -68,6 +68,7 @@ const platform = await import('./js/platform.js');
 const auth = await import('./js/auth.js');
 const cc = await import('./js/control-center.js');
 const { icon } = await import('./js/icons.js');
+const { normTeam: normTeamFn } = await import('./js/team-match.js');
 
 const read = (rel) => readFile(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 function stripComments(src) {
@@ -94,8 +95,9 @@ const article = (o = {}) => ({
   premium: false, ...o,
 });
 const payload = (articles) => ({ header: 'NCAAF News', link: {}, articles });
+// D1 (DI-484 #4): every item gets ITS OWN url (derived from its id) — two different ids at one URL are now read-time duplicates, as they would be from a real feed.
 const item = (o = {}) => Object.freeze({
-  id: 'news_abc', url: 'https://www.espn.com/college-football/story/_/id/1/x', source: 'ESPN', headline: 'A headline', imageUrl: null, publishedAt: iso(NOW - 2 * HOUR),
+  id: 'news_abc', url: 'https://www.espn.com/college-football/story/_/id/' + encodeURIComponent(String(o.id || 'news_abc')) + '/x', source: 'ESPN', headline: 'A headline', imageUrl: null, publishedAt: iso(NOW - 2 * HOUR),
   sport: 'cfb', teamIds: [], reason: null, relevanceTier: null, teamNames: [], teamShortNames: [], description: null, ...o,
 });
 
@@ -122,14 +124,21 @@ console.log('[1] Static contract — allow-lists, the zero-import rank module, o
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 {
   const ALLOW = {
-    'js/newsTransport.js': ['./data-provider.js', './auth.js', './newsCard.js', './newsRules.js'],
-    'js/newsCard.js': ['./haptics.js', './platform.js'],
+    // D1 Lane C (DI-673 / DI-479 / DI-487 13.1, 2026-10-08): the transport also mirrors the pilot rule (./pilot-only.js); the card takes its validators from the shared rules file.
+    'js/newsTransport.js': ['./data-provider.js', './auth.js', './newsCard.js', './newsRules.js', './pilot-only.js'],
+    'js/newsCard.js': ['./haptics.js', './platform.js', './newsRules.js'],
     'js/newsSettings.js': ['./icons.js'],
-    'js/newsFeed.js': ['./storage.js', './auth.js', './newsTransport.js', './newsRank.js', './newsCard.js'],
+    // D1 Lane C (DI-663 / DI-673): the adapter also builds the slate keys and the storyline tag — ./team-match.js (the one matcher) and ./data-model.js (TIME_ZONES, for the tag's weekday).
+    // D1 Lane C (DI-660 / DI-668): the Home CONTENT leg rides the same adapter — ./feed-relevance.js (pure: the private relevance) and ./content-card.js (the cards' one sink).
+    'js/newsFeed.js': ['./storage.js', './auth.js', './newsTransport.js', './newsRank.js', './newsCard.js', './team-match.js', './data-model.js', './feed-relevance.js', './content-card.js'],
     'js/newsRules.js': [],
-    'js/newsRank.js': [],
+    'js/newsRank.js': ['./team-match.js', './newsRules.js'],
   };
-  assert(!/^\s*import\s/m.test(CODE['js/newsRank.js']) && importsOf(CODE['js/newsRank.js']).length === 0, '1-1: js/newsRank.js has ZERO import statements (S-C10)');
+  // D1 Lane C (DI-668, 2026-10-08): the team matcher MOVED to js/team-match.js (pure, zero imports) so News, Home's content relevance, the storyline tag and the server
+  // collector share ONE definition. newsRank imports ONLY that file; S-C10's property (no I/O, no AI reachable from the ranking) holds because team-match imports nothing.
+  const tm = stripComments(await read('./js/team-match.js'));
+  assert(importsOf(CODE['js/newsRank.js']).sort().join() === './newsRules.js,./team-match.js' && !/^\s*import\s/m.test(tm) && !/^\s*import\s/m.test(CODE['js/newsRules.js']),
+    '1-1: js/newsRank.js imports ONLY ./team-match.js and ./newsRules.js, and both have ZERO import statements (S-C10, DI-668, DI-672)');
   assert(!/^\s*import\s/m.test(CODE['js/newsRules.js']), '1-2: js/newsRules.js has ZERO import statements (the shared pure rules file B reuses from an Edge function)');
   for (const [f, allowed] of Object.entries(ALLOW)) {
     const imps = importsOf(CODE[f]);
@@ -142,8 +151,17 @@ console.log('[1] Static contract — allow-lists, the zero-import rank module, o
   assert(/credentials:\s*'omit'/.test(CODE['js/newsTransport.js']) && /referrerPolicy:\s*'no-referrer'/.test(CODE['js/newsTransport.js']), "1-5: the fetch is credentials:'omit' with referrerPolicy:'no-referrer'");
   assert(!/headers\s*:/.test(CODE['js/newsTransport.js']), '1-6: the fetch carries NO custom headers (a custom header would turn a simple GET into a preflighted one the endpoint answers 403 to)');
   // UN-341: the allow-list above is the guard; this is the second, redundant layer (comments stripped — the files' headers name what they never do)
-  const AI = /anthropic|claude|scribe-ask|_shared\/anthropic|supabase\.functions\.invoke|\/functions\/v1\/|\.rpc\(|supabase\.from|createClient/i;
-  for (const f of NEWS_FILES) assert(!AI.test(CODE[f]), `1-7: ${f} references no AI / Anthropic / Edge function / Supabase client (UN-341)`);
+  // D1 Lane C (DI-673 / DI-487 13.1): the transport now reads OUR backend through two typed RPCs (`news_feed`, `news_sources_for`) and one two-key platform_kv select, on an INJECTED
+  // client. The rule that replaces "no Supabase client" is: no AI, no Edge function, no client CONSTRUCTED here, no read of news_articles, and RPC names from a closed list.
+  const AI = /anthropic|claude|scribe-ask|_shared\/anthropic|functions\.invoke|\/functions\/v1\/|createClient/i;
+  for (const f of NEWS_FILES) assert(!AI.test(CODE[f]), `1-7: ${f} references no AI / Anthropic / Edge function and constructs no Supabase client (UN-341)`);
+  const rpcs = [...CODE['js/newsTransport.js'].matchAll(/\.rpc\(\s*'([^']+)'/g)].map((m) => m[1]);
+  // D1 Lane C (DI-660 / DI-669 / DI-667): and the Home content leg's typed reads of 0055 (feed_content_list, feed_content_get — no pick, team or league argument, DI-668) and the
+  // league's own callback read (league_insight_get: the active league's id, membership checked first by the server).
+  assert(rpcs.length === 5 && rpcs.every((n) => ['news_feed', 'news_sources_for', 'feed_content_list', 'feed_content_get', 'league_insight_get'].includes(n)) && NEWS_FILES.filter((f) => f !== 'js/newsTransport.js').every((f) => !/\.rpc\(/.test(CODE[f])),
+    `1-7b: the transport calls ONLY news_feed, news_sources_for, the two content reads and the callback read (${rpcs.join(', ')}); no other news file calls an RPC`);
+  assert(!/from\(\s*'news_articles'\s*\)|news_articles/.test(NEWS_FILES.map((f) => CODE[f]).join('\n')), "1-7c: no news file reads news_articles directly (SC-N13(c): the client reads only through the RPC)");
+  assert(!/\{\s*get\s*:\s*true|\{\s*head\s*:\s*true/.test(CODE['js/newsTransport.js']), '1-7d: the RPC is a POST: no { get: true } and no { head: true } (SC-N13(c))');
   for (const f of NEWS_FILES) {
     assert(!/CORS_FALLBACKS|attemptFetch|CapacitorHttp|localStorage|\bload\(|\bsave\(|import\(|\beval\(|new Function/.test(CODE[f]), `1-8: ${f} uses no proxy chain, no Capacitor HTTP, no localStorage / load / save, no dynamic import, no eval (S-C11, SD-16)`);
     assert(!/Object\.hasOwn|\.at\(|AbortSignal\.timeout|structuredClone|replaceAll/.test(CODE[f]), `1-9: ${f} is iOS 15.0 safe (no Object.hasOwn, .at(), AbortSignal.timeout, structuredClone, replaceAll)`);
@@ -180,7 +198,11 @@ console.log('\n[2] newsRules — text hygiene; betting headlines are KEPT ([BET-
   assert(s('<b>ok</b>') === '<b>ok</b>', '2-6: markup is NOT removed here — it is plain text that is escaped again at render');
 
   // [BET-KEEP] the betting filter is gone (Drew, 2026-10-01: "I want betting news" / "ok to remove betting filter"). Re-adding a drop must be a deliberate, reviewed change.
-  assert(JSON.stringify(Object.keys(rules).sort()) === '["stripControlAndBidi"]', '2-7: [BET-KEEP] newsRules exports ONLY stripControlAndBidi — the scored betting filter (bettingVerdict / isBettingItem / the term lists) is removed (SD-6 reversed by Drew, 2026-10-01)');
+  // D1 Lane C (DI-670…673, 2026-10-08): the shared rules file gained the multi-publisher URL, host, dedupe and via rules (newsrulestest proves them). Still NO betting export.
+  assert(JSON.stringify(Object.keys(rules).sort()) === JSON.stringify(['FORBIDDEN_IMAGE_PROXIES', 'IMAGE_HOST_DENYLIST', 'LINK_HOST_DENYLIST', 'MULTI_TENANT_SUFFIXES', 'REGEX_REGISTRY',
+    'SHARED_IMAGE_CDNS', 'TRACKING_PARAMS', 'VIA_BANNED_VOICES', 'canonicalizeArticleUrl', 'dedupeKeyOf', 'guardVia', 'hasSecretShapedQueryKey', 'headlineTokens', 'hostPatternOk',
+    'isAllowedImageUrl', 'isHostAllowed', 'jaccard', 'parseArticleUrl', 'stripControlAndBidi'])
+    && !Object.keys(rules).some((k) => /bet/i.test(k)), '2-7: [BET-KEEP] newsRules exports the D1 rule set and NO betting filter (bettingVerdict / isBettingItem / the term lists stay removed; SD-6 reversed by Drew, 2026-10-01)');
   const stripComments = (code) => code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
   assert(!/bettingVerdict|isBettingItem|HARD_SINGLE|BETTING_|droppedBetting|droppedFilterError/.test(stripComments(CODE['js/newsRules.js']) + stripComments(CODE['js/newsTransport.js']) + stripComments(CODE['js/newsFeed.js'])), '2-8: [BET-KEEP] no betting-filter code remains in newsRules, newsTransport or newsFeed');
   {
@@ -415,7 +437,7 @@ const tx = (name, short, o = {}) => item({ id: 'news_' + name.replace(/\W/g, '')
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-console.log('\n[5] newsTransport — normalization, dedupe, TTL, identity, errors, zero network…');
+console.log('\n[5] newsTransport — the ESPN CONTINGENCY path (fetchEspnNews; NEWS_CLIENT_ESPN_FALLBACK is false: C20) — normalization, dedupe, TTL, identity, errors, zero network…');
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 const N = (arts, sport = 'cfb', now = NOW, o) => transport.normalizeNewsPayload(payload(arts), sport, now, o);
 const serve = (byPath) => mkFetch((url) => {
@@ -500,23 +522,23 @@ const serve = (byPath) => mkFetch((url) => {
   // the fetch itself
   transport.clearNewsCache();
   const f = serve({ cfb: payload([article()]) });
-  const r = await withFetch(f, () => transport.fetchNews({ sports: ['cfb'], now: NOW }));
+  const r = await withFetch(f, () => transport.fetchEspnNews({ sports: ['cfb'], now: NOW }));
   assert(f.calls.length === 1 && f.calls[0].url === 'https://site.api.espn.com/apis/site/v2/sports/football/college-football/news?limit=20', '5-22: the request is the fixed per-sport URL with limit=20 and nothing else');
   assert(f.calls[0].opts.credentials === 'omit' && f.calls[0].opts.referrerPolicy === 'no-referrer' && !('headers' in f.calls[0].opts) && !('mode' in f.calls[0].opts), "5-23: credentials 'omit', referrerPolicy 'no-referrer', NO custom headers, NO mode override");
   assert(r.items.length === 1 && Object.keys(r.errors).length === 0 && typeof r.stats === 'object', '5-24: fetchNews resolves { items, errors, stats }');
   // five sports, five distinct URLs, paths from the frozen map
   transport.clearNewsCache();
   const f5 = serve((sport) => payload([article({ headline: 'Story for ' + sport, links: { web: { href: 'https://www.espn.com/' + sport + '/story/1' } } })]));
-  const r5 = await withFetch(f5, () => transport.fetchNews({ sports: ['cfb', 'nfl', 'nba', 'nhl', 'cbb'], now: NOW }));
+  const r5 = await withFetch(f5, () => transport.fetchEspnNews({ sports: ['cfb', 'nfl', 'nba', 'nhl', 'cbb'], now: NOW }));
   assert(f5.calls.length === 5 && new Set(f5.calls.map(c => c.url)).size === 5 && r5.items.length === 5 && JSON.stringify(r5.items.map(i => i.sport)) === '["cfb","nfl","nba","nhl","cbb"]', '5-25: five sports -> five requests in parallel, five items back in the requested order');
   assert(Object.isFrozen(transport.NEWS_SPORT_PATHS) && transport.espnNewsPath('cfb') === 'football/college-football' && transport.espnNewsPath('mlb') === null && transport.espnNewsPath('__proto__') === null && transport.espnNewsPath('constructor') === null && transport.espnNewsPath(undefined) === null, '5-26: the sport map is frozen and an unknown key is REFUSED (null) — never silently CFB, and prototype names are not keys');
   transport.clearNewsCache();
   const fu = serve({ cfb: payload([article()]) });
-  const ru = await withFetch(fu, () => transport.fetchNews({ sports: ['cfb', 'mlb', '__proto__'], now: NOW }));
+  const ru = await withFetch(fu, () => transport.fetchEspnNews({ sports: ['cfb', 'mlb', '__proto__'], now: NOW }));
   assert(fu.calls.length === 1 && ru.items.length === 1 && ru.errors.mlb.code === 'unknown_sport' && ru.errors['__proto__'].code === 'unknown_sport' && Object.getPrototypeOf(ru.errors) === null, '5-27: an unknown sport key makes NO request and is recorded as an error (even "__proto__" is only a key — the errors map has no prototype); the real sport still loads');
   transport.clearNewsCache();
   const fz = mkFetch(() => { throw new Error('must not be called'); });
-  const noSports = await withFetch(fz, async () => [await transport.fetchNews({ sports: [], now: NOW }), await transport.fetchNews({ now: NOW }), await transport.fetchNews({ sports: 'cfb', now: NOW }), await transport.fetchNews({ sports: [5, null, {}], now: NOW })]);
+  const noSports = await withFetch(fz, async () => [await transport.fetchEspnNews({ sports: [], now: NOW }), await transport.fetchEspnNews({ now: NOW }), await transport.fetchEspnNews({ sports: 'cfb', now: NOW }), await transport.fetchEspnNews({ sports: [5, null, {}], now: NOW })]);
   assert(fz.calls.length === 0 && noSports.every(x => x.items.length === 0), '5-28: ZERO fetch calls when no sport is requested, or only junk is (S-C8)');
 }
 {
@@ -534,9 +556,9 @@ const serve = (byPath) => mkFetch((url) => {
   for (const [code, handler] of cases) {
     transport.clearNewsCache();
     const f = mkFetch(handler);
-    const e = await withFetch(f, () => nonThrowing(() => transport.fetchNews({ sports: ['cfb'], now: NOW })));
+    const e = await withFetch(f, () => nonThrowing(() => transport.fetchEspnNews({ sports: ['cfb'], now: NOW })));
     assert(e.name === 'NewsUnavailableError' && e.e.sports[0] === 'cfb', `5-29: every sport failing (${code}) -> NewsUnavailableError`);
-    const partial = await withFetch(mkFetch((url, o, n) => (sportOf(url) === 'nfl' ? handler(url, o, n) : okRes(url, payload([article()])))), () => transport.fetchNews({ sports: ['cfb', 'nfl'], now: NOW }));
+    const partial = await withFetch(mkFetch((url, o, n) => (sportOf(url) === 'nfl' ? handler(url, o, n) : okRes(url, payload([article()])))), () => transport.fetchEspnNews({ sports: ['cfb', 'nfl'], now: NOW }));
     transport.clearNewsCache();
     assert(partial.items.length === 1 && partial.errors.nfl && partial.errors.nfl.code === code && !/secret|token|espn\.com/.test(partial.errors.nfl.message + String(partial.errors.nfl.cause && partial.errors.nfl.cause.message)), `5-30: one sport failing (${code}) renders the other, records code "${code}", and no URL / query / platform message rides along`);
   }
@@ -544,9 +566,9 @@ const serve = (byPath) => mkFetch((url) => {
   transport.clearNewsCache();
   const slow = mkFetch((url, o) => new Promise((_, rej) => { o.signal.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' }))); }));
   const t0 = Date.now();
-  const te = await withFetch(slow, () => nonThrowing(() => transport.fetchNews({ sports: ['cfb'], timeoutMs: 25, now: NOW })));
+  const te = await withFetch(slow, () => nonThrowing(() => transport.fetchEspnNews({ sports: ['cfb'], timeoutMs: 25, now: NOW })));
   assert(te.name === 'NewsUnavailableError' && Date.now() - t0 < 2000, '5-31: a hanging request times out through an AbortController (no AbortSignal.timeout — iOS 15) -> NewsUnavailableError');
-  const timeoutErr = await withFetch(slow, async () => { try { return (await transport.fetchNews({ sports: ['cfb', 'nfl'], timeoutMs: 20, now: NOW })).errors; } catch (e) { return e; } });
+  const timeoutErr = await withFetch(slow, async () => { try { return (await transport.fetchEspnNews({ sports: ['cfb', 'nfl'], timeoutMs: 20, now: NOW })).errors; } catch (e) { return e; } });
   assert(timeoutErr.name === 'NewsUnavailableError', '5-31b: …for every sport at once');
 }
 {
@@ -555,32 +577,32 @@ const serve = (byPath) => mkFetch((url) => {
   let n = 0;
   const f = mkFetch((url) => okRes(url, payload([article({ headline: 'Call ' + (++n), links: { web: { href: 'https://www.espn.com/c/' + n } } })])));
   await withFetch(f, async () => {
-    const a = await transport.fetchNews({ sports: ['cfb'], now: NOW });
-    const b = await transport.fetchNews({ sports: ['cfb'], now: NOW + 14 * MIN });
+    const a = await transport.fetchEspnNews({ sports: ['cfb'], now: NOW });
+    const b = await transport.fetchEspnNews({ sports: ['cfb'], now: NOW + 14 * MIN });
     assert(f.calls.length === 1 && b.items[0].headline === 'Call 1' && a.items[0] === b.items[0], '5-32: a call inside the TTL returns the cached items with ZERO network (the "cached" rung of the Loading hierarchy)');
-    const c = await transport.fetchNews({ sports: ['cfb'], now: NOW + 16 * MIN });
+    const c = await transport.fetchEspnNews({ sports: ['cfb'], now: NOW + 16 * MIN });
     assert(f.calls.length === 2 && c.items[0].headline === 'Call 2', '5-33: past the 15-minute TTL it refetches');
-    const d = await transport.fetchNews({ sports: ['cfb'], force: true, now: NOW + 16 * MIN + 1000 });
+    const d = await transport.fetchEspnNews({ sports: ['cfb'], force: true, now: NOW + 16 * MIN + 1000 });
     assert(f.calls.length === 3 && d.items[0].headline === 'Call 3', '5-34: force:true (pull-to-refresh) ALWAYS refetches, TTL or not');
-    const e = await transport.fetchNews({ sports: ['cfb', 'nfl'], now: NOW + 16 * MIN + 2000 });
+    const e = await transport.fetchEspnNews({ sports: ['cfb', 'nfl'], now: NOW + 16 * MIN + 2000 });
     assert(f.calls.length === 4 && f.calls[3].url.includes('/nfl/'), '5-35: the TTL is per sport — the cached sport is served, only the missing one is fetched');
   });
   // in-flight dedupe
   transport.clearNewsCache();
   let release; const gate = new Promise(r => { release = r; });
   const fg = mkFetch(async (url) => { await gate; return okRes(url, payload([article()])); });
-  const pair = await withFetch(fg, async () => { const p1 = transport.fetchNews({ sports: ['cfb'], now: NOW }); const p2 = transport.fetchNews({ sports: ['cfb'], force: true, now: NOW }); await flush(); release(); return Promise.all([p1, p2]); });
+  const pair = await withFetch(fg, async () => { const p1 = transport.fetchEspnNews({ sports: ['cfb'], now: NOW }); const p2 = transport.fetchEspnNews({ sports: ['cfb'], force: true, now: NOW }); await flush(); release(); return Promise.all([p1, p2]); });
   assert(fg.calls.length === 1 && pair[0].items.length === 1 && pair[1].items.length === 1, '5-36: two simultaneous callers for the same sport share ONE request');
   // a failed forced refresh falls back to a still-fresh cache
   transport.clearNewsCache();
   let fail = false;
   const ff = mkFetch((url) => (fail ? okRes(url, null, { ok: false, status: 500 }) : okRes(url, payload([article()]))));
   await withFetch(ff, async () => {
-    await transport.fetchNews({ sports: ['cfb'], now: NOW });
+    await transport.fetchEspnNews({ sports: ['cfb'], now: NOW });
     fail = true;
-    const r = await transport.fetchNews({ sports: ['cfb'], force: true, now: NOW + 2 * MIN });
+    const r = await transport.fetchEspnNews({ sports: ['cfb'], force: true, now: NOW + 2 * MIN });
     assert(r.items.length === 1 && Object.keys(r.errors).length === 0, '5-37: a failed forced refresh serves the still-fresh cached items instead (offline, cache available)');
-    const stale = await nonThrowing(() => transport.fetchNews({ sports: ['cfb'], force: true, now: NOW + 30 * MIN }));
+    const stale = await nonThrowing(() => transport.fetchEspnNews({ sports: ['cfb'], force: true, now: NOW + 30 * MIN }));
     assert(stale.name === 'NewsUnavailableError', '5-38: …but a STALE (past TTL) entry is never served: failure with nothing fresh -> NewsUnavailableError (offline, nothing cached)');
   });
 }
@@ -591,7 +613,7 @@ const serve = (byPath) => mkFetch((url) => {
   let release; const gate = new Promise(r => { release = r; });
   const f = mkFetch(async (url) => { await gate; return okRes(url, payload([article()])); });
   const res = await withFetch(f, async () => {
-    const p = nonThrowing(() => transport.fetchNews({ sports: ['cfb'], now: NOW }));
+    const p = nonThrowing(() => transport.fetchEspnNews({ sports: ['cfb'], now: NOW }));
     await flush();
     auth._bumpIdentityEpochForTest('newstest');          // a sign-out / a different player signs in while the request is in flight
     release();
@@ -602,7 +624,7 @@ const serve = (byPath) => mkFetch((url) => {
   let release2; const gate2 = new Promise(r => { release2 = r; });
   const f2 = mkFetch(async (url) => { await gate2; return okRes(url, payload([article()])); });
   const res2 = await withFetch(f2, async () => {
-    const p = nonThrowing(() => transport.fetchNews({ sports: ['cfb'], now: NOW }));
+    const p = nonThrowing(() => transport.fetchEspnNews({ sports: ['cfb'], now: NOW }));
     await flush();
     lsStore.set('cfbp_supabase_active_league', 'L2');      // a league switch mid-flight
     release2();
@@ -614,14 +636,14 @@ const serve = (byPath) => mkFetch((url) => {
   lsStore.set('cfbp_supabase_active_league', 'L1');
   const f3 = serve({ cfb: payload([article()]) });
   await withFetch(f3, async () => {
-    await transport.fetchNews({ sports: ['cfb'], now: NOW });
-    await transport.fetchNews({ sports: ['cfb'], now: NOW + MIN });
+    await transport.fetchEspnNews({ sports: ['cfb'], now: NOW });
+    await transport.fetchEspnNews({ sports: ['cfb'], now: NOW + MIN });
     assert(f3.calls.length === 1, '5-41: (control) the same identity is served from cache');
     lsStore.set('cfbp_supabase_active_league', 'L2');
-    await transport.fetchNews({ sports: ['cfb'], now: NOW + 2 * MIN });
+    await transport.fetchEspnNews({ sports: ['cfb'], now: NOW + 2 * MIN });
     assert(f3.calls.length === 2, '5-42: a different LEAGUE reads the cache as a miss (entries carry the token they were written under — safe even if clearNewsCache() is never called)');
     auth._bumpIdentityEpochForTest('newstest-2');
-    await transport.fetchNews({ sports: ['cfb'], now: NOW + 3 * MIN });
+    await transport.fetchEspnNews({ sports: ['cfb'], now: NOW + 3 * MIN });
     assert(f3.calls.length === 3, '5-43: a different identity EPOCH reads the cache as a miss');
   });
   transport.clearNewsCache();
@@ -646,7 +668,7 @@ console.log('\n[5b] Security C4 — the byte cap is enforced WHILE the body stre
   transport.clearNewsCache();
   const st1 = { reads: 0, cancelled: false, textCalled: false };
   const f1 = mkFetch((url) => (sportOf(url) === 'cfb' ? streamed(Array.from({ length: 200 }, () => new Uint8Array(100000)), st1)(url) : okRes(url, payload([article()]))));
-  const r1 = await withFetch(f1, () => transport.fetchNews({ sports: ['cfb', 'nfl'], now: NOW }));
+  const r1 = await withFetch(f1, () => transport.fetchEspnNews({ sports: ['cfb', 'nfl'], now: NOW }));
   assert(r1.errors.cfb && r1.errors.cfb.code === 'too_large' && r1.items.length === 1, '5b-1: a 20 MB stream is refused as too_large (the other sport still loads)');
   assert(st1.reads <= 7, `5b-2: …after reading ${st1.reads} chunks, not 200 — it stopped AT the cap instead of buffering the whole body (500 KB / 100 KB chunks = 6 reads)`);
   const cfbCall = f1.calls.find(c => c.url.includes('/college-football/'));
@@ -657,27 +679,27 @@ console.log('\n[5b] Security C4 — the byte cap is enforced WHILE the body stre
   const bytes = enc.encode(JSON.stringify(payload([article({ headline })])));
   const cut = bytes.indexOf(0xC3) + 1;                         // inside the two-byte "é"
   const st2 = { reads: 0, cancelled: false, textCalled: false };
-  const r2 = await withFetch(mkFetch(streamed([bytes.slice(0, cut), bytes.slice(cut)], st2)), () => transport.fetchNews({ sports: ['cfb'], now: NOW }));
+  const r2 = await withFetch(mkFetch(streamed([bytes.slice(0, cut), bytes.slice(cut)], st2)), () => transport.fetchEspnNews({ sports: ['cfb'], now: NOW }));
   assert(r2.items.length === 1 && r2.items[0].headline === headline && st2.textCalled === false && st2.cancelled === false, '5b-4: a streamed body under the cap parses, a character split across two chunks stays intact, and nothing is cancelled');
   // 3) a body under the cap but large (about 400 KB in four chunks) is fine
   transport.clearNewsCache();
   const big = enc.encode(JSON.stringify({ articles: [article()], pad: 'x'.repeat(400000) }));
   const quarter = Math.ceil(big.length / 4);
   const st3 = { reads: 0, cancelled: false, textCalled: false };
-  const r3 = await withFetch(mkFetch(streamed([0, 1, 2, 3].map(k => big.slice(k * quarter, (k + 1) * quarter)), st3)), () => transport.fetchNews({ sports: ['cfb'], now: NOW }));
+  const r3 = await withFetch(mkFetch(streamed([0, 1, 2, 3].map(k => big.slice(k * quarter, (k + 1) * quarter)), st3)), () => transport.fetchEspnNews({ sports: ['cfb'], now: NOW }));
   assert(r3.items.length === 1 && st3.reads === 5 && st3.cancelled === false, '5b-5: a ~400 KB body under the cap streams through in full (four chunks and the done read)');
   // 4) a chunk that is not bytes is a fetch error, and the stream is released
   transport.clearNewsCache();
   const st4 = { reads: 0, cancelled: false, textCalled: false };
-  const r4 = await withFetch(mkFetch((url) => (sportOf(url) === 'cfb' ? streamed(['not bytes'], st4)(url) : okRes(url, payload([article()])))), () => transport.fetchNews({ sports: ['cfb', 'nfl'], now: NOW }));
+  const r4 = await withFetch(mkFetch((url) => (sportOf(url) === 'cfb' ? streamed(['not bytes'], st4)(url) : okRes(url, payload([article()])))), () => transport.fetchEspnNews({ sports: ['cfb', 'nfl'], now: NOW }));
   assert(r4.errors.cfb && r4.errors.cfb.code === 'fetch_error' && st4.cancelled === true, '5b-6: a chunk that is not bytes is a fetch_error and the reader is cancelled');
   // 5) no readable body (older environments, the other tests' fakes): the res.text() fallback still enforces the same cap
   transport.clearNewsCache();
-  const r5 = await withFetch(mkFetch((url) => okRes(url, null, { text: JSON.stringify({ articles: [], pad: 'x'.repeat(600000) }) })), () => nonThrowing(() => transport.fetchNews({ sports: ['cfb'], now: NOW })));
+  const r5 = await withFetch(mkFetch((url) => okRes(url, null, { text: JSON.stringify({ articles: [], pad: 'x'.repeat(600000) }) })), () => nonThrowing(() => transport.fetchEspnNews({ sports: ['cfb'], now: NOW })));
   assert(r5.name === 'NewsUnavailableError', '5b-7: with no res.body the text() fallback still refuses an over-cap body');
   // 6) a mid-stream network error maps to a fixed code
   transport.clearNewsCache();
-  const r6 = await withFetch(mkFetch((url) => ({ ok: true, status: 200, url, headers: { get: () => null }, body: { getReader() { return { async read() { throw new TypeError('network lost https://site.api.espn.com/secret?token=x'); }, async cancel() {} }; } } })), () => nonThrowing(() => transport.fetchNews({ sports: ['cfb', 'nfl'], now: NOW })));
+  const r6 = await withFetch(mkFetch((url) => ({ ok: true, status: 200, url, headers: { get: () => null }, body: { getReader() { return { async read() { throw new TypeError('network lost https://site.api.espn.com/secret?token=x'); }, async cancel() {} }; } } })), () => nonThrowing(() => transport.fetchEspnNews({ sports: ['cfb', 'nfl'], now: NOW })));
   assert(r6.name === 'NewsUnavailableError', '5b-8: a stream that errors mid-body fails the sport calmly (no message or URL escapes)');
 }
 
@@ -773,13 +795,30 @@ const espnItem = (name, short, o = {}) => item({ id: 'news_' + name.replace(/\W/
   const items = [espnItem('Texas Longhorns', 'Texas'), espnItem('Clemson Tigers', 'Clemson'), espnItem('Texas A&M Aggies', 'Texas A&M'), item({ id: 'news_gen' })];
   const home = feed.createHomeNews({ read: mkRead(w), transport: mkTransport(items, track), now: () => NOW });
   const out = await home.fetchNews({ force: false });
-  assert(Array.isArray(out) && out.length === 4 && JSON.stringify(track.calls[0]) === '{"sports":["cfb"],"force":false,"now":' + NOW + '}', '8-1: fetchNews asks the transport for the player\'s own sports only (nothing else is a request input)');
+  // D1 (DI-673): the request also carries the league's PUBLISHED slate as sorted, normalized keys (never a pick: [11] proves two viewers who differ only in picks send identical requests)
+  // review B2 (2026-10-14): the slate is EVERY game of every current published week, whatever its sport — the world's third game is a manual NFL game, so its teams' keys ride too
+  const allKeys = JSON.stringify(transport.slateKeysFor(['Texas', 'Oklahoma', 'Clemson', 'Duke', 'Auburn', 'Texas A&M'], normTeamFn));
+  // coordinator ruling 2026-10-14 (S-C2-N amended for PF-480): the request's sports are the FOLLOWED ones plus the published slate's own sports (here the manual NFL game's)
+  assert(Array.isArray(out) && out.length === 4 && JSON.stringify(track.calls[0]) === '{"sports":["cfb","nfl"],"slateKeys":' + allKeys + ',"force":false,"now":' + NOW + '}',
+    `8-1: fetchNews asks the transport for the player's followed sports plus the published slate's sports, and the slate's keys only (nothing else is a request input): ${JSON.stringify(track.calls[0])}`);
   const label = (id) => out.find(x => x.id === id).reason;
   assert(label('news_TexasLonghorns') === "In this week's slate" && label('news_ClemsonTigers') === 'Your pick' && label('news_TexasAMAggies') === 'Your alma mater' && label('news_gen') === 'CFB', '8-2: viewer A picked Clemson, who is on the slate: "Your pick" (F2); an unpicked slate team, the alma mater and the sport label come out as the DI says');
   const inputs = feed.buildRankInputs(mkRead(w));
-  assert(JSON.stringify(inputs.slateTeams) === '["Texas","Oklahoma","Clemson","Duke"]', '8-3: SC-N13(b) — the slate is EVERY game of the current published week, home and away, final or not; a manual NFL game in a CFB league is not a CFB slate team');
+  assert(JSON.stringify(inputs.slateTeams) === '["Texas","Oklahoma","Clemson","Duke","Auburn","Texas A&M"]' && JSON.stringify(inputs.slateTeamsBySport) === '{"cfb":["Texas","Oklahoma","Clemson","Duke"],"nfl":["Auburn","Texas A&M"]}',
+    '8-3: SC-N13(b) + review B2 — the slate is EVERY game of the current published week, home and away, final or not, grouped BY SPORT: a manual NFL game is an NFL slate team, never a CFB one');
   assert(JSON.stringify(inputs.ownPickTeams) === '["Clemson"]', '8-4: the viewer\'s own picks come from ownPickTeamNames over the FULL picks array — B\'s Texas pick is not A\'s');
-  assert(JSON.stringify(inputs.teamSports) === '{"slate":["cfb"],"pick":["cfb"],"alma":["cfb","cbb"],"home":["cfb","cbb"]}', '8-5: team groups are sport-gated (slate / picks to the league sport, alma / chips to college sports)');
+  assert(JSON.stringify(inputs.teamSports) === '{"slate":["cfb","nfl"],"pick":["cfb","nfl"],"alma":["cfb","cbb"],"home":["cfb","cbb"]}' && JSON.stringify(inputs.slateSports) === '["cfb","nfl"]',
+    '8-5: team groups are sport-gated (slate / picks to the slate\'s own sports, alma / chips to college sports)');
+  {
+    // review B2: per-sport gating — a CFB slate team never tags an NFL article, even by the prefix rule ("Miami" vs "Miami Dolphins"), and the NFL slate tags its own sport
+    const ms = mkWorld({ games: [{ gameId: 'm1', weekId: 'w9', homeTeam: 'Miami', awayTeam: 'Florida State', status: 'scheduled' }, { gameId: 'm2', weekId: 'w9', homeTeam: 'Buffalo Bills', awayTeam: 'Kansas City Chiefs', espnSport: 'nfl' }], picks: [] });
+    const mi = feed.buildRankInputs(mkRead(ms));
+    const ranked = rank.rankNews([item({ id: 'news_dolphins', sport: 'nfl', teamNames: ['Miami Dolphins'], teamShortNames: [] }), item({ id: 'news_chiefs', sport: 'nfl', teamNames: ['Kansas City Chiefs'], teamShortNames: ['Chiefs'] }),
+      item({ id: 'news_canes', sport: 'cfb', teamNames: ['Miami Hurricanes'], teamShortNames: ['Miami'] })], { ...mi, enabledSports: ['cfb', 'nfl'], now: NOW });
+    const r = (id) => (ranked.find((x) => x.id === id) || {}).reason;
+    assert(r('news_dolphins') === 'NFL' && r('news_chiefs') === "In this week's slate" && r('news_canes') === "In this week's slate",
+      `8-5h: review B2 — per-sport slate: the CFB slate's "Miami" never tags the Dolphins (NFL tier only); the NFL slate tags the Chiefs; the CFB slate tags the Hurricanes (${r('news_dolphins')} / ${r('news_chiefs')} / ${r('news_canes')})`);
+  }
   {
     // reviewer F2 end to end: the REAL buildRankInputs, the picked team ON the slate, the card reads "Your pick" — and nobody else's pick ever does
     const pw = mkWorld({ picks: [{ playerId: 'A', gameId: 'g1', selectedTeam: 'Texas' }, { playerId: 'B', gameId: 'g2', selectedTeam: 'Duke' }] });
@@ -813,7 +852,10 @@ const espnItem = (name, short, o = {}) => item({ id: 'news_' + name.replace(/\W/
   // NFL league
   const nflLeague = mkWorld({ settings: { sport: 'nfl' }, games: [{ gameId: 'n1', homeTeam: 'Green Bay', awayTeam: 'Chicago', espnSport: 'nfl' }, { gameId: 'c1', homeTeam: 'Texas', awayTeam: 'Duke' }] });
   const ni = feed.buildRankInputs(mkRead(nflLeague));
-  assert(JSON.stringify(ni.slateTeams) === '["Green Bay","Chicago"]' && JSON.stringify(ni.teamSports.slate) === '["nfl"]', '8-10: in an NFL league the slate is the NFL games and the slate gate is the NFL (a CFB game is not its slate)');
+  assert(JSON.stringify(ni.slateTeamsBySport.nfl) === '["Green Bay","Chicago"]' && JSON.stringify(ni.slateTeamsBySport.cfb) === '["Texas","Duke"]',
+    '8-10: review B2 — each game counts under ITS sport (the NFL game is the NFL slate; an unmarked game is CFB unless its week\'s competition says otherwise)');
+  const nflWeek = mkRead(mkWorld({ week: { sport: 'nfl' }, games: [{ gameId: 'n1', homeTeam: 'Green Bay', awayTeam: 'Chicago' }] }));
+  assert(JSON.stringify(feed.buildRankInputs(nflWeek).slateTeamsBySport) === '{"nfl":["Green Bay","Chicago"]}', '8-10b: an unmarked game in a week whose competition is NFL is an NFL slate game');
   assert(feed.leagueSportOf({ sport: 'nfl' }) === 'nfl' && feed.leagueSportOf({ sport: 'mlb' }) === 'cfb' && feed.leagueSportOf({}) === 'cfb' && feed.leagueSportOf(null) === 'cfb', '8-11: the league sport is one of the five, else CFB');
   // alma mater / chips
   const chips = mkWorld({ prefs: { on: true, sports: ['cfb'], teams: ['Texas A&M', 'Ole Miss'] } });
@@ -872,9 +914,11 @@ const espnItem = (name, short, o = {}) => item({ id: 'news_' + name.replace(/\W/
   // tap wiring: bindEvents resolves ids against the CURRENT items
   const w7 = mkWorld(); const h7 = feed.createHomeNews({ read: mkRead(w7), transport: mkTransport([espnItem('Texas Longhorns', 'Texas', { url: 'https://www.espn.com/x/1' })]), now: () => NOW });
   await h7.fetchNews();
-  const lst = {}; const rootEl = { addEventListener(t, f) { lst[t] = f; }, removeEventListener() {} };
+  // D1 Lane C: the root now carries TWO delegated click listeners (news, and the content cards); a real element keeps both, so this fake does too
+  const lst = {}; const rootEl = { addEventListener(t, f) { (lst[t] ||= []).push(f); }, removeEventListener() {} };
   const opened = []; h7.bindEvents(rootEl, { onOpen: (hh) => opened.push(hh) });
-  lst.click({ target: { closest: () => ({ dataset: { newsId: h7.currentItems()[0].id } }) } });
+  const newsCardEl = { dataset: { newsId: h7.currentItems()[0].id } };
+  lst.click.forEach((f) => f({ target: { closest: (sel) => (/data-news-id|news-card/.test(sel) ? newsCardEl : null) } }));
   assert(opened.length === 1 && opened[0] === 'https://www.espn.com/x/1', '8-23: bindEvents wires the delegated tap to the adapter\'s CURRENT items');
   assert(h7.renderNewsCard(h7.currentItems()[0]).includes('data-news-id=') && h7.renderNewsCard({}) === '', '8-24: renderNewsCard is the card renderer, \'\' on bad input');
   // prefs-changed subscription
@@ -909,7 +953,8 @@ const model = (o = {}) => ({ on: true, sports: ['cfb'], teams: ['Texas A&M'], le
   const body = settingsUi.renderNewsSettingsBody(model());
   const pane = settingsUi.renderNewsSettingsPane(model());
   assert(pane.includes('data-action="cc-pop-news"') && pane.includes('admin-section-title">News<') && pane.includes('Control Center'), '9-1: the pushed pane has the back row (the same .control-center-back Profile uses), the title and the body');
-  assert(body.includes('Show news in Home') && body.includes('Off hides the news slot entirely — no message, nothing to see.') && body.includes('News never uses AI-generated text and never costs anything extra to run — it&#39;s headlines, images, and links, fetched directly from ESPN, the same way Google News works.'), '9-2: the master label, its sub-label and the footer note are the DI-379 copy (the footer corrected for the client-side fetch)');
+  assert(body.includes('Show news in Home') && body.includes('Off hides the news slot entirely — no message, nothing to see.') && body.includes('News never uses AI-generated text. Headlines, images and links come from the publishers named on each card, collected by our servers and kept for 14 days.')
+    && !/fetched directly from ESPN|Google News/.test(body), '9-2: the master label, its sub-label and the footer note — the footer is DI-673\'s D1 sentence (publishers, our servers, 14 days); the false "fetched directly from ESPN" line is gone');
   assert(body.includes("NFL / NBA / NHL / CBB teams aren&#39;t selectable yet — those sports are followed at the sport level only until the shared team catalog work lands."), '9-3: the mockup\'s hint copy is verbatim');
   assert(['CFB', 'NFL', 'NBA', 'NHL', 'CBB'].every(l => body.includes(`<span class="cc-row-label">${l}</span>`)) && (body.match(/data-action="cc-news-toggle-sport"/g) || []).length === 5, '9-4: exactly the five sport rows, in the DI order');
   assert(!/betting|gambling|specific leagues/i.test(body), '9-5: no betting / gambling toggle row (betting headlines are simply kept since the 2026-10-01 reversal of SD-6; no toggle was asked for) and no "specific leagues" row (deferred)');
@@ -1171,6 +1216,23 @@ async function loadMutant(rel, edits) {
   src = src.replace(/from '\.\/([\w.-]+)'/g, (_m, f) => `from '${URL_OF('./js/' + f)}'`);
   return await import('data:text/javascript;base64,' + Buffer.from(src).toString('base64'));
 }
+/**
+ * D1 Lane C (2026-10-08): the URL and picture validators MOVED into js/newsRules.js (one validator for the server and the client). A mutant of THAT file is loaded
+ * as a data: URL and the module under test (newsCard.js / newsTransport.js) is loaded with its `./newsRules.js` import pointed at the mutant, so every proof that
+ * used to mutate newsCard.js's private copy keeps its teeth against the code that now does the work.
+ */
+async function loadMutantVia(rel, edits) {
+  let dep = await readFile(fileURLToPath(new URL('./js/newsRules.js', import.meta.url)), 'utf8');
+  for (const [a, b] of edits) {
+    const n = dep.split(a).length - 1;
+    if (n !== 1) throw new Error(`mutation anchor must match exactly once in ./js/newsRules.js (matched ${n}): ${a.slice(0, 80)}`);
+    dep = dep.split(a).join(b);
+  }
+  const depUrl = 'data:text/javascript;base64,' + Buffer.from(dep).toString('base64');
+  let src = await readFile(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+  src = src.replace(/from '\.\/newsRules\.js'/g, `from '${depUrl}'`).replace(/from '\.\/([\w.-]+)'/g, (_m, f) => `from '${URL_OF('./js/' + f)}'`);
+  return await import('data:text/javascript;base64,' + Buffer.from(src).toString('base64'));
+}
 const GAMES = [{ gameId: 'g1', homeTeam: 'Texas', awayTeam: 'Oklahoma' }, { gameId: 'g2', homeTeam: 'Clemson', awayTeam: 'Duke' }];
 const PICKS = [{ playerId: 'B', gameId: 'g1', selectedTeam: 'Texas' }, { playerId: null, gameId: 'g1', selectedTeam: 'Texas' }, { playerId: 'A', gameId: 'g2', selectedTeam: 'Clemson' }];
 
@@ -1229,7 +1291,7 @@ const rankChecks = (m) => {
 };
 const transportChecks = async (m) => {
   const out = {};
-  const run = async (handler, o, pre) => { m.clearNewsCache(); const f = mkFetch(handler); try { if (pre) pre(); const r = await withFetch(f, () => m.fetchNews({ sports: ['cfb'], now: NOW, ...o })); return { r, f }; } catch (e) { return { e, f }; } };
+  const run = async (handler, o, pre) => { m.clearNewsCache(); const f = mkFetch(handler); try { if (pre) pre(); const r = await withFetch(f, () => m.fetchEspnNews({ sports: ['cfb'], now: NOW, ...o })); return { r, f }; } catch (e) { return { e, f }; } };
   const good = (url) => okRes(url, payload([article()]));
   const a1 = await run(good); out['X1 credentials are omitted'] = a1.f.calls[0]?.opts?.credentials === 'omit';
   const a2 = await run((url) => okRes(url, payload([article()]), { resUrl: 'https://evil.example/news' })); out['X2 a response from another host is refused'] = !!a2.e && a2.e.name === 'NewsUnavailableError';
@@ -1243,12 +1305,12 @@ const transportChecks = async (m) => {
   m.clearNewsCache();
   let release; const gate = new Promise(r => { release = r; });
   const f7 = mkFetch(async (url) => { await gate; return good(url); });
-  const r7 = await withFetch(f7, async () => { const p = nonThrowing(() => m.fetchNews({ sports: ['cfb'], now: NOW })); await flush(); auth._bumpIdentityEpochForTest('mut'); release(); return p; });
+  const r7 = await withFetch(f7, async () => { const p = nonThrowing(() => m.fetchEspnNews({ sports: ['cfb'], now: NOW })); await flush(); auth._bumpIdentityEpochForTest('mut'); release(); return p; });
   out['X7 a result that resolves after the identity epoch moved is discarded and never cached'] = r7.name === 'NewsUnavailableError' && m._newsCacheSizeForTest() === 0;
   // cache keyed by identity
   m.clearNewsCache(); lsStore.set('cfbp_supabase_active_league', 'M1');
   const f8 = mkFetch(good);
-  await withFetch(f8, async () => { await m.fetchNews({ sports: ['cfb'], now: NOW }); lsStore.set('cfbp_supabase_active_league', 'M2'); await m.fetchNews({ sports: ['cfb'], now: NOW + MIN }); });
+  await withFetch(f8, async () => { await m.fetchEspnNews({ sports: ['cfb'], now: NOW }); lsStore.set('cfbp_supabase_active_league', 'M2'); await m.fetchEspnNews({ sports: ['cfb'], now: NOW + MIN }); });
   lsStore.delete('cfbp_supabase_active_league');
   out['X8 a cache entry from another league is a miss'] = f8.calls.length === 2;
   const a9 = await run(good, { sports: ['mlb'] }); out['X9 an unknown sport key is refused, never mapped to CFB'] = a9.f.calls.length === 0;
@@ -1271,7 +1333,7 @@ const transportChecks = async (m) => {
   const st17 = { reads: 0, cancelled: false };
   m.clearNewsCache();
   const f17 = mkFetch((url) => ({ ok: true, status: 200, url, headers: { get: () => null }, text: async () => '', body: { getReader() { let i = 0; return { async read() { st17.reads++; if (i >= 40) return { done: true }; i++; return { done: false, value: new Uint8Array(100000) }; }, async cancel() { st17.cancelled = true; } }; } } }));
-  let r17 = null; try { await withFetch(f17, () => m.fetchNews({ sports: ['cfb'], now: NOW })); } catch (e) { r17 = e; }
+  let r17 = null; try { await withFetch(f17, () => m.fetchEspnNews({ sports: ['cfb'], now: NOW })); } catch (e) { r17 = e; }
   out['X17 a streamed body is cut off AT the byte cap (it is not read to the end first)'] = !!r17 && st17.reads <= 7 && st17.cancelled === true;
   return out;
 };
@@ -1296,8 +1358,8 @@ const feedChecks = async (m) => {
   out['F5 the tap memo is identity-scoped'] = h4.currentItems().length === 0;
   const beltOut = await m.createHomeNews({ read: mkRead(mkWorld()), transport: mkTransport([item({ id: 'news_bet', headline: 'Best bets for the weekend' })]), now: () => NOW }).fetchNews();
   out['F6 [BET-KEEP] a betting headline reaches Home (no read-time filter)'] = beltOut.length === 1 && beltOut[0].id === 'news_bet';
-  const nfl = m.buildRankInputs(mkRead(mkWorld({ settings: { sport: 'nfl' } })));
-  out['F7 the slate gate follows the league sport'] = JSON.stringify(nfl.teamSports.slate) === '["nfl"]';
+  const per = m.buildRankInputs(mkRead(mkWorld()));
+  out['F7 the slate groups follow each game\'s sport'] = JSON.stringify(per.slateTeamsBySport) === '{"cfb":["Texas","Oklahoma","Clemson","Duke"],"nfl":["Auburn","Texas A&M"]}';
   const w8 = mkWorld({ prefs: { on: true, sports: ['cfb'], teams: [] } }); let release; const gate = new Promise(r2 => { release = r2; });
   const h8 = m.createHomeNews({ read: mkRead(w8), transport: { fetchNews: async () => { await gate; return { items: [item()], errors: {}, stats: {} }; } }, now: () => NOW });
   const p8 = h8.fetchNews(); await flush(); w8.prefs = { on: false, sports: ['cfb'], teams: [] }; release();
@@ -1316,9 +1378,10 @@ const settingsChecks = (m) => {
     'S6 a duplicate team is not added': m.newsPatchFor('cc-news-add-team', { teams: ['Texas'] }, { value: 'texas' }) === null,
   };
 };
-async function mutant(label, rel, edits, runChecks, mustFail) {
+async function mutantVia(label, rel, edits, runChecks, mustFail) { return mutant(label, rel, edits, runChecks, mustFail, loadMutantVia); }
+async function mutant(label, rel, edits, runChecks, mustFail, loader = loadMutant) {
   let res;
-  try { const mod = await loadMutant(rel, edits); res = await runChecks(mod); }
+  try { const mod = await loader(rel, edits); res = await runChecks(mod); }
   catch (e) { res = { 'the mutant could not run': false, [String(e.message).slice(0, 100)]: false }; }
   const failed = Object.entries(res).filter(([, ok]) => ok !== true).map(([l]) => l);
   const hit = mustFail.every(m => failed.some(f => f.startsWith(m)));
@@ -1332,21 +1395,21 @@ async function mutant(label, rel, edits, runChecks, mustFail) {
 
   // newsCard.js
   await mutant('10-1: M1 esc() no longer escapes the apostrophe (S-C3)', './js/newsCard.js', [[`"'": '&#39;'`, `"x": '&#39;'`]], async (m) => cardChecks(m), ['C1']);
-  await mutant('10-2: M2 parseArticleUrl accepts a backslash (the S-C1 proof case)', './js/newsCard.js', [['raw.length > URL_MAX) return null;\n  if (/[\\s\\u0000-\\u001F\\u007F\\\\]/.test(raw)) return null;', 'raw.length > URL_MAX) return null;\n  if (/[\\s\\u0000-\\u001F\\u007F]/.test(raw)) return null;']], async (m) => cardChecks(m), ['C2']);
-  await mutant('10-3: M3 parseArticleUrl returns the RAW string, not the serialized href', './js/newsCard.js', [['  return u.href;\n}', '  return raw;\n}']], async (m) => cardChecks(m), ['C3']);
-  await mutant('10-4: M4 userinfo is no longer refused', './js/newsCard.js', [['if (u.username || u.password) return null;                // userinfo is refused outright, never out-guessed', '']], async (m) => cardChecks(m), ['C4']);
-  await mutant('10-5: M5 the host test is a substring test', './js/newsCard.js', [["host !== 'espn.com' && !host.endsWith('.espn.com')", "host.indexOf('espn.com') < 0"]], async (m) => cardChecks(m), ['C5']);
-  await mutant('10-6: M6 a port is allowed', './js/newsCard.js', [['if (u.port) return null;                                  // an ESPN article never needs a non-default port', '']], async (m) => cardChecks(m), ['C6']);
-  await mutant('10-7: M7 http is allowed for an article', './js/newsCard.js', [["if (u.protocol !== 'https:') return null;\n  if (u.port) return null;                                  //", "if (false) return null;\n  if (u.port) return null;                                  //"]], async (m) => cardChecks(m), ['C7']);
-  await mutant('10-8: M8 the card emits a data-home-action (Home\'s delegated handler would obey it)', './js/newsCard.js', [['role="link" tabindex="0"', 'role="link" tabindex="0" data-home-action="build-slate" data-haptic="medium"']], async (m) => cardChecks(m), ['C8']);
+  await mutantVia('10-2: M2 parseArticleUrl accepts a backslash (the S-C1 proof case; the validator lives in newsRules.js since D1)', './js/newsCard.js', [["if (typeof raw !== 'string' || raw.length === 0 || raw.length > 600) return null;\n  if (/[\\s\\u0000-\\u001F\\u007F\\\\]/.test(raw)) return null;", "if (typeof raw !== 'string' || raw.length === 0 || raw.length > 600) return null;\n  if (/[\\s\\u0000-\\u001F\\u007F]/.test(raw)) return null;"]], async (m) => cardChecks(m), ['C2']);
+  await mutantVia('10-3: M3 parseArticleUrl returns the RAW string, not the serialized href', './js/newsCard.js', [['  if (!isHostAllowed(host, allowedHosts)) return null;\n  return u.href;', '  if (!isHostAllowed(host, allowedHosts)) return null;\n  return raw;']], async (m) => cardChecks(m), ['C3']);
+  await mutantVia('10-4: M4 userinfo is no longer refused', './js/newsCard.js', [['  if (u.username || u.password) return null;\n  const host = u.hostname.toLowerCase();\n  if (!HOST_CHARS.test(host) || isIpLiteral(host)) return null;\n  if (hostDenied(host, LINK_HOST_DENYLIST)) return null;', '  const host = u.hostname.toLowerCase();\n  if (!HOST_CHARS.test(host) || isIpLiteral(host)) return null;\n  if (hostDenied(host, LINK_HOST_DENYLIST)) return null;']], async (m) => cardChecks(m), ['C4']);
+  await mutantVia('10-5: M5 the host test is a substring test', './js/newsCard.js', [["if (h.charAt(0) === '.') { if (host === h.slice(1) || host.endsWith(h)) return true; }", "if (h.charAt(0) === '.') { if (host.indexOf(h.slice(1)) >= 0) return true; }"]], async (m) => cardChecks(m), ['C5']);
+  await mutantVia('10-6: M6 a port is allowed', './js/newsCard.js', [['  if (u.port) return null;\n  if (u.username || u.password) return null;', '  if (u.username || u.password) return null;']], async (m) => cardChecks(m), ['C6']);
+  await mutantVia('10-7: M7 http is allowed for an article', './js/newsCard.js', [["  if (u.protocol !== 'https:') return null;\n  if (u.port) return null;", '  if (u.port) return null;']], async (m) => cardChecks(m), ['C7']);
+  await mutant('10-8: M8 the card emits a data-home-action (Home\'s delegated handler would obey it)', './js/newsCard.js', [['data-news-id="${esc(id)}" role="link" tabindex="0" aria-label="${esc(label)}">${main}</div>`;', 'data-news-id="${esc(id)}" role="link" tabindex="0" data-home-action="build-slate" data-haptic="medium" aria-label="${esc(label)}">${main}</div>`;']], async (m) => cardChecks(m), ['C8']);
   await mutant('10-9: M9 the image loses referrerpolicy="no-referrer"', './js/newsCard.js', [['decoding="async" referrerpolicy="no-referrer" src=', 'decoding="async" src=']], async (m) => cardChecks(m), ['C9']);
-  await mutant('10-10: M10 the reason pill is no longer a closed set', './js/newsCard.js', [["const reason = NEWS_CARD_REASONS.indexOf(item.reason) >= 0 ? item.reason : '';", "const reason = typeof item.reason === 'string' ? item.reason : '';"]], async (m) => cardChecks(m), ['C10']);
-  await mutant('10-11: M11 the image host allow-list is gone', './js/newsCard.js', [['return ok ? u.href : null;', 'return u.href;']], async (m) => cardChecks(m), ['C11']);
-  await mutant('10-12: M12 an http image host is allowed', './js/newsCard.js', [["if (u.protocol !== 'https:' || u.port || u.username || u.password) return null;", "if (u.port || u.username || u.password) return null;"]], async (m) => cardChecks(m), ['C13']);
+  await mutant('10-10: M10 the reason pill is no longer a closed set', './js/newsCard.js', [["const reason = !tag && NEWS_CARD_REASONS.indexOf(item.reason) >= 0 ? item.reason : '';", "const reason = !tag && typeof item.reason === 'string' ? item.reason : '';"]], async (m) => cardChecks(m), ['C10']);
+  await mutantVia('10-11: M11 the image host allow-list is gone', './js/newsCard.js', [['  if (!isHostAllowed(host, imageHosts) && !isHostAllowed(host, shared)) return null;', '']], async (m) => cardChecks(m), ['C11']);
+  await mutantVia('10-12: M12 an http image host is allowed', './js/newsCard.js', [["  if (u.protocol !== 'https:' || u.port || u.username || u.password) return null;\n  const host = u.hostname.toLowerCase();\n  if (!HOST_CHARS.test(host) || isIpLiteral(host)) return null;\n  if (hostDenied(host, IMAGE_HOST_DENYLIST)", "  if (u.port || u.username || u.password) return null;\n  const host = u.hostname.toLowerCase();\n  if (!HOST_CHARS.test(host) || isIpLiteral(host)) return null;\n  if (hostDenied(host, IMAGE_HOST_DENYLIST)"]], async (m) => cardChecks(m), ['C13']);
   await mutant('10-13: M13 the headline is interpolated unescaped', './js/newsCard.js', [['<p class="news-card__headline">${esc(headline)}</p>', '<p class="news-card__headline">${headline}</p>']], async (m) => cardChecks(m), ['C12']);
   await mutant('10-14: M14 a tap opens item.url (the raw string) instead of the validated href', './js/newsCard.js', [['try { open(href); }', 'try { open(item.url); }']], tapChecks, ['T1']);
   await mutant('10-15: M15 the tap-time re-validation is gone (an item that never went through normalize opens)', './js/newsCard.js', [['if (!href) return;                                        // fails closed: nothing opens', '']], tapChecks, ['T2']);
-  await mutant('10-16: M16 a tap reads its URL out of the DOM (dataset.url)', './js/newsCard.js', [['const href = parseArticleUrl(item.url);                   // re-validated at tap time (S-C1)', 'const href = parseArticleUrl(card.dataset && card.dataset.url ? card.dataset.url : item.url);']], tapChecks, ['T1']);
+  await mutant('10-16: M16 a tap reads its URL out of the DOM (dataset.url)', './js/newsCard.js', [['const href = parseArticleUrl(item.url, Array.isArray(item.linkHosts) ? item.linkHosts : ESPN_LINK_HOSTS);', 'const href = parseArticleUrl(card.dataset && card.dataset.url ? card.dataset.url : item.url, Array.isArray(item.linkHosts) ? item.linkHosts : ESPN_LINK_HOSTS);']], tapChecks, ['T1']);
 
   // newsRank.js
   await mutant('10-17: M17 ownPickTeamNames loses its viewer guard (S-C2: a null viewer meets null-player rows)', './js/newsRank.js', [["if (typeof viewerPlayerId !== 'string' || !viewerPlayerId.trim()) return [];", '']], async (m) => rankChecks(m), ['R1']);
@@ -1363,7 +1426,7 @@ async function mutant(label, rel, edits, runChecks, mustFail) {
   await mutant('10-26: M26 the actual-length byte cap is gone', './js/newsTransport.js', [["if (text.length > NEWS_MAX_RESPONSE_BYTES) throw new NewsFetchError(sport, 'too_large');", '']], transportChecks, ['X3 ']);
   await mutant('10-27: M27 the declared-length byte cap is gone', './js/newsTransport.js', [["if (declared > NEWS_MAX_RESPONSE_BYTES) throw new NewsFetchError(sport, 'too_large');", '']], transportChecks, ['X3b']);
   await mutant('10-28: M28 links are not validated at normalize time', './js/newsTransport.js', [['const url = parseArticleUrl(upgraded);', "const url = typeof upgraded === 'string' ? upgraded : null;"]], transportChecks, ['X4']);
-  await mutant('10-31: M31 an in-flight result is committed after the identity moved (S-C9)', './js/newsTransport.js', [["    throw new NewsFetchError(sport, 'identity');\n  }\n  _cache.set", "    /* mutated */\n  }\n  _cache.set"], ["throw new NewsUnavailableError(list, 'identity');", '/* mutated */']], transportChecks, ['X7']);
+  await mutant('10-31: M31 an in-flight result is committed after the identity moved (S-C9)', './js/newsTransport.js', [["    throw new NewsFetchError(sport, 'identity');\n  }\n  _cache.set", "    /* mutated */\n  }\n  _cache.set"], ["console.warn('[news] the identity moved while headlines were loading — nothing is returned');\n    throw new NewsUnavailableError(list, 'identity');", "console.warn('[news] the identity moved while headlines were loading — nothing is returned');\n    /* mutated */"]], transportChecks, ['X7']);
   await mutant('10-32: M32 the cache ignores identity', './js/newsTransport.js', [['const hitUsable = !!hit && sameIdentity(hit, token) && isFresh(hit, nowMs);', 'const hitUsable = !!hit && isFresh(hit, nowMs);']], transportChecks, ['X8']);
   await mutant('10-33: M33 an unknown sport silently maps to CFB', './js/newsTransport.js', [['? NEWS_SPORT_PATHS[sportKey] : null;', '? NEWS_SPORT_PATHS[sportKey] : NEWS_SPORT_PATHS.cfb;']], transportChecks, ['X9']);
   await mutant('10-34: M34 the team id is the category id', './js/newsTransport.js', [['const rawId = c.teamId !== undefined && c.teamId !== null ? c.teamId :', 'const rawId = c.id !== undefined && c.id !== null ? c.id :']], transportChecks, ['X10']);
@@ -1376,15 +1439,15 @@ async function mutant(label, rel, edits, runChecks, mustFail) {
   await mutant('10-61: M61 the upgrade ignores ports and userinfo', './js/newsTransport.js', [["if (u.protocol !== 'http:' || u.port || u.username || u.password) return raw;", "if (u.protocol !== 'http:') return raw;"]], transportChecks, ['X14']);
   await mutant('10-62: M62 normalize no longer upgrades (the NHL recaps are lost again)', './js/newsTransport.js', [['const upgraded = upgradeEspnHttpLink(webLink);', 'const upgraded = webLink;']], transportChecks, ['X15']);
 
-  await mutant('10-63: M63 the article validator accepts any hostname characters (security C3)', './js/newsCard.js', [[/if \(!HOST_CHARS\.test\(host\)\) return null;\s+\/\/ after parsing[^\n]*\n/, '']], async (m) => cardChecks(m), ['C14']);
-  await mutant('10-64: M64 the picture validator accepts any hostname characters (security C3)', './js/newsCard.js', [[/if \(!HOST_CHARS\.test\(host\)\) return null;\s+\/\/ letters, digits, dots and hyphens only \(security C3\)\n/, '']], async (m) => cardChecks(m), ['C14']);
+  await mutantVia('10-63: M63 the article validator accepts any hostname characters (security C3; the validator lives in newsRules.js since D1)', './js/newsCard.js', [['  if (!HOST_CHARS.test(host) || isIpLiteral(host)) return null;\n  if (hostDenied(host, LINK_HOST_DENYLIST)) return null;', '  if (isIpLiteral(host)) return null;\n  if (hostDenied(host, LINK_HOST_DENYLIST)) return null;']], async (m) => cardChecks(m), ['C14']);
+  await mutantVia('10-64: M64 the picture validator accepts any hostname characters (security C3)', './js/newsCard.js', [['  if (!HOST_CHARS.test(host) || isIpLiteral(host)) return null;\n  if (hostDenied(host, IMAGE_HOST_DENYLIST)', '  if (isIpLiteral(host)) return null;\n  if (hostDenied(host, IMAGE_HOST_DENYLIST)']], async (m) => cardChecks(m), ['C14']);
   await mutant('10-65: M65 the slate is checked BEFORE the viewer\'s own pick again (F2: "Your pick" can never render)', './js/newsRank.js', [[/if \(hit\('pick'\)\) \{ tier = 1; reason = REASON_PICK; \}[^\n]*\n\s*else if \(hit\('slate'\)\) \{ tier = 2; reason = REASON_SLATE; \}/, "if (hit('slate')) { tier = 2; reason = REASON_SLATE; }\n      else if (hit('pick')) { tier = 1; reason = REASON_PICK; }"]], async (m) => rankChecks(m), ['R8']);
   await mutant('10-66: M66 the byte cap is checked only AFTER the whole stream is read (security C4)', './js/newsTransport.js', [[/if \(total > NEWS_MAX_RESPONSE_BYTES\) throw new NewsFetchError\(sport, 'too_large'\);[^\n]*\n/, '']], transportChecks, ['X17']);
   await mutant('10-68: M68 the live picker and its caption are not absorbed before a chip repaint (reviewer F1)', './js/control-center.js', [['  function absorbLiveNewsPicker(alsoKnown) {\n', '  function absorbLiveNewsPicker(alsoKnown) {\n    return;\n']], (m) => pickerScenario(m), ['P1', 'P2', 'P3']);
   await mutant('10-69: M69 focus is not restored after a chip is removed or added (reviewer F5)', './js/control-center.js', [['  function refocusNewsPane(index) {\n', '  function refocusNewsPane(index) {\n    return;\n']], (m) => pickerScenario(m), ['P4', 'P5']);
   await mutant('10-70: M70 the removed team is not re-offered when it is in no catalog (review round 2 R2: the `alsoKnown` push in absorbLiveNewsPicker is deleted)', './js/control-center.js', [['    if (alsoKnown && alsoKnown.location) found.push(alsoKnown);\n', '']], (m) => pickerScenario(m), ['P6']);
   await mutant('10-71: M71 a betting drop is quietly re-added at normalize ([BET-KEEP] must catch it)', './js/newsTransport.js', [['  let imageUrl = null;\n', "  if (/\\bbets?\\b|odds/i.test(headline)) { stats.droppedShape++; return null; }\n  let imageUrl = null;\n"]], transportChecks, ['X5']);
-  await mutant('10-72: M72 a read-time betting filter is quietly re-added to the Home adapter ([BET-KEEP] must catch it)', './js/newsFeed.js', [['const ranked = rankNews(items, { ...buildRankInputs(read), now: now() });', "const ranked = rankNews(items, { ...buildRankInputs(read), now: now() }).filter((it) => !/\\bbets?\\b/i.test(it.headline));"]], feedChecks, ['F6']);
+  await mutant('10-72: M72 a read-time betting filter is quietly re-added to the Home adapter ([BET-KEEP] must catch it)', './js/newsFeed.js', [['const ranked = rankNews(rest, { ...buildRankInputs(read), now: now() });', "const ranked = rankNews(rest, { ...buildRankInputs(read), now: now() }).filter((it) => !/\\bbets?\\b/i.test(it.headline));"]], feedChecks, ['F6']);
 
   // newsRules.js
   await mutant('10-44: M44 bidi overrides are no longer stripped', './js/newsRules.js', [['const STRIP_RANGES = [[0x00, 0x1F], [0x7F, 0x9F], [0x200B, 0x200F], [0x202A, 0x202E], [0x2066, 0x2069], [0xFEFF, 0xFEFF]];', 'const STRIP_RANGES = [[0x00, 0x1F]];']], async (m) => rulesChecks(m), ['B8']);
@@ -1392,9 +1455,9 @@ async function mutant(label, rel, edits, runChecks, mustFail) {
   // newsFeed.js
   await mutant('10-46: M46 the viewer\'s "own picks" are everyone\'s picks (the blind-rule leak)', './js/newsFeed.js', [['ownPickTeams: ownPickTeamNames(allPicks, slateGames, viewerId),', 'ownPickTeams: allPicks.map((p) => p.selectedTeam),']], feedChecks, ['F1', 'F2']);
   await mutant('10-47: M47 a draft / final week still builds a slate', './js/newsFeed.js', [["export const NEWS_SLATE_STATUSES = Object.freeze(['open', 'locked', 'live']);", "export const NEWS_SLATE_STATUSES = Object.freeze(['open', 'locked', 'live', 'draft', 'final']);"]], feedChecks, ['F3']);
-  await mutant('10-48: M48 OFF is not honoured — the transport is called anyway', './js/newsFeed.js', [['if (!available()) { held = null; return null; }     // OFF: no request of any kind, and Home renders nothing for the slot', '']], feedChecks, ['F4']);
+  await mutant('10-48: M48 OFF is not honoured — the transport is called anyway', './js/newsFeed.js', [['    if (!newsOn) {                                       // News OFF: no news request of any kind; the content cards alone, or no slot at all', '    if (false) {']], feedChecks, ['F4']);
   await mutant('10-49: M49 the tap memo outlives an identity change', './js/newsFeed.js', [['if (!sameToken(held.token, read.identity())) { held = null; return []; }', '']], feedChecks, ['F5']);
-  await mutant('10-51: M51 the slate gate ignores the league sport', './js/newsFeed.js', [["teamSports: { slate: [leagueSport], pick: [leagueSport], alma: ['cfb', 'cbb'], home: ['cfb', 'cbb'] },", "teamSports: { slate: ['cfb'], pick: ['cfb'], alma: ['cfb', 'cbb'], home: ['cfb', 'cbb'] },"]], feedChecks, ['F7']);
+  await mutant('10-51: M51 every game counts under one sport (review B2)', './js/newsFeed.js', [["_sport: gameSport(g, week) }", "_sport: 'cfb' }"]], feedChecks, ['F7']);
   await mutant('10-52: M52 a result that arrives after news was turned off is still returned', './js/newsFeed.js', [['    if (!available()) { held = null; return null; }     // turned off while it loaded: drop the result, paint nothing', '']], feedChecks, ['F8']);
 
   // newsSettings.js

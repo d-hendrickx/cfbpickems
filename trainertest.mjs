@@ -1278,8 +1278,10 @@ console.log("\n[25] NOTE #9 — dataset.responsesWithRatings counts DISTINCT rat
 console.log("\n[26] NOTE #14 (CONVENTIONS #17) — the Approve/Reject buttons clear the 40px tap-target floor…");
 {
   const cssSrc = await readFile(fileURLToPath(new URL('./css/styles.css', import.meta.url)), 'utf8');
-  const rule26 = /\.scribe-approve-btn,\s*\.scribe-reject-btn,\s*\.scribe-canon-approve-btn,\s*\.scribe-canon-reject-btn\s*\{[^}]*min-height:\s*40px/;
-  assert(rule26.test(cssSrc), 'all four approve/reject selectors carry an explicit min-height:40px');
+  // D1 batch O follow-up (2026-10-07): the floor is 44 pt (Apple's), and the learned list's on/off switch — the control that reads
+  // "Saving…" and "Retry" — is on the same rule. Raised from 40; an assertion is only ever strengthened.
+  const rule26 = /\.scribe-approve-btn,\s*\.scribe-reject-btn,\s*\.scribe-canon-approve-btn,\s*\.scribe-canon-reject-btn,\s*\.scribe-learning-toggle-btn\s*\{[^}]*min-height:\s*44px/;
+  assert(rule26.test(cssSrc), 'all four approve/reject selectors AND the on/off switch carry an explicit min-height:44px');
   assert(/\.btn-sm\{[^}]*min-height:34px/.test(cssSrc),
     'fixture check: .btn-sm really does default to 34px — proves the override above is necessary, not decorative');
 

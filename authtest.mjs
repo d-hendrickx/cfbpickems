@@ -1036,6 +1036,10 @@ console.log('      Join/Create landing, and the signups_closed refusal copy…')
     `[10b-7] a signups_closed server refusal maps to the exact same sentence (got ${JSON.stringify(resolve({ message: 'signups_closed' }))})`);
   assert(resolve({ message: 'P0001: signups_closed' }) === "New leagues aren't being created right now — check back soon.",
     '[10b-8] …matched by substring, same as every other code in this table (PostgREST decorates the raw message)');
+  // D1 Lane A (2026-10-08) - the three refusals this release adds to create_league / join_league (DI-550, 0049, DI-548 #10).
+  assert(resolve({ message: 'P0001: creation_admins_only' }) === "Creating a league isn't available to your account yet." && resolve({ message: 'rejoin_limit' }) === "You've joined and left this league too many times. Ask the commissioner."
+      && resolve({ message: 'push_not_ready' }) === "New leagues aren't being created right now — check back soon.",
+    '[10b-9] creation_admins_only, rejoin_limit and push_not_ready map to their approved sentences (no cap, no window, no raw code)');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4626,7 +4630,7 @@ console.log('\n[34] DI-184j — a cleared league pill leaves no stale accessible
     auth.setActiveLeagueId('L-A');
     const pill = new FakeEl(); pill.id = 'league-pill'; registry.set('league-pill', pill);
     app.renderLeaguePill();
-    assert(pill.getAttribute('aria-label') === 'Active league: League A. Tap to switch.',
+    assert(pill.getAttribute('aria-label') === 'League A. League overview. Opens the overview.',
       `${label}: fixture — the pill really did render an accessible name first (${JSON.stringify(pill.getAttribute('aria-label'))})`);
     assert(pill.getAttribute('role') === 'button' && pill.hidden === false, `${label}: fixture — …as an interactive pill`);
 
@@ -8698,6 +8702,32 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
         // permanent reveal — did a LANDED hydrate read the week while picks_select served every member's
         // picks? Read-only metadata about the last read; no league data moves through app.js. [44k3].
         'picksReadWhilePublic',
+        // SECURITY N-1 (0045 delta, 2026-10-08): boot hands `sb.getConfirmedMemberRole` to notifications.js (setMemberRoleSource) so the
+        // chat relay grants a COMMISSIONER_ANNOUNCEMENT its never-silenceable push only when the author is a confirmed active commissioner of
+        // the row's league. app.js does not read the role itself; it passes a reader (the isReady precedent above). Read-only metadata off the
+        // base row; no league data moves through app.js. notifytest [26n1] is the behavioural proof, adaptertest the getter's.
+        'getConfirmedMemberRole',
+        // PF-467 / FB-005 (2026-10-07, fix/d1-o-obligations; enumerated at the int/v0.30.0 merge): trackScribeReviewSave()
+        // asks sb.flushAndConfirm(key) whether a SCRIBE review row's approval REACHED the server before it is shown as
+        // "Approved" or applied to memory. Lifecycle + status like flush(): it sends what the seam already queued and returns
+        // 'saved' | 'refused' | 'pending' — no league data moves through app.js (the row was written with save()). learntest [22].
+        'flushAndConfirm',
+        // D1 Lane C (FB-006, 2026-10-07): mirrorRowIds(key) answers which SERVER row id sits at each mirror POSITION of a keyed list (null while unresolved). The SCRIBE profile pane is fed by the
+        // `scribe-profile` function (server ids), while batch O's decision functions are keyed by mirror position; this is the checked bridge between the two. It READS the adapter's own
+        // bookkeeping and moves no league data through app.js. scribeprofiletest.mjs + adaptertest [A-FB005b].
+        'mirrorRowIds',
+        // PF-1 reviewer BLOCK #1 N1 (2026-10-01): lateEntryLockWritePending() asks the adapter's OWN planner — planFlush(), the operations the next flush would send — whether the commissioner's
+        // `picks_lock_at` patch for ONE week row is still waiting AFTER the flush settled. flush()'s result cannot say (a batch that stops at an earlier 503 never sent a later operation and
+        // does not name it), and a re-open planned ahead of an unsent lock time breaks the two-step order. Read-only: it inspects an operation's key, kind, row id and the NAMES of the changed
+        // columns (`hasOwnProperty('picks_lock_at')`), never a value, and writes nothing; no league data moves through app.js. lockclienttest [4zz-4]/[4zz-5] are the behavioural proof.
+        'planFlush',
+        // 0046 / R-19 follow-up (2026-10-07, fix/d1-0046-obligations): applyOb2025Action() sends a PLAYER's own 2K25 Mark
+        // Paid / Confirm / Deny through sb.settleOb2025() -> settle_2025_obligation (DEFINER, pilot only, party-checked). The
+        // 2K25 status map lives in the commissioner-only `settings` row, so a player's save() of it was refused; the server
+        // RPC is the one door, and its answer comes back INTO the mirror through the adapter's own Realtime fold (no league
+        // data is written through app.js). Every refusal rejects -> the loud-fail banner. adaptertest [A-0046-2K25],
+        // leaguesettingsuitest [7].
+        'settleOb2025',
         // ── UN-237/238 (DI-260, 2026-09-23) — SCRIBE MEMORY. FOUR MEMBERS, AND THEY ARE NOT A
         //    BREACH OF §0.3 ITEM 1, which is a rule about LEAGUE DATA going through the seam.
         //    `scribe_memory` is deliberately NOT a seam key and never has been: its rows must be
@@ -8716,7 +8746,11 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
       'auth.js': ['beginSwitch', 'switchLeague', 'dropMirror', 'hasDeviceSnapshot'],
       // RG-253 (2026-09-26): arePicksPublic() — the blind rule — reads the SERVER-CONFIRMED status, so a
       // polluted mirror (a leg refused or still in flight) cannot reveal picks on one device. [44k3].
-      'storage.js': ['isReady', 'getState', 'get', 'set', 'getConfirmedWeekStatus'],
+      // UN-412 / DI-502e (2026-10-01, "Who's in"): refreshWeekProgress() re-asks week_submission_status() between hydrates so the
+      // strip is not frozen at the last hydrate. It is the adapter's SECOND caller of that one RPC (the first is hydrate's own),
+      // it lands in the same derived never-persisted key, and it is reached ONLY through storage.js's wrapper of the same name —
+      // app.js and every other module stay off the adapter (assertion (2) above still binds them). [pickstatustest] pins the wrapper.
+      'storage.js': ['isReady', 'getState', 'get', 'set', 'getConfirmedWeekStatus', 'refreshWeekProgress'],
     };
     for (const [f, allowed] of Object.entries(ALLOWED)) {
       const used = [...new Set([...src[f].matchAll(/\bsb\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))].sort();
@@ -8928,11 +8962,13 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
     // site, same text, only the distance grew.
     // Re-derived AGAIN 2026-10-01 (Home wiring, checklist item 18 — the `else if (state.currentTab === 'home') renderHomePage();`
     // repaint line and its comment sit inside this same loop, ABOVE the read) — widened to 9500; same site, same text.
+    // Re-derived 2026-10-07 (D1 / DI-535 #1) — the single-week legs moved into tickWeekLegs(), run per sport by `for (const week of tickWeeks())`. That loop is now the first read
+    // of a week BELOW the gate (the draft scan's getWeeks() read stays above it, unchanged); the window is widened to 12000 for the new comment, same gate, same text.
     const fnK = appSrcK.slice(appSrcK.indexOf('export function tickAutoTransition()'),
-      appSrcK.indexOf('export function tickAutoTransition()') + 9500);
+      appSrcK.indexOf('export function tickAutoTransition()') + 12000);
     const codeK = fnK.replace(/\/\*[\s\S]*?\*\//g, ' ').split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
     const gateAt = codeK.indexOf('isSupabaseDataMode()');
-    const weekAt = codeK.indexOf('const week = getCurrentWeek()');
+    const weekAt = codeK.indexOf('for (const week of tickWeeks())');
     assert(gateAt > -1, '[44k] tickAutoTransition() has a supabase-mode gate at all');
     assert(gateAt > -1 && weekAt > -1 && gateAt < weekAt,
       `[44k] …and it is ABOVE every read and every write in the function (gate@${gateAt}, first read@${weekAt}) — a gate below the first saveWeek() would refuse nothing. Both indices are required to be FOUND, because indexOf() returns -1 and -1 < anything`);
@@ -9736,6 +9772,78 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
     assert(tickS() === null && sb._dirtyKeysForTest().includes('cfbp_weeks') && storage.getCurrentWeek().status === 'locked',
       '[44k3] F1 control: once the server has confirmed the week (ACTIVE, base row present) the tick DOES take the lock leg');
 
+    // ── 0045 review (coordinator, 2026-10-08) — THE SWEEP ANNOUNCES THE LOCK FROM THE SERVER-CONFIRMED STATUS ─────
+    // 0045 refuses sys_lc_PICKS_LOCKED_<week> until the SERVER holds the week locked, and the server's lock is 0043's once-a-minute
+    // cron. The week here is OPEN on the server with its lock time three hours gone, so this device DERIVES locked (the effective
+    // status) a cron run before the server does. Driven through the REAL checkLifecyclePostDue() over a REAL hydrate, the server's
+    // lock arriving as the Realtime UPDATE the cron produces. The device ledger (set at queue) is the observable.
+    {
+      const LC_KEY = 'cfbp_lifecycle_posted';
+      const ledger = () => { try { return JSON.parse(localStorage.getItem(LC_KEY) || '[]'); } catch { return []; } };
+      const sweep = () => quietS(() => { try { app.checkLifecyclePostDue(); } catch { /* the ledger is the observable */ } });
+      const LOCK_ID = `sys_lc_PICKS_LOCKED_${WK}`, OPEN_ID = `sys_lc_PICKS_OPENED_${WK}`;
+      const sweepChecks = async (sweepFn = sweep) => {
+        const out = {};
+        await hydrateWith('open', [MINE]);
+        localStorage.removeItem(LC_KEY);
+        out.confirmedAtStart = sb.getConfirmedWeekStatus(WK);
+        out.fixture = out.confirmedAtStart === 'open' && storage.getCurrentWeek()?.status === 'open'
+          && storage.getEffectiveWeekStatus(storage.getCurrentWeek()) === 'locked';
+        sweepFn(); sweepFn(); sweepFn();
+        out.ledgerBeforeLock = ledger();
+        out.openedOnly = ledger().includes(OPEN_ID) && !ledger().includes(LOCK_ID);
+        // the commissioner's own device has the lock in its MIRROR (a leg not yet acknowledged): still not the server's word
+        quietS(() => storage.saveWeek({ ...storage.getCurrentWeek(), status: 'locked' }));
+        sweepFn(); sweepFn();
+        out.mirrorLockedStillWaits = sb.getConfirmedWeekStatus(WK) === 'open' && !ledger().includes(LOCK_ID);
+        // the cron runs: the server's LOCKED arrives as a Realtime UPDATE, and the next navigation announces it
+        quietS(() => sb._foldRealtimeRowForTest('weeks', { eventType: 'UPDATE', new: weekRow('locked', { locked_at: new Date(T0 - 60e3).toISOString(), locked_alma_maters: [] }) }));
+        sweepFn();
+        out.postsOnceServerLocked = sb.getConfirmedWeekStatus(WK) === 'locked' && ledger().includes(LOCK_ID);
+        out.ledgerAfterLock = ledger();
+        return out;
+      };
+      const real = await sweepChecks();
+      assert(real.fixture,
+        `[44k3] 0045 sweep fixture: hydrated, the server confirms OPEN, and this device DERIVES locked from the passed lock time (confirmed ${real.confirmedAtStart})`);
+      assert(real.openedOnly,
+        `[44k3] 0045 sweep: on a stored-OPEN, derived-LOCKED week the sweep announces the OPEN and does NOT post PICKS_LOCKED, however many navigations (ledger ${JSON.stringify(real.ledgerBeforeLock)})`);
+      assert(real.mirrorLockedStillWaits,
+        '[44k3] 0045 sweep: …and a mirror that says LOCKED over a server still at OPEN does not post it either: only the server\'s confirmed status announces the lock');
+      assert(real.postsOnceServerLocked,
+        `[44k3] 0045 sweep: once the server reads LOCKED (the cron's Realtime UPDATE), the next navigation DOES post PICKS_LOCKED (ledger ${JSON.stringify(real.ledgerAfterLock)})`);
+      // THE KIT (S-3). lockNoticeDue() is evaluated from the REAL source text (the chatfoottest [7] precedent: the function under test, never
+      // a paraphrase of it), against the live adapter, once as written and once per mutant; each mutant must answer TRUE where the real rule
+      // answers FALSE. And the sweep's own `locked` line is pinned to it, so the behavioural cases above are the wiring's proof.
+      const srcA = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+      const fnAt = srcA.indexOf('function lockNoticeDue(week, reached) {');
+      const fnSrc = fnAt < 0 ? '' : srcA.slice(fnAt, srcA.indexOf('\n}\n', fnAt) + 2);
+      const evalRule = (text) => new Function('isSupabaseDataMode', 'sb', 'WEEK_STATUS', `${text}\nreturn lockNoticeDue;`)(() => true, sb, { LOCKED: 'locked', LIVE: 'live', FINAL: 'final' });
+      await hydrateWith('open', [MINE]);
+      const wNow = storage.getCurrentWeek();
+      const reachedOf = (w) => { const eff = String(storage.getEffectiveWeekStatus(w) || ''); const st = String(w.status || ''); return (list) => list.includes(eff) || list.includes(st); };
+      const ghost = { ...wNow, weekId: 'wk_not_on_server', status: 'locked' };          // a week the server does not hold, LOCKED in the mirror
+      const cases = (rule) => ({ derived: rule(wNow, reachedOf(wNow)), ghost: rule(ghost, reachedOf(ghost)) });
+      const realRule = fnSrc ? cases(evalRule(fnSrc)) : null;
+      assert(!!fnSrc && realRule && realRule.derived === false && realRule.ghost === false,
+        `[44k3] 0045 sweep kit control: the REAL lockNoticeDue() says "not yet" for a derived-locked week the server holds OPEN, and for a week the server does not hold at all (${JSON.stringify(realRule)})`);
+      const KIT = [
+        ['the pre-review rule (effective-or-stored in every mode)', ['  if (!isSupabaseDataMode()) return reached(LOCKED_OR_LATER);', '  return reached(LOCKED_OR_LATER);'], 'derived'],
+        ['a confirmed null falls back to the mirror (serverConfirmedWeekStatus\'s fallback)', ['confirmed = sb.getConfirmedWeekStatus(week.weekId);', 'confirmed = sb.getConfirmedWeekStatus(week.weekId) || week.status;'], 'ghost'],
+      ];
+      for (const [label, [from, to], code] of KIT) {
+        const ok = fnSrc.split(from).length === 2;
+        let res = null;
+        try { res = ok ? cases(evalRule(fnSrc.split(from).join(to))) : null; } catch (e) { res = { err: String(e.message).slice(0, 80) }; }
+        assert(ok && res && res[code] === true,
+          `[44k3] 0045 sweep MUTANT "${label}" posts the lock early (${code} -> true) — RED against the control above (${JSON.stringify(res)})`);
+      }
+      const sweepAt = srcA.indexOf('export function checkLifecyclePostDue() {');
+      const sweepBody = sweepAt < 0 ? '' : srcA.slice(sweepAt, srcA.indexOf('\n}\n', sweepAt));
+      assert(/\n    const locked = lockNoticeDue\(week, reached\);\n/.test(sweepBody) && !/const locked = reached\(/.test(sweepBody),
+        '[44k3] 0045 sweep: checkLifecyclePostDue() takes its `locked` from lockNoticeDue() and from nothing else (the wiring the behavioural cases above exercise)');
+    }
+
     // ── reviewer note 2 — THE WIZARD'S MANAGE SCREEN FROM A POLLUTED MIRROR (phase-5a twin) ──────
     const mgr = typeof app._renderWeekWizardManageHTMLForTest === 'function' ? app._renderWeekWizardManageHTMLForTest : null;
     assert(!!mgr, '[44k3] the wizard Manage screen is reachable from the harness (_renderWeekWizardManageHTMLForTest)');
@@ -9804,6 +9912,9 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
       await drive('Admin Save Week Settings', 'admin-save-week-settings-btn', { 'admin-week-espn-num': '7' }, 'espn_week_number');
       await drive('Admin Save Data Source Mode', 'admin-save-data-source-mode-btn', { 'admin-data-source-mode': 'espn' }, 'data_source_mode');
       // Dismiss-pending: the painted week carried pendingFinalization; the server's copy still does.
+      // RE-DERIVED 2026-10-07 (FB-027 / DI-518, bug batch W): the Comm panel's `dismiss-pending-btn` handler (it wrote pendingFinalization:false, the
+      // RG-256 site this block drove) is REMOVED — nothing rendered that id; "Not yet" is the wizard's own `wiz-final-not-yet`, which writes nothing
+      // (wizardfinalizetest [1-13]). So the proof is now that NOTHING binds the old id, and that a press on it writes nothing and plans no leg.
       {
         await hydrateWith('open', [MINE]);
         const painted = { ...storage.getCurrentWeek(), pendingFinalization: true };
@@ -9812,8 +9923,10 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
         quietS(() => sb._foldRealtimeRowForTest('weeks', { eventType: 'UPDATE', new: { ...lockedRow, pending_finalization: true } }));
         quietS(() => { try { btn.click(); } catch { /* read below */ } });
         const r = quietS(() => sb.planFlush());
-        assert(storage.getCurrentWeek().status === 'locked' && !statusLegs(r.plan).length && !r.refusals.length,
-          `[44k4] Dismiss pending finalization: keeps the week LOCKED and plans no status leg (status ${storage.getCurrentWeek().status}, legs ${JSON.stringify(statusLegs(r.plan).map((o) => o.name))})`);
+        const weeksPatches = r.plan.filter((o) => o.key === 'cfbp_weeks' && o.op === 'patch');
+        assert(btn.listenerCount('click') === 0 && storage.getCurrentWeek().status === 'locked' && storage.getCurrentWeek().pendingFinalization === true
+          && !weeksPatches.length && !statusLegs(r.plan).length && !r.refusals.length,
+          `[44k4] Dismiss pending finalization (FB-027): the legacy Comm handler is GONE — nothing binds the id, the week stays LOCKED with pendingFinalization intact, nothing is planned (listeners ${btn.listenerCount('click')}, status ${storage.getCurrentWeek().status}, patches ${weeksPatches.length}, legs ${JSON.stringify(statusLegs(r.plan).map((o) => o.name))})`);
       }
 
       // ── SECURITY F1 on f16d87c — THE AUTO-REFRESH TICK ACTS ONLY FROM THE BASE ITS OWN RE-HYDRATE
@@ -11152,9 +11265,11 @@ console.log('\n[50] RG-195 — the Picks page\'s "Log Out" button is PIN-era, an
   const idLiterals50 = (appSrc50.match(/id="logout-btn"/g) || []).length;
   assert(idLiterals50 === 1,
     `[50] \`id="logout-btn"\` is written exactly ONCE in js/app.js — inside the one function that decides (found ${idLiterals50}) [structural]`);
+  // D1 / DI-510 (2026-10-07): a FOURTH Picks-page render exists — the one a member lands on when the week locks under his unsaved draft (renderLockedDraftView). It carries the same header row and the
+  // same button through the same one function, so the count moves from 3 renders to 4 (5 occurrences with the declaration) and the pins below move with it.
   const callSites50 = (appSrc50.match(/picksLogoutButtonHTML\(/g) || []).length;
-  assert(callSites50 === 4,
-    `[50] …and it is reached from the three Picks-page renders (plus its own declaration): 4 occurrences, found ${callSites50} [structural]`);
+  assert(callSites50 === 5,
+    `[50] …and it is reached from the four Picks-page renders (plus its own declaration): 5 occurrences, found ${callSites50} [structural]`);
 
   // ── (d) NO EMPTY WRAPPER, AND NO EMPTY ROW ───────────────────────────────
   // Removing the button may not leave a 44px hole. Two shapes are checked: a
@@ -11168,11 +11283,11 @@ console.log('\n[50] RG-195 — the Picks page\'s "Log Out" button is PIN-era, an
   // only "what else is in this row with it".
   const callCtx50 = [...appSrc50.matchAll(/\$\{picksLogoutButtonHTML\(/g)]
     .map(m => appSrc50.slice(Math.max(0, m.index - 400), m.index));
-  assert(callCtx50.length === 3,
-    `[50] fixture: three template call sites were located (found ${callCtx50.length}) [structural]`);
+  assert(callCtx50.length === 4,
+    `[50] fixture: four template call sites were located (found ${callCtx50.length}) [structural]`);
   const rows50 = callCtx50.filter(ctx => /<div class="flex-between mb-md">/.test(ctx));
-  assert(rows50.length === 2,
-    `[50] fixture: two of the three call sites live in a flex-between header row (found ${rows50.length}) [structural]`);
+  assert(rows50.length === 3,
+    `[50] fixture: three of the four call sites live in a flex-between header row (found ${rows50.length}) [structural]`);
   assert(rows50.every(r => /escHtml\(displayName\)/.test(r)),
     '[50] …and both rows still render the player\'s name, so the row keeps its height and its content when the button goes [structural]');
   assert(callCtx50.filter(ctx => !/<div class="flex-between mb-md">/.test(ctx))
@@ -11185,8 +11300,8 @@ console.log('\n[50] RG-195 — the Picks page\'s "Log Out" button is PIN-era, an
   // Breathing Room sweep (2026-10-01): the button's ✏️ emoji became the family's pencil glyph (icon('pencil')); the id, the label and the wiring are what this guards.
   assert(/id="edit-picks-btn">\$\{icon\('pencil'\)\} Edit My Picks<\/button>/.test(appSrc50),
     '[50] the submitted view\'s "Edit My Picks" button is untouched (locked decision: submitting does not lock) — same id and label; only its glyph is now icon(\'pencil\') [structural]');
-  assert((appSrc50.match(/document\.getElementById\('logout-btn'\)\?\.addEventListener/g) || []).length === 3,
-    '[50] …and all three PIN-mode handler bindings are still wired, unchanged — the fix is a render decision, not a deleted code path (they bind nothing when the button is absent, which is what `?.` is for) [structural]');
+  assert((appSrc50.match(/document\.getElementById\('logout-btn'\)\?\.addEventListener/g) || []).length === 4,
+    '[50] …and all four PIN-mode handler bindings are still wired, unchanged — the fix is a render decision, not a deleted code path (they bind nothing when the button is absent, which is what `?.` is for) [structural]');
   assert((appSrc50.match(/clearSession\(\); clearPickDraft\(\); resyncPlayerPreferences\(\); renderPicksPage\(\);/g) || []).length >= 3,
     '[50] …including the draft reset persisttest\'s "every session change in the picks flow clears the draft" rule scans for [structural]');
 
@@ -11795,6 +11910,68 @@ console.log('     once AFTER the SDK lands, and still only once across a repeate
   }
 }
 
+// [56b] (review follow-up, P-2, 2026-10-08) — THE CLAIM SCREEN'S LATE REPAINT, ARMED BY THE REAL BOOT CHAIN. [80a4] drives the repaint through a test hook; this drives it the way production arms it: a COLD LOAD through the real
+// applyAuthModeDecision() (SDK injected, [56]'s harness), an unmatched zero-league account whose claim screen is PAINTED BEFORE the platform_kv answer resolves, then the answer resolves with the gate OPEN and scope "admins".
+// Nothing here calls the repaint: the only thing that can bring the invite option in is the boot fetch's own `.then(() => _repaintMaintenanceBannerSurface())`.
+{
+  resetAll();
+  app._resetAuthHoldForTest();
+  app._resetSupabaseSdkLoaderForTest();
+  auth._resetMaintenanceBannerCacheForTest();
+  auth._setHasSupabaseDataBackendForTest(true);
+  app._resetClaimScreenModeForTest(); app._resetPendingInviteViewForTest(); app._resetLinkFlowForTest();
+  localStorage.removeItem('cfbp_pending_join');
+  let kvCalls56b = 0, releaseKv56b;
+  const kvHeld56b = new Promise((r) => { releaseKv56b = r; });
+  const kvOverrides56b = {
+    from: (table) => {
+      if (table === 'platform_kv') { kvCalls56b++; return kvHeld56b; }          // THE ANSWER IS HELD until the test lets it go
+      return { data: [], error: null };
+    },
+    rpc: (name) => (name === 'link_member_by_email' ? { data: [], error: null } : { data: null, error: null }),
+  };
+  globalThis.window.supabase = undefined;
+  const realFetch56b = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('config.json')) return { ok: true, json: async () => ({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' }) };
+    throw new Error('no network');
+  };
+  const realWarn56b2 = console.warn; console.warn = () => {};
+  try {
+    const before56b = createdScripts.length;
+    const pending = app._applyAuthModeDecisionForTest();                                      // NOT awaited - the SDK has not arrived
+    for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+    const injected = createdScripts.slice(before56b).find((el) => /supabase/.test(String(el.src || '')));
+    assert(!!injected, 'fixture 56b: the vendored SDK script was injected (cold load)');
+    storeValidSession();                                                                      // a signed-in account...
+    auth._setMembershipsForTest([]);                                                          // ...with no league yet
+    installFakeSupabase(kvOverrides56b);
+    injected.dispatch('load', {});
+    await pending;
+    for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(kvCalls56b === 1 && auth.getCachedLeagueCreationOpen() === false, '56b-0: the boot fetch asked platform_kv exactly once and its answer is still HELD (the gate cache is still closed)');
+    // the claim screen is painted NOW, before the answer resolves
+    const un = await app.attemptAutoLink();
+    const page56b = new FakeEl(); page56b.id = 'page-dashboard'; registry.set('page-dashboard', page56b);
+    app.state.currentTab = 'dashboard';
+    app.renderLinkFlowScreen('dashboard');
+    assert(un === 'unmatched' && app.linkFlowScreen() === 'claim' && !/data-lc-seg|I have an invite code/.test(page56b.innerHTML) && /id="link-claim-card"/.test(page56b.innerHTML),
+      '56b-1: an unmatched zero-league account sits on the pre-N1 claim card, painted BEFORE the platform_kv answer (no invite option yet)');
+    // the answer resolves: gate OPEN, scope "admins" (a non-super-admin)
+    releaseKv56b({ data: [{ key: 'league_creation_open', value: true }, { key: 'league_creation_scope', value: 'admins' }, { key: 'offered_sports', value: ['cfb', 'nfl'] }, { key: 'signups_open', value: true }, { key: 'maintenance_banner', value: '' }], error: null });
+    for (let i = 0; i < 16; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(auth.getCachedLeagueCreationOpen() === true && auth.getCachedLeagueCreationScope() === 'admins' && auth.getIsSuperAdmin() === false,
+      '56b-2: the held answer landed: the gate cache is OPEN, scope "admins", the viewer is not the super admin');
+    assert(/data-lc-seg="invite"/.test(page56b.innerHTML) && /I have an invite code/.test(page56b.innerHTML) && !/link-create-league-btn|Create a league/.test(page56b.innerHTML),
+      '56b-3: the claim screen REPAINTED itself when the answer landed - the invite option is there (and no Create choice for a non-super-admin) - with NOTHING calling the repaint but the boot chain');
+  } finally {
+    globalThis.fetch = realFetch56b;
+    console.warn = realWarn56b2;
+    auth._resetMaintenanceBannerCacheForTest();
+    app._resetLinkFlowForTest();
+  }
+}
+
 // S2-1 unit half (2026-09-26) — auth.js's own latch, independent of app.js's
 // call site: a refresh with NO client (SDK not on the page) must not latch
 // `_maintenanceBannerAttempted`, so a later real attempt is still possible.
@@ -11819,6 +11996,15 @@ console.log('     once AFTER the SDK lands, and still only once across a repeate
     auth._resetMaintenanceBannerCacheForTest();
   }
 }
+
+// W-22 — shared by [57e] and [57i] (module scope since 2026-10-08; it was [57i]'s alone, and [57e] still read after 4 ticks).
+const tick57 = () => new Promise((r) => setTimeout(r, 0));
+const flush57 = async (n = 14) => { for (let i = 0; i < n; i++) await tick57(); };
+// W-22 — a CONFIRMED deletion is read when its sequence has FINISHED (the sheet gone), not after a fixed tick budget: it signs out, and signOut()
+// waits for the push unlink — up to 2 s — whenever the push SDK has answered ok on the page (UN-315 / DI-436.1), which a stale init from an
+// earlier scenario can make true mid-scenario. The 4 s bound (past the 2 s one) only ends a wait for a sequence that never finishes; the
+// assertions after it then fail exactly as before.
+const settle57 = async () => { const t0 = Date.now(); while (document.getElementById('pwacct-delete-overlay') && Date.now() - t0 < 4000) await tick57(); await flush57(); };
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log('\n[57] UX Revamp Group F wiring (DI-332…340, 2026-09-25) — the gate\'s');
@@ -11905,12 +12091,33 @@ console.log('     sheet, driven through the REAL app.js functions against the fa
   let deleteInvoked = null;
   installFakeSupabase({ functionsInvoke: async (name) => { deleteInvoked = name; return { data: { ok: true, what: 'deleted' }, error: null }; } });
   auth.configureAuth({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
-  await delBtn()?.dispatch('click', {});
-  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+  // 57e's tap and its read, shared with 57e-3 below so the guard exercises the read 57e actually uses.
+  const confirmDelete57e = async () => { await delBtn()?.dispatch('click', {}); await settle57(); };
+  await confirmDelete57e();
   assert(deleteInvoked === 'account-delete',
     `57e: confirming delete calls client.functions.invoke('account-delete') — DI-340's own Edge Function, not a client-side write (got ${JSON.stringify(deleteInvoked)})`);
   assert(document.getElementById('pwacct-delete-overlay') === null,
     '57e-2: the sheet closes on a confirmed success');
+
+  // 57e-3 (W-22) — the same confirmed deletion with the push SDK READY on this page (a stale init from an earlier scenario can make it ready
+  // mid-scenario under load): signOut() waits out its push unlink, up to 2 s, before the sheet goes. Read after 57e's old 4-tick budget, 57e-2 went
+  // red here with nothing wrong, and the deletion ran on, still able to close whichever Delete Account sheet is current when it lands (57f's, if it
+  // lands there: a false AD-06 red, "a failed delete does NOT close the sheet").
+  resetAll();
+  storeValidSession();
+  app._showDeleteAccountSheetForTest();
+  delInput().value = 'DELETE';
+  delInput().dispatch('input', {});
+  let deleteInvoked3 = null;
+  installFakeSupabase({ functionsInvoke: async (name) => { deleteInvoked3 = name; return { data: { ok: true, what: 'deleted' }, error: null }; } });
+  auth.configureAuth({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  pushOs._setSdkReadyForTest(true);
+  const t57e3 = Date.now();
+  await confirmDelete57e();
+  const ms57e3 = Date.now() - t57e3;
+  pushOs._setSdkReadyForTest(false);
+  assert(deleteInvoked3 === 'account-delete' && document.getElementById('pwacct-delete-overlay') === null,
+    `57e-3: with the push SDK ready (signOut() waits out its push unlink, up to 2 s), the confirmed deletion is still read once it has finished: the call was made and the sheet is gone (read after ${ms57e3} ms; sheet ${document.getElementById('pwacct-delete-overlay') ? 'STILL UP' : 'gone'})`);
 
   // 57f — the delete-account sheet's LOUD-FAIL path: a failure never closes
   // the sheet silently, never claims success (AD-06).
@@ -11992,8 +12199,6 @@ console.log('     sheet, driven through the REAL app.js functions against the fa
 // ═══════════════════════════════════════════════════════════════════════════
 console.log('\n[57i] UN-389 / DI-446 — the Delete Account sheet for a sole commissioner (real handlers, fake client, spy order)…');
 {
-  const tick57 = () => new Promise((r) => setTimeout(r, 0));
-  const flush57 = async (n = 14) => { for (let i = 0; i < n; i++) await tick57(); };
   const quiet57 = async (fn) => {
     const rl = console.log, rw = console.warn, re = console.error, ri = console.info;
     console.log = () => {}; console.warn = () => {}; console.error = () => {}; console.info = () => {};
@@ -12005,8 +12210,27 @@ console.log('\n[57i] UN-389 / DI-446 — the Delete Account sheet for a sole com
   const SEAT57 = (leagueId, name, role = 'commissioner') => ({ leagueId, memberId: `me-${leagueId}`, role, displayName: 'Drew', leagueName: name, pilot: false, status: 'active' });
   const ROWS57 = (list) => list.map((m) => ({ league_id: m.leagueId, id: m.memberId, role: m.role, display_name: 'Drew', active: true, leagues: { name: m.leagueName, pilot: m.pilot, status: m.status } }));
 
+  // W-22 — a scenario BEGINS only once the one before it has finished its deletion sequence. A confirmed deletion's success path ends in
+  // closeDeleteAccountSheet({ immediate: true }), which closes whichever sheet is CURRENT, so a sequence left running into the next scenario closes THAT
+  // scenario's sheet mid-assertion (--quick, 2026-10-08: [57i-81] crashed on a null sheet, two scenarios after the read that left a deletion running).
+  // Each boundary names a leak loudly and then waits it out (bounded, the 4 s settle57 uses) so the rest of the suite still reports real results;
+  // [57i-88] turns the run red. A leak is never silently absorbed.
+  let boundaries57 = 0;
+  const leaks57 = [];
+  async function boundary57(where) {
+    boundaries57 += 1;
+    const left = app._deleteAccountSheetStateForTest();
+    if (!left || !left.running) return;
+    leaks57.push(`${left.running} into ${where}`);
+    _realErr(`  (W-22: ${where} began while the previous scenario's deletion sequence was still running (${left.running}): that scenario read its result before the sequence finished)`);
+    const t0 = Date.now();
+    while (app._deleteAccountSheetStateForTest()?.running && Date.now() - t0 < 4000) await tick57();
+    await flush57();
+  }
+
   /** One harness per scenario: the fake client records every RPC and Edge Function call, IN ORDER, so the final tap's sequence is asserted by SPY ORDER. */
   async function harness57({ seats = [SEAT57('L1', 'Saturday Crew')], exitRows = [wire57()], rpcs = {}, fn = null, exitReply = null } = {}) {
+    await boundary57(`scenario ${boundaries57 + 1}`);
     const calls = [];
     const state = { exitRows, seats };
     resetAll({
@@ -12105,7 +12329,7 @@ console.log('\n[57i] UN-389 / DI-446 — the Delete Account sheet for a sole com
     assert(h.named('account_exit_leagues').length === before + 1, '[57i-23] …and the sheet RE-RUNS the preflight after the change (server truth wins)');
     assert(sheetState57().step === 'list' && /data-ax-state="handed"/.test(rows57().innerHTML) && rows57().innerHTML.includes('Sam Rivera is now commissioner of Saturday Crew.'), '[57i-24] the picker pops and the row reads "Sam Rivera is now commissioner of Saturday Crew."');
     assert(submit57().disabled === false && caption57().textContent === '', '[57i-25] with the answer current and nothing unresolved, Delete is enabled (the typed text survived) and the caption is gone');
-    await quiet57(async () => { await submit57().dispatch('click', {}); await flush57(); });
+    await quiet57(async () => { await submit57().dispatch('click', {}); await settle57(); });
     assert(h.order().join() === 'rpc:admin_set_member_role,fn:account-delete' && !h.named('archive_league_on_exit').length, `[57i-26] the final tap calls account-delete and NEVER archive_league_on_exit after a hand-off (order: ${h.order().join(' > ')})`);
     assert(!wrap57(), '[57i-27] the sheet is gone on a confirmed deletion');
   }
@@ -12152,7 +12376,7 @@ console.log('\n[57i] UN-389 / DI-446 — the Delete Account sheet for a sole com
     click57('ask-archive', { 'data-ax-league': 'L2' }); click57('confirm-archive');
     click57('ask-archive', { 'data-ax-league': 'L1' }); click57('confirm-archive');
     type57();
-    await quiet57(async () => { await submit57().dispatch('click', {}); await flush57(20); });
+    await quiet57(async () => { await submit57().dispatch('click', {}); await settle57(); });
     assert(h.order().join() === 'rpc:archive_league_on_exit,rpc:archive_league_on_exit,fn:account-delete', `[57i-41] the final order: archive_league_on_exit for EACH queued league, THEN account-delete (got ${h.order().join(' > ')})`);
     assert(h.named('archive_league_on_exit').map((c) => c.params.p_league).join() === 'L1,L2', '[57i-42] …in LIST order (the order the rows appear: L1 then L2), not the order they were chosen');
     assert(h.named('archive_league_on_exit').every((c) => Object.keys(c.params).join() === 'p_league'), '[57i-43] …each call carries exactly {p_league}');
@@ -12249,14 +12473,23 @@ console.log('\n[57i] UN-389 / DI-446 — the Delete Account sheet for a sole com
   }
 
   // ── (i) the AUTO-ARCHIVE row: no actions, never blocks, the client never archives it (the server does, with the deletion) ───────────
-  {
+  // W-22 — run twice: as written, then with the push SDK READY ([57i-67b]), where the confirmed deletion's signOut() waits out its push unlink, up to 2 s (a stale
+  // init from an earlier scenario can make the SDK ready mid-scenario under load). The read must come once the sequence has FINISHED: [57i-67] read after a fixed
+  // tick budget, so the deletion could still be running when the next scenario began, and its success closed THAT scenario's sheet (see boundary57()).
+  for (const pushReady of [false, true]) {
     const h = await harness57({ exitRows: [wire57({ blocks: false, auto_archive: true, candidates: [], league_name: 'Solo Test' })], seats: [SEAT57('L1', 'Solo Test')] });
     await open57();
-    assert(/data-ax-state="auto"/.test(rows57().innerHTML) && rows57().innerHTML.includes('Solo Test has no other members. It will be archived when you delete your account.') && !/<button/.test(rows57().innerHTML), '[57i-65] the auto-archive row is an info line with NO control');
+    if (!pushReady) assert(/data-ax-state="auto"/.test(rows57().innerHTML) && rows57().innerHTML.includes('Solo Test has no other members. It will be archived when you delete your account.') && !/<button/.test(rows57().innerHTML), '[57i-65] the auto-archive row is an info line with NO control');
     type57();
-    assert(submit57().disabled === false && caption57().textContent === '', '[57i-66] it never blocks Delete');
-    await quiet57(async () => { await submit57().dispatch('click', {}); await flush57(); });
-    assert(h.order().join() === 'fn:account-delete' && !h.named('archive_league_on_exit').length, `[57i-67] the client does NOT archive it (the server archives it inside the deletion): order ${h.order().join(' > ')}`);
+    if (!pushReady) assert(submit57().disabled === false && caption57().textContent === '', '[57i-66] it never blocks Delete');
+    if (pushReady) pushOs._setSdkReadyForTest(true);
+    const t0 = Date.now();
+    await quiet57(async () => { await submit57().dispatch('click', {}); await settle57(); });
+    const ms = Date.now() - t0;
+    if (pushReady) pushOs._setSdkReadyForTest(false);
+    const finished = h.order().join() === 'fn:account-delete' && !h.named('archive_league_on_exit').length && !wrap57();
+    if (!pushReady) assert(finished, `[57i-67] the client does NOT archive it (the server archives it inside the deletion), and the read comes once the sequence has finished (the sheet is gone): order ${h.order().join(' > ')}`);
+    else assert(finished, `[57i-67b] …and with the push SDK ready (signOut() waits out its push unlink, up to 2 s) the read still comes once the sequence has finished (read after ${ms} ms; order ${h.order().join(' > ') || 'none'}; sheet ${wrap57() ? 'STILL UP' : 'gone'})`);
   }
 
   // ── (j) dismissal is inert while the sequence runs ───────────────────────────────────────────────────────────────────────────────────
@@ -12277,8 +12510,24 @@ console.log('\n[57i] UN-389 / DI-446 — the Delete Account sheet for a sole com
     assert(!!wrap57() && sheetState57() !== null, '[57i-70] the close control and Esc are INERT while the sequence runs');
     assert(app._isDeleteAccountDismissGestureBlockedForTest() === true, '[57i-71] …and so is the native swipe-down (its blocked predicate answers true)');
     release();
-    await quiet57(async () => { await flush57(20); });
+    await quiet57(async () => { await settle57(); });
     assert(h.order().join() === 'rpc:archive_league_on_exit,fn:account-delete' && !wrap57(), '[57i-72] released, the sequence finishes in order and the sheet goes');
+  }
+  {
+    // W-22 — the same final tap with the push SDK READY on this page (an init answered ok — a stale one from an earlier scenario can, mid-scenario):
+    // a confirmed deletion signs out, and signOut() then waits for the push unlink, up to its 2 s bound (nothing drains this fake SDK's queue),
+    // before deleteOwnAccount() returns and the sheet goes. Same sequence, longer; a fixed tick budget read the world before it finished.
+    const h = await harness57({ exitRows: [wire57()] });
+    await open57();
+    click57('ask-archive', { 'data-ax-league': 'L1' }); click57('confirm-archive');
+    type57();
+    pushOs._setSdkReadyForTest(true);
+    const t0 = Date.now();
+    await quiet57(async () => { await submit57().dispatch('click', {}); await settle57(); });
+    const ms = Date.now() - t0;
+    pushOs._setSdkReadyForTest(false);
+    assert(h.order().join() === 'rpc:archive_league_on_exit,fn:account-delete' && !wrap57(),
+      `[57i-72b] with the push SDK ready (signOut() waits out its push unlink, up to 2 s), the sequence still finishes in order and the sheet goes (read after ${ms} ms)`);
   }
   {
     await harness57({ seats: [SEAT57('L1', 'Saturday Crew', 'player')] });
@@ -12362,6 +12611,8 @@ console.log('\n[57i] UN-389 / DI-446 — the Delete Account sheet for a sole com
     assert(!!wrap57() && sheetState57() !== null, '[57i-87] …and the sheet can be opened again');
     app._resetDeleteAccountSheetForTest();
   }
+  await boundary57('the end of [57i]');
+  assert(leaks57.length === 0 && boundaries57 >= 20, `[57i-88] (W-22) every [57i] scenario began with the one before it finished: no deletion sequence ran on into the next (${boundaries57} boundaries checked${leaks57.length ? `; LEAKED: ${leaks57.join(', ')}` : ''})`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -12997,11 +13248,17 @@ console.log('     native window: a downward drag on .chat-sheet-header dismisses
   console.warn = () => {}; console.info = () => {};
   FakeEl.classQueries = true;
   globalThis.window.Capacitor = { isNativePlatform: () => true };
-  const drag = (headerEl) => {
-    headerEl.dispatch('touchstart', { touches: [{ clientX: 100, clientY: 0 }] });
-    headerEl.dispatch('touchmove', { touches: [{ clientX: 100, clientY: 20 }] });
-    headerEl.dispatch('touchmove', { touches: [{ clientX: 100, clientY: 300 }] });   // 300/500 = 60%
-    headerEl.dispatch('touchend', { touches: [] });
+  // W-70 (2026-10-14, DI-W70.1) - RE-DERIVED, not weakened: the drag is now bound on the WHOLE sheet (header and body), not the header alone, and asks canStart() at touchstart
+  // (bottom sheet only - under 700 px - and a touch on the header always qualifies). The fake DOM does not bubble, so the touches are delivered to the element the page bound,
+  // with the header as their target; every assertion below is the one this section always made.
+  const hadWidth = Object.prototype.hasOwnProperty.call(globalThis.window, 'innerWidth'); const savedWidth = globalThis.window.innerWidth;
+  globalThis.window.innerWidth = 390;
+  const HEADER_TARGET = { nodeType: 1 };
+  const drag = (sheetEl) => {
+    sheetEl.dispatch('touchstart', { touches: [{ clientX: 100, clientY: 0 }], target: HEADER_TARGET });
+    sheetEl.dispatch('touchmove', { touches: [{ clientX: 100, clientY: 20 }], target: HEADER_TARGET });
+    sheetEl.dispatch('touchmove', { touches: [{ clientX: 100, clientY: 300 }], target: HEADER_TARGET });   // 300/500 = 60%
+    sheetEl.dispatch('touchend', { touches: [] });
   };
   const signIn = async () => {
     resetAll({ getSession: async () => ({ data: { session: { user: { id: 'uW' }, access_token: 't' } } }) });
@@ -13020,9 +13277,9 @@ console.log('     native window: a downward drag on .chat-sheet-header dismisses
     assert(!!wrap, 'fixture: the REAL openWeekWizardSheet() put #week-wizard-sheet-wrap on the page');
     const headerEl = wrap?.querySelector('.chat-sheet-header');
     const sheetEl = wrap?.querySelector('#week-wizard-sheet');
-    assert(!!headerEl && headerEl.listenerCount('touchstart') === 1,
-      'fixture: the drag handler is bound on the sheet header (native, bindSwipeToDismiss())');
-    drag(headerEl);
+    assert(!!sheetEl && sheetEl.listenerCount('touchstart') === 1 && !!headerEl && headerEl.listenerCount('touchstart') === 0,
+      'fixture: the drag handler is bound on the WHOLE sheet (native, bindSwipeToDismiss(), W-70), not on the header alone');
+    drag(sheetEl);
     assert(wrap.style['--wizard-drag-y'] === '1' && document.getElementById('week-wizard-sheet-wrap') === wrap,
       '64-1: past the threshold the sheet plays the REST of the slide (offset -> 1) and is still on screen mid-slide — it does not pop (reviewer R2)');
     sheetEl.dispatch('transitionend', { target: sheetEl });
@@ -13034,7 +13291,7 @@ console.log('     native window: a downward drag on .chat-sheet-header dismisses
     await signIn();
     app._openWeekWizardSheetForTest();
     const wrap2 = document.getElementById('week-wizard-sheet-wrap');
-    drag(wrap2.querySelector('.chat-sheet-header'));
+    drag(wrap2.querySelector('#week-wizard-sheet'));
     assert(document.getElementById('week-wizard-sheet-wrap') === null,
       '64-3: under prefers-reduced-motion the dismissed sheet is removed immediately');
 
@@ -13043,11 +13300,11 @@ console.log('     native window: a downward drag on .chat-sheet-header dismisses
     await signIn();
     app._openWeekWizardSheetForTest();
     const wrap3 = document.getElementById('week-wizard-sheet-wrap');
-    const h3 = wrap3.querySelector('.chat-sheet-header');
-    h3.dispatch('touchstart', { touches: [{ clientX: 100, clientY: 0 }] });
-    h3.dispatch('touchmove', { touches: [{ clientX: 100, clientY: 20 }] });
+    const h3 = wrap3.querySelector('#week-wizard-sheet');
+    h3.dispatch('touchstart', { touches: [{ clientX: 100, clientY: 0 }], target: HEADER_TARGET });
+    h3.dispatch('touchmove', { touches: [{ clientX: 100, clientY: 20 }], target: HEADER_TARGET });
     await new Promise((r) => setTimeout(r, 400));
-    h3.dispatch('touchmove', { touches: [{ clientX: 100, clientY: 60 }] });   // 12%, slow
+    h3.dispatch('touchmove', { touches: [{ clientX: 100, clientY: 60 }], target: HEADER_TARGET });   // 12%, slow
     await new Promise((r) => setTimeout(r, 50));
     h3.dispatch('touchend', { touches: [] });
     assert(document.getElementById('week-wizard-sheet-wrap') === wrap3 && wrap3.style['--wizard-drag-y'] === '0',
@@ -13060,6 +13317,7 @@ console.log('     native window: a downward drag on .chat-sheet-header dismisses
   } finally {
     globalThis.matchMedia = savedMM;
     delete globalThis.window.Capacitor;
+    if (hadWidth) globalThis.window.innerWidth = savedWidth; else delete globalThis.window.innerWidth;
     FakeEl.classQueries = false;
     console.warn = realWarn; console.info = realInfo;
   }
@@ -14738,16 +14996,21 @@ console.log('     scenario) — plus N12, wizardSetActiveWeekId()\'s null-pointe
 
     const commEl75 = new FakeEl(); commEl75.id = 'page-commissioner'; registry.set('page-commissioner', commEl75);
     app.renderCommPage();
-    assert(/Selected Slate \(1\/10 games\)/.test(commEl75.innerHTML),
-      `75-1: THE FIX — the Games tab shows the DRAFT's ONE game, not the open week's (got ${commEl75.innerHTML.match(/Selected Slate \([^)]*\)/)?.[0]})`);
-    assert(!/DraftHome/.test('') && /DraftHome/.test(commEl75.innerHTML.match(/id="admin-games-list"[\s\S]*?<\/div>\s*<\/div>/)?.[0] || commEl75.innerHTML),
+    // RE-DERIVED 2026-10-14 (D1 W-69): the "Selected Slate (n/10 games)" heading is the Games section's summary line ("1 on slate · … · target 10") and its rows are the ONE list (#games-groups).
+    const summary75 = (h) => (h.match(/id="games-summary"[^>]*>([^<]*)</) || [])[1];
+    assert(/^1 on slate/.test(summary75(commEl75.innerHTML) || ''),
+      `75-1: THE FIX — the Games tab shows the DRAFT's ONE game, not the open week's (got ${summary75(commEl75.innerHTML)})`);
+    assert(/DraftHome/.test(commEl75.innerHTML.match(/id="games-groups"[\s\S]*?<\/details>|id="games-groups"[\s\S]*$/)?.[0] || '') && !/Open ?Home|wk75_open_home/.test(commEl75.innerHTML.match(/id="games-groups"[\s\S]*$/)?.[0] || ''),
       '75-2: …and the row on it is the draft\'s own game');
     assert(/id="games-tab-continue-setup-btn"/.test(commEl75.innerHTML),
       '75-3: the "Continue set up" card is present — it follows the SAME target (gamesTabTargetWeek())');
     assert(!/id="comm-denied-card"/.test(commEl75.innerHTML), '75-3b: fixture — this really is the commissioner panel body, not a denial card');
 
     // Add Manually on the Games tab adds to the DRAFT, never the open week.
-    document.getElementById('add-manual-game-btn').dispatch('click', { target: document.getElementById('add-manual-game-btn') });
+    // The Add a game button is a delegated `data-action="add-manual"` on #games-section now; this fake-DOM harness has no event bubbling, so the click is dispatched on the section root with the button as its target
+    // (the handler resolves `target.closest('[data-action]')` exactly as in a browser). gameslisttest taps the real button in a real element tree.
+    const addBtn75 = { disabled: false, getAttribute: (k) => (k === 'data-action' ? 'add-manual' : null) };
+    document.getElementById('games-section').dispatch('click', { target: { closest: (sel) => (sel === '[data-action]' ? addBtn75 : null) } });
     const ov75b = document.body.lastChild;
     fillManualGame75('DraftHome2', 'DraftAway2', '2026-12-06T17:00');
     ov75b.querySelector('#m-save').dispatch('click', { target: ov75b.querySelector('#m-save') });
@@ -14758,13 +15021,20 @@ console.log('     scenario) — plus N12, wizardSetActiveWeekId()\'s null-pointe
     //    ABSENT while the Games tab shows a parked DRAFT that HAS games.
     const commEl75c = new FakeEl(); commEl75c.id = 'page-commissioner'; registry.set('page-commissioner', commEl75c);
     app.renderCommPage();
-    assert(!/id="unlock-all-btn"/.test(commEl75c.innerHTML), '75-R1a: "Unlock All" is absent for a parked DRAFT (would wipe the OPEN week\'s own lock overrides too)');
+    // RE-DERIVED 2026-10-14 (D1 W-69): Unlock All and Calculate ATS moved into the More… sheet (they are rare and one is destructive); Refresh Scores stays a visible control, id kept. The R1 rule is unchanged:
+    // none of the three exists while the Games tab shows a parked DRAFT - not in the markup, not in the sheet's items - and the handlers refuse a DRAFT even if called.
+    const more75 = app._gamesMoreItemsNowForTest();
+    assert(!more75.includes('slate-more-unlock-all'), '75-R1a: "Unlock All" is absent from More for a parked DRAFT (would wipe the OPEN week\'s own lock overrides too)');
     assert(!/id="refresh-scores-btn"/.test(commEl75c.innerHTML), '75-R1b: "Refresh Scores" is absent for a parked DRAFT');
-    assert(!/id="finalize-scoring-btn"/.test(commEl75c.innerHTML), '75-R1c: "Calculate ATS" is absent for a parked DRAFT (would finalize a week with zero real picks)');
-    assert(document.getElementById('finalize-scoring-btn') === null,
-      '75-R1c-2: …and the id has never been registered at all in this run — the button never rendered, so finalizeWeek() can never be reached by a click');
-    assert(/id="clear-slate-btn"/.test(commEl75c.innerHTML), '75-R1d: "Clear All Slate Games" is STILL present — not one of the three gated buttons');
-    assert(/id="add-manual-game-btn"/.test(commEl75c.innerHTML), '75-R1e: "Add Manually" is still present');
+    assert(!more75.includes('slate-more-calc-ats'), '75-R1c: "Calculate ATS" is absent from More for a parked DRAFT (would finalize a week with zero real picks)');
+    assert(document.getElementById('refresh-scores-btn') === null && document.getElementById('finalize-scoring-btn') === null,
+      '75-R1c-2: …and neither id has ever been registered in this run - the buttons never rendered, so finalizeWeek() can never be reached by a click');
+    const lockBefore75 = JSON.stringify(storage.getGameLockOverrides());
+    app._slateSheetActionForTest('slate-more-unlock-all', { weekId: targetId75 });
+    app._slateSheetActionForTest('slate-more-calc-ats', { weekId: targetId75 });
+    assert(JSON.stringify(storage.getGameLockOverrides()) === lockBefore75, '75-R1c-3: …and the handlers refuse a DRAFT when called directly (belt and suspenders): no lock override changed');
+    assert(more75.includes('slate-more-clear-slate'), '75-R1d: "Clear all slate games" is STILL there - not one of the three gated entries');
+    assert(/id="add-manual-game-btn"/.test(commEl75c.innerHTML), '75-R1e: "Add a game" is still present');
 
     // ── R1b (reviewer round 3, copy) — the banner says how to get back, and
     //    "Close setup" actually restores the live week's Games tab.
@@ -14776,10 +15046,11 @@ console.log('     scenario) — plus N12, wizardSetActiveWeekId()\'s null-pointe
     assert(app.state.currentTab === 'commissioner', '75-R1b-4: still on the commissioner tab (navigateTo(\'commissioner\'), not a tab change)');
     assert(!/id="games-tab-close-setup-btn"/.test(commEl75c.innerHTML) && !/Setting up/.test(commEl75c.innerHTML),
       '75-R1b-5: the Games tab repainted WITHOUT the banner — back to the live week');
-    assert(/Selected Slate \(1\/10 games\)/.test(commEl75c.innerHTML),
-      `75-R1b-6: …and the LIVE week's own game count shows (1, the open week's — not the draft's 2) (got ${commEl75c.innerHTML.match(/Selected Slate \([^)]*\)/)?.[0]})`);
-    assert(/id="unlock-all-btn"/.test(commEl75c.innerHTML) && /id="refresh-scores-btn"/.test(commEl75c.innerHTML) && /id="finalize-scoring-btn"/.test(commEl75c.innerHTML),
-      '75-R1b-7: …and the three LIVE-week-only buttons are back — the open week is not a draft');
+    assert(/^1 on slate/.test(summary75(commEl75c.innerHTML) || ''),
+      `75-R1b-6: …and the LIVE week's own game count shows (1, the open week's — not the draft's 2) (got ${summary75(commEl75c.innerHTML)})`);
+    const more75b = app._gamesMoreItemsNowForTest();
+    assert(more75b.includes('slate-more-unlock-all') && /id="refresh-scores-btn"/.test(commEl75c.innerHTML) && more75b.includes('slate-more-calc-ats'),
+      '75-R1b-7: …and the three LIVE-week-only controls are back — the open week is not a draft');
 
     // Structural pin — the exact B1 derivation line 75-1..75-4 depend on.
     // (The actual mutation proof — this line removed/replaced so
@@ -15656,8 +15927,12 @@ console.log('\n[79] REVIEWER R3 — Join from the pill sheet runs the league swi
     app.renderLeaguePill();
     const pillBound = pill.listenerCount('click') === 1;
     pill.click();
+    // D1 DI-556 - the pill opens the league OVERVIEW; the old selector is its "Switch or join a league" row (one tap more, nothing lost).
+    const overviewSheet = document.body.lastChild;
+    const overviewOk = overviewSheet?.id === 'league-overview-sheet-wrap';
+    overviewSheet?.dispatch('click', { target: { closest: () => ({ disabled: false, getAttribute: (k) => ({ 'data-lo-action': 'switch-league' })[k] ?? null }) } });
     const selectorSheet = document.body.lastChild;
-    const selectorOk = /Choose a League/.test(selectorSheet?.innerHTML || '');
+    const selectorOk = overviewOk && selectorSheet !== overviewSheet && /Choose a League/.test(selectorSheet?.innerHTML || '');
     selectorSheet?.querySelector('#league-selector-join-btn')?.click();
     const joinSheet = document.body.lastChild;
     const joinSheetOk = /id="league-join-code"/.test(joinSheet?.innerHTML || '') && joinSheet !== selectorSheet;
@@ -15685,7 +15960,7 @@ console.log('\n[79] REVIEWER R3 — Join from the pill sheet runs the league swi
     assert(r.before.league === 'L-A' && r.before.state === 'ACTIVE',
       `[79] fixture: signed in, ONE membership, scoped to League A and hydrated ACTIVE (league ${r.before.league}, state ${r.before.state})`);
     assert(r.pillBound && r.selectorOk && r.joinSheetOk,
-      `[79] fixture: the REAL controls — the pill is bound, a tap opens "Choose a League", its "Join a League" row opens the join sheet (bound ${r.pillBound}, selector ${r.selectorOk}, join sheet ${r.joinSheetOk})`);
+      `[79] fixture: the REAL controls — the pill is bound, a tap opens the league overview, its "Switch or join a league" row opens "Choose a League", whose "Join a League" row opens the join sheet (bound ${r.pillBound}, selector ${r.selectorOk}, join sheet ${r.joinSheetOk})`);
     // N1 (DI-430, 2026-09-30): joinLeague() removes spaces and hyphens before the RPC (`join_league` only does upper(trim())), so the typed `IRB-4F2K` arrives as `IRB4F2K`.
     assert(r.joinArgs?.name === 'join_league' && r.joinArgs?.args?.p_code === 'IRB4F2K',
       `[79] fixture: the join RPC really ran with the typed code, spaces and hyphens removed by joinLeague() (${JSON.stringify(r.joinArgs)})`);
@@ -16420,7 +16695,7 @@ console.log('\n[80] N1 league creation — the claim screen, the landing, the sh
   });
   const ROW_NEW = { league_id: 'L-NEW', id: 'mNEW', role: 'commissioner', display_name: 'Sam', active: true, leagues: { name: 'Weekend Crew', pilot: false } };
   const ROW_JOINED = { league_id: 'L-INV', id: 'mINV', role: 'player', display_name: 'Sam', active: true, leagues: { name: 'Invited League', pilot: false } };
-  const GATE_ROWS = [{ key: 'league_creation_open', value: true }, { key: 'offered_sports', value: ['cfb', 'nfl'] }, { key: 'signups_open', value: true }, { key: 'maintenance_banner', value: '' }];
+  const GATE_ROWS = [{ key: 'league_creation_open', value: true }, { key: 'league_creation_scope', value: 'everyone' }, { key: 'offered_sports', value: ['cfb', 'nfl'] }, { key: 'signups_open', value: true }, { key: 'maintenance_banner', value: '' }];
   const toasts80 = () => (registry.get('toast-container')?.children || []).map((t) => ({ cls: t.className, text: t.textContent }));
   const makeToastBox80 = () => { const c = document.createElement('div'); c.id = 'toast-container'; registry.set('toast-container', c); return c; };
   const shippingFlags80 = async (script) => {
@@ -16578,6 +16853,191 @@ console.log('\n[80] N1 league creation — the claim screen, the landing, the sh
     const pageOpen = dashPage80();
     app.renderLinkFlowScreen('dashboard');
     assert(pageOpen.innerHTML !== GOLDEN_CLAIM_80('') && /data-lc-seg="invite"/.test(pageOpen.innerHTML) && /link-create-league-btn/.test(pageOpen.innerHTML), '[80a2h] non-vacuity: with the door OPEN the same account gets the segments and the Create choice — so [80a2c] measured the gate, not a screen that never changes');
+    // F-1 (2026-10-08): the door CLOSED stays the golden even for the SUPER admin with a valid pending invite (who may create changes nothing while the release gate is shut)
+    await shippingFlags80({ link_member_by_email: () => ({ data: [], error: null }), _from: () => ({ data: [], error: null }) });
+    auth._setPlatformAdminFlagsForTest(true, true);
+    assert(auth.getCachedLeagueCreationOpen() === false && await app.attemptAutoLink() === 'unmatched', '[80a2i] F-1 fixture: the gate is CLOSED, the viewer IS the super admin, auto-link found nothing');
+    localStorage.setItem(KEY80, pendingValid);
+    app._resetClaimScreenModeForTest(); app._resetPendingInviteViewForTest();
+    const pageSup = dashPage80(); app.renderLinkFlowScreen('dashboard');
+    assert(pageSup.innerHTML === GOLDEN_CLAIM_80('') && !NEVER_80.test(pageSup.innerHTML) && localStorage.getItem(KEY80) === pendingValid,
+      '[80a2j] F-1 (c): gate CLOSED + the super admin + a valid pending invite: still the pre-N1 claim card, byte for byte, the stored invite untouched');
+    auth._setPlatformAdminFlagsForTest(false, false);
+    app._resetLinkFlowForTest();
+    localStorage.removeItem(KEY80);
+  }
+
+  // ── (a3) F-1 (reviewer BLOCK, 2026-10-08) - JOINING IS UNTOUCHED BY WHO MAY CREATE. Gate OPEN, scope "admins": the invite option, the invite card, the pre-fill and the expired-link notice are for EVERYONE; only the
+  // Create choice is for the super admin. (Before the fix the whole invite surface sat behind the door predicate, so an invited non-super-admin saw only the claim card - an invite link that did nothing.) ───────
+  {
+    const ADMINS_F1 = GATE_ROWS.filter((r) => r.key !== 'league_creation_scope').concat([{ key: 'league_creation_scope', value: 'admins' }]);
+    const claimScreen = async (isSuper, pending) => {
+      const calls = await shippingFlags80({ link_member_by_email: () => ({ data: [], error: null }), join_league: () => ({ data: null, error: { message: 'invalid_code' } }),
+        _from: (table) => (table === 'platform_kv' ? { data: ADMINS_F1, error: null } : { data: [], error: null }) });
+      await quiet80(() => auth.refreshMaintenanceBannerCache());
+      auth._setPlatformAdminFlagsForTest(isSuper, isSuper);
+      const un = await app.attemptAutoLink();
+      if (pending) localStorage.setItem(KEY80, JSON.stringify(pending)); else localStorage.removeItem(KEY80);
+      app._resetClaimScreenModeForTest(); app._resetPendingInviteViewForTest();
+      const page = dashPage80(); app.renderLinkFlowScreen('dashboard');
+      return { un, calls, page, html: page.innerHTML };
+    };
+    const VALID = { code: 'K7QX9M2P', exp: Date.now() + 600_000 };
+    {
+      const r = await claimScreen(false, VALID);
+      assert(r.un === 'unmatched' && auth.getCachedLeagueCreationOpen() === true && auth.getCachedLeagueCreationScope() === 'admins' && auth.getIsSuperAdmin() === false,
+        '[80a2k] F-1 fixture: gate OPEN, scope "admins", the viewer is NOT the super admin, auto-link found nothing, a valid ?join= invite is waiting');
+      assert(/data-lc-seg="invite"/.test(r.html) && /id="link-invite-card"/.test(r.html) && /id="league-join-code"[^>]*value="K7QX 9M2P"/.test(r.html) && r.html.includes('You opened an invite link. Check the code, then tap Join League.'),
+        '[80a2l] F-1 (a): the invited NON-super-admin gets the segments, the invite card and the PRE-FILLED code with the invite note (joining is untouched)');
+      assert(!/link-create-league-btn|data-action="create-league"|Create a league/.test(r.html), '[80a2m] F-1 (a): …and there is NO Create choice (that one is for the super admin only)');
+      assert(r.calls.filter((c) => c.name === 'join_league').length === 0 && localStorage.getItem(KEY80) !== null, '[80a2n] …opening the screen joined nothing and consumed nothing (one visible tap)');
+      const btn = r.page.querySelector('#league-join-btn');
+      r.page.querySelector('#league-join-code').value = 'K7QX 9M2P';
+      await quiet80(async () => { btn.click(); await flush80(); });
+      assert(r.calls.filter((c) => c.name === 'join_league').length === 1, '[80a2o] F-1 (a): …and the Join button on that card makes the join_league call for the invited code');
+    }
+    {
+      const r = await claimScreen(false, { code: 'K7QX9M2P', exp: Date.now() - 1 });
+      assert(/data-lc-seg="invite"/.test(r.html) && r.html.includes('That invite link has expired. Ask whoever invited you to send it again.') && !/link-create-league-btn|Create a league/.test(r.html),
+        '[80a2p] F-1 (a): an EXPIRED invite is announced loudly to the non-super-admin too (the notice belongs to the invite surface, which is for everyone), still with no Create choice');
+    }
+    {
+      const r = await claimScreen(true, VALID);
+      assert(/data-lc-seg="invite"/.test(r.html) && /id="league-join-code"[^>]*value="K7QX 9M2P"/.test(r.html) && /id="link-create-league-btn" data-action="create-league"/.test(r.html),
+        '[80a2q] F-1 (b): the SUPER admin gets BOTH - the pre-filled invite card and the Create choice');
+    }
+    {
+      const r = await claimScreen(false, null);
+      assert(/data-lc-seg="invite"/.test(r.html) && /I have an invite code/.test(r.html) && !/link-create-league-btn/.test(r.html), '[80a2r] F-1 (a): with no invite waiting the non-super-admin still gets the "I have an invite code" option (and no Create choice)');
+    }
+    auth._setPlatformAdminFlagsForTest(false, false);
+    app._resetLinkFlowForTest();
+    localStorage.removeItem(KEY80);
+  }
+
+  // ── (a4) THE CLAIM SCREEN REPAINTS WHEN THE GATE / THE SUPER-ADMIN FLAG LANDS AFTER ITS FIRST PAINT (review follow-up, 2026-10-08) ─────────────────────────────────────────────────────────
+  // With F-1 the invite option, the invite card and the pre-fill depend on the release gate alone, and the gate read is a network round trip that can land after the first paint. _repaintMaintenanceBannerSurface()
+  // used to return early whenever the claim screen was up, so the screen stayed as first drawn until a reload. The page below is a FreshEl: unlike FakeEl it BUILDS NEW NODES on every innerHTML write (what a
+  // browser does), so a typed code that "survives" is genuinely carried, not an artefact of the fake memoizing its children.
+  {
+    const { stampFieldOwner } = await import('./js/field-preserve.js');
+    class FreshEl extends FakeEl {
+      constructor() { super('div'); this.writes = 0; }
+      get innerHTML() { return this._html; }
+      set innerHTML(v) { this._html = v; this.writes++; this._subEls = {}; }
+      _fields() { return [...String(this._html).matchAll(/<(input|textarea)\b[^>]*\bid="([^"]+)"[^>]*>/g)].map((m) => ({ tag: m[1], id: m[2], html: m[0] })); }
+      querySelector(sel) {
+        if (typeof sel === 'string' && sel.startsWith('#')) {
+          const id = sel.slice(1), hit = this._fields().find((x) => x.id === id);
+          if (hit) {
+            if (!this._subEls[id]) {
+              const el = new FakeEl(hit.tag); el.id = id; el.type = 'text';
+              const dv = /\bvalue="([^"]*)"/.exec(hit.html); el.defaultValue = dv ? dv[1] : ''; el.value = el.defaultValue; el.selectionStart = el.selectionEnd = el.value.length;
+              el.setSelectionRange = (a, b) => { el.selectionStart = a; el.selectionEnd = b; };
+              el.focus = () => { document.activeElement = el; };
+              this._subEls[id] = el;
+            }
+            return this._subEls[id];
+          }
+        }
+        return super.querySelector(sel);
+      }
+      querySelectorAll(sel) { return /input\[id\]/.test(String(sel)) ? this._fields().map((x) => this.querySelector('#' + x.id)) : []; }
+      contains(el) { return Object.values(this._subEls).includes(el); }
+    }
+    const ADMINS_A4 = GATE_ROWS.filter((r) => r.key !== 'league_creation_scope').concat([{ key: 'league_creation_scope', value: 'admins' }]);
+    const VALID_A4 = JSON.stringify({ code: 'K7QX9M2P', exp: Date.now() + 600_000 });
+    // an unmatched account, the release gate CLOSED (nothing has read platform_kv), the claim screen painted into a FreshEl
+    const firstPaint = async ({ pending = null, match = false } = {}) => {
+      await shippingFlags80({ link_member_by_email: () => ({ data: match ? [{ league_id: 'L-A', member_id: 'mA' }] : [], error: null }),
+        _from: (table) => (table === 'platform_kv' ? { data: ADMINS_A4, error: null } : { data: [], error: null }) });
+      auth._setPlatformAdminFlagsForTest(false, false);
+      const un = await app.attemptAutoLink();
+      if (pending) localStorage.setItem(KEY80, pending); else localStorage.removeItem(KEY80);
+      app._resetClaimScreenModeForTest(); app._resetPendingInviteViewForTest();
+      app.state.currentTab = 'dashboard';
+      const page = new FreshEl(); page.id = 'page-dashboard'; registry.set('page-dashboard', page);
+      delete document.activeElement;
+      app.renderLinkFlowScreen('dashboard');
+      stampFieldOwner(page, app._currentIdentityKeyForTest());   // what navigateTo() does at the end of the render that painted this page (its ONE stamp, pinned by drafttest)
+      return { un, page };
+    };
+    // THE GATE LANDS: the real cache read, then the repaint the boot fetch chains onto it
+    const gateLands = async () => { await quiet80(() => auth.refreshMaintenanceBannerCache()); app._repaintMaintenanceBannerSurfaceForTest(); };
+
+    // A - a typed claim code and the focus survive the gate landing; the invite option appears
+    {
+      const { un, page } = await firstPaint();
+      const before = page.innerHTML;
+      assert(un === 'unmatched' && auth.getCachedLeagueCreationOpen() === false && !/data-lc-seg|I have an invite code/.test(before), '[80a4a] fixture: gate CLOSED, an unmatched account on the pre-N1 claim card (no invite option yet)');
+      const n1 = page.querySelector('#link-claim-code'); n1.value = 'K7QX9'; n1.selectionStart = n1.selectionEnd = 5; document.activeElement = n1;
+      await gateLands();
+      const n2 = page.querySelector('#link-claim-code');
+      assert(auth.getCachedLeagueCreationOpen() === true && /data-lc-seg="invite"/.test(page.innerHTML) && /I have an invite code/.test(page.innerHTML) && !/link-create-league-btn/.test(page.innerHTML),
+        '[80a4b] the gate lands AFTER first paint: the claim screen REPAINTS and the invite option appears (non-super-admin, scope "admins": no Create choice)');
+      assert(n2 && n2 !== n1 && n2.value === 'K7QX9' && document.activeElement === n2 && n2.selectionStart === 5 && n2.selectionEnd === 5,
+        '[80a4c] …and the half-typed claim code and the focus (caret included) are CARRIED onto the new node (a fresh node, not the old one: the repaint really happened)');
+      assert(/id="link-claim-card"/.test(page.innerHTML) && !/id="link-invite-card"/.test(page.innerHTML), '[80a4d] …on the claim card they were on');
+    }
+    // A2 - focus in an EMPTY field is restored too (a dirty-only rule would drop it), and an unfocused field is never given focus
+    {
+      const { page } = await firstPaint();
+      const n1 = page.querySelector('#link-claim-code'); document.activeElement = n1;
+      await gateLands();
+      const n2 = page.querySelector('#link-claim-code');
+      assert(n2 !== n1 && n2.value === '' && document.activeElement === n2, '[80a4e] the focus of an EMPTY claim field survives the repaint (the keyboard stays up)');
+      const { page: p2 } = await firstPaint();
+      const o1 = p2.querySelector('#link-claim-code');
+      await gateLands();
+      assert(p2.querySelector('#link-claim-code') !== o1 && document.activeElement === undefined, '[80a4f] …and a field nobody was in is NOT given focus (restored, never granted)');
+    }
+    // B - a waiting invite does not snatch a player who is typing a claim code
+    {
+      const { page } = await firstPaint({ pending: VALID_A4 });
+      const n1 = page.querySelector('#link-claim-code'); n1.value = 'ABCD'; n1.selectionStart = n1.selectionEnd = 4; document.activeElement = n1;
+      await gateLands();
+      const n2 = page.querySelector('#link-claim-code');
+      assert(/id="link-claim-card"/.test(page.innerHTML) && !/id="link-invite-card"/.test(page.innerHTML) && /data-lc-seg="invite"/.test(page.innerHTML) && n2 && n2.value === 'ABCD' && document.activeElement === n2 && localStorage.getItem(KEY80) === VALID_A4,
+        '[80a4g] a valid ?join= invite is waiting but the player is MID-TYPING a claim code: the card does not change under them (the invite option appears as a segment), the typed code and focus are kept, the invite is not consumed');
+    }
+    // C - nothing typed: the screen goes to the waiting invite exactly as a first paint would
+    {
+      const { page } = await firstPaint({ pending: VALID_A4 });
+      await gateLands();
+      assert(/id="link-invite-card"/.test(page.innerHTML) && /id="league-join-code"[^>]*value="K7QX 9M2P"/.test(page.innerHTML) && page.innerHTML.includes('You opened an invite link. Check the code, then tap Join League.'),
+        '[80a4h] nothing typed: the late gate brings the waiting invite card in PRE-FILLED (the deep-link visitor sees what a first paint would have shown)');
+    }
+    // D - the super-admin flag landing late brings the Create choice in, the typed code kept
+    {
+      const { page } = await firstPaint();
+      await gateLands();
+      assert(!/link-create-league-btn/.test(page.innerHTML), '[80a4i] fixture: gate landed, scope "admins", not (yet) the super admin: no Create choice');
+      const n1 = page.querySelector('#link-claim-code'); n1.value = 'K7QX9M2P'; n1.selectionStart = n1.selectionEnd = 8; document.activeElement = n1;
+      auth._setPlatformAdminFlagsForTest(true, true);          // the super-admin flag lands (the identity chokepoint repaints through this same function)
+      app._repaintMaintenanceBannerSurfaceForTest();
+      const n2 = page.querySelector('#link-claim-code');
+      assert(/id="link-create-league-btn" data-action="create-league"/.test(page.innerHTML) && n2 !== n1 && n2.value === 'K7QX9M2P' && document.activeElement === n2,
+        '[80a4j] the super-admin flag landing late brings the Create choice in, with the typed code and focus carried');
+      auth._setPlatformAdminFlagsForTest(false, false);
+    }
+    // E - nothing changed: nothing is rewritten (an ordinary banner refresh must not cost a player their caret)
+    {
+      const { page } = await firstPaint();
+      await gateLands();
+      const w = page.writes, n = page.querySelector('#link-claim-code');
+      app._repaintMaintenanceBannerSurfaceForTest(); app._repaintMaintenanceBannerSurfaceForTest();
+      assert(page.writes === w && page.querySelector('#link-claim-code') === n, '[80a4k] a repaint with nothing new to show rewrites NOTHING (same node, no write)');
+    }
+    // F - the one-time confirmation card is never repainted from here
+    {
+      const { un, page } = await firstPaint({ match: true });
+      assert(un === 'matched' || app.linkFlowScreen() === 'confirm', '[80a4l] fixture: a matched account is on the one-time confirmation card');
+      const w = page.writes, html = page.innerHTML;
+      await gateLands();
+      assert(page.writes === w && page.innerHTML === html, '[80a4m] …and a late gate / banner refresh leaves that card exactly as it is (no repaint, not replaced by another page)');
+    }
+    delete document.activeElement;
+    auth._setPlatformAdminFlagsForTest(false, false);
     app._resetLinkFlowForTest();
     localStorage.removeItem(KEY80);
   }
@@ -16601,6 +17061,40 @@ console.log('\n[80] N1 league creation — the claim screen, the landing, the sh
     // an identity change re-arms the CLOSED default (never the previous account's open door)
     auth.clearMaintenanceBannerCacheOnIdentityChange();
     assert(auth.getCachedLeagueCreationOpen() === false && auth.getCachedOfferedSports().length === 0, '[80ab] an identity change resets the gate cache to CLOSED');
+
+    // ── D1 Lane A (2026-10-08) — DI-550 (RP-1): WHO may create. The card is drawn only when the gate is open AND (scope is 'everyone' OR the viewer is the super admin). Unread / missing / malformed reads 'admins'. ──
+    assert(auth.getCachedLeagueCreationScope() === 'admins', '[80ab1] DI-550: before any read the scope is "admins" (the fail-closed default), and an identity change re-arms it');
+    const scopeRows = (scope) => GATE_ROWS.filter((r) => r.key !== 'league_creation_scope').concat(scope === undefined ? [] : [{ key: 'league_creation_scope', value: scope }]);
+    const readScope80 = async (scope) => {
+      await shippingFlags80({ _from: (table) => (table === 'platform_kv' ? { data: scopeRows(scope), error: null } : { data: [], error: null }) });
+      await quiet80(() => auth.refreshMaintenanceBannerCache());
+      return auth.getCachedLeagueCreationScope();
+    };
+    const got = {};
+    for (const [label, v] of [['everyone', 'everyone'], ['admins', 'admins'], ['missing', undefined], ['Everyone', 'Everyone'], ['true', true], ['1', 1], ['object', { v: 'everyone' }], ['null', null], ['empty', ''], ['all', 'all']]) got[label] = await readScope80(v);
+    assert(got.everyone === 'everyone' && got.admins === 'admins' && ['missing', 'Everyone', 'true', '1', 'object', 'null', 'empty', 'all'].every((k) => got[k] === 'admins'),
+      `[80ab2] DI-550: the scope reads "everyone" ONLY when the row is exactly that string; a missing row or any malformed value reads "admins" (got ${JSON.stringify(got)})`);
+    await readScope80('admins');
+    auth._setPlatformAdminFlagsForTest(false, false);
+    const pAdm = dashPage80(); app.renderLeagueFlowScreen('dashboard');
+    const hAdm = pAdm.innerHTML;
+    assert(auth.getCachedLeagueCreationOpen() === true && !/data-action="create-league"/.test(hAdm) && /id="league-create-open-btn"[^>]*disabled/.test(hAdm),
+      '[80ab3] DI-550: gate OPEN but scope "admins" and the viewer NOT the super admin: the landing shows the closed look (a disabled control), never the entry to the sheet');
+    auth._setPlatformAdminFlagsForTest(true, false);
+    const pPlat = dashPage80(); app.renderLeagueFlowScreen('dashboard');
+    assert(!/data-action="create-league"/.test(pPlat.innerHTML) && /id="league-create-open-btn"[^>]*disabled/.test(pPlat.innerHTML),
+      '[80ab4] DI-550: a PLATFORM admin who is not the SUPER admin sees the closed look too (is_super_admin, never is_platform_admin)');
+    auth._setPlatformAdminFlagsForTest(true, true);
+    const pSup = dashPage80(); app.renderLeagueFlowScreen('dashboard');
+    assert(/id="league-create-open-btn" data-action="create-league"/.test(pSup.innerHTML) && !/id="league-create-open-btn"[^>]*disabled/.test(pSup.innerHTML),
+      '[80ab5] DI-550: the SUPER admin sees the enabled card while the scope is still "admins"');
+    auth._setPlatformAdminFlagsForTest(false, false);
+    await readScope80('everyone');
+    const pEvery = dashPage80(); app.renderLeagueFlowScreen('dashboard');
+    assert(/id="league-create-open-btn" data-action="create-league"/.test(pEvery.innerHTML), '[80ab6] DI-550: scope "everyone" draws the card for an ordinary signed-in account (Deployment 2: one statement widens it)');
+    auth.clearMaintenanceBannerCacheOnIdentityChange();
+    assert(auth.getCachedLeagueCreationScope() === 'admins', '[80ab7] DI-550: an identity change resets the scope to "admins" (the previous account\'s "everyone" never shows the card to the next one)');
+    auth._setPlatformAdminFlagsForTest(false, false);
   }
 
   // ── (c) THE SHEET, THROUGH ITS REAL HANDLERS, INTO THE REAL RPC ───────────────────────────────────────────────────────────────
@@ -16750,7 +17244,9 @@ console.log('\n[80] N1 league creation — the claim screen, the landing, the sh
     assert(document.getElementById('league-create-sheet-wrap') && LC80.dismissMode(stateNow80()) === 'confirm', '[80ba] …and the sheet is still up (a failure never closes it)');
     app._resetLeagueCreateForTest();
   }
-  for (const [label, message, phase] of [['a per-account limit', 'league_limit', 'limit'], ['the daily rate', 'creation_rate', 'limit'], ['the platform breaker', 'creation_paused', 'limit'], ['the closed gate/valve', 'creation_closed', 'paused']]) {
+  for (const [label, message, phase] of [['a per-account limit', 'league_limit', 'limit'], ['the daily rate', 'creation_rate', 'limit'], ['the platform breaker', 'creation_paused', 'limit'], ['the closed gate/valve', 'creation_closed', 'paused'],
+    // D1 Lane A (2026-10-08, S-2 G2b): the two refusals 0049/0050 added. An admins-only server refusal reaches a stale client that still drew the card; push_not_ready is the release gate that would open before push does.
+    ['an admins-only refusal (a stale client that still drew the card)', 'creation_admins_only', 'admins_only'], ['the release gate not yet ready (0049)', 'push_not_ready', 'paused']]) {
     const h = await sheetHarness80({ createResult: () => ({ data: null, error: { message: `P0001: ${message}` } }) });
     app._openLeagueCreateSheetForTest();
     const { wrap } = sheetEls80();
@@ -16760,7 +17256,166 @@ console.log('\n[80] N1 league creation — the claim screen, the landing, the sh
     const st = stateNow80();
     if (phase === 'limit') assert(st.phase === 'limit' && /data-lc-banner="info"/.test(body.innerHTML) && body.innerHTML.includes('reached the limit for new leagues') && /done-limit/.test(body.innerHTML), `[80bb] ${label} (${message}) → the ONE gold limit banner and Done (no cap is disclosed)`);
     else assert(st.phase === 'paused' && st.step === 'name', `[80bb] ${label} (${message}) → back to the name step, paused (frame 10)`);
+    if (phase !== 'limit') {
+      // the sentence on the banner is the APPROVED one for that refusal, and never the raw server code (S-2 G2b)
+      const plain = String(body.innerHTML).replace(/<[^>]*>/g, '').replace(/&#0*39;|&apos;/g, "'").replace(/&amp;/g, '&');
+      const want = phase === 'admins_only' ? LC80.LC_COPY.adminsOnly : LC80.LC_COPY.paused;
+      const other = phase === 'admins_only' ? LC80.LC_COPY.paused : LC80.LC_COPY.adminsOnly;
+      assert(plain.includes(want) && !plain.includes(other) && !plain.includes(message) && /data-lc-banner="info"/.test(body.innerHTML), `[80bb2] ${label} (${message}) → the banner reads "${want}" (and not the other paused sentence, not the raw code)`, `got ${JSON.stringify(plain.slice(0, 160))}`);
+      if (phase === 'admins_only') assert(st.phase === 'paused' && st.pausedReason === 'admins_only', `[80bb3] ${label}: the state remembers WHY it paused (admins_only), so the sentence survives a repaint`);
+      else assert(st.pausedReason == null, `[80bb3] ${label}: a plain pause carries no admins_only reason`);
+    }
     app._resetLeagueCreateForTest();
+  }
+  {
+    // D1 Lane A (2026-10-08, S-2 G2a / DI-550): THE ENTRY, PRESSED THROUGH THE REAL DELEGATED `[data-action="create-league"]` DISPATCHER, with the door NOT open to everyone (scope "admins"). The target of each tap is
+    // derived from the markup the REAL renderer drew (a selector answers an element only if that markup carries it), so a button the renderer did not draw cannot be tapped and a drawn one is tapped as drawn.
+    // A: the SUPER admin -> the sheet opens on the NAME step.   B: the STALE button -> the viewer stopped being eligible after the card was drawn (no repaint yet): the tap is refused with the closed-door
+    // toast, the sheet does not open and no create_league is sent.   C: a non-super-admin is never drawn the entry, so there is nothing to press and nothing happens.
+    const ADMINS80 = GATE_ROWS.filter((r) => r.key !== 'league_creation_scope').concat([{ key: 'league_creation_scope', value: 'admins' }]);
+    const savedClick80 = (document._docListeners.click || []).slice();
+    const tapDrawn80 = (html) => ({ target: { closest: (sel) => {
+      const m = /^\[data-action="([a-z-]+)"\]$/.exec(sel);
+      return m && html.includes(`data-action="${m[1]}"`) ? { closest: () => null, disabled: false } : null;
+    } } });
+    const door80 = async (isSuper) => {
+      const h = await sheetHarness80({ extra: { _from: (table) => (table === 'platform_kv' ? { data: ADMINS80, error: null } : { data: [], error: null }) } });
+      document._docListeners.click = [];            // exactly ONE dispatcher is bound for this block (the harness bound one more; a toast per bound listener would hide a double-fire)
+      app._bindCreateLeagueDispatcherForTest();
+      auth._setPlatformAdminFlagsForTest(isSuper, isSuper);
+      const page = dashPage80(); app.renderLinkFlowScreen('dashboard');
+      return { h, page, html: page.innerHTML };
+    };
+    {
+      const { h, html } = await door80(true);
+      assert(auth.getCachedLeagueCreationScope() === 'admins' && auth.getCachedLeagueCreationOpen() === true && /id="link-create-league-btn" data-action="create-league"/.test(html),
+        '[80bb4] fixture: gate OPEN, scope "admins", the viewer is the SUPER admin -> the real claim screen draws the entry as a create-league action');
+      const toastsBefore = toasts80().length;
+      document.fireDocEvent('click', tapDrawn80(html));
+      const { wrap } = sheetEls80();
+      assert(!!wrap && stateNow80()?.step === 'name' && toasts80().length === toastsBefore && h.calls.filter((c) => c.name === 'create_league').length === 0,
+        '[80bb5] A: tapping the drawn entry as the super admin opens the New League sheet on the NAME step - no toast, and nothing is sent yet');
+      app._resetLeagueCreateForTest();
+      await waitExit80();
+    }
+    {
+      const { h, html } = await door80(true);
+      auth._setPlatformAdminFlagsForTest(false, false);   // the account stops being the super admin (a sign-out/in, a role change) - the card on screen is now stale
+      const before = toasts80().length;
+      document.fireDocEvent('click', tapDrawn80(html));
+      const t = toasts80().slice(before);
+      assert(!document.getElementById('league-create-sheet-wrap') && stateNow80() === null && h.calls.filter((c) => c.name === 'create_league').length === 0 && t.length === 1 && t[0].text === LC80.LC_COPY.landingClosed,
+        `[80bb6] B: a STALE entry (drawn for the super admin, tapped after the door closed to this viewer) is refused: the closed-door toast "${LC80.LC_COPY.landingClosed}" - exactly once - and NO sheet, NO create_league (got ${JSON.stringify(t)})`);
+      app._resetLeagueCreateForTest();
+    }
+    {
+      const { h, html } = await door80(false);
+      assert(auth.getCachedLeagueCreationOpen() === true && auth.getCachedLeagueCreationScope() === 'admins' && !/link-create-league-btn|data-action="create-league"|Create a league/.test(html) && html.includes('id="link-claim-card"'),
+        '[80bb7] fixture: gate OPEN, scope "admins", the viewer is NOT the super admin -> the real claim screen does not draw the entry at all (only the claim card)');
+      const before = toasts80().length;
+      document.fireDocEvent('click', tapDrawn80(html));
+      assert(!document.getElementById('league-create-sheet-wrap') && toasts80().length === before && h.calls.filter((c) => c.name === 'create_league').length === 0,
+        '[80bb8] C: pressing where the entry was NOT drawn does nothing: no sheet, no toast, no call');
+    }
+    document._docListeners.click = savedClick80;
+    auth._setPlatformAdminFlagsForTest(false, false);
+    app._resetLeagueCreateForTest();
+  }
+  {
+    // D1 Lane A (2026-10-08, S-2 G2c / DI-548 #10): `rejoin_limit` PRESSED THROUGH THE JOIN AND THE CLAIM-CODE BUTTONS. The server refuses the 4th new seat in 24 hours; each button must show the approved sentence in its own
+    // error line (never the raw code), leave the button usable, and must not navigate or welcome. The control (invalid_code) proves the mapping chooses by the refusal, not by pressing the button.
+    const REJOIN80 = LC80.LC_COPY.rejoinLimit;
+    const pressJoin80 = async (message) => {
+      const calls = await shippingFlags80({ link_member_by_email: () => ({ data: [], error: null }), join_league: () => ({ data: null, error: { message } }),
+        _from: (table) => (table === 'platform_kv' ? { data: GATE_ROWS, error: null } : { data: [], error: null }) });
+      await quiet80(() => auth.refreshMaintenanceBannerCache());
+      await app.attemptAutoLink();
+      app._resetClaimScreenModeForTest(); app._resetPendingInviteViewForTest();
+      localStorage.setItem(KEY80, JSON.stringify({ code: 'K7QX9M2P', exp: Date.now() + 600_000 }));
+      const page = dashPage80(); app.renderLinkFlowScreen('dashboard');
+      const btn = page.querySelector('#league-join-btn'), err = page.querySelector('#league-join-error');
+      page.querySelector('#league-join-code').value = 'K7QX 9M2P';
+      const toastsBefore = toasts80().length;
+      await quiet80(async () => { btn.click(); await flush80(); });
+      return { calls, btn, err, toasts: toasts80().slice(toastsBefore), html: page.innerHTML };
+    };
+    const pressClaim80 = async (message) => {
+      const calls = await shippingFlags80({ link_member_by_email: () => ({ data: [], error: null }), link_member: () => ({ data: null, error: { message } }),
+        _from: (table) => (table === 'platform_kv' ? { data: GATE_ROWS, error: null } : { data: [], error: null }) });
+      await quiet80(() => auth.refreshMaintenanceBannerCache());
+      await app.attemptAutoLink();
+      app._resetClaimScreenModeForTest(); app._resetPendingInviteViewForTest();
+      const page = dashPage80(); app.renderLinkFlowScreen('dashboard');
+      const btn = page.querySelector('#link-claim-btn'), err = page.querySelector('#link-claim-error');
+      page.querySelector('#link-claim-code').value = 'K7QX9M2P';
+      const toastsBefore = toasts80().length;
+      await quiet80(async () => { btn.click(); await flush80(); });
+      return { calls, btn, err, toasts: toasts80().slice(toastsBefore) };
+    };
+    {
+      const r = await pressJoin80('P0001: rejoin_limit');
+      const j = r.calls.filter((c) => c.name === 'join_league');
+      assert(j.length === 1 && j[0].params.p_code === 'K7QX9M2P' && r.err.textContent === REJOIN80 && r.err.style.display === 'block' && !/rejoin_limit/.test(r.err.textContent),
+        `[80bb9] the JOIN button against a server rejoin_limit: exactly one join_league, and the error line reads "${REJOIN80}" (never the raw code) (got ${JSON.stringify(r.err.textContent)})`);
+      assert(r.btn.disabled === false && r.btn.textContent === 'Join League' && r.toasts.length === 0 && localStorage.getItem(KEY80) !== null,
+        '[80bb10] …the button is usable again ("Join League"), no welcome toast and no navigation, and the pending invite is NOT consumed by a refused join');
+      const c = await pressJoin80('invalid_code');
+      assert(c.err.textContent !== REJOIN80 && /doesn't match an open league/.test(c.err.textContent), '[80bb11] control: a different refusal (invalid_code) shows ITS sentence, not the rejoin one');
+      localStorage.removeItem(KEY80);
+    }
+    {
+      const r = await pressClaim80('P0001: rejoin_limit');
+      const l = r.calls.filter((c) => c.name === 'link_member');
+      assert(l.length === 1 && l[0].params.p_code === 'K7QX9M2P' && r.err.textContent === REJOIN80 && r.err.style.display === 'block' && !/rejoin_limit/.test(r.err.textContent),
+        `[80bb12] the CLAIM-CODE button against a server rejoin_limit: exactly one link_member, and the error line reads "${REJOIN80}" (never the raw code) (got ${JSON.stringify(r.err.textContent)})`);
+      assert(r.btn.disabled === false && r.btn.textContent === 'Link My Account' && r.toasts.length === 0, '[80bb13] …the button is usable again ("Link My Account") and nothing was announced');
+      const c = await pressClaim80('invalid_code');
+      assert(c.err.textContent !== REJOIN80 && c.err.textContent.length > 0, '[80bb14] control: a different refusal (invalid_code) shows its own sentence on the claim button too', c.err.textContent);
+    }
+  }
+  {
+    // D1 Lane A (2026-10-08, S-2 G3 / P-2 / DI-550): THE FLAG-LANDING REPAINT, ARMED BY A REAL IDENTITY CHANGE. The super-admin flag is read AFTER first paint (refreshPlatformAdminFlags() inside the identity chokepoint), so
+    // the zero-league screen first draws the CLOSED look for an account that is in fact the super admin; once the flag lands the chokepoint must repaint that one screen so the New League card appears. The test does not call
+    // the repaint: it changes the signed-in account (auth._setAccountUserIdForTest -> the app's real identity chokepoint -> the real flag read, answered by the script's is_super_admin) and reads the page.
+    const ADMINS80g = GATE_ROWS.filter((r) => r.key !== 'league_creation_scope').concat([{ key: 'league_creation_scope', value: 'admins' }]);
+    // The order a signed-in boot really produces: the identity change CLEARS the gate cache and starts the flag read (still in flight); the gate read then lands (open, scope "admins"); only then does the flag
+    // land. The flag read is held open by the script, so the test controls exactly that order.
+    const landing80 = async (superAdmin) => {
+      let release; const held = new Promise((r) => { release = r; });
+      const calls = await shippingFlags80({ is_super_admin: () => held.then(() => ({ data: superAdmin, error: null })), is_platform_admin: () => held.then(() => ({ data: superAdmin, error: null })),
+        _from: (table) => (table === 'platform_kv' ? { data: ADMINS80g, error: null } : { data: [], error: null }) });
+      auth._setPlatformAdminFlagsForTest(false, false);   // the flag has NOT landed yet: first paint is the closed look
+      app.state.currentTab = 'dashboard';
+      app._resetAuthUIWiringForTest(); wireRealAuthUI();   // the app's REAL listener on auth events (the chokepoint's only way in)
+      return { calls, release, held };
+    };
+    {
+      const { calls, release } = await landing80(true);
+      await quiet80(async () => { auth._setAccountUserIdForTest('u-super-admin-1'); await flush80(4); });                     // the identity change: gate cleared, flag read now in flight
+      await quiet80(() => auth.refreshMaintenanceBannerCache());                                                              // the gate read lands: OPEN, scope "admins"
+      const page = dashPage80(); app.renderLeagueFlowScreen('dashboard');                                                      // what is on screen when the flag finally lands (flag still false)
+      const first = page.innerHTML;
+      assert(app.needsLeagueFlowScreen() === true && auth.getCachedLeagueCreationOpen() === true && auth.getCachedLeagueCreationScope() === 'admins' && auth.getIsSuperAdmin() === false
+        && !/data-action="create-league"/.test(first) && /id="league-create-open-btn"[^>]*disabled/.test(first),
+        '[80bb15] fixture: the zero-league screen, gate OPEN, scope "admins", the flag read still in flight: what is on screen is the closed look (a disabled control, no create-league action)');
+      await quiet80(async () => { release(); await flush80(20); });                                                            // the flag lands, true
+      const after = page.innerHTML;
+      assert(calls.some((c) => c.name === 'is_super_admin') && auth.getIsSuperAdmin() === true, '[80bb16] the identity change made the REAL flag read (is_super_admin) and it landed true');
+      assert(/id="league-create-open-btn" data-action="create-league"/.test(after) && !/id="league-create-open-btn"[^>]*disabled/.test(after),
+        '[80bb17] …and the chokepoint REPAINTED the zero-league screen when the flag landed: the New League card is now the enabled create-league entry (no navigation, no tap, no second identity change)');
+    }
+    {
+      const { calls, release } = await landing80(false);
+      await quiet80(async () => { auth._setAccountUserIdForTest('u-plain-member-1'); await flush80(4); });
+      await quiet80(() => auth.refreshMaintenanceBannerCache());
+      const page = dashPage80(); app.renderLeagueFlowScreen('dashboard');
+      await quiet80(async () => { release(); await flush80(20); });
+      const after = page.innerHTML;
+      assert(calls.some((c) => c.name === 'is_super_admin') && auth.getIsSuperAdmin() === false && !/data-action="create-league"/.test(after) && /id="league-create-open-btn"[^>]*disabled/.test(after),
+        '[80bb18] control: the same sequence for an account that is NOT the super admin leaves the closed look in place (the repaint is conditional on the flag landing true, not on the change)');
+    }
+    auth._setPlatformAdminFlagsForTest(false, false);
+    auth._setAccountUserIdForTest('');
   }
   {
     // CREATED, BUT THIS DEVICE COULD NOT LOAD IT (frame 13): the server said yes, the refresh does not show the row
@@ -17088,6 +17743,20 @@ console.log('\n[80] N1 league creation — the claim screen, the landing, the sh
       '[80bx4] R-F7: a read with push_alias_mode_live exactly true shows "marked live"');
     assert(!/data-alias-live="true"/.test(html({ maintenanceBanner: '', signupsOpen: true, pushAliasModeLive: 'true', loaded: true, error: null })),
       '[80bx5] R-F7: only the boolean true counts (the string "true" does not)');
+    // Review (2026-10-08): 0049's door interlock is satisfied by EITHER marker; after Part D (push_nonpilot_alias_only) the card must not keep saying "not marked live" over an open interlock.
+    const viaNonpilot = html({ maintenanceBanner: '', signupsOpen: true, leagueCreationOpen: false, pushAliasModeLive: false, pushNonpilotAliasOnly: true, loaded: true, error: null });
+    assert(/id="super-alias-status" data-alias-live="true">marked live</.test(viaNonpilot) && !/not marked live/.test(viaNonpilot),
+      '[80bx4b] review: with push_nonpilot_alias_only exactly true (and push_alias_mode_live false) the first precondition reads "marked live"');
+    assert(/data-alias-live="false">not marked live</.test(html({ maintenanceBanner: '', signupsOpen: true, pushAliasModeLive: false, pushNonpilotAliasOnly: false, loaded: true, error: null })) && !/data-alias-live="true"/.test(html({ maintenanceBanner: '', signupsOpen: true, pushNonpilotAliasOnly: 'true', loaded: true, error: null })),
+      '[80bx4c] review: neither marker (or the string "true") still reads "not marked live"');
+    {
+      await shippingFlags80({ _from: (table) => (table === 'platform_kv' ? { data: [{ key: 'push_nonpilot_alias_only', value: true }, { key: 'push_alias_mode_live', value: false }], error: null } : { data: [], error: null }) });
+      const kvRead = await auth.getPlatformKv();
+      await shippingFlags80({ _from: (table) => (table === 'platform_kv' ? { data: [{ key: 'push_nonpilot_alias_only', value: 'true' }], error: null } : { data: [], error: null }) });
+      const kvStr = await auth.getPlatformKv();
+      assert(kvRead.pushNonpilotAliasOnly === true && kvRead.pushAliasModeLive === false && kvStr.pushNonpilotAliasOnly === false,
+        '[80bx4d] review: the REAL platform_kv read carries pushNonpilotAliasOnly, true only when the row is exactly true');
+    }
     const open = html({ maintenanceBanner: '', signupsOpen: true, leagueCreationOpen: true, loaded: true, error: null });
     assert(/data-next-open="false"/.test(open) && open.includes('Close creation') && />Open</.test(open), '[80by] an open gate offers "Close creation"');
     assert(/id="super-creation-open-btn"[^>]*disabled/.test(html({ maintenanceBanner: '', error: 'x', loaded: false })), '[80bz] an unreadable platform read disables the toggle (never write a value that was never read)');

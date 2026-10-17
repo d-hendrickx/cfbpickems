@@ -1,0 +1,10 @@
+{
+  "id": "tbdtest",
+  "script": "tbdtest.mjs",
+  "summary": "strict",
+  "floor": 153,
+  "tags": [
+    "quick"
+  ],
+  "note": "TBD-time games and the kickoff-flag heal through the live refresh (counts toward the lock instant, DI-489). W-22/DI-543 (2026-10-08): REGISTERED - it crashed on the `...logoBackfill` spread in the merge it derives from app.js source (fixed); it had no manifest, so nothing ran it."
+}

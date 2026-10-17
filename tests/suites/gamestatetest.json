@@ -1,0 +1,14 @@
+{
+  "id": "gamestatetest",
+  "script": "gamestatetest.mjs",
+  "summary": "strict",
+  "floor": 58,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/game-state.js"
+  ],
+  "note": "D1 Lane B DI-570: the game-state model (phases, the exact 3:00 stale line, parity with the shipped live chip, freshness copy, decided language). Registered 2026-10-07."
+}

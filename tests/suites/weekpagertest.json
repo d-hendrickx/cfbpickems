@@ -1,0 +1,26 @@
+{
+  "id": "weekpagertest",
+  "script": "weekpagertest.mjs",
+  "label": "136",
+  "summary": "strict",
+  "floor": 115,
+  "tags": [
+    "browser",
+    "slow"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/sw-register.js",
+    "css/**",
+    "index.html",
+    "service-worker.js",
+    "manifest.json",
+    "config.json",
+    "icons/**",
+    "vendor/**",
+    "reveal/**",
+    "favicon.*"
+  ],
+  "expectedMs": 47300,
+  "note": "RAISED from 114 by W-22 (2026-10-08): 1-2b, the boot race — with the config answer held back 1.5 s the harness still ends on the Dashboard (it waits for the boot's own Home render); 111 -> 114 C-5/C-6 (B1), 108 -> 111 G-2b/G-3b, 104 -> 108 the [B] guards, 103 -> 104 C-4, 97 -> 103 W-22's app-fix guards, 96 -> 97 C-1b (history before 96: tests/suites/_archive.md)."
+}

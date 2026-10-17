@@ -4,8 +4,9 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.29.0';
-export const APP_VERSION_DATE = '2026-10-02';
+export const APP_VERSION = 'v0.30.0';
+// 2026-10-16 is the web deploy day (D-87, moved by Drew 2026-10-16, M-59: "Change to oct 16"); if the deploy lands on a different day, set this and WHATS_NEW_RELEASES[0].date to that day together (whatsnewtest pins them equal).
+export const APP_VERSION_DATE = '2026-10-16';
 
 /**
  * UN-124 + FEAT-3 / DI-200.0 (UN-200/UN-201, 2026-09-12) — release notes,
@@ -124,7 +125,52 @@ export const APP_VERSION_DATE = '2026-10-02';
 // were reworded to read as iPhone-app items. CAP NOTE: the list already held 15
 // releases before this entry (header rule 3 says 12); trimming is left to a
 // deliberate pass, not slipped into a release cut.
+// Release v0.30.0 (2026-10-16) — Deployment 1, "The Shared Sports Platform", copy approved by Drew 2026-10-14; the join-nudge and privacy lines were added and approved 2026-10-15 (D-91).
+// Lists only what a player or commissioner can SEE and USE right after the web deploy and the
+// migrations Drew pastes first (0043 to 0056, 0059; 0057 last). Each line was checked against the
+// merged code on int/v0.30.0, not the commit titles. The FIRST `added` item is SCRIBE's chat-post
+// headline (whatsNewHeadline()'s 90-character cut). NOT mentioned because they ship OFF or dormant:
+// the news collector and its publishers, the Home content cards (team facts, player previews,
+// storylines, spotlights; feedBuild is off and pilot-only), SCRIBE's final-hour call-out and scan
+// (both switches default off), the spread lookup from other sources (dormant until the odds key
+// exists; the Find spreads line says "not yet on", as v0.23.0 did for the server jobs), league
+// creation (closed; Drew flips it), and the push-address migration (waits for TestFlight build 4).
+// Commissioner-only SCRIBE surfaces (profile, lore, routing, budgets, learning approvals) are held
+// out of the player list on purpose, as in v0.25.0.
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.30.0',
+    date: '2026-10-16',
+    added: [
+      'Game Day is on Home: the live games, your week and your rank, on one card.',
+      'Tap a game or a Home card for its own screen: the live score and spread, picks once they\'re revealed, and the game\'s chat thread. Back takes you to where you were.',
+      'Who\'s in, on Picks and Dashboard, shows who has submitted their picks and never what they picked. The Locker Room posts a line as each person gets their picks in.',
+      'The weekly ranking and the alma mater tiebreaker now move on their own as scores come in, without anyone pressing Calculate.',
+      'Dashboard has a Sort button: Kickoff time, Live first or Custom, where you hold a game and drag it into place.',
+      'Tap the league name for the league overview: your sports, what is due and when, what is live, and Add a sport for commissioners.',
+      'NFL, for leagues that add it: commissioners add it from the league name, members join it from the same sheet, and each sport gets its own Picks, Dashboard and Standings, with sport pills in the Locker Room.',
+      'Standings: tap a player to compare picks and seasons head to head, or tap a week in Weekly History for its games and results.',
+      'Share to chat: from a Home card, a game, a week or a comparison, send it to the Locker Room as one message, with a comment if you like.',
+      'Chat times now sit under each message, and the Home button in the centre of the bar carries the full Munera mark.',
+      'An amber notice appears when a sport\'s live scores stall. Players are told scores are delayed and picks still lock as normal; commissioners see the cause.',
+      'Commissioners: adding a game to a full slate asks whether to add it as an extra game or swap it for one already on the slate, and Comm → Games is now one list with Remove on each game\'s row.',
+      'Commissioners: swipe down to close the Week Wizard, swipe sideways to move between its steps, and swipe sideways to change Comm tabs.',
+      'Commissioners: Find spreads (Comm → Games) re-checks ESPN for any slate game still missing a spread. Checking other sources too is not yet on.',
+      'In a league with more than one sport, Home shows how the sports you\'re not in are going, with a Join button when you want in.',
+      'The privacy policy has been updated to cover how SCRIBE looks up football questions and where News headlines come from. You\'ll find it at the bottom of the menu.',
+    ],
+    fixed: [
+      'Picks now lock at the stated time everywhere: the Open and Locked badge, the countdown and the Picks page flip together, and a late edit is turned away.',
+      'Home puts the newest card first, its summary now covers every live game, and SCRIBE posts on Home say what they are about. Casual banter stays in Chat.',
+      'Team logos show in Game Day and no longer blank out when scores refresh.',
+      'Players can mark a payment paid, confirm it or deny it, and it saves. A denial\'s reason shows under Unpaid.',
+      'Commissioners: Finalize Week now walks through approving scores, confirming the tiebreaker and the longest field goal before it finalizes, and no longer trips the red "Cross-device sync is OFF" error.',
+      'Ask SCRIBE about a game on the slate and it now knows the teams, the score and whether the game is live.',
+      'SCRIBE\'s call-out before picks lock no longer depends on push notifications: it posts to the Locker Room once a week and leaves out anyone who has already submitted.',
+      'After you switch leagues, the notifications row in the menu shows the new league\'s setting right away.',
+      'Request a Game: Find games now shows the games it finds, and swiping the Saturday chips no longer fights the swipe that opens the menu.',
+    ],
+  },
   {
     version: 'v0.29.0',
     date: '2026-10-02',
@@ -516,8 +562,10 @@ import {
   // §[11] asserts they agree), so the card cannot offer a model the server
   // would refuse to price.
   SCRIBE_MODEL_CHOICES,
-  getAlmaMaters, DEFAULT_RULES, DATA_QUALITY, DATA_SOURCE_MODE,
-  createPlayer, createGame, createPick, createWeek, formatWeekLabel, formatWeekLabelParts,
+  // D1 Lane C (DI-633) — the catalog (the one table that knows a model's id, label and price) and the legacy-id -> tier map, so a stored `claude-opus-5` still reads as Opus.
+  SCRIBE_MODEL_CATALOG, tierForModelId,
+  getAlmaMaters, DEFAULT_RULES, applyRulesLegacyReplacements, DATA_QUALITY, DATA_SOURCE_MODE,
+  createPlayer, createGame, createPick, createWeek, tiebreakerQuestionFor, formatWeekLabel, formatWeekLabelParts,
   formatGameTime, formatVenueDisplay, formatSpread, getPlayerInitials,
   sourceModeLabelOf, ALMA_MATER_DISPLAY, getAlmaMaterMatch, ownGet,
   formatTeamName, getTeamDisplay, gameDataReadiness,
@@ -526,7 +574,7 @@ import {
   HISTORICAL_DEMO_WEEK, HISTORICAL_DEMO_GAMES, REAL_WEEK_1_2026,
   SITE_PIN,
   getAutoLockOffsetMinutes, getAutoLiveEnabled, getAutoFinalizeEnabled,
-  obligationRole, obligationNextStatus, obligationStatusDisplay, isObligationActive,
+  obligationRole, obligationNextStatus, obligationStatusDisplay, isObligationActive, normalizeDeniedReason, DENIED_REASON_MAX,
   getEffectiveGroupId, weeksInGroup, getGroupTiebreakerWeek,
   isGroupTiebreakerAmbiguous, formatWeekGroupLabel,
   // DI-417 (UN-372, 2026-09-28) — the header league pill's sport label/short
@@ -552,6 +600,8 @@ import {
   // other league value. Returns null for "we do not know", which is a different
   // answer from "nobody has submitted" and must never be rendered as one.
   getWeekProgress,
+  // UN-412 / DI-502e (2026-10-01) — re-asks the SAME RPC between hydrates ("Who's in" freshness). Through the seam, never the adapter.
+  refreshWeekProgress,
   getWeeklyResults, saveAllWeeklyResults,
   getObligations, getActiveObligations, saveObligation, saveAllObligations, createObligation,
   getNickname, setNickname, getDisplayNamePlain,
@@ -567,6 +617,8 @@ import {
   countPicksForGame, deletePicksForGame,
   saveFetchProof, getFetchProof,
   getTimezone, setTimezone,
+  // D1 DI-531 — the Join action's write (insert-only; the adapter's route decides who may write which row).
+  addCompetitionMember, removeCompetitionMember, getCompetitionMembers,
   getTheme, setTheme,
   // DI-360 (2026-09-27) — Munera night mode's per-player System/Light/Dark
   // preference, same seam pattern as getTheme/setTheme just above.
@@ -624,6 +676,7 @@ import {
   // value already in storage from before this https-only/length constraint
   // existed, per data-provider.js's own comment on this function).
   logoOk, darkLogoUrl,
+  espnKeyForSport,   // D1 (DI-557): a competition's sport to the ESPN bucket its games are polled under
 } from './data-provider.js';
 
 import {
@@ -632,6 +685,10 @@ import {
   calculateAtsWinner, calculateAlmaMaterTotal,
   computeEffectiveLockAt, computeEffectiveLiveAt, computeFirstKickoff, computeLastKickoff,
 } from './scoring.js';
+// D1 (2026-10-07) — FB-001 / DI-509: the ONE answer to "is this week open for editing right now" (badge, countdown, timing line, submit, Edit My Picks, Manage line) and
+// FB-002 / DI-515/516: the alma-mater tiebreaker computed live from the scores already on screen. Two pure leaf modules; scoring.js is not edited.
+import { weekLockState, weekBadgePhase, LOCK_PHASE } from './week-lock.js';
+import { liveTiebreakerTotal, effectiveTiebreakerActual } from './live-tiebreak.js';
 
 // ── js/backend.js IS DOWN TO FOUR IMPORTS (2026-09-23) ──────────────────────
 // It used to give this file eighteen: the Sheets config pair, the mirror prime,
@@ -752,7 +809,7 @@ import {
   // renderDashboard() was its only consumer in this file and the function
   // itself is deleted.
   initChatUI, renderChatPage, gameChatBubbleHTML,
-  updateChatBadges, openGameChatSheet, setChatChannel,
+  updateChatBadges, openGameChatSheet, setChatChannel, showChatMessage, ensureChatTargetVisible,
   emitPicksLockedEvent, emitGameFinalEvent, emitExtraPointEvent, emitWeekFinalEvent,
   emitPickRevealEvent, emitKickoffEvent, scribeLiveGameCheck,
   resumeChatAfterLogin,
@@ -781,8 +838,13 @@ import {
   // F5 (3c fix window, third pass) — the identity-change sweep's state reset
   // for the game-thread sheet it removes.
   resetGameChatSheetForTeardown,
+  // D1 Lane B / DI-588 — the Back chip: the hooks app.js registers (it owns the pushed screens) and the programmatic Locker Room view.
+  registerChatReturnHooks, showChatFilter,
+  registerShareResolver, postShareToChat, findShareDuplicate,   // D1 Lane B (DI-597): Share to chat
 } from './chat-ui.js';
-import { setPollMode, sendEvent as sendChatEvent, sendMessage as sendChatMessage, sendGameReact, getMessage as getChatMessage, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats, unreadCount, mentionUnreadCount, isChatImagePreviewEnabled, wakeChat, clearOutbox, forceRefresh, rescopeChat, getMessages, isPrivateRow, chatBoundToLeague } from './chat.js';
+import { validShareRef, SHARE_COPY } from './chat-share.js';   // D1 Lane B (DI-597): the reference's one gate and the sheet's words (a pure leaf)
+// UN-412 / DI-506c — `onChat` + `getMessages as getChatMessages` (last two names) serve the "Who's in" arrival hook: a subscriber that READS the folded room and writes nothing.
+import { setPollMode, sendEvent as sendChatEvent, sendMessage as sendChatMessage, sendGameReact, getMessage as getChatMessage, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats, unreadCount, mentionUnreadCount, isChatImagePreviewEnabled, wakeChat, clearOutbox, forceRefresh, rescopeChat, getMessages, isPrivateRow, chatBoundToLeague, chatLoadedFromTs, onChat, getMessages as getChatMessages } from './chat.js';
 // RG-176 — the ONE generic answer to the repaint hazard RG-174 fixed in one
 // place. Wired at navigateTo() below, which is the single render chokepoint
 // every Supabase Realtime repaint lands on. See js/field-preserve.js.
@@ -804,6 +866,14 @@ import { isScribeInteractiveEnabled, isScribeWebSearchEnabled, isScribeLearnings
 // is how the server's proposal and the client's application come to disagree
 // about what a step is.
 import { parsePacingNudge, stepAutonomousCooldown } from './scribe-trainer-rules.js';
+// D1 Lane C (DI-633) — the pure routing helpers: the cost ratio is computed from the catalog, never typed. The Admin routing card (DI-634) lives in js/scribe-routes-card.js.
+import { tierCostRatio } from './scribe-routing.js';
+import {
+  renderScribeRoutesBody, renderRouteSheetBody, draftForClass, nextRoutesValue, savedToast as scribeRouteSavedToast, ROUTES_COPY, ROUTE_ROWS,
+} from './scribe-routes-card.js';
+import {
+  renderContentStatusBody, renderStatusSheetBody, normalizeContentStatus, spendByClassFromStatus, STATUS_COPY,
+} from './content-status-card.js';
 // Build 3, Group D pass 2 (2026-09-11) — the approved copy tables (FREQUENCY_*
 // / MEMORY_COPY, from SCRIBE_COPY_GROUP_D_091126.md) and the ONE impure
 // week-signal wrapper pass 1 built for these two call sites. Imported rather
@@ -833,7 +903,39 @@ import {
   TIE_COPY, TIE_STAGES, buildWeekTieContext, buildGroupTieContexts, validTieBreak, tieDecidedBy, tieCaption, tieNoteLines, tieRecapPhrase,
   composeFinalizeTieNotice,
 } from './tie-context.js';
-import { profileForWeek } from './competition.js';
+// FB-027 / DI-518 — getCompetitions too: the wizard's Finalize button names the sport in a multi-sport league ("Finalize NFL Week 6").
+import { profileForWeek, competitionForWeek, getDefaultCompetition as getLeagueDefaultCompetition, getCompetitions as getLeagueCompetitions, getAllCurrentWeeks, getCurrentWeekFor, saveCompetition as saveLeagueCompetition, getWeeksForCompetition, getLiveSports } from './competition.js';
+// D1 (v0.30.0, Lane A: DI-532…536) - the commissioner's multisport operations. multisport-admin.js is PURE (copy, the deterministic competition id, which sports can be
+// added, the archive rule, the all-sports rows, a sport's entries, the wizard helpers); sport-seam.js is the seam to the client branch's participation + pointer API
+// (who is in a sport, the sport pointer) with a single-sport fallback until that branch merges. Both are LEAF modules: neither imports this file.
+import {
+  MS_COPY, archiveSportSheetHTML, addSportOptions, newCompetitionRow, archiveBlocker, nextActionFor, allSportsRows, nextDeadlinesLine, sportEntriesModel,
+  nextWeekNumberFor, slateSizeFor, tiebreakerGameOptions, tiebreakerFieldsFor, suggestSlateFor, addSportAction, archiveSportAction, inCountOf, inCountText, addSportRowSubtitle,
+} from './multisport-admin.js';
+// D1 (W-68 / W-69, 2026-10-14) - ONE games list on Comm -> Games, and the add-or-swap rule on a full slate. games-list.js (the join, the rows, the markup) and slate-add.js (the rule, the sheets'
+// copy, add / swap / remove over injected deps) are PURE leaf modules: no storage, no DOM, neither imports this file. keyed-list.js reconciles a list by key so an add or a remove patches ONE row.
+import { slateMatchFor, poolGameToSlateData, buildGameRows, segmentCounts, rowsForSegment, summaryText, GAMES_COPY, gameRowHTML, segmentsHTML, controlsHTML, groupShellHTML, groupCountText, groupSig, hashSig, sigOfHtml, countLineText, listStateOf, suggestionNotes } from './games-list.js';
+import { SLATE_COPY, slateAddDecision, slateTargetOf, planBulkAdd, choiceSheetHTML, removeSheetHTML, moreSheetItems, moreSheetHTML, clearSlateSheetHTML, swapPickerBodyHTML, swapPickerFooterHTML, addGameToSlate, swapSlateGame, removeGameFromSlate, removedToastText } from './slate-add.js';
+import { patchKeyedRows } from './keyed-list.js';
+import {
+  isMultiSportLeague, entrantsForWeek, getLensSport, setLensSport, resetLensSport, lensCompetition, lensWeek, liveCompetitions as liveLeagueCompetitions, lensIsSeparate,
+  entriesSupported, entryRows, addEntry as sportSeamAddEntry, removeEntry as sportSeamRemoveEntry,
+} from './sport-seam.js';
+// D1 (DI-536 / DI-512): which sports' cards the Rules page shows, and the words of the NFL card (pure).
+import { rulesSports, nflRulesItems, NFL_RULES_HEADING, RULES_COLLEGE_NOTE } from './sport-rules.js';
+// D1 (v0.30.0, thread 100726-D1, Lane A) — the multisport client: the sport context and who-plays-a-sport (js/competition.js), then four pure leaf modules (the card status, the overview markup, the
+// switcher and the combined slate). Each is a leaf: no storage, no DOM, no pick reader; every effect is in this file.
+import {
+  isMultiSport, playersForCompetition, playersForWeek, picksOfRoster, viewerMemberId, viewerPlaysCompetition, playedSports, leagueSports, competitionForSport,
+  getActiveSportKey, setActiveSportKey, getContextCompetition, getContextWeek, getContextWeeks, getDashboardScope, setDashboardScope, clearSportContextExcept,
+  DASHBOARD_ALL,
+} from './competition.js';
+import { formatTimeLeft, formatGameWindow, deriveSportCardStatus, sportCardView, joinCardView, sportsNeedingPicks, glanceChips } from './sport-status.js';
+import { leagueOverviewHeaderHTML, leagueOverviewBodyHTML, leaguePageSportsHTML } from './league-overview.js';
+import { sportSwitcherHTML, nextSegmentIndex, segmentValues } from './sport-switcher.js';
+// D1 (DI-557, 2026-10-14) - the stall banner's pure half (which rows, in whose words, and the markup): a leaf with no storage, no DOM, no clock. The in-page paint and the poll-health record are below, beside the sibling notices.
+import { STALL_PAGES, createPollHealth, notePoll, clearPollHealth, stallRows, stallRowsKey, sportStallBannerHTML } from './sport-stall.js';
+import { allSportsModel, effectiveSortMode, thisWeekHeader, ALL_SPORTS_NOTE } from './all-sports.js';
 
 // ── Groups A/B — in-app + push notifications (UN-139…UN-148, 2026-09-10) ─────
 //
@@ -849,7 +951,7 @@ import { profileForWeek } from './competition.js';
 // nothing renders the stored records or the folded server log. The stored data
 // is left exactly where it is (no migration, destructive or otherwise).
 import {
-  wireChatNotifications, destinationFor,
+  wireChatNotifications, destinationFor, setMemberRoleSource,
   LIFECYCLE_EVENTS, CATEGORY_OF_EVENT,
   // `OneSignalRelayAdapter` was imported beside this until 2026-09-23. It is
   // deleted: its send() was the client -> Apps Script -> OneSignal hop, and
@@ -910,7 +1012,18 @@ import { getShellBrandName, getShellWordmark, getShellTagline } from './brand.js
 // icon-family modules this pass wires in. Group A1/A2/D/E's own file
 // headers each state ZERO top-level side effects — safe imports.
 import { icon } from './icons.js';
+// D1 Lane C (FB-006 / UN-468 / PF-468) — the SCRIBE profile pane: pure markup, the one Edge Function call, the shared text rules, the written-standards digest.
+import * as SPV from './scribe-profile-view.js';
+import { callScribeProfile, describeProfileError, newRequestId } from './scribe-profile-client.js';
+import { INSTRUCTION_CATEGORIES, TEXT_MAX, KEY_MAX, RULE_CAP, RULE_CAP_MESSAGE, validateInstruction, validateFact, validateLore, isLearningLive, LIVE_CONFIDENCE_FLOOR, HOLD_BADGE_LABEL, HOLD_BADGE_REASON, HOLD_CONFIRM } from './scribe-profile-rules.js';
+import { SCRIBE_STANDARDS } from './scribe-standards.js';
 import { haptic } from './haptics.js';
+// UN-412 (2026-10-01) — "Who's in": the pure model / copy / markup / throttle for the pick-status strip. Zero imports of storage or the DOM;
+// every reader is handed in by the glue block next to submissionStateFor() below.
+import {
+  pickStatusFor, renderPickStatusHTML, patchPickStatus, createPickStatusRefresher, newPicksInArrival,
+  PICK_STATUS_TICK_MIN_AGE_MS, PICK_STATUS_ENTER_FRESH_MS,
+} from './pick-status.js';
 // SB-08 (2026-09-30) — the status-bar glyph tracker. Zero imports, zero
 // top-level side effects; it installs only from syncNativeStatusBar(),
 // behind isNativeShell(), so a web boot never touches it.
@@ -918,13 +1031,16 @@ import { installStatusBarTracker, syncStatusBar } from './status-bar.js';
 import {
   bindScrollDirection, bindKeyboardAvoid, bindPullToRefresh, bindWeekSwipe, chronologicalWeekIds,
   bindBottomBounce, gesturesSuspended, prefersReducedMotion, bindSwipeToDismiss,
-  bindBottomPullToRefresh, claimTouch, releaseTouch, deferRenderWhileWeekSwiping,
+  bindBottomPullToRefresh, claimTouch, releaseTouch, deferRenderWhileWeekSwiping, deferInPlaceRepaint, pauseNavHide,
+  isPagerYieldTarget,
 } from './nav-gestures.js';
 // SP-57 (2026-10-01) — the long-press section drag engine: a leaf module (imports nav-gestures.js, haptics.js and
 // icons.js only, never this file); every app-side effect is a callback passed to attachSectionDrag().
 import {
   attachSectionDrag, detachSectionDrag, requestDone, requestReset, cancelSectionDrag,
   announceLayout, focusLayoutTarget, movedAnnouncement,
+  // D1 Lane B / DI-581: the edge measurement helpers the Custom arrange's auto-scroll shares with the section drag, and the focus rule after an arrow move.
+  autoScrollEdges, visibleHeaderBottom, safeTopOf, moveButtonStates, chooseFocusDirection,
   // SB-23 N1/N6 — the house iOS 15 scroll rule (options form, numeric fallback, never throws), reused for the week swipe and arrows.
   scrollWindow,
 } from './section-drag.js';
@@ -948,24 +1064,33 @@ import {
 } from './leagues-home.js';
 import {
   createWeekWizard, WIZARD_STEPS, WIZARD_STEP_COUNT, WIZARD_COPY, countMissingSpreads,
-  narrowedWeekStatusButtons, dueForScheduledOpen, OPEN_MODES, FINALIZE_STEPS, FINALIZE_STEP_COUNT, blurbCheck, blurbGate, blurbErrorCopy, // DI-404 (UN-388): the mandatory weekly blurb — kept on this line so no pinned line number below it moves
+  narrowedWeekStatusButtons, dueForScheduledOpen, OPEN_MODES, FINALIZE_STEPS, blurbCheck, blurbGate, blurbErrorCopy, // DI-404 (UN-388): the mandatory weekly blurb — kept on this line so no pinned line number below it moves
   // DI-416 (UN-371) — Step 6's "another week already open" notice predicate.
   anotherWeekAlreadyOpen,
+  // FB-027 / DI-518 / DI-519 (bug batch W) — the guided Finalize flow's entry, visible steps and review card (pure, no deps).
+  FINALIZE_COPY, finalizeEntry, finalizeStepsFor, finalizeNextStep, finalizePrevStep, finalizeNormalizeStep, finalizeStepPosition,
+  finalizeScoresCountLabel, tiebreakerRequirement, tiebreakerSourceChip, finalizeReview, liveWeekBehindDraft, liveWeekRowCopy,
+  finalizePressAction, finalizeOutcomeView, finalizeEntryState,
   // DI-359 — the two Finalize-flow summary functions NOT wrapped in
   // createWeekWizard()'s deps-bound instance (they take no deps at all —
   // pure reads over `games`/`week`), so they're imported directly.
   finalizeApproveScoresSummary, tiebreakerConfirmSummary,
+  // PF-1 / Amendment 1 (A1.1) — "Re-open Picks" on a lapsed week asks for a new lock time; these are the sheet's pure decisions (js/week-wizard.js).
+  LATE_ENTRY_COPY, lateEntryApplies, lateEntryLastKickoffMs, lateEntryDefaultMs, validateLateEntryAt, lateEntryErrorCopy,
+  lateEntryFirstKickoffMs, lateEntryStartedWarning, lateEntryLockWriteLanded,
 } from './week-wizard.js';
 import {
   getIsPlatformAdmin, getIsSuperAdmin, refreshPlatformAdminFlags,
   superSetLeagueStatus, superSetPlatformKv, getPlatformKv, listAllLeagues,
+  // D1 Lane C (DI-634 / DI-637) — the routing rows for the Admin routing card, and the operator's content and AI status read.
+  getScribeRoutingKv, getContentStatus,
   listUsersAcrossLeagues, adminSetMemberRole, adminSetPlatformAdmin,
   getLeagueJoinCode, rotateJoinCode,
   getCachedMaintenanceBanner, refreshMaintenanceBannerCache, setCachedMaintenanceBannerLocally,
   clearMaintenanceBannerCacheOnIdentityChange,
   getCachedSignupsOpen,
   // N1 (DI-430/433, 2026-09-30) — the release gate's cache (DEFAULT FALSE, the opposite of signups) and the sports the picker may offer.
-  getCachedLeagueCreationOpen, getCachedOfferedSports,
+  getCachedLeagueCreationOpen, getCachedLeagueCreationScope, getCachedOfferedSports,
   // SECURITY GATE NOTE A (2026-09-25) — wired as the boot-tail call's own
   // guard, below (applyAuthModeDecision()). Was exported and never read.
   hasAttemptedMaintenanceBannerFetch,
@@ -974,7 +1099,16 @@ import {
 // render modules (js/roles.js/js/admin-panel.js's own header: NO DOM, NO
 // NETWORK) — safe to import from app.js, the DOM-side wiring layer.
 import { renderAdminPanel } from './admin-panel.js';
-import { renderCommTabBar } from './comm-panel-layout.js';
+import { renderCommTabBar, COMM_TABS } from './comm-panel-layout.js';
+// W-70 (2026-10-14) - the pure half of native navigation in the week wizard (swipe-down with a discard ask, the step pager's table); see js/wizard-nav.js.
+import {
+  WIZ_NAV_COPY, snapshotWizardControls, wizardControlsDirty, canStartWizardSheetDrag,
+  wizardCreateStepPlan, wizardCanAdvance, wizardStepButtonId,
+} from './wizard-nav.js';
+// W-71 (2026-10-14) - "Find spreads": the pure half (what is missing, the sign, the label, the cards), the wiring (state, painting, the three taps) and the browser's one call into odds-lookup.
+import * as SF from './spread-fallback.js';
+import { createSpreadFindUI } from './spread-find-ui.js';
+import { callOddsLookup } from './odds-lookup-client.js';
 // `isLeaguePaused` carries NO allow-list fence (DI-317 §2b.11/DI-344's own
 // extension is specific to `isPlatformAdmin`/`isSuperAdmin` — REV F19's
 // "read-and-support role, never a write bypass" concern; league-paused is
@@ -987,9 +1121,28 @@ import { isLeaguePaused, isPilotLeague, PAUSED_LEAGUE_BANNER_TEXT } from './role
 import * as LC from './league-create.js';
 // UN-389 / DI-446 (2026-09-30) — the Delete Account sheet's pure half (copy, state, row kinds, renderers); this file is its DOM/network wiring. Imports league-create.js's shared action-sheet builder.
 import * as AX from './account-exit.js'; import * as LS from './league-settings.js'; import * as LSV from './league-settings-view.js'; import { waiveControlsHTML } from './league-settings-view.js'; // SP-53 (2026-10-01): League Settings — the pure text half, then the rendered half (kept on this line so no pinned line number below it moves)
-import { listProfiles } from './sports/index.js';
+import { listProfiles, getProfile } from './sports/index.js';
 // Social Platform Home (v0.29.0, DI-366/370/372, HOME_WIRING_CHECKLIST_100126): the Home renderer and its chat-candidate source. Built lazily by getHomeWiring() below, never at module scope.
-import { createHome, makeChatCandidateSource } from './home.js';
+import { createHome, makeChatCandidateSource, shortWhen } from './home.js';
+// D1 Lane B (2026-10-07, DI-570 / DI-579): the one game-state vocabulary (stale / awaiting / no-score are honest words, not silence) and the viewer's game ORDER (Kickoff · Live first · My order).
+// Both are pure leaf modules; the preference's seam is storage.js (the player record, never the league-shared settings).
+import { gameStateOf } from './game-state.js';
+import { orderGames } from './game-order.js';
+// D1 Lane B (DI-571 / DI-575): the pushed-screen shell (a leaf; every app effect arrives as a callback — configured lazily below) that Home's card detail opens in.
+import { configurePushedScreens, pushScreen, popScreen, closeAllScreens, invalidateScreens, isScreenOpen, stackSnapshot } from './pushed-screen.js';
+// D1 Lane B (DI-594 / 595 / 596, history): the member comparison and the week detail - two pure leaf modules (markup and models); every read and every effect is in this file.
+import { buildComparison, comparisonHTML, unavailableComparisonHTML, rivalChoices, rivalPickerBodyHTML, COMPARE_COPY, parseCompareShareId } from './compare.js';
+import { buildWeekDetail, weekDetailHTML, unavailableWeekDetailHTML } from './week-detail.js';
+import { crossFadeBody } from './gameday-dom.js';   // D1 Lane B Game Day fix round 2 (DI-591): the Game view's prev / next cross-fade (a leaf)
+import { getGameOrderMode, getManualGameOrder, setGameOrderMode, setManualGameOrder, clearManualGameOrder } from './storage.js';
+// D1 Lane B (2026-10-08, DI-591 / DI-611 / DI-612, Drew D-63/D-64): the chip-helper module (the GATE `pickVisibilityFor` and the Dashboard's member chips, extracted verbatim), the ONE By person / By team renderer, and
+// the member's Show picks choice. Both modules are leaves; their app-owned helpers are injected once, by ensurePickModules() below.
+import { configurePickGate, gamePickChipsHTML, livePickStatus as livePickStatusOf } from './pick-chips.js';
+import { configurePickGroups, picksRowHTML } from './pick-groups.js';
+// D1 Lane B (DI-607 / DI-581): the Dashboard's Sort button and sheet (words + markup + the pure move) and the hold-and-drag Custom arrange.
+import { SORT_COPY, MODE_LABEL, SORT_MODES, effectiveMode, moveId, arrangeAnnouncement, finalMovedAnnouncement, finalMovedManyAnnouncement, listControlHTML, sortSheetBodyHTML, sortSheetHeaderHTML, arrangeRowControlsHTML } from './game-sort.js'
+import { attachGameArrange } from './game-arrange.js';;
+import { getPicksView, setPicksView } from './storage.js';
 // N1 (DI-432 §7, 2026-09-30) — the pilot-only registry: what belongs to the pilot league alone (the 2025 record, the Permanent Record, the six founders' schools, the IRB
 // wording) is gated by ONE predicate, `isPilotOnlyAllowed(key)`, which delegates to roles.js's isPilotLeague(). pilotonlytest.mjs is the source tripwire over every site.
 import { isPilotOnlyAllowed, setPilotOnlyLeagueResolver } from './pilot-only.js';
@@ -998,6 +1151,12 @@ import { isPilotOnlyAllowed, setPilotOnlyLeagueResolver } from './pilot-only.js'
 // so it costs an import nothing. A local-only (PIN-era) device has no league concept and IS the founding league's own device, so it answers as the pilot; a Supabase device with no
 // resolved active league answers NO (fail closed) until memberships load, so no gated site can paint another league's content first.
 setPilotOnlyLeagueResolver(() => (getAuthMode() === 'supabase' ? activeLeagueRow() : { pilot: true }));
+// D1 Lane C (DI-672 / DI-673, 2026-10-08): the news SERVER path's injected client, the "Also from" sheet's opener and the sheet's body (built in newsCard.js, C10).
+import { installNewsTransport, fetchContentDetail, fetchLeagueInsight } from './newsTransport.js';
+// D1 Lane C (DI-669 / DI-665 / DI-666): the Home content cards' detail, share text and "Talk about it" line (built in content-card.js from the PUBLIC payload only).
+import { contentDetailHTML, contentDetailUnavailableHTML, contentDetailActions, talkLine, spotlightShareText, CONTENT_KIND_META, insightSectionHTML } from './content-card.js';
+import { registerHomeNewsOpeners, registerHomeNewsWeeks } from './newsFeed.js';
+import { renderAlsoFromSheet, bindAlsoFromSheetEvents, openNewsArticle } from './newsCard.js';
 
 // DI-208c step 1 (PASS 1b) — the native-shell body class, applied as early as
 // this module can reach `document.body` without touching index.html's inline
@@ -1016,13 +1175,42 @@ if (typeof document !== 'undefined' && document.body && isNativeShell()) {
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
 
+// ═══ D1 (v0.30.0) DI-527 — STATE ISOLATION: switching sports never loses or mixes a draft, a viewed week or a scroll position ═══════════════════════════════════════════════════
+// `state.draftPicks / draftTiebreaker / draftExtraPoint / editingPicks / viewingWeekId` keep their names and their meaning for every caller (there are ~60 reads and writes of them and the
+// persisttest / drafttest / weeklocktest contracts hang off those names), but each is now an ACCESSOR over a per-week (drafts) or per-sport (viewed week) bucket:
+//   - a draft belongs to the WEEK the Picks page is showing, so a half-filled CFB slate and a half-filled NFL slate coexist, and a tiebreaker guess typed for one can never become the other's;
+//   - `clearPickDraft()` still clears EVERY bucket (it is the identity-change invariant persisttest [7] pins); `clearPickDraft({ weekId })` clears one — a submit clears only its own week;
+//   - `editingPicks` is per week and, exactly as before, is NOT cleared by clearPickDraft();
+//   - the week being viewed is remembered per sport, so NFL Week 4 survives a trip to CFB and back.
+// With ONE sport the bucket key is the current week's id (or '_none') and the viewed-week key is constant, so the accessors are indistinguishable from the plain fields they replace.
+const _draftBuckets = Object.create(null);   // { [weekId]: { picks, tiebreaker, extraPoint } }
+const _editingByWeek = Object.create(null);  // { [weekId]: boolean }
+const _viewingBySport = Object.create(null); // { [sportKey]: weekId | null }
+function _draftKey() {
+  let w = null;
+  try { w = getContextWeek(); } catch { w = null; }
+  return (w && w.weekId) ? String(w.weekId) : '_none';
+}
+function _draftBucket(key = _draftKey()) {
+  return _draftBuckets[key] || (_draftBuckets[key] = { picks: {}, tiebreaker: null, extraPoint: null });
+}
+function _viewingKey() {
+  try { return isMultiSport() ? getActiveSportKey() : '_one'; } catch { return '_one'; }
+}
+/** The sport-aware tabs (Drew D-54: "the sport switcher belongs inside the sport-aware destinations"): the Standings tab's id is 'leaderboard'. Home, Chat and the rest are league-wide. */
+const SPORT_TABS = Object.freeze(['picks', 'dashboard', 'leaderboard']);
+
 export const state = {
   // v0.29.0 (Social Platform, DI-370 / UN-320): HOME is where the app lands. This initializer is the real default-landing mechanism in supabase mode (the first paint is
   // _repaintForSupabaseData()'s navigateTo(state.currentTab || ...)); bootDefaultTab() only governs the local/error boot paths. It ships ONLY with the Home nav button
   // and #page-home being `.active` in index.html (homenavtest T3 fails if either half lands alone).
   currentTab: 'home',
-  draftPicks: {}, draftTiebreaker: null,
-  editingPicks: false, // true while a logged-in player is updating their already-submitted picks
+  get draftPicks() { return _draftBucket().picks; },
+  set draftPicks(v) { _draftBucket().picks = v && typeof v === 'object' ? v : {}; },
+  get draftTiebreaker() { return _draftBucket().tiebreaker; },
+  set draftTiebreaker(v) { _draftBucket().tiebreaker = v === undefined ? null : v; },
+  get editingPicks() { return _editingByWeek[_draftKey()] === true; },   // true while a logged-in player is updating their already-submitted picks (per week)
+  set editingPicks(v) { _editingByWeek[_draftKey()] = !!v; },
   // DI-426 (UN-381, 2026-09-28) — UNIFIES the former state.dashboardWeekId
   // (v0.16.0) and state.picksWeekId (v0.16.0) into ONE shared field: a week
   // swiped/arrowed/selected into on EITHER tab is what the OTHER tab shows
@@ -1033,14 +1221,25 @@ export const state = {
   // large never is): resets to `null` on every boot, deliberately NOT
   // persisted (DI-426's own "recommend NOT persisting" call — a returning
   // player almost always wants the CURRENT week, not a stale swiped-to one).
-  viewingWeekId: null,
-  draftExtraPoint: null,  // v0.16.0 — Ischemic Extra Point guess (longest FG, yards)
+  get viewingWeekId() { const v = _viewingBySport[_viewingKey()]; return v === undefined ? null : v; },
+  set viewingWeekId(v) { _viewingBySport[_viewingKey()] = v === undefined ? null : v; },
+  get draftExtraPoint() { return _draftBucket().extraPoint; },   // v0.16.0 — Ischemic Extra Point guess (longest FG, yards)
+  set draftExtraPoint(v) { _draftBucket().extraPoint = v === undefined ? null : v; },
+  // D1 / DI-510 (2026-10-07) — the weekId whose EDITABLE form this session last painted. When that week locks under the member (the flip timer, a hydrate, a Realtime lock) and the
+  // member holds an unsaved draft, the Picks page keeps the draft on screen read-only with a notice instead of repainting to the bare locked card. Reset with the draft.
+  pickFormShownFor: null,
+  // D1 / DI-510 (fix round, B1) — the weekId whose locked-draft notice has already been ANNOUNCED (role="alert") once. The notice repaints on every flip/tick; a screen reader hears it once.
+  lockDraftAnnouncedFor: null,
   // FEAT-8a / UN-179 — which page (if any) is currently in layout EDIT MODE:
   // null | 'dashboard' | 'standings'. TRANSIENT by design (DI-179j): the
   // ORDER is persisted on the player record, the mode never is — a player who
   // reloads mid-edit comes back to a normal page, not to a page with move
   // bars on it. Cleared on every session change in resyncPlayerPreferences().
   layoutEditing: null,
+  // D1 Lane B / DI-581 (2026-10-08) — the weekId whose Dashboard Game list the member is ARRANGING right now (Custom sort, Compact layout), and how many moves they have made in this session of it
+  // (the "Arrangement saved." toast on Done needs at least one). TRANSIENT like layoutEditing: the ARRANGEMENT is persisted on the player record, the mode never is. Ended by a tab change, a week
+  // change, a layout change, a sort-mode change, a session change and Done.
+  arrangeWeekId: null, arrangeMoves: 0,
   // The one-shot aria-live string for the move just made; consumed (and
   // cleared) by the bind pass right after the re-render.
   layoutAnnounce: null,
@@ -1078,6 +1277,9 @@ export const state = {
     tightOnly: false,     // DI-3 — only tight matchups (|spread| <= 7)
     search: '',           // free-text team/school search
   },
+  // D1 (W-69, DI-W69.4): Comm -> Games' segment ('all' | 'on' | 'off'; in memory only, resets with "Reset filters") and the date groups the commissioner closed (so a patch never re-opens one).
+  gamesListSegment: 'all',
+  gamesClosedGroups: new Set(),
 };
 
 /**
@@ -1113,10 +1315,42 @@ export const state = {
  * five of six call sites again. Asserted structurally in persisttest [7],
  * with canaries on both matchers (CONVENTIONS #21).
  */
-function clearPickDraft() {
-  state.draftPicks = {};
-  state.draftTiebreaker = null;
-  state.draftExtraPoint = null;
+function clearPickDraft({ weekId = null } = {}) {
+  // D1 DI-527: no argument clears EVERY week's draft (the identity-change invariant, unchanged); `{ weekId }` clears just that week's — a submit in one sport leaves the other's draft alone.
+  if (weekId !== null && weekId !== undefined) {
+    delete _draftBuckets[String(weekId)];
+  } else {
+    for (const k of Object.keys(_draftBuckets)) delete _draftBuckets[k];
+  }
+  state.pickFormShownFor = null;   // D1 / DI-510: no draft, nothing to keep on screen when the week locks
+  state.lockDraftAnnouncedFor = null;
+}
+
+export const _clearPickDraftForTest = clearPickDraft;
+
+/**
+ * D1 / DI-510 — does this player hold an UNSAVED draft for this week? A pick that differs from (or is missing in) the saved pick, a tiebreaker guess or an Extra Point guess that differs
+ * from the saved one. The edit-mode prefill copies the saved values into the draft, so an untouched prefill is NOT a draft. Reads the player's OWN picks only (the blind rule).
+ */
+/** D1 DI-527 — every week's draft, moved out of `state` whole (the suspended slate holds ALL of them). The picks object is carried by reference: it is the bucket's own, which is then dropped. */
+function _snapshotDraftBuckets() {
+  const out = {};
+  for (const [k, b] of Object.entries(_draftBuckets)) out[k] = { picks: b.picks, tiebreaker: b.tiebreaker, extraPoint: b.extraPoint };
+  return out;
+}
+function _restoreDraftBuckets(snap) {
+  for (const k of Object.keys(_draftBuckets)) delete _draftBuckets[k];
+  for (const [k, b] of Object.entries(snap || {})) _draftBuckets[k] = { picks: b.picks || {}, tiebreaker: b.tiebreaker ?? null, extraPoint: b.extraPoint ?? null };
+}
+export function hasUnsavedDraft(week, playerId) {
+  if (!week || !playerId) return false;
+  const saved = new Map(getPicks(week.weekId, playerId).map((p) => [p.gameId, p.selectedTeam]));
+  for (const [gameId, team] of Object.entries(state.draftPicks || {})) if (saved.get(gameId) !== team) return true;
+  const tb = getTiebreakerGuess(week.weekId, playerId);
+  if (state.draftTiebreaker !== null && state.draftTiebreaker !== undefined && state.draftTiebreaker !== tb) return true;
+  const ep = getExtraPointGuess(week.weekId, playerId);
+  if (state.draftExtraPoint !== null && state.draftExtraPoint !== undefined && state.draftExtraPoint !== ep) return true;
+  return false;
 }
 
 /**
@@ -1812,7 +2046,7 @@ function supabaseProgressUnknownNoteHTML(week) {
   if (!week || !isSupabaseDataMode()) return '';
   try {
     if (arePicksPublic(week)) return '';
-    const players = getPlayers().filter(p => p.active);
+    const players = playersForWeek(week);   // D1 DI-531 (C4): the week's own sport's entrants (a one-sport league: the active roster, as before)
     if (!players.some(p => submissionVisibility(week.weekId, p.playerId) === 'unknown')) return '';
     const at = weekSubmissionProgressAt();
     const when = at ? fmtBannerTime(at) : '';
@@ -1820,6 +2054,174 @@ function supabaseProgressUnknownNoteHTML(week) {
     return `<p class="blind-note"><span class="blind-note-icon">⏳</span><span>${escHtml(
       `Who else has picks in isn't available right now — nobody is being shown as missing.${tail}`)}</span></p>`;
   } catch { return ''; }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// UN-412 / DI-500…502 / DI-506 — "WHO'S IN" (Social Platform, 2026-10-01)
+// ════════════════════════════════════════════════════════════════════════════
+/**
+ * WHO HAS SUBMITTED, shown while a week is still blind — names and two integers, never a pick. Drew, 2026-10-01: "while I
+ * shouldn't be able to see the other players picks before the week is live I should be able to see who has picked."
+ *
+ * THE ONE DEFINITION. `read.state` below IS submissionStateFor() above — the strip adds no second answer to "is he in?"
+ * (CONVENTIONS #21). The model, copy, markup, in-place patcher and throttle are js/pick-status.js's (pure, Node-tested);
+ * this block is only the glue that hands them this device's readers and finds the strips on screen.
+ *
+ * FIVE PLACEMENTS, ONE COMPONENT: Picks (draft form, submitted view, locked card), the Dashboard's "All Picks by Game"
+ * card (standard and compact share the slot above the layout switch), the Dashboard's full-page gate, and its matrix-level
+ * gate. Home's Now card joins at the Home wiring window with `pickStatusHTMLFor(weekId, { tone: 'dark' })`.
+ *
+ * FRESHNESS (DI-502e). A strip is on screen only after a render, so the freshness hooks all go through mountPickStatus():
+ * screen entry (navigateTo), a successful submit of my own, the arrival of a "<Name> is in" room line, and the 60 s tick
+ * while a strip is visible and the answer is a minute old. They share ONE throttled refresher (one request per 20 s, never
+ * two in flight); a refresh patches the strips in place — it never rebuilds a page and never moves a scroll position.
+ * Pull-to-refresh and the foreground hydrate already re-ask the same RPC through the hydrate, so they add nothing here.
+ */
+function buildPickStatusModel(weekId) {
+  const session = getSession();
+  const viewerId = session && session.playerVerified && session.playerId ? session.playerId : '';
+  const week = getWeek(weekId);
+  return pickStatusFor({
+    week,
+    games: getGames(weekId),
+    // D1 (DI-539 #2, security A3): in a league that runs two or more sports the roster is the week's ENTRANTS (those who joined its sport before the lock), the same people the database's
+    // week_required_members counts for "N of M" and the missing-names line; a viewer who is not in that sport is not in the roster, so pickStatusFor shows him no strip (no You marker, no Join
+    // prompt on the strip itself). A one-sport league keeps every player, exactly as before.
+    players: isMultiSportLeague() ? entrantsForWeek(week) : getPlayers(),
+    viewerId,
+    isCommissioner: !!(session && session.isAdmin),
+    read: { state: submissionStateFor, asOf: weekSubmissionProgressAt, isPublic: arePicksPublic, pending: () => _pickStatusRefresher.pending() },
+    now: Date.now(),
+  });
+}
+
+/** The strip for one week, or '' when none is due (draft / live / final / demo-for-a-player / no viewer / fewer than two members). */
+function pickStatusHTMLFor(weekId, { tone = 'light' } = {}) {
+  return renderPickStatusHTML(buildPickStatusModel(weekId), { escHtml, formatTime: fmtBannerTime, tone });
+}
+
+/** The Picks page's placement (DI-502a): the strip in its own card, directly under the lock-timing line. */
+function pickStatusCardHTML(weekId) {
+  const strip = pickStatusHTMLFor(weekId);
+  return strip ? `<div class="card mb-md pick-status-card" data-pick-status-wrap>${strip}</div>` : '';
+}
+
+/** The Dashboard placements (DI-502b): the strip as a block inside a card or a gate, spaced by the block, never by a neighbour's margin. */
+function pickStatusBlockHTML(weekId) {
+  const strip = pickStatusHTMLFor(weekId);
+  return strip ? `<div class="pick-status-block" data-pick-status-wrap>${strip}</div>` : '';
+}
+
+/** Brings every strip on screen up to date, in place. A strip whose week no longer shows one (it went live) is removed with its wrapper. */
+function patchAllPickStatus() {
+  if (typeof document === 'undefined') return 0;
+  let hosts = [];
+  try { hosts = Array.from(document.querySelectorAll('[data-pick-status]')); } catch { return 0; }
+  let n = 0;
+  for (const host of hosts) {
+    try {
+      const model = buildPickStatusModel(host.getAttribute('data-pick-status'));
+      const result = patchPickStatus(host, model, { escHtml, formatTime: fmtBannerTime });
+      if (result === 'hidden') {
+        const wrap = typeof host.closest === 'function' ? host.closest('[data-pick-status-wrap]') : null;
+        (wrap || host).remove();
+      }
+      if (result === 'patched' || result === 'replaced' || result === 'hidden') n++;
+    } catch (e) { console.warn('[pick-status] a strip could not be patched', e && e.message); }
+  }
+  return n;
+}
+
+const _pickStatusRefresher = createPickStatusRefresher({
+  // `refreshWeekProgress` never throws and never rejects (the seam's wrapper); a failed read is a result the strip renders as stale or
+  // unknown — it is NOT the league's red banner (a failed read of this status is not a failed write of picks).
+  refresh: async () => { const r = await refreshWeekProgress(); return !!(r && r.ok); },
+  onStart: () => { patchAllPickStatus(); },
+  onSettled: () => { patchAllPickStatus(); },
+});
+
+/** A strip ON SCREEN is one inside the ACTIVE page: the page sections persist in the DOM, so a strip left in a hidden Picks page while the player
+ *  is on Chat is not on screen and must not cost an RPC every minute. */
+const PICK_STATUS_ON_SCREEN = '.page-section.active [data-pick-status]';
+/** How old (ms) the answer on this device is: Infinity when there is none or its stamp is unreadable. */
+function pickStatusAnswerAgeMs() {
+  const at = weekSubmissionProgressAt();
+  const ms = at ? Date.parse(at) : NaN;
+  return Number.isFinite(ms) ? Date.now() - ms : Infinity;
+}
+
+/** The one door the freshness hooks go through: asks for a refresh only when a strip is actually on screen (Supabase mode only —
+ *  in local mode every row is on the device and a strip is already exact). A screen entry that lands within seconds of a hydrate (a Realtime
+ *  repaint re-enters navigateTo right after one) is answered by that hydrate's own read and asks for nothing. */
+function mountPickStatus(reason) {
+  try {
+    if (!isSupabaseDataMode()) return 'off';
+    if (typeof document === 'undefined' || !document.querySelector(PICK_STATUS_ON_SCREEN)) return 'off';
+    if (reason === 'enter' && pickStatusAnswerAgeMs() < PICK_STATUS_ENTER_FRESH_MS) return 'fresh';
+    return _pickStatusRefresher.request(reason);
+  } catch (e) { console.warn('[pick-status] mount failed', e && e.message); return 'off'; }
+}
+
+/** The 60 s tick's leg (DI-502e): only while a strip is visible, and only when the answer on the device is a minute old or more. */
+function tickPickStatus() {
+  try {
+    if (!isSupabaseDataMode()) return 'off';
+    if (typeof document === 'undefined' || document.hidden === true) return 'hidden';
+    if (!document.querySelector(PICK_STATUS_ON_SCREEN)) return 'off';
+    if (pickStatusAnswerAgeMs() < PICK_STATUS_TICK_MIN_AGE_MS) return 'fresh';
+    return _pickStatusRefresher.request('tick');
+  } catch (e) { console.warn('[pick-status] tick failed', e && e.message); return 'off'; }
+}
+
+/** DI-506c — a "<Name> is in" line landing in the room re-asks the RPC. LIVE deliveries only: history replay, a cache replay and a
+ *  mid-walk page never refresh; a player-authored lookalike (its author is a member id) and an optimistic local row (no sequence)
+ *  are not arrivals. Idempotent: wired once per page. */
+let _pickStatusChatMark = -1;
+let _pickStatusChatUnsub = null;
+function wirePickStatusChatArrival() {
+  if (_pickStatusChatUnsub) return _pickStatusChatUnsub;
+  _pickStatusChatUnsub = onChat((kind, detail) => {
+    if (kind !== 'events') return;
+    let items = [];
+    try { items = getChatMessages({ types: ['system'] }); } catch { return; }
+    const r = newPicksInArrival(items, _pickStatusChatMark);
+    _pickStatusChatMark = r.watermark;
+    const live = !!detail && detail.wasCaughtUp === true && detail.caughtUp === true && detail.fromCache !== true;
+    if (live && r.arrived) mountPickStatus('chat');
+  });
+  return _pickStatusChatUnsub;
+}
+
+/**
+ * The Dashboard's full-page gate, "Submit Your Picks First" (DI-502b). An unsubmitted player used to learn nothing here; now he sees who he is
+ * waiting on (names, never picks), which is the nudge Drew asked for. Touched-screen audit: the button is a centred `.btn-row` group (Breathing
+ * Room — the space comes from the container, never from a margin on the button), so a hidden strip leaves the group exactly where it was.
+ */
+function dashboardGateHTML(week) {
+  return `<div class="empty-state"><div class="empty-state-icon">🔒</div>
+        <h3>Submit Your Picks First</h3>
+        <p class="text-secondary text-sm">Dashboard is hidden until you submit — keeps it blind.</p>
+        ${pickStatusBlockHTML(week.weekId)}
+        <div class="btn-row dash-gate-actions"><button class="btn btn-primary" id="go-picks-btn">Make My Picks</button></div></div>`;
+}
+
+/** The older "who else has picks in isn't available" placeholder note. When the strip is shown it carries that sentence itself (DI-501 closed the
+ *  placeholder's wording), so the note renders ONLY when there is no strip for this week (a draft week for the commissioner, a demo week, …). */
+function dashboardUnknownNoteHTML(week) {
+  return pickStatusHTMLFor(week.weekId) ? '' : supabaseProgressUnknownNoteHTML(week);
+}
+
+export const _buildPickStatusModelForTest = buildPickStatusModel;
+export const _pickStatusHTMLForTest = pickStatusHTMLFor;
+export const _patchAllPickStatusForTest = patchAllPickStatus;
+export const _mountPickStatusForTest = mountPickStatus;
+export const _tickPickStatusForTest = tickPickStatus;
+export const _pickStatusRefresherForTest = _pickStatusRefresher;
+export const _wirePickStatusChatArrivalForTest = wirePickStatusChatArrival;
+export function _resetPickStatusForTest() {
+  _pickStatusChatMark = -1;
+  if (_pickStatusChatUnsub) { try { _pickStatusChatUnsub(); } catch { /* ignore */ } _pickStatusChatUnsub = null; }
+  _pickStatusRefresher.reset();
 }
 
 /** §7.1 item 2 — how old a hydrate has to be before the 60 s tick re-selects
@@ -1908,7 +2310,19 @@ function wireSupabaseAdapter() {
     // idempotent across all six phones by deterministic id. Cheap: it is a fold
     // lookup per game of the current week, and it returns immediately when the
     // week is demo or absent. Guard: refreshtest.mjs:540 [5i-1].
-    onRealtimeEvent: () => { _repaintForSupabaseData('realtime'); reconcileGameEvents(getCurrentWeek()); },
+    //
+    // PF-416 / FB-026 follow-up (W-46) — a `weeks` event may be the one that tells this device the server holds a finalized week final:
+    // releaseWeekFinalAnnouncements() sends a week-final announcement waiting for that, once (its header, above finalizeWeek()).
+    // D1 DI-527 #4 - an update for the OTHER sport repaints nothing on a sport tab (it is already folded into the mirror, so the next visit shows it); a league-wide tab, a table that is not about
+    // a week, and every event in a one-sport league repaint exactly as before. The system posts (kickoff / FINAL) are reconciled for every sport's current week, not only the default's
+    // (D1 DI-535 #1: tickWeeks() - the one list of those weeks; a one-sport league is exactly [getCurrentWeek()]).
+    onRealtimeEvent: (table, payload) => {
+      const otherSport = realtimeEventForOtherSport(table, payload);
+      _repaintForSupabaseData('realtime', { skipTab: otherSport });   // an other-sport row skips ONLY the tab rebuild; the header, pill, switcher dots, unfrozen-spread notice and held deep link still run
+      if (otherSport && _lo) { try { paintLeagueOverview(); } catch (e) { console.warn('[overview] repaint failed', e); } }
+      for (const w of tickWeeks()) reconcileGameEvents(w);
+      releaseWeekFinalAnnouncements();
+    },
   });
   sb.onStatus(onSupabaseDataStatus);
 }
@@ -1929,6 +2343,9 @@ function wireSupabaseAdapter() {
  *  wording), unchanged for every OTHER refusal. */
 const REFUSAL_COPY = {
   cfbp_feedback: {
+    // Reviewer note 3 (0046 round 3): its OWN owner — a feedback refusal is not "sync is off" (isSyncFailureBannerUp()), and by B8 it
+    // never replaces a real sync failure already up (its "Nothing else on this device is affected" would be false); then it toasts.
+    owner: 'feedback',
     title: 'Your feedback was not saved.',
     hint: 'Nothing else on this device is affected. Try again, and if it keeps failing tell the commissioner.',
   },
@@ -1941,6 +2358,80 @@ const REFUSAL_COPY = {
     hint: 'The server’s status stands — check the Week tab before changing it again.',
   },
 };
+
+/**
+ * PF-1 / DI-495(c) (2026-10-01) — the lock refusal's copy, calm and TRUE (Interaction Principles, Error States: explain what happened, suggest the next step, never expose a technical
+ * message). It does not say "at kickoff": the week locks at its first kickoff MINUS the offset. Plain text through the banner's own escHtml; no server text appears in it.
+ */
+export const LOCK_REFUSAL_COPY = Object.freeze({
+  title: 'This week is locked.',
+  detail: 'Your last change was not saved.',
+  hint: 'Picks and guesses close when the week locks.',
+});
+/** The three storage keys a pick or guess write can be refused under (the adapter's names for picks, tiebreaker_guesses and extra_point_guesses). */
+export const LOCK_REFUSAL_KEYS = Object.freeze(['cfbp_picks', 'cfbp_tiebreaker_guesses', 'cfbp_extra_point_guesses']);
+/**
+ * Is a refused run a LOCK refusal? True only when EVERY refused key is one of the three pick/guess keys AND this device's own check says the week's pick window has closed: a stored
+ * locked / live / final week, or an open one whose lock instant (picksLockAt, else first kickoff minus the offset) has passed. A demo week is exempt on the server and here. An empty or
+ * mixed key set, a draft week and a week with no instant are all NOT lock refusals (they keep today's copy). Pure: `now` is injectable.
+ */
+export function isLockRefusal({ keys, week, games, now = Date.now() } = {}) {
+  if (!Array.isArray(keys) || !keys.length || !keys.every((k) => LOCK_REFUSAL_KEYS.includes(k))) return false;
+  if (!week || week.dataSourceMode === DATA_SOURCE_MODE.DEMO) return false;
+  // D1 / DI-509: the "has the window closed" half is the ONE week-lock state (a stored lock/live/final, or an open week at or past its instant), not a second copy of the clock test.
+  return weekLockState({ week, games, now }).closed;
+}
+function lockRefusalApplies(keys, refusedWeeks = null) {
+  try {
+    // D1 (N3) - A LOCK REFUSAL IS JUDGED BY THE WEEKS OF THE ROWS THAT WERE REFUSED. The adapter reports them per key (`refusedWeeks`). In a league with several sports a refused row of a CLOSED
+    // week can sit queued beside a later pick for another sport's OPEN week; judged by getCurrentWeek() the second refusal looked like the first and was swallowed by the notice that was
+    // already up. Now it is a lock refusal only when EVERY refused row's week has closed; a batch that also holds an open week's row is not (it keeps the plain refusal copy, which is
+    // true for it). With no row information (an older emit, a key that carries no week) the rule is today's: the current week.
+    const ids = [];
+    if (refusedWeeks && typeof refusedWeeks === 'object' && Array.isArray(keys)) {
+      for (const k of keys) { const w = Object.prototype.hasOwnProperty.call(refusedWeeks, k) ? refusedWeeks[k] : null; if (Array.isArray(w)) for (const id of w) if (typeof id === 'string' && !ids.includes(id)) ids.push(id); }
+    }
+    if (!ids.length) {
+      const week = getCurrentWeek();
+      return isLockRefusal({ keys, week, games: week ? getGames(week.weekId) : [] });
+    }
+    return ids.every((id) => {
+      const week = getWeek(id);
+      return isLockRefusal({ keys, week, games: week ? getGames(week.weekId) : [] });
+    });
+  } catch (e) { console.warn('[sb] could not decide whether a refusal was a lock refusal', e); return false; }
+}
+/**
+ * Is the lock notice ALREADY on screen? Same node, tagged `lock-closed`, not dismissed. A second lock refusal while it is up changes nothing the player can act on, so it must not re-render the
+ * banner (every re-render is a fresh `role="alert"` insertion, which VoiceOver announces again, and a flash for everyone else) and must not rebuild the page under them a second time.
+ */
+/** D1 (N3) - is a pick / tiebreaker / Extra Point write currently LATCHED refused by the adapter (the three LOCK_REFUSAL_KEYS)? Reads the adapter's own latch; never throws; false when it cannot tell. */
+function pickKeysHeldRefused() {
+  try { return (sb.getStatus().refusedKeys || []).some((k) => LOCK_REFUSAL_KEYS.includes(k)); } catch { return false; }
+}
+export const _pickKeysHeldRefusedForTest = pickKeysHeldRefused;
+export const _lockRefusalAppliesForTest = lockRefusalApplies;
+function lockNoticeIsUp() {
+  const el = document.getElementById('backend-error-banner');
+  return !!el && el.getAttribute?.('data-notice') === 'lock-closed' && el.style?.display !== 'none';
+}
+/**
+ * PF-1 / DI-495(c), reviewer BLOCK #1 B1 (2026-10-01) — what a lock refusal does to the SCREEN, and why it is a REPAINT and no longer a re-read.
+ *
+ * The first build ended a lock refusal with `ensureSupabaseDataHydrated('lock-refusal')`, "so the screen shows what the server holds". It could not: the adapter's rebase keeps a DIRTY key's
+ * local value (`hydrate()`: user intent wins for the keys this device changed) and re-arms the push, and its refusal latch only holds within ONE hydrate sequence, so the landed hydrate
+ * re-applied the refused edit, re-sent it, had it re-refused, and raised the banner a second time — after `afterSupabaseHydrate()` had just hidden it. The player saw the notice vanish and
+ * return, and VoiceOver announced it twice. The re-read is therefore NOT started from here: nothing this function does lands a hydrate, so the latch (same hydrate sequence, same plan) holds
+ * and the refused edit is not re-sent by the refusal itself. The page is repainted from the mirror exactly as the status-moved notice does, which closes the form through the device's own
+ * lock check (`canPlayerSubmitPicks`, DI-495(a)). A hydrate that lands for an INDEPENDENT reason (resume, back online) still follows the adapter's own §5.2 rule — it re-sends a still-dirty
+ * key once — and the standing notice neither flashes nor re-announces through it (`afterSupabaseHydrate` leaves it up; `lockNoticeIsUp()` stops a re-render).
+ */
+function showLockRefusalNotice() {
+  if (lockNoticeIsUp()) return false;
+  showBackendErrorBanner(LOCK_REFUSAL_COPY.detail, { title: LOCK_REFUSAL_COPY.title, hint: LOCK_REFUSAL_COPY.hint, notice: 'lock-closed', noRetry: true });
+  _repaintForSupabaseData('lock-refusal');
+  return true;
+}
 
 /** RG-253 follow-up (reviewer F2) — the body of a `status_moved` banner, in the week's own words:
  *  its label (never its id), where the server has it now, and what this device had asked for. No
@@ -1958,6 +2449,9 @@ function statusMovedBody(moved) {
 }
 
 function onSupabaseDataStatus(status, detail = {}) {
+  // PF-416 / FB-026 follow-up (W-46) — every emit may be the one that says the server now holds a finalized week final (the flush that landed
+  // finalize_week, a hydrate): a week-final announcement waiting for that goes out now, once (releaseWeekFinalAnnouncements(), above finalizeWeek()).
+  releaseWeekFinalAnnouncements();
   updateSyncBadge(status === 'refused' ? 'refused' : status);
   const state = detail.state || sb.getState();
   if (status === 'refused') {
@@ -1987,7 +2481,25 @@ function onSupabaseDataStatus(status, detail = {}) {
       _repaintForSupabaseData('status-moved');
       return;
     }
-    showBackendErrorBanner(String(banner), (soleKey && detail.key !== 'cfbp_weeks' && REFUSAL_COPY[detail.key]) || {});
+    // PF-1 / DI-495(c) — THE WEEK LOCKED UNDER THE PLAYER'S WRITE. From migration 0043 the server refuses any pick / guess write at the week's lock instant. The refusal arrives here as a
+    // 42501 for cfbp_picks / cfbp_tiebreaker_guesses / cfbp_extra_point_guesses, and the default copy ("Cross-device sync is OFF on this device." + the raw server text) is FALSE and
+    // technical for it (Interaction Principles, Error States). `REFUSAL_COPY` only applies when ONE key is the whole refusal and a submit refuses up to three at once, so the rule is by SET:
+    // every key refused this run is one of those three AND this device's own check says the week's window has closed (a refusal for any other reason — a paused league, an unrelated key
+    // — keeps today's copy). Dismiss only, stays until dismissed (a notice about something already corrected, through a 'synced' AND through a landed hydrate), no haptic, and the page repaints from
+    // the mirror (showLockRefusalNotice(): a repaint, NOT a re-read — see its comment for why the re-read was removed).
+    // The adapter's SECOND 'refused' shape — a later flush while a key is still latched (RG-254): no `code`, `keys: []`, the latched keys in `refusedKeys`. It is the same refusal, still
+    // unsaved, and its default copy ("Cross-device sync is OFF…") is the false, technical one DI-495(c) exists to replace; so the lock rule reads the latched set for it too.
+    const stillRefused = !detail.code && !(Array.isArray(detail.keys) && detail.keys.length) && Array.isArray(detail.refusedKeys) && detail.refusedKeys.length > 0;
+    if ((detail.code === '42501' || stillRefused) && lockRefusalApplies(stillRefused ? detail.refusedKeys : detail.keys, detail.refusedWeeks)) {
+      showLockRefusalNotice();
+      return;
+    }
+    const refusalCopy = (soleKey && detail.key !== 'cfbp_weeks' && REFUSAL_COPY[detail.key]) || {};
+    if (showBackendErrorBanner(String(banner), refusalCopy) === false) {
+      // Reviewer note 3 (0046 round 3): a non-sync refusal (feedback) met an 'app' banner already up — that banner stays.
+      // PF-416 follow-up, item 5 — "once sync is back on" only when that banner IS a sync failure; a lock or status-moved notice is not one.
+      showToast(`${refusalCopy.title || 'That change was not saved.'} ${isSyncFailureBannerUp() ? 'Try again once sync is back on.' : 'Try again.'}`, 'error');
+    }
     return;
   }
   if (state === 'OFFLINE-READONLY') { showSupabaseOfflineBanner(sb.getStatus().lastSyncAt); return; }
@@ -2081,8 +2593,9 @@ function onSupabaseDataStatus(status, detail = {}) {
   }
   if (status === 'synced') {
     // Reviewer F5 — a status-moved NOTICE is not a sync failure that 'synced' resolves; see above.
+    // PF-1 / DI-495(c): the "This week is locked." notice is the second of its kind — a correction already made (the device re-reads what the server holds), not a sync failure 'synced' resolves.
     const up = document.getElementById('backend-error-banner');
-    if (up?.getAttribute?.('data-notice') !== 'status-moved') hideBackendErrorBanner();
+    if (!['status-moved', 'lock-closed'].includes(up?.getAttribute?.('data-notice'))) hideBackendErrorBanner();
   }
 }
 
@@ -2232,7 +2745,10 @@ async function afterSupabaseHydrate(reason) {
     // answer rather than recomputing it.
     flushPendingPushActiveFlag(`hydrate:${reason}`);
     hideSupabaseOfflineBanner();
-    hideBackendErrorBanner();
+    // PF-1 / DI-495(c), reviewer B1: the "This week is locked." notice STAYS UNTIL DISMISSED. A hydrate landing for any independent reason must not take it down — the adapter re-sends a
+    // still-dirty refused key once per landed hydrate, the server refuses it again, and a banner hidden here would be raised again a moment later (a flash, and a second announcement).
+    // It is true after a hydrate exactly as it was before one: the week is still locked and the edit is still not saved. Every other banner comes down here exactly as before.
+    if (!lockNoticeIsUp()) hideBackendErrorBanner();
     // §5.1 — the data hold clears itself the moment the league is there.
     // Both of Step 4's own hold reasons clear themselves the moment the league
     // is back. 'data-hold' never had an identity problem; 'session-expired' had
@@ -2260,7 +2776,7 @@ async function afterSupabaseHydrate(reason) {
     // and the consequence is bounded and safe rather than visible: the post is
     // appended, the server answers `deduped:true` off its own unique id, and
     // nothing new appears in the room.
-    reconcileGameEvents(getCurrentWeek());
+    for (const w of tickWeeks()) reconcileGameEvents(w);   // D1 (DI-535 #1): every sport's current week; one week for a one-sport league
     if (!_sbTailRan) {
       _sbTailRan = true;
       try { await runPostHydrateTail(); }
@@ -2384,7 +2900,8 @@ async function afterSupabaseHydrate(reason) {
  * accent, every rendered time) is read at PAINT time and is already healed by
  * the navigateTo() below. boottest [25] is the guard.
  */
-function _repaintForSupabaseData(reason) {
+function _repaintForSupabaseData(reason, { skipTab = false } = {}) {
+  bumpShareDataVersion();   // D1 DI-597 (security F-1): Share's resolver never answers from a read older than this data
   // RG-179 — the player record has just landed; ask it again. Its own catch for
   // the same reason the repaint below has one.
   //
@@ -2412,8 +2929,19 @@ function _repaintForSupabaseData(reason) {
   // palette we already know is right" — not a second source of truth.
   try { applyTheme(bootThemeKey()); renderThemeToggle(); renderTzToggle(); applyColorScheme(bootColorScheme()); }
   catch (e) { console.warn(`[sb] could not re-apply player preferences after ${reason}`, e); }
-  try { navigateTo(state.currentTab || 'dashboard'); }
-  catch (e) { console.warn(`[sb] repaint after ${reason} failed`, e); }
+  // D1 DI-527 #4 (merge 2026-10-08): `skipTab` is set ONLY for a Realtime row about the OTHER sport's week while a sport tab is on screen (realtimeEventForOtherSport). It skips the TAB REBUILD and
+  // nothing else: the header, the league pill and the switcher's dots follow the change (a lock in the other sport takes its dot away), and the two follow-ups below still run.
+  if (skipTab) {
+    try { refreshSportChrome(); }
+    catch (e) { console.warn(`[sb] the chrome refresh after ${reason} failed`, e); }
+  } else {
+    try { navigateTo(state.currentTab || 'dashboard'); }
+    catch (e) { console.warn(`[sb] repaint after ${reason} failed`, e); }
+  }
+  // PF-1 / DI-496 — a week the SERVER locked (the job has no device) cannot raise the commissioner's "spread not frozen" toast itself, so the commissioner's own device does, once per
+  // week, on the first repaint that shows the locked week. Commissioner session only; never a player.
+  try { maybeNoticeUnfrozenSpreads(); }
+  catch (e) { console.warn(`[sb] the unfrozen-spread check after ${reason} failed`, e); }
   // RG-245 — THE UN-WITHHOLD MOMENT, #1 of 2. This is where the adapter starts
   // SERVING, i.e. where isContentWithheld() flips false on the path B-04 is
   // about: boot's hydrate deferred under an unproven identity, the tail ran and
@@ -2524,6 +3052,16 @@ async function boot() {
                                          // client-half switch read, injected rather than imported so
                                          // chatTransport.js keeps importing EXACTLY js/backend.js (S5/T5.11).
   });
+  // D1 Lane C (DI-673): News reads OUR backend (`news_feed`, `news_sources_for`) on the SAME client, injected like chat's. Dormant until Home asks; a device with no
+  // client shows News's calm "temporarily unavailable" state (never the phone-side ESPN fetch: that contingency is C20-gated, NEWS_CLIENT_ESPN_FALLBACK).
+  installNewsTransport({ getClient: getSupabaseClient });
+  registerHomeNewsOpeners({ openAlsoFrom: openNewsAlsoSheet, openContent: openContentDetail, retryContent: () => { void getHomeWiring().homeView.refresh(); } });
+  // Review B2 (2026-10-14): News and the Home content cards read EVERY current week (DI-535's multi-sport sweep), each tagged with its competition's sport (never a stored week.sport).
+  registerHomeNewsWeeks(() => currentWeeksToSweep().map((w) => {
+    let sport = null;
+    try { sport = competitionForWeek(w)?.sport || null; } catch { sport = null; }
+    return sport === 'cfb' || sport === 'nfl' ? { ...w, sport } : w;
+  }));
   // ── SECURITY A-1 (RG-196) — THE WITHHELD PREDICATE, INSTALLED BEFORE CHAT ──
   // Beside the two installs above and for the same reason: `initChatUI({phase:
   // 'early'})` below runs before the config read and replays the device's chat
@@ -3100,7 +3638,15 @@ async function runPostHydrateTail() {
         native.markNativeBootReady();
       }).catch((e) => console.warn('[push-native] wiring failed', e));
     }
+    // SECURITY N-1 (0045 delta, 2026-10-08) — the relay grants an announcement its never-silenceable push only when the author is a confirmed
+    // active commissioner of the row's league. NO BOOT-ORDER PRECONDITION: it hands over a function the relay calls per message; before a
+    // hydrate lands (or in any mode without the adapter) it answers null and the relay FAILS CLOSED to the ordinary chat category.
+    setMemberRoleSource((leagueId, memberId) => sb.getConfirmedMemberRole(leagueId, memberId));
     wireChatNotifications();                             // DI-B1 — subscribes to chat.js's EXISTING onChat(), zero chat.js changes
+    // UN-412 / DI-506c — the "<Name> is in" room line re-asks "Who's in". NO BOOT-ORDER PRECONDITION: it registers a subscriber (chat.js's onChat,
+    // a Set add) and reads nothing until a delivery arrives, so it sits beside its sibling above and needs no resolved auth, config or SDK
+    // (boot-order rule, 2026-09-26). pickstatustest pins its source position AFTER wireChatNotifications() and its idempotence.
+    wirePickStatusChatArrival();
     setupNotifBell();
     renderNotifBell();
     ensureOneSignalInit().then(() => {
@@ -3301,6 +3847,12 @@ function showBackendErrorBanner(message, opts = {}) {
   // Reviewer F5 — which banners 'synced' must leave up (only the status-moved notice). Reset on
   // every show, so a later ordinary banner in the same node is never sticky.
   el.setAttribute('data-notice', String(opts.notice || ''));
+  // PF-1 / DI-495 touched-screen audit (2026-10-01) — the banner is THE message a refused write needs a screen reader to speak, and the node carried no role, so VoiceOver stayed
+  // silent while the banner appeared (Interaction Principles, Accessibility). role="alert" announces every banner that lands here (sync failures included), which is correct.
+  el.setAttribute('role', 'alert');
+  // DI-495(c): a NOTICE about something that is not a connection problem (the week locked under a write) offers Dismiss ONLY — a Retry would hydrate "successfully" and announce
+  // "Connection restored" about a thing that never disconnected. `opts.noRetry` is that notice's flag; every other caller keeps both buttons, exactly as before.
+  const retryBtnHTML = opts.noRetry ? '' : '<button type="button" class="beb-retry" id="beb-retry-btn">Retry</button>';
   el.innerHTML = `
     <div class="beb-inner">
       <span class="beb-icon" aria-hidden="true">${icon('warning')}</span>
@@ -3309,7 +3861,7 @@ function showBackendErrorBanner(message, opts = {}) {
         <div class="beb-detail">${escHtml(String(message))}</div>
         <div class="beb-hint">${escHtml(String(opts.hint || "Picks made on THIS device may NOT reach other players' devices until this is fixed. Tell the commissioner."))}</div>
       </div>
-      <button type="button" class="beb-retry" id="beb-retry-btn">Retry</button>
+      ${retryBtnHTML}
       <button type="button" class="beb-close" id="beb-close-btn" aria-label="Dismiss">${icon('close')}</button>
     </div>`;
   el.style.display = 'block';
@@ -3811,6 +4363,9 @@ function makeRunManualSync(
     // (CONVENTIONS #21): a failed league hydrate THREW above, into the caller's onFail -> showSyncFailureBanner (loud-fail, no success haptic over a failed sync); Home's refresh() is only
     // the forced news fetch and a repaint, never rejects, and a news-only failure becomes the slot's calm inline error, never the red banner.
     else if (state.currentTab === 'home') await getHomeWiring().homeView.refresh();
+    // D1 Lane C (DI-637, PD-C4): the Admin page's leg of pull-to-refresh and of the header sync tap re-reads the routing and status cards. It never rejects: a card failure is that card's own
+    // calm state, never the red sync banner.
+    else if (state.currentTab === 'admin') await refreshAdminAiCaches();
   };
 }
 const runManualSync = makeRunManualSync();
@@ -3931,19 +4486,27 @@ let controlCenterApi = null;
  *  the last successfully RESOLVED notif-settings body, so a re-open of the
  *  drawer paints the cached string instead of a blank/skeleton every time. */
 let _lastNotifSettingsHTML = null;
-/** Test seams (the `_xForTest` convention) — pushtest [12z3]/[12z4]: what a
+/** W-33 (bugfixer, 2026-10-07) — the identity (currentIdentityKey(): account, league, member) the saved copy was resolved FOR. The copy is one
+ *  league's switches for one person ("Each league keeps its own"), and a league switch or a second account on the same page never reloads, so a
+ *  copy saved for any other identity is never painted and never re-used: it reads as "none" and the open row resolves its own. */
+let _lastNotifSettingsKey = null;
+function savedNotifSettingsHTML() {
+  return (_lastNotifSettingsHTML !== null && _lastNotifSettingsKey === currentIdentityKey()) ? _lastNotifSettingsHTML : null;
+}
+/** Test seams (the `_xForTest` convention) — pushtest [12z3]/[12z4]/[12z5]: what a
  *  re-opened Notifications row would paint, and a clean slate for it. */
-export function _notifSettingsRowCacheForTest() { return _lastNotifSettingsHTML; }
-export function _resetNotifSettingsRowCacheForTest() { _lastNotifSettingsHTML = null; _lastNotifSettingsResolved = null; }
+export function _notifSettingsRowCacheForTest() { return savedNotifSettingsHTML(); }
+export function _resetNotifSettingsRowCacheForTest() { _lastNotifSettingsHTML = null; _lastNotifSettingsResolved = null; _lastNotifSettingsKey = null; }
 /** The {st, device} that _lastNotifSettingsHTML was rendered from, so a switch
  *  flip can re-render the saved copy WITHOUT re-resolving or repainting the open
  *  row (a repaint would replace the switch mid-animation). Reviewer, 2026-10-02. */
 let _lastNotifSettingsResolved = null;
 async function resyncNotifSettingsRowCopy() {
   const r = _lastNotifSettingsResolved;
-  if (_lastNotifSettingsHTML === null || !r) return;
+  const key = _lastNotifSettingsKey;
+  if (_lastNotifSettingsHTML === null || !r || key !== currentIdentityKey()) return;
   const html = await renderNotifSettingsBodyHTML(getSession()?.playerId || null, r.st, r.device);
-  if (r === _lastNotifSettingsResolved) _lastNotifSettingsHTML = html;   // a newer full resolve wins
+  if (r === _lastNotifSettingsResolved && key === currentIdentityKey()) _lastNotifSettingsHTML = html;   // a newer full resolve wins; W-33: never across an identity change
 }
 /** DI-308's OWN accordion open/closed state — a SEPARATE object from the
  *  drawer's own (js/control-center.js's `initialControlCenterState()`),
@@ -4022,7 +4585,7 @@ function buildControlCenterCtx() {
     },
     version: { APP_VERSION, APP_VERSION_DATE },
     bodies: {
-      notifSettingsHTML: _lastNotifSettingsHTML || '<p class="text-muted text-sm">Checking…</p>',
+      notifSettingsHTML: savedNotifSettingsHTML() || '<p class="text-muted text-sm">Checking…</p>',   // W-33: only THIS identity's saved copy
       chatPrefsHTML: prefsPanelHTML(),
       // DI-365 (2026-09-27) — the SCRIBE training archive, RETIRED off the
       // Rules page (renderRulesPage() no longer calls
@@ -4037,7 +4600,9 @@ function buildControlCenterCtx() {
         rowError: scribeFileRowError,
       }) + (isPilotLeague(leagueForCtx) ? renderScribeTrainingCardHTML() : ''),
       feedbackCardHTML: renderFeedbackCardHTML(),
-      gameRequestHTML: renderGameRequestCardHTML(),
+      // W-66 touched-screen audit (2026-10-14): read each time the row paints, never a snapshot. The card's typed filter, Game
+      // day and chat choice change without a drawer repaint, and a snapshot reopened the row on the last repaint's copy.
+      get gameRequestHTML() { return renderGameRequestCardHTML(); },
       releaseNotesHTML: renderReleaseNotesCardHTML(),
       // DI-423 AMENDMENT (2026-09-28, RG-290 finding) — the Profile pane's
       // alma-mater field is now the SAME ESPN <select> the chat-prefs picker
@@ -4062,6 +4627,8 @@ function buildControlCenterCtx() {
     // SP-52 (DI-452) — the phone's own appearance, so the quick Light/Dark row can say "Matches your phone · Dark right now".
     systemIsDark: schemeSystemIsDark(),
     logoView: player?.preferences?.logoView === true,
+    // D1 Lane B / DI-613 — the Show picks row's values (null signed out: the row is absent). Read through the storage seam, never from the record directly.
+    picksView: player ? { dashboard: getPicksView('dashboard'), gameday: getPicksView('gameday') } : null,
     // === SOCIAL PLATFORM NEWS -- BEGIN === `ctx.news` feeds the drawer's third pane and its "News" row (null = the feature is off app-wide: no row). The team catalog is the ONE
     // alma-mater catalog (cached ESPN list, else the short fallback) -- never a second fetch.
     news: buildNewsSettingsCtx({ teamCatalog: cachedEspnTeamsList() || almaMaterCatalogFallback() }),
@@ -4178,6 +4745,18 @@ function buildControlCenterCtx() {
         try { navigateTo(state.currentTab || 'dashboard'); }
         catch (e) { console.warn('[cc] repaint after the logo toggle failed', e); }
       },
+      // D1 Lane B / DI-613 (Drew D-64) — Show picks: ONE write (setPicksView refuses an unknown place or value and a signed-out viewer), then the page under the drawer repaints if it is Home or the Dashboard (the logo
+      // toggle's precedent just above: nothing else repaints on this write). A refused write answers { changed:false } and the control keeps the stored value; a SYNC failure is the loud banner's job.
+      onSetPicksView: (place, value) => {
+        if (!session?.playerId) return { changed: false };
+        const before = getPicksView(place);
+        if (before === value) return { changed: false, value: before };
+        if (!setPicksView(place, value)) return { changed: false, refused: true, value: getPicksView(place) };
+        if (state.currentTab === 'home' || state.currentTab === 'dashboard') {
+          try { navigateTo(state.currentTab); } catch (e) { console.warn('[cc] repaint after Show picks failed', e); }
+        }
+        return { changed: true, value: getPicksView(place) };
+      },
       // === SOCIAL PLATFORM NEWS -- BEGIN === onOpenNews (the one-time alma-mater chip seed, a repaint, the shared catalog fetch) and onSetNewsPrefs (a validated write + the prefs-changed notice).
       ...makeNewsSettingsCallbacks({ refresh: refreshControlCenterAndSettingsPage, ensureCatalog: () => maybeRefreshAlmaMaterCatalog() }),
       // === SOCIAL PLATFORM NEWS -- END ===
@@ -4204,6 +4783,7 @@ export const _buildControlCenterCtxForTest = buildControlCenterCtx;
 // block retired with it). Name kept (many call sites below reference it) —
 // it now updates the drawer alone; there is no second host to repaint.
 function refreshControlCenterAndSettingsPage() {
+  // W-66: open rows stay open through this repaint (js/control-center.js paintMainContent(), the one place both repaint paths share).
   if (controlCenterApi) controlCenterApi.update(buildControlCenterCtx());
 }
 
@@ -4215,14 +4795,19 @@ function refreshControlCenterAndSettingsPage() {
  */
 async function maybeRefreshNotifSettingsRow() {
   try {
+    const keyAtStart = currentIdentityKey();   // W-33
     const playerId = getSession()?.playerId || null;
     // resolvePushSettingsState() — declared below, hoisted — is the SAME
     // resolver refreshNotifSettingsBody() (the old modal's own equivalent)
     // uses, so this file keeps exactly one dynamic push-native module
     // import call site for this logic (nativeguardtest.mjs [13a]).
     const { st, device } = await resolvePushSettingsState();
-    _lastNotifSettingsHTML = await renderNotifSettingsBodyHTML(playerId, st, device);
+    const html = await renderNotifSettingsBodyHTML(playerId, st, device);
+    // W-33 — resolved for an identity that has since left this page (a league switch, another account, a sign-out): never saved, never painted.
+    if (currentIdentityKey() !== keyAtStart) return;
+    _lastNotifSettingsHTML = html;
     _lastNotifSettingsResolved = { st, device };
+    _lastNotifSettingsKey = keyAtStart;
     refreshControlCenterAndSettingsPage();
   } catch (e) {
     console.warn('[control-center] notif settings body failed to resolve', e);
@@ -4415,7 +5000,7 @@ function bindControlCenterBodies(scopeEl, rowState) {
   // the row's HTML, which repaints the drawer and re-runs this binder on the new node.
   bindOnceIn(scopeEl, 'cc-body-notifications', (el) =>
     bindNotifSettingsBody(el, getSession()?.playerId || null, () => maybeRefreshNotifSettingsRow(), () => resyncNotifSettingsRowCopy()));
-  if (rowState?.settingsOpenRow === 'notifications' && !_lastNotifSettingsHTML) {
+  if (rowState?.settingsOpenRow === 'notifications' && !savedNotifSettingsHTML()) {   // W-33: no copy for THIS identity -> resolve one
     maybeRefreshNotifSettingsRow();
   }
   // FIX (RG-298, 2026-09-28, reviewer BLOCK B1) — the Profile pane's own
@@ -4989,6 +5574,18 @@ function lifecycleGatesOpen() {
 }
 
 /**
+ * D1 - the sport a lifecycle post belongs to: `{ sportTag: 'nfl' }` for a week of a multi-sport league, `{}` otherwise (a one-sport league, a week the resolver cannot place).
+ * Resolved through the ONE resolver (competitionForWeek, R1), never from the week's own `sport` field.
+ */
+export function lifecycleSportFields(week) {
+  try {
+    if (!week || !isMultiSportLeague()) return {};
+    const c = competitionForWeek(week);
+    return c && typeof c.sport === 'string' && c.sport ? { sportTag: c.sport } : {};
+  } catch { return {}; }
+}
+
+/**
  * THE one emitter. Every lifecycle call site below routes through here rather
  * than hand-rolling a sendChatEvent() — the same "one place" rule DI-A1 applied
  * to the old policy layer, moved to the surface that replaced it.
@@ -5031,6 +5628,10 @@ export function emitLifecyclePost({ event, scopeId, weekId = null, facts = {}, a
   sendChatEvent({
     ...(id ? { id } : {}),
     type: 'message', author, gameTag: '', notify: true, replyTo: '',
+    // D1 (DI-553, DI-537 #1): a system row carries its WEEK's sport, so the push for "NFL Week 4 is open / locked / final" goes to the NFL's members (notify-fanout narrows a
+    // sport-tagged message to that sport's entrants) and the Locker Room's sport filter files it under the right pill. Only in a league that runs two or more sports: a
+    // one-sport league's event has no sportTag key at all, byte-identical to before. (chat.js carries the field once the client branch's sport plumbing is merged.)
+    ...lifecycleSportFields(w),
     body,
     meta: {
       kind: 'lifecycle', event, weekId: weekId || null,
@@ -5059,7 +5660,7 @@ export function postPicksOpenedNotice(week) {
  *  pile-on, and the locking-soon notice already did the useful version of it. */
 export function postPicksLockedNotice(week) {
   if (!week) return null;
-  const active = getPlayers().filter(p => p.active);
+  const active = playersForWeek(week);       // D1 (S1) + DI-531 (C4): "k of n got picks in" counts the week's own sport's ENTRANTS, not every member of the league
   // DI-T4.11 — a count is a CLAIM, and this one is broadcast to six people. If
   // any player's state is 'unknown' (Supabase mode, the count RPC's answer not
   // on this device) the count would be a lie, so the FACT IS OMITTED rather
@@ -5209,30 +5810,62 @@ export function postCommissionerAnnouncement(body, commissionerPlayerId) {
  * one, the same pair canPlayerSubmitPicks() and wagerWeekReachedLock() consult.
  * With Auto-Open set and Auto-Lock blank, getEffectiveWeekStatus() reports
  * 'open' for a week the app itself advanced to locked; either saying "locked"
- * is enough.
+ * is enough. EXCEPT the lock in supabase mode (0045 review, 2026-10-08): it is
+ * announced only from the SERVER-CONFIRMED status (lockNoticeDue, below).
  */
+/**
+ * The week of EVERY live sport a sweep must look at (D1 / DI-535 S3): in a league that runs two or more sports, each sport's own current week (the default sport first); in a one-sport league exactly
+ * `[getCurrentWeek()]`, as it always was. The sweeps below still do at most ONE thing per call, so a device that missed several transitions catches up one navigation at a time, oldest sport first.
+ */
+function currentWeeksToSweep() {
+  if (!isMultiSportLeague()) { const w = getCurrentWeek(); return w ? [w] : []; }
+  let all = [];
+  try { all = getAllCurrentWeeks() || []; } catch { all = []; }
+  return all.filter(Boolean);
+}
+/**
+ * 0045 review (coordinator decision, 2026-10-08) — WHEN THE SWEEP MAY ANNOUNCE THE LOCK.
+ * Migration 0045 refuses `sys_lc_PICKS_LOCKED_<week>` unless the SERVER holds the week locked, live or
+ * final, and the server's own lock is 0043's once-a-minute `cfbp_auto_lock_weeks` cron. A device whose
+ * clock has passed the lock time (the EFFECTIVE status) is up to a minute ahead of that, and posting
+ * then parks the notice (chatTransport A7) while this device's outbox gives up on it and paints "Not
+ * sent". So in supabase mode the lock is announced only from the status the server has CONFIRMED on
+ * this page (sb.getConfirmedWeekStatus: a hydrate, a Realtime fold or an acknowledged RPC; null until
+ * then, which means "not yet", never "post anyway"). The next navigation after the cron's Realtime
+ * update posts it. Every other mode has no server and keeps the belt-and-braces pair (`reached`). The
+ * OPEN notice is unchanged. The A7 ladder stays as the backstop for the commissioner's own button.
+ */
+function lockNoticeDue(week, reached) {
+  const LOCKED_OR_LATER = [WEEK_STATUS.LOCKED, WEEK_STATUS.LIVE, WEEK_STATUS.FINAL];
+  if (!isSupabaseDataMode()) return reached(LOCKED_OR_LATER);
+  let confirmed = null;
+  try { confirmed = sb.getConfirmedWeekStatus(week.weekId); } catch { confirmed = null; }
+  return typeof confirmed === 'string' && LOCKED_OR_LATER.includes(confirmed);
+}
 export function checkLifecyclePostDue() {
-  const week = getCurrentWeek();
-  if (!week || week.dataSourceMode === 'demo') return;       // bound 1 + bound 4
-  if (!lifecycleGatesOpen()) return;
-  const done = getLifecyclePosted();                          // bound 3
+  for (const week of currentWeeksToSweep()) {
+    if (!week || week.dataSourceMode === 'demo') continue;     // bound 1 + bound 4
+    if (!lifecycleGatesOpen()) return;
+    const done = getLifecyclePosted();                          // bound 3
 
-  let eff = '';
-  try { eff = String(getEffectiveWeekStatus(week) || ''); } catch { eff = ''; }
-  const stored = String(week.status || '');
-  const reached = (statuses) => statuses.includes(eff) || statuses.includes(stored);
+    let eff = '';
+    try { eff = String(getEffectiveWeekStatus(week) || ''); } catch { eff = ''; }
+    const stored = String(week.status || '');
+    const reached = (statuses) => statuses.includes(eff) || statuses.includes(stored);
 
-  const opened = reached([WEEK_STATUS.OPEN, WEEK_STATUS.LOCKED, WEEK_STATUS.LIVE, WEEK_STATUS.FINAL]);
-  const locked = reached([WEEK_STATUS.LOCKED, WEEK_STATUS.LIVE, WEEK_STATUS.FINAL]);
+    const opened = reached([WEEK_STATUS.OPEN, WEEK_STATUS.LOCKED, WEEK_STATUS.LIVE, WEEK_STATUS.FINAL]);
+    const locked = lockNoticeDue(week, reached);
 
-  // Chronological order, so a device that missed BOTH transitions posts them in
-  // the order they happened rather than announcing the lock before the open.
-  if (opened && !done.includes(lifecycleChatId(LIFECYCLE_EVENTS.PICKS_OPENED, week.weekId))) {
-    postPicksOpenedNotice(week);
-    return;                                                   // bound 2 — ONE per invocation
-  }
-  if (locked && !done.includes(lifecycleChatId(LIFECYCLE_EVENTS.PICKS_LOCKED, week.weekId))) {
-    postPicksLockedNotice(week);
+    // Chronological order, so a device that missed BOTH transitions posts them in
+    // the order they happened rather than announcing the lock before the open.
+    if (opened && !done.includes(lifecycleChatId(LIFECYCLE_EVENTS.PICKS_OPENED, week.weekId))) {
+      postPicksOpenedNotice(week);
+      return;                                                   // bound 2 — ONE per invocation
+    }
+    if (locked && !done.includes(lifecycleChatId(LIFECYCLE_EVENTS.PICKS_LOCKED, week.weekId))) {
+      postPicksLockedNotice(week);
+      return;                                                   // bound 2 — ONE per invocation, across every sport
+    }
   }
 }
 
@@ -5509,6 +6142,10 @@ let _homeBoundRoot = null;
 function ensureHomeRoot() {
   const page = document.getElementById('page-home');
   if (!page) return null;
+  // FB-021 (2026-10-07) — the Live Peek's team logos (renderDashboardCompact()'s `.dc-chip-logo`, injected into the Now card) are opacity:0 until bindLogoImageEvents()'s
+  // load listener marks them loaded, and that listener was bound on Picks, Dashboard and the Commissioner panel only: on Home a logo loaded and stayed invisible, and a
+  // broken one never reached its text fallback. Bound on the SECTION, which survives #home-root being re-created; idempotent per element.
+  bindLogoImageEvents(page);
   // A league-flow or link-flow screen OWNS the section while it is up (navigateTo() paints it into #page-home, DI-181a / DI-183b: the link-confirmation card has no path that skips it). A Home repaint
   // that arrives meanwhile (a score tick, the sync leg) must not paint over it: no container, so Home paints nothing, and the flow screen stays until navigateTo() resolves it.
   if ((getAuthMode() === 'supabase' && needsLeagueFlowScreen()) || linkFlowScreen()) return null;
@@ -5530,23 +6167,560 @@ function onHomeAction(action, params = {}) {
     const tab = params && params.tab;
     // The commissioner panel's own tab (DI-365's nudge deep-links to Week or Games): the SAME mechanism the week wizard's "Edit in Games tab" uses; navigateTo('commissioner') reads state.commTab.
     if (tab === 'commissioner' && (params.commTab === 'week' || params.commTab === 'games')) state.commTab = params.commTab;
+    // FB-022 (D1 batch H) — the live Now card's "See the full slate" is View All: it opens the Dashboard on THAT card's week, not whatever week
+    // Picks / Dashboard was last swiped to (state.viewingWeekId is shared). Same convention as the week selector: the current week is stored as null.
+    // D1 DI-528 — a card about a SPORT routes through enterSportContext (which validates it against this league and against what the member plays). A card about a sport the member has NOT
+    // joined never reaches that sport's tab: enterSportContext opens the overview at its Join instead (DI-555).
+    if (typeof params.sport === 'string' && params.sport && SPORT_TABS.includes(tab) && !isContentWithheld()) {
+      enterSportContext(params.sport, { tab, weekId: typeof params.weekId === 'string' ? params.weekId : null, source: 'home' });
+      return;
+    }
+    // D1 Lane B History (DI-596): Game Day's Final card "Results" names its week; where the week's detail can open it opens ABOVE Home (Back returns to Home), else it is the Standings tab it always was.
+    if (tab === 'leaderboard' && typeof params.weekId === 'string' && params.weekId && !isContentWithheld() && openWeekDetail(params.weekId, { backLabel: 'Home' })) return;
+    if (tab === 'dashboard' && typeof params.weekId === 'string' && getWeek(params.weekId)) state.viewingWeekId = (params.weekId === getContextWeek()?.weekId) ? null : params.weekId;
     navigateTo(tab);                                    // security W6: go-tab goes ONLY through navigateTo (which refuses while content is withheld)
     return;
   }
   if (action === 'build-slate') {
     if (getSession()?.isAdmin) openWeekWizardSheet();   // security W6: the role is re-checked at TAP time, not trusted from the markup that rendered the button
+    return;
   }
+  // D1 Lane B / DI-575: a feed card opens its detail. home.js has already resolved the id against the cards derived for the current paint; openCardDetail() resolves it AGAIN, from live data.
+  if (action === 'open-card' && params && typeof params.cardId === 'string') openCardDetail(params.cardId);
+  // D1 Lane B Game Day (DI-605/606): a row of the open card opens that game's Game view (home.js has validated the id against the card's rows; openGameView() resolves it again from live data).
+  if (action === 'open-game' && params && typeof params.gameId === 'string') openGameView(params.gameId, { from: 'home' });
+  // The footer's Dashboard button. `scope` ('all' | a sport | null) is Lane A's Dashboard scope (DI-525 rev 3): until that branch is merged the Dashboard has one scope, so it only opens the Dashboard.
+  if (action === 'open-dashboard') openDashboardFromGameDay(params && params.scope);
+}
+
+// ─── Home card detail (D1 Lane B, DI-571 / DI-575 / DI-576 / DI-585) ──────────────────────────────────────────────────────────────────────────────────────────────
+// The detail is a PUSHED SCREEN (js/pushed-screen.js) over Home, which stays mounted underneath untouched (so Back lands on the same card at the same offset). The model is rebuilt from the
+// CURRENT data on open and on every repaint (homeView.resolveCardDetail: the reveal gate is re-asked each time, and a card that can no longer be shown becomes the calm unavailable state).
+// Every button is allow-listed by `data-cd-action` and must match an action in the CURRENT model with the same parameters before anything happens (the DOM is untrusted — Std-9).
+let _pushedScreensConfigured = false;
+function ensurePushedScreens() {
+  if (_pushedScreensConfigured) return;
+  configurePushedScreens({
+    escHtml,
+    isContentWithheld,                                     // Std-12: refuses to open — and closes on a repaint — while content is withheld
+    setPageInert: _setLeaguePageOverlayInert,              // main content, header and tab bar inert while a screen is up (defers to a live hold's own lock)
+    getBlocked: () => _dismissBlockingSurfaceUp({ excludePushed: true }),   // the swipe-back / Esc yield to any OTHER surface on top (a sheet, a modal, the drawer)
+    onMount: (root) => bindLogoImageEvents(root),          // DI-572 (c) / FB-021: every new root binds the logo events once
+  });
+  _pushedScreensConfigured = true;
+  ensureChatReturnHooks();                                  // D1 DI-588: the Back chip's hooks, registered with the first pushed screen
+}
+
+function openCardDetail(cardId, { backLabel = 'Home', fromGame = false, restore = null } = {}) {
+  if (isContentWithheld() || typeof cardId !== 'string' || !cardId) return;
+  ensurePushedScreens();
+  if (!restore) clearReadingChain();                       // a NEW push ends the Back chip (DI-588)
+  const hv = getHomeWiring().homeView;
+  const first = hv.resolveCardDetail(cardId, { noGame: fromGame });
+  pushScreen({
+    id: `card:${cardId}`,
+    title: first ? first.title : 'Details',
+    backLabel,                                             // 'Home', or — opened from a Game view's Related — the matchup (DI-610)
+    restoreKey: cardId,                                    // Back returns focus to the card that opened it (found by its data-card-key)
+    meta: { kind: 'card', ref: cardId, fromGame },
+    instant: !!(restore && restore.instant), scrollTop: restore ? restore.scrollTop : 0,
+    render: () => { const r = hv.resolveCardDetail(cardId, { noGame: fromGame }); return r ? withYearAgoInsight(r) : hv.unavailableDetail(); },   // D1 Lane C (DI-667): "SCRIBE's read" on the "A year ago" detail
+    onClick: (e, api) => onCardDetailClick(e, api, cardId, { fromGame }),
+  });
+}
+
+// D1 Lane C (DI-667, 2026-10-08) — the "A year ago" card's detail gains "SCRIBE's read" (league_insight_get, membership checked first on the server), AFTER Lane B's record and
+// "this year so far" and before its actions. Fetched once per league and week while the detail is open; the section appears when the answer lands (the detail repaints in place).
+const _yearAgoInsight = new Map();   // `${leagueId}|${weekRef}` -> { status: 'loading'|'ok'|'none'|'error', read, createdAt }
+function withYearAgoInsight(r) {
+  if (!r || !r.model || r.model.type !== 'year.ago' || typeof r.html !== 'string') return r ? r.html : '';
+  const weekN = Number(r.model.facts && r.model.facts.weekN);
+  const week = getContextWeek();
+  const leagueId = getActiveLeagueId();
+  if (!Number.isInteger(weekN) || !week || !leagueId) return r.html;
+  const weekRef = `${String(week.season)}:cfb:${weekN}`;
+  const key = `${leagueId}|${weekRef}`;
+  let st = _yearAgoInsight.get(key);
+  if (!st) {
+    st = { status: 'loading' };
+    _yearAgoInsight.set(key, st);
+    void loadYearAgoInsight({ key, leagueId, weekRef });
+  }
+  const insight = insightSectionHTML(st, { timeZone: contentTimeOpts().timeZone });   // review N2: the read's date in the player's zone
+  if (!insight) return r.html;
+  const at = r.html.lastIndexOf('<div class="cd-actions">');
+  return at >= 0 ? r.html.slice(0, at) + insight + r.html.slice(at) : r.html.replace(/<\/div>$/, insight + '</div>');
+}
+
+async function loadYearAgoInsight({ key, leagueId, weekRef }) {
+  try {
+    _yearAgoInsight.set(key, await fetchLeagueInsight({ leagueId, weekRef }));
+  } catch {
+    _yearAgoInsight.set(key, { status: 'error' });
+  }
+  if (isScreenOpen()) invalidateScreens();
+}
+
+function onCardDetailClick(e, api, cardId, { fromGame = false } = {}) {
+  const btn = e && e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-cd-action]') : null;
+  if (!btn) return;
+  const act = btn.getAttribute('data-cd-action');
+  if (act === 'back-home') { api.pop(); return; }
+  if (act === 'show-all') {                                // a list's "Show all N" opens in place (no repaint, nothing above it moves)
+    const list = btn.closest('[data-cd-list]');
+    if (!list) return;
+    const open = list.getAttribute('data-expanded') !== 'true';
+    list.setAttribute('data-expanded', open ? 'true' : 'false');
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    btn.textContent = open ? 'Show fewer' : `Show all ${list.querySelectorAll('.cd-item').length}`;
+    return;
+  }
+  const game = btn.getAttribute('data-cd-game') || '', weekId = btn.getAttribute('data-cd-week') || '', messageId = btn.getAttribute('data-cd-message') || '', memberId = btn.getAttribute('data-cd-member') || '';
+  const r = getHomeWiring().homeView.resolveCardDetail(cardId, { noGame: fromGame });
+  const hit = r && r.model.actions.find(a => a.id === act && (a.params.gameId || '') === game && (a.params.weekId || '') === weekId && (a.params.messageId || '') === messageId && (a.params.memberId || '') === memberId);
+  if (!hit) return;                                        // not in the current model with these exact parameters: nothing happens
+  if (act === 'open-game') { haptic('medium'); openGameView(game, { from: 'card', backLabel: r.title }); return; }   // D1 Lane B: the Game view pushes DIRECTLY above this detail, so Back from the game returns to the card (DI-588)
+  haptic('light');
+  if (act === 'open-thread') { openGameChatSheet(game); return; }   // the game thread is the existing bottom sheet; the detail stays where it is beneath it
+  // D1 Lane B / DI-595, DI-596: the history screens push ABOVE this detail, so Back returns to the card (the same level rule as every pushed screen).
+  if (act === 'week-detail') { openWeekDetail(weekId, { backLabel: r.title }); return; }
+  if (act === 'compare') { openComparison({ rivalId: memberId, competitionId: competitionForWeek(getWeek(weekId))?.id || null, backLabel: r.title }); return; }
+  if (act === 'share') { if (r.model && r.model.share) openShareSheet(r.model.share); return; }   // DI-597: the share the model just re-derived (never the DOM); the detail stays beneath the sheet
+  api.close('navigate');                                   // every other action leaves the pushed stack for a tab
+  if (act === 'open-chat') { navigateTo('chat'); showChatMessage(messageId); return; }
+  if (act === 'go-standings') { navigateTo('leaderboard'); return; }
+  // The card's OWN week, in its own sport (the Lane A seam): "Open Dashboard" on an NFL card opens the NFL Dashboard on that week even while the pointer is on CFB (openSportWeek).
+  if (act === 'go-picks') { openSportWeek('picks', weekId, { source: 'card' }); return; }
+  if (act === 'go-dashboard') { openSportWeek('dashboard', weekId, { source: 'card' }); return; }
+  if (act === 'see-2025') {
+    navigateTo('leaderboard');
+    try { document.querySelector('[data-section-id="stand-2025-record"]')?.scrollIntoView({ block: 'start' }); } catch { /* the section may be hidden by the player's layout */ }
+  }
+}
+
+// ─── The Game view (D1 Lane B, DI-591 / DI-610 / DI-588; Drew D-63) ───────────────────────────────────────────────────────────────────────────────────────────────────────
+// One game, as a PUSHED screen (js/pushed-screen.js) over whatever opened it: Home with Game Day open (Back returns THERE, the card still open), or a card detail (Back returns to the card). Everything it draws
+// is resolved BY GAME ID from the CURRENT data (homeView.resolveGameView) on open and on every repaint — a finished game turns into its final form in place, a game that can no longer be shown becomes the calm
+// unavailable state. Every button is allow-listed by `data-gv-action`, and a Related card by the ids resolveGameView just derived; the DOM is only ever a request (Std-9).
+function openGameView(gameId, { from = 'home', backLabel = null, restore = null } = {}) {
+  if (isContentWithheld() || typeof gameId !== 'string' || !gameId) return;
+  ensurePushedScreens();
+  if (!restore) clearReadingChain();                       // a NEW push ends the Back chip (a restore is not a new push)
+  const hv = getHomeWiring().homeView;
+  const first = hv.resolveGameView(gameId);
+  const st = { gameId };                                   // the stepper changes the shown game without leaving the screen
+  const levelId = `game:${gameId}`;
+  // DI-591 / DI-593: a cover flip or the game ending is said politely, only while focus is inside THIS screen (home.js owns the rule and the sentences)
+  const announcer = hv.gameViewAnnouncer(() => Array.from(document.querySelectorAll('#pushed-root .ps-level')).find((l) => l.getAttribute('data-ps-id') === levelId) || null);
+  pushScreen({
+    id: levelId,
+    title: first ? first.title : 'Game',
+    backLabel: backLabel || (from === 'card' ? 'Details' : 'Home'),
+    restoreKey: `gd:${gameId}`,                            // Back returns focus to the row that opened it
+    meta: { kind: 'game', ref: gameId },
+    instant: !!(restore && restore.instant), scrollTop: restore ? restore.scrollTop : 0,
+    render: () => { const r = hv.resolveGameView(st.gameId); announcer.observe(r); return r ? { html: r.html, right: r.stepperHTML } : { html: hv.gameUnavailable(), right: '' }; },
+    patch: (el, part) => hv.patchGameView(el, part),       // DI-572(a): a repaint patches the screen IN PLACE (logos, focus and scroll untouched); the stepper's pair keeps the pressed button
+    onClick: (e, api) => onGameViewClick(e, api, st),
+    onClose: () => announcer.cancel(),
+  });
+}
+export const _openGameViewForTest = openGameView;
+
+function onGameViewClick(e, api, st) {
+  const t = e && e.target && typeof e.target.closest === 'function' ? e.target : null;
+  if (!t) return;
+  const hv = getHomeWiring().homeView;
+  const card = t.closest('[data-home-action="open-card"]');
+  if (card) {                                              // a Related card: its detail pushes above this screen; the id must be one resolveGameView just derived for THIS game
+    const id = card.getAttribute('data-card-id');
+    const r = hv.resolveGameView(st.gameId);
+    if (!r || typeof id !== 'string' || !r.related.includes(id)) return;
+    haptic('light');
+    openCardDetail(id, { backLabel: r.matchup, fromGame: true });
+    return;
+  }
+  const btn = t.closest('[data-gv-action]');
+  if (!btn) return;
+  const act = btn.getAttribute('data-gv-action');
+  if (act === 'back-home') { api.pop(); return; }
+  if (act === 'open-thread') { haptic('light'); openGameChatSheet(st.gameId); return; }   // the existing bottom sheet; this screen stays beneath it
+  if (act === 'share') { const r = hv.resolveGameView(st.gameId); if (!r || !r.share) return; haptic('light'); openShareSheet(r.share); return; }   // DI-597: resolved NOW for this game
+  if (act === 'prev' || act === 'next') {
+    const r = hv.resolveGameView(st.gameId);
+    if (!r || r.live.index < 0) return;
+    const to = r.live.ids[r.live.index + (act === 'next' ? 1 : -1)];
+    if (typeof to !== 'string') return;                    // disabled at the ends; never wraps
+    haptic('selection');
+    const hadStepFocus = !!(document.activeElement && document.activeElement.closest && document.activeElement.closest('.gv-step'));
+    st.gameId = to;
+    const next = hv.resolveGameView(to);
+    const title = document.querySelector('#pushed-root .ps-level:last-child .ps-title');
+    if (title && next) title.textContent = next.title;
+    const body = document.querySelector('#pushed-root .ps-level:last-child [data-ps-body]');
+    crossFadeBody(body, () => api.repaint(), { reduced: prefersReducedMotion(), setTimer: (fn, ms) => setTimeout(fn, ms) });   // a 150 ms cross-fade of the body (no slide)
+    // the pair is patched in place, so the pressed button keeps focus; at the end of the list it is disabled (a disabled button cannot hold focus), so focus moves to the one still enabled
+    if (hadStepFocus) {
+      const a = document.activeElement;
+      if (!a || a === document.body || a.disabled || !a.isConnected) {
+        const btns = Array.from(document.querySelectorAll('#pushed-root .ps-level:last-child .gv-step-btn'));
+        const keep = btns.find((b) => b.getAttribute('data-gv-action') === act && !b.disabled) || btns.find((b) => !b.disabled);
+        if (keep) { try { keep.focus({ preventScroll: true }); } catch { /* focus is a courtesy */ } }
+      }
+    }
+    return;
+  }
+  if (act === 'make-picks') { haptic('medium'); api.close('navigate'); openSportWeek('picks', getGame(st.gameId)?.weekId || null, { source: 'game' }); return; }   // THIS game's week, in its sport
+  // DI-599 / DI-593 — What's next. Each tap is checked against what resolveGameView says NOW for this game (the DOM is only a request, Std-9): the button must still be the one the model offers.
+  if (act === 'next-picks' || act === 'open-gameday' || act === 'week-results') {
+    const r = hv.resolveGameView(st.gameId);
+    if (!r) return;
+    if (act === 'next-picks') {
+      const n = r.next;
+      if (!n || n.action !== 'next-picks' || typeof n.weekId !== 'string' || !getWeek(n.weekId)) return;
+      haptic(n.tone === 'primary' ? 'medium' : 'light');
+      api.close('navigate');
+      openSportWeek('picks', n.weekId, { source: 'whats-next' });   // "Make your NFL picks" sets the sport AND the week (the Lane A seam: enterSportContext in a several-sport league)
+      return;
+    }
+    if (act === 'open-gameday') {
+      const n = r.next;
+      if (!n || n.action !== 'open-gameday') return;
+      haptic('light');
+      api.close('navigate');
+      openGameDay({ sport: n.sport || null, source: 'whats-next' });   // DI-606 entry (5): Home, the card open in place
+      return;
+    }
+    if (!r.results || r.results.final !== true) return;                // "See week results" exists only for a server-confirmed final week
+    haptic('light');
+    // D1 Lane B History (DI-596): the week's own DETAIL screen, pushed ABOVE this game (Back returns here). Only a week the detail can open (revealed, shown in Standings' history) - else the older routes below.
+    const gameWeekId = (getGame(st.gameId) || {}).weekId;
+    if (typeof gameWeekId === 'string' && gameWeekId && openWeekDetail(gameWeekId, { backLabel: r.matchup })) return;
+    if (typeof r.results.cardId === 'string' && r.results.cardId) { openCardDetail(r.results.cardId, { backLabel: r.matchup, fromGame: true }); return; }   // the week's result, pushed ABOVE this game (Back returns here)
+    api.close('navigate'); navigateTo('leaderboard');                    // no result card is shown for this week: the week's standings
+    return;
+  }
+  if (act === 'see-all-home') { haptic('light'); const r = hv.resolveGameView(st.gameId); api.close('navigate'); navigateTo('home'); if (r && r.relatedIds.length && !hv.revealCard(r.relatedIds[0])) showToast('Those cards are further down on Home.'); return; }
+  if (act === 'locker-room') { haptic('light'); recordReadingChain(); api.close('navigate'); navigateTo('chat'); showChatFilter('all'); return; }   // DI-588: record → close → Chat (the chip is drawn by Chat's own paint)
+}
+
+// ─── The Back stack and the "Back to {screen}" chip (D1 Lane B, DI-588) ──────────────────────────────────────────────────────────────────────────────────────────────────
+// Chain: Home → (Game Day open in place) → card detail / Game view (pushed) → the game thread (the existing bottom sheet) → "Open in chat" / "Locker Room" (the Chat tab). Back always removes ONE level. Leaving
+// for Chat RECORDS the pushed stack (levels, what each opened, scroll offsets) and closes it; Chat then shows one "Back to {screen}" chip. Tapping it puts the stack back exactly as it was (a restore: instant, no push
+// animation) and clears the chip. The chip also clears on any tab change, a chat-filter change, an identity or league change, and a new push. In memory only; never persisted.
+let _readingChain = null;
+function clearReadingChain() { _readingChain = null; }
+function recordReadingChain() {
+  const levels = stackSnapshot();
+  if (!levels.length) return false;
+  const top = levels[levels.length - 1];
+  _readingChain = { levels, originTab: state.currentTab || 'home', label: top.title || 'previous screen', identity: currentIdentityKey() };
+  return true;
+}
+function readingChainChip() {
+  const c = _readingChain;
+  if (!c) return null;
+  if (c.identity !== currentIdentityKey()) { _readingChain = null; return null; }   // another account or league: never offer the departed reader's way back
+  return { label: c.label };
+}
+function restoreReadingChain() {
+  const c = _readingChain;
+  _readingChain = null;                                                              // the chip clears on the tap
+  if (!c || c.identity !== currentIdentityKey() || isContentWithheld()) return;
+  closeAllScreens('chain-restore');
+  navigateTo(c.originTab || 'home');
+  for (const lv of c.levels) {
+    const m = lv.meta || {};
+    const restore = { instant: true, scrollTop: lv.scrollTop || 0 };
+    if (m.kind === 'card' && typeof m.ref === 'string') openCardDetail(m.ref, { backLabel: lv.backLabel, fromGame: m.fromGame === true, restore });
+    else if (m.kind === 'game' && typeof m.ref === 'string') openGameView(m.ref, { backLabel: lv.backLabel, restore });
+    // D1 Lane B History (DI-588 x DI-595 / DI-596): the week detail and the comparison come back the same way - instant, at the reader's scroll, through their OWN open functions (each re-asks its gates).
+    else if (m.kind === 'week' && typeof m.ref === 'string') openWeekDetail(m.ref, { backLabel: lv.backLabel, restore });
+    else if (m.kind === 'compare' && typeof m.ref === 'string') openComparison({ rivalId: m.ref, competitionId: typeof m.competitionId === 'string' ? m.competitionId : null, firstId: typeof m.firstId === 'string' ? m.firstId : null, backLabel: lv.backLabel, restore });
+  }
+}
+let _chatReturnHooksRegistered = false;
+function ensureChatReturnHooks() {
+  if (_chatReturnHooksRegistered) return;
+  registerChatReturnHooks({
+    getChip: readingChainChip, onTap: restoreReadingChain, onFilterChange: clearReadingChain,
+    // "Open in chat" on the thread sheet: record the pushed stack the reader is standing on and close it, so the Chat tab is what they see (the pushed root would otherwise cover it).
+    beforeOpenMain: () => { if (isScreenOpen()) { recordReadingChain(); closeAllScreens('navigate'); } },
+  });
+  _chatReturnHooksRegistered = true;
+}
+export const _readingChainForTest = () => _readingChain;
+export const _restoreReadingChainForTest = restoreReadingChain;
+
+/** The thread card's data (DI-591, DI-592): the count and the last two messages as a READ-ONLY preview — plain text, never a pick chip. Chat off = no card. */
+function gameThreadInfo(gameId) {
+  if (!isChatEnabled()) return { enabled: false, count: 0, preview: [] };
+  let msgs = [];
+  try { msgs = getMessages({ tag: gameId, respectRetention: true, types: ['message'] }); } catch { msgs = []; }
+  const visible = msgs.filter(m => m && !m.deleted && !isPrivateRow(m));
+  const now = Date.now();
+  const ago = (ts) => { const ms = now - (Number(ts) || now); const m = Math.floor(ms / 60000); return m < 1 ? 'now' : m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h` : new Date(Number(ts)).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+  const authorLabel = (m) => (m.author === 'scribe' ? 'SCRIBE' : (m.authorName || getPlayer(m.author)?.displayName || 'Someone'));
+  const flat = (t) => String(t ?? '').replace(/\s+/g, ' ').trim();
+  const preview = visible.slice(-2).map(m => ({ who: authorLabel(m), text: flat(m.body).length > 140 ? `${flat(m.body).slice(0, 139)}…` : flat(m.body), when: ago(m.ts) }));
+  return { enabled: true, count: visible.length, preview };
+}
+
+/** Game Day's footer: the Dashboard, on the Now card's week. `scope` ('all' or a sport) is Lane A's Dashboard scope (DI-525 rev 3) and is applied by that branch; here the Dashboard has the one scope it has. */
+function openDashboardFromGameDay(scope) {
+  // The Lane A seam (merge of int, 2026-10-08): the footer's scope is Game Day's own (home.js validated it against the card's sports). In a several-sport league 'all' opens the Dashboard's All sports view
+  // (only for a member who plays two or more; otherwise the pointer sport) and a sport opens THAT sport's Dashboard on its current week, both through enterSportContext, which checks the sport against this
+  // league and what the member plays. A one-sport league opens the Dashboard on the current week, as before.
+  if (isMultiSport() && !isContentWithheld()) {
+    const played = playedSports();
+    if (scope === DASHBOARD_ALL && played.length >= 2) {
+      const at = played.find((p) => p.dbCode === getActiveSportKey()) || played[0];
+      enterSportContext(at.dbCode, { tab: 'dashboard', scope: DASHBOARD_ALL, source: 'gameday' });
+      return;
+    }
+    const sp = typeof scope === 'string' && scope !== DASHBOARD_ALL && leagueSports().some((x) => x.dbCode === scope) ? scope : null;
+    if (sp) {
+      const comp = competitionForSport(sp);
+      const cur = comp ? getCurrentWeekFor(comp.id) : null;
+      enterSportContext(sp, { tab: 'dashboard', weekId: cur ? cur.weekId : null, source: 'gameday' });
+      return;
+    }
+    setDashboardScope(null);                                 // an unknown scope: the pointer sport's single Dashboard, never All sports by default
+  }
+  state.viewingWeekId = null;                              // the current week is stored as null (the same convention the Live Now card's View All used)
+  navigateTo('dashboard');
+}
+
+/**
+ * Open a sport tab on ONE week, from Lane B's surfaces (a card detail, a Game view, What's next). In a several-sport league through enterSportContext, with the sport of the week's OWN competition (R1:
+ * competitionForWeek, never the week record's field): the pointer moves to that sport and the week is honoured only when it is that sport's. A week whose competition is not hydrated opens the tab as it
+ * stands (never another sport's week under this one). A one-sport league: the week alone, the shared convention (the context week is stored as null).
+ */
+function openSportWeek(tab, weekId, { source = '' } = {}) {
+  const w = typeof weekId === 'string' && weekId ? getWeek(weekId) : null;
+  if (isMultiSport()) {
+    const comp = w ? competitionForWeek(w) : null;
+    if (comp && typeof comp.sport === 'string' && comp.sport) return enterSportContext(comp.sport, { tab, weekId: w.weekId, source });
+    navigateTo(tab);
+    return false;
+  }
+  if (w) state.viewingWeekId = (w.weekId === getContextWeek()?.weekId) ? null : w.weekId;
+  navigateTo(tab);
+  return true;
+}
+export const _openSportWeekForTest = openSportWeek;
+
+// ═══ D1 Lane B — DI-597 / PF-454: SHARE TO CHAT ═══════════════════════════════════════════════════════════════════════════════════════════════
+// The sheet (the shared sheet shell: grabber and drag-down on native, ✕ / backdrop / Esc on the web), the post (chat-ui.js postShareToChat: ONE ordinary player message, uuid id, meta { ref } only), and the
+// reader's resolver (whether a shared reference opens for THIS reader, from their own data and gates, and how). Share exists only where the sharer's own gate passed: the card detail's model offers it
+// after its gate, the Game view after its own; both are re-derived at the tap (never the DOM).
+const SHARE_WRAP_ID = 'share-sheet-wrap', SHARE_SHEET_ID = 'share-sheet';
+let _shareSheet = null;     // { share, status: 'ready'|'posting'|'failed'|'duplicate', dupId, comment, unbind, onKey, closing }
+
+/** Share is offered to a signed-in, verified member while chat is on (DI-597: hidden for signed-out viewers and with chat off). */
+function shareOffered() {
+  try { const s = getSession(); return isChatEnabled() && !!(s && s.playerId && s.playerVerified) && !isContentWithheld(); } catch { return false; }
+}
+
+function openShareSheet(share) {
+  if (isContentWithheld() || !shareOffered() || !share || !validShareRef(share.ref) || typeof share.line !== 'string' || !share.line) return;
+  if (!shareRefAvailableNow(share.ref)) return;             // the sharer's own gate, asked again here: Share exists only for what THIS member may see right now
+  closeShareSheet({ immediate: true });
+  let dup = null;
+  try { dup = findShareDuplicate({ ref: share.ref, gameTag: share.gameTag || '' }); } catch { dup = null; }
+  let opener = null;
+  try { opener = document.activeElement && document.activeElement !== document.body ? document.activeElement : null; } catch { opener = null; }
+  const ss = { share, status: dup ? 'duplicate' : 'ready', dupId: dup ? dup.id : null, comment: '', unbind: null, onKey: null, closing: false, opener };
+  _shareSheet = ss;
+  const { wrap, unbind } = mountSheetShell({
+    wrapId: SHARE_WRAP_ID,
+    sheetId: SHARE_SHEET_ID,
+    sheetAttrs: ' role="dialog" aria-modal="true" aria-labelledby="share-sheet-title" aria-describedby="share-sheet-sub"',
+    headerInnerHTML: `<div class="share-head-text"><div class="chat-sheet-title" id="share-sheet-title" tabindex="-1">${escHtml(SHARE_COPY.title)}</div><div class="chat-sheet-sub" id="share-sheet-sub">${escHtml(SHARE_COPY.subtitle)}</div></div><button type="button" class="chat-sheet-close" id="share-sheet-close" aria-label="Close">${icon('close')}</button>`,
+    bodyId: 'share-sheet-body',
+    closeId: 'share-sheet-close',
+    onBackdrop: () => closeShareSheet(),
+    renderBody: () => paintShareSheetBody(),
+    drag: { getBlocked: () => _dismissBlockingSurfaceUp({ excludeShare: true, excludePushed: true }), onProgress: shareSheetDragProgress, onSettle: settleShareSheetDrag },
+  });
+  ss.unbind = unbind;
+  wrap.addEventListener('click', onShareSheetClick);
+  ss.onKey = (e) => { if (e && e.key === 'Escape' && _shareSheet === ss && !document.querySelector('.modal-overlay, #site-gate-overlay')) closeShareSheet(); };
+  document.addEventListener('keydown', ss.onKey);
+  try { wrap.querySelector('#share-sheet-title')?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+}
+
+function paintShareSheetBody(focusSel = null) {
+  const body = document.getElementById('share-sheet-body');
+  const ss = _shareSheet;
+  if (!body || !ss) return;
+  const ta = body.querySelector('#share-comment');
+  if (ta) ss.comment = String(ta.value || '');
+  const sh = ss.share;
+  const preview = `<article class="card share-preview"><div class="share-eyebrow"><span class="share-eyebrow-icon" aria-hidden="true">${icon('share')}</span><span>${escHtml(sh.eyebrow || '')}</span></div>${sh.title ? `<h3 class="share-title">${escHtml(sh.title)}</h3>` : ''}</article>`;
+  let main;
+  if (ss.status === 'duplicate') {
+    main = `<p class="share-status" role="status">${escHtml(SHARE_COPY.already)}</p><div class="share-actions"><button type="button" class="btn btn-primary share-btn" data-share-action="view" data-haptic="light">${escHtml(SHARE_COPY.viewInChat)}</button><button type="button" class="btn btn-ghost share-btn" data-share-action="cancel" data-haptic="light">${escHtml(SHARE_COPY.cancel)}</button></div>`;
+  } else {
+    const posting = ss.status === 'posting', failed = ss.status === 'failed';
+    main = `<label class="sr-only" for="share-comment">${escHtml(SHARE_COPY.placeholder)}</label><textarea id="share-comment" class="share-comment" rows="2" maxlength="200" placeholder="${escHtml(SHARE_COPY.placeholder)}"${posting ? ' disabled' : ''}>${escHtml(ss.comment)}</textarea>`
+      + (failed ? `<p class="share-status share-status--error" role="alert">${escHtml(SHARE_COPY.failed)}</p>` : '')
+      + `<div class="share-actions"><button type="button" class="btn btn-primary share-btn" data-share-action="post" data-haptic="medium"${posting ? ' disabled aria-disabled="true"' : ''}>${escHtml(failed ? SHARE_COPY.retry : SHARE_COPY.post)}</button><button type="button" class="btn btn-ghost share-btn" data-share-action="cancel" data-haptic="light">${escHtml(SHARE_COPY.cancel)}</button></div>`;
+  }
+  body.innerHTML = `${preview}${main}<p class="share-foot">${escHtml(SHARE_COPY.footnote)}</p>`;
+  if (focusSel) { try { body.querySelector(focusSel)?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ } }
+}
+
+function onShareSheetClick(e) {
+  const btn = e && e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-share-action]') : null;
+  const ss = _shareSheet;
+  if (!btn || !ss || ss.closing || btn.disabled) return;
+  const action = btn.getAttribute('data-share-action');
+  if (action === 'cancel') { haptic('light'); closeShareSheet(); return; }
+  if (action === 'view' && ss.status === 'duplicate') {
+    haptic('light');
+    const id = ss.dupId, tag = ss.share.gameTag || '';
+    closeShareSheet({ immediate: true });
+    try { if (isScreenOpen()) { recordReadingChain(); closeAllScreens('navigate'); } } catch { /* the stack is a courtesy */ }
+    navigateTo('chat');
+    if (tag) { try { showChatFilter(tag); } catch { /* the filter is a courtesy */ } }
+    if (id) { try { showChatMessage(id); } catch { /* the jump is a courtesy */ } }
+    return;
+  }
+  if (action !== 'post' || (ss.status !== 'ready' && ss.status !== 'failed')) return;   // posting: one message per Post — a second tap does nothing
+  const ta = document.getElementById('share-comment');
+  ss.comment = ta ? String(ta.value || '') : ss.comment;
+  ss.status = 'posting';
+  paintShareSheetBody();
+  let res = null;
+  try { res = postShareToChat({ ref: ss.share.ref, line: ss.share.line, comment: ss.comment, gameTag: ss.share.gameTag || '' }); } catch (err) { console.error('[share] the post failed', err); res = null; }
+  if (_shareSheet !== ss) return;
+  if (res && res.ok) { haptic('success'); closeShareSheet(); showToast(SHARE_COPY.posted, 'success'); return; }
+  if (res && res.reason === 'duplicate') { ss.status = 'duplicate'; ss.dupId = res.id || null; paintShareSheetBody('[data-share-action="view"]'); return; }
+  ss.status = 'failed';
+  paintShareSheetBody('[data-share-action="post"]');
+}
+
+function closeShareSheet({ immediate = false } = {}) {
+  const ss = _shareSheet;
+  const wrap = document.getElementById(SHARE_WRAP_ID);
+  if (ss) {
+    if (ss.closing && !immediate) return;
+    ss.closing = true;
+    try { ss.unbind?.(); } catch { /* the drag teardown is a courtesy */ }
+    ss.unbind = null;
+    if (ss.onKey) { try { document.removeEventListener('keydown', ss.onKey); } catch { /* courtesy */ } ss.onKey = null; }
+  }
+  const finish = () => {
+    document.getElementById(SHARE_WRAP_ID)?.remove();
+    if (_shareSheet === ss) _shareSheet = null;
+    // focus goes back to the Share button that opened the sheet, when it is still on screen (VoiceOver resumes where the member was)
+    try { if (ss && ss.opener && ss.opener.isConnected && typeof ss.opener.focus === 'function' && !document.getElementById(SHARE_WRAP_ID)) ss.opener.focus({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+  };
+  if (!wrap || immediate) { finish(); return; }
+  const sheetEl = wrap.querySelector(`#${SHARE_SHEET_ID}`);
+  let reduced = false; try { reduced = prefersReducedMotion(); } catch { reduced = false; }
+  finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--share-drag-y', '1'), reducedMotion: reduced, done: finish });
+}
+function shareSheetDragProgress(wrap, sheetEl, progress) {
+  sheetEl.setAttribute('data-dragging', 'true');
+  wrap.setAttribute('data-dragging', 'true');
+  wrap.style.setProperty('--share-drag-y', String(progress));
+}
+function settleShareSheetDrag(wrap, sheetEl, { dismissed, reducedMotion } = {}) {
+  sheetEl.removeAttribute('data-dragging');
+  wrap.removeAttribute('data-dragging');
+  if (!dismissed) { wrap.style.setProperty('--share-drag-y', '0'); return; }
+  finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--share-drag-y', '1'), reducedMotion: !!reducedMotion, done: () => closeShareSheet({ immediate: true }) });
+}
+export const _openShareSheetForTest = openShareSheet;
+export const _closeShareSheetForTest = closeShareSheet;
+export const _shareSheetStateForTest = () => (_shareSheet ? { status: _shareSheet.status, dupId: _shareSheet.dupId, ref: { ..._shareSheet.share.ref } } : null);
+
+/**
+ * THE READER'S RESOLVER (DI-597 "rebuilt from the reader's own data"). A reference opens for this reader only when it resolves NOW against their own data and the same gate as the original: a card is
+ * one this paint derives with a detail (its reveal class, its week), a game or a week one the viewer may open (homeView's viewableWeek: no demo week but for the commissioner, no week the SERVER still
+ * calls a draft but for the commissioner). A comparison opens nothing until the History lane registers it. Withheld content answers no.
+ *
+ * Security F-1 (2026-10-14): a room repaint asks once per shared message, so the PAINT check is Set lookups against ONE fresh read per pass (homeView.shareTargets()), cached by the identity and a data
+ * version and dropped when the task that built it ends (the next paint reads again). The TAP and the Share sheet's open ask the exact question again (resolveCardDetail / resolveGameView): the paint's
+ * answer is never trusted for an action.
+ */
+let _shareTargets = null;          // { key, version, cardIds, gameIds, weekIds }
+let _shareDataVersion = 0;         // bumped by every data repaint (_repaintForSupabaseData): a pass that spans a data change reads again (and every new task reads again anyway)
+function bumpShareDataVersion() { _shareDataVersion += 1; }
+function shareTargetsNow() {
+  const key = currentIdentityKey();
+  if (_shareTargets && _shareTargets.key === key && _shareTargets.version === _shareDataVersion) return _shareTargets;
+  let t = null;
+  try { t = getHomeWiring().homeView.shareTargets(); } catch { t = null; }
+  const built = { key, version: _shareDataVersion, cardIds: t ? t.cardIds : new Set(), gameIds: t ? t.gameIds : new Set(), weekIds: t ? t.weekIds : new Set(), compare: new Map() };   // (compare: this pass's memo of comparison refs, History lane)
+  _shareTargets = built;
+  setTimeout(() => { if (_shareTargets === built) _shareTargets = null; }, 0);   // the pass ends with this task
+  return built;
+}
+function shareRefAvailable(ref) {
+  const r = validShareRef(ref);
+  if (!r || isContentWithheld()) return false;
+  const t = shareTargetsNow();
+  if (r.type === 'card') return t.cardIds.has(r.id);
+  if (r.type === 'game') return t.gameIds.has(r.id);
+  if (r.type === 'week') return t.weekIds.has(r.id) && historyWeekReachable(getWeek(r.id));        // D1 Lane B History: a week the member may open AND the detail can show (revealed)
+  if (r.type === 'compare') return compareRefOk(r.id, t.compare);
+  return false;
+}
+/** The exact question, for an ACTION (the tap, the Share sheet's open): the detail or the Game view resolved now, never a cached or Set answer. */
+function shareRefAvailableNow(ref) {
+  const r = validShareRef(ref);
+  if (!r || isContentWithheld()) return false;
+  _shareTargets = null;
+  try {
+    const hv = getHomeWiring().homeView;
+    if (r.type === 'card') return !!hv.resolveCardDetail(r.id);
+    if (r.type === 'game') return !!hv.resolveGameView(r.id);
+    if (r.type === 'week') return hv.shareTargets().weekIds.has(r.id) && historyWeekReachable(getWeek(r.id));
+    if (r.type === 'compare') return compareRefOk(r.id, null);
+  } catch { return false; }
+  return false;
+}
+function openSharedRef(ref) {
+  const r = validShareRef(ref);
+  if (!r || isContentWithheld()) return;
+  if (!shareRefAvailableNow(r)) return;                    // asked again at the tap, never trusted from the paint
+  if (r.type === 'card') openCardDetail(r.id, { backLabel: 'Chat' });
+  else if (r.type === 'game') openGameView(r.id, { from: 'chat', backLabel: 'Chat' });
+  else if (r.type === 'week') openWeekDetail(r.id, { backLabel: 'Chat' });
+  else if (r.type === 'compare') openSharedComparison(r.id);
+}
+registerShareResolver({ available: shareRefAvailable, open: openSharedRef });
+export const _shareRefAvailableForTest = shareRefAvailable;
+export const _shareRefAvailableNowForTest = shareRefAvailableNow;
+export const _clearShareAvailMemoForTest = () => { _shareTargets = null; };
+export const _openDashboardFromGameDayForTest = openDashboardFromGameDay;
+/** DI-606: every entry point to the open Game Day card (a card detail's "Open Game Day", the league overview's "{n} live now" chip, later a notification). Switches to Home if needed, then expands the card. */
+export function openGameDay({ gameId = null, source = 'api' } = {}) {
+  if (isContentWithheld()) return false;
+  if (state.currentTab !== 'home') navigateTo('home');
+  return getHomeWiring().homeView.openGameDay({ gameId, source });
 }
 
 function getHomeWiring() {
   if (_homeWiring) return _homeWiring;
+  ensurePickModules();   // D1 Lane B: the gate and the By team renderer get the app's helpers before Home (or a Game view) can ask them anything
   const homeNews = createHomeNews();
   const chatCandidates = makeChatCandidateSource({ getMessages, isPrivateRow, chatBoundToLeague });   // DI-372 A1: chatBoundToLeague is chat.js's STORE-backed predicate, by reference (W2)
   const homeView = createHome({
     escHtml,                                            // the app's one escaper, never String (S-C6)
     isContentWithheld,                                  // S-C7: the render chokepoint's own gate
     currentIdentityKey,                                 // W3: the real function, so an async paint can compare identities
-    renderCompact: renderDashboardCompact,              // the Dashboard's own compact table, unmodified (its blind-rule logic stays where it is reviewed)
+    // (renderCompact retired, D1 Lane B 2026-10-08: Game Day's pills and open card replace the Live Peek's compact Dashboard block — Drew D-58/D-63.)
+    threadInfo: gameThreadInfo,                         // D1 Lane B / DI-591: the Game view's thread card (count + the last two messages), read through chat.js — the app owns chat
+    logoUrlFor: (game, side) => { const logoViewOn = getLogoView(); const u = (logoViewOn && game && !game.isManual) ? logoOk(side === 'home' ? game.homeLogo : game.awayLogo) : null; return (u && !isKnownFailedLogo(u)) ? u : null; },   // the Game view's lockups: Team logos on AND a usable URL (DI-572) that has not already failed on this page (the batch-L rule: a known-failed file is never asked for again, so the lockup shows its label)
+    entrantsFor: entrantsForWeek,                       // D1 Lane B: WHO IS IN a game's sport for its week (security C4) — the Lane A seam, see entrantsForWeek() above renderDashboardCompact
+    joinOffers,                                         // DESIGN_D1_E (DI-E1.1): the sports this viewer has not joined that the league offers - the league overview's own "Also in this league" cards, so the nudge and the sheet cannot disagree
+    // N7 (pass 3): the sport a week belongs to, by the LEAGUE's competitions (the week detail's own lookup), so the Game view of an NFL game says "You're not entered in NFL picks" even while the NFL is not
+    // one of Home's sports. Narrower than a `competitions` list on purpose: that list would also widen Game Day, the stats lines and the sport words across Home (see the pass-3 hand-back).
+    weekSportLabel: (week) => { if (!week || !isMultiSport()) return null; const c = competitionForWeek(week); const e = c ? leagueSports().find((x) => x.competitionId === c.id) : null; return e ? e.code : null; },
     // The server-CONFIRMED week status (RG-253): a client-computed 'final' is not enough to open the after-final cards.
     confirmedStatusFor: (w) => {
       if (getBackendMode() !== 'supabase') return w.status;
@@ -5560,12 +6734,33 @@ function getHomeWiring() {
     getContainer: ensureHomeRoot,
     getCurrentTab: () => state.currentTab,
     onAction: onHomeAction,
+    setTimer: (fn, ms) => setTimeout(fn, ms), clearTimer: (h) => clearTimeout(h),   // D1 DI-574: the new-posts pill's polite VoiceOver announcement is debounced 1 s (the renderer owns no timer of its own)
+    pilotHistoryAllowed: () => isPilotOnlyAllowed('season2025Record'),   // D1 security O1: the `year.ago` card and its detail name the PILOT league's members and 2025 scores — pilot leagues only, by the registry's one predicate
+    onRender: () => { if (isScreenOpen()) invalidateScreens(); },   // D1 Lane B: every Home repaint also refreshes an open card detail (the top level, debounced; its gate is re-asked)
+    liveEntryFor: (gameId) => liveStatusById.get(gameId) || null,   // DI-570: the provider capture, so a stale score says so (the SAME map the Dashboard reads)
+    // DI-575/576: what the card detail needs from the app — the game thread's message count, the Dashboard's own week-summary rows (one render path), and which onward actions exist today.
+    detailContext: () => ({
+      threadCount: (gameId) => (historyThreadLoadedFor()(gameId) ? historyThreadCount(gameId) : null),   // N4: the SAME number the history rows and the Game view show (withdrawn and private rows are not counted); B1: null = a bare "Open thread" for a game older than the loaded log
+      scoreSummaryRowsHTML: (week) => {
+        // THE BLIND RULE, asked again where the league's picks are read (S-C1 / S-C10): the card gate already passed, and this is the belt — a week whose picks are not public, or whose server read has not landed, yields nothing.
+        if (!week || !arePicksPublic(week) || (getBackendMode() === 'supabase' && sb.picksReadWhilePublic(week.weekId) !== true)) return '';
+        const players = playersForWeek(week), picks = picksOfRoster(getPicks(week.weekId), players), games = getGames(week.weekId), actualTB = week.actualTiebreakerValue;   // D1 merge 2026-10-08 (C4, A3): the week's own sport's ENTRANTS and their rows - a card detail for an NFL week never ranks the league's non-entrants
+        return renderScoreSummaryRowsHTML(week, weeklyResultsWithTie(week, players, picks, games, actualTB), players, actualTB);
+      },
+      capabilities: { thread: isChatEnabled(), chat: isChatEnabled(), gameday: true, share: shareOffered(), compare: true, weekDetail: true },   // DI-597: Share to chat for a signed-in member with chat on; D1 Lane B: the Game view exists ("Open game"); compare and weekDetail are the history screens (DI-595 / DI-596)
+      // DI-576 / DI-595: "Compare with {name}" only between two members who were BOTH entered in the card's week's competition (S4 and a sport the viewer does not play hide it).
+      canCompare: (memberId, week) => { const me = viewerMemberId(); if (!me || !week || !memberId || memberId === me) return false; const ids = playersForWeek(week).map((p) => p.playerId); return ids.includes(me) && ids.includes(memberId); },
+    }),
     fetchNews: homeNews.fetchNews,
     renderNewsCard: homeNews.renderNewsCard,
     newsEmptyCopy: homeNews.emptyCopy,                  // "Pick at least one sport in News settings." when every sport is unchecked
     // haptic and isDataReady are deliberately NOT passed: the defaults are the right ones (checklist items 14, 15).
   });
   _homeWiring = { homeView, homeNews };
+  // D1 Lane B / DI-587: the app going to the background ends a Home visit (the "last seen" marker advances after a visit of 2 s or more). Registered ONCE, with the wiring.
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('visibilitychange', () => { if (document.hidden && state.currentTab === 'home') { try { homeView.noteLeft(); } catch { /* a marker is never worth a thrown handler */ } } });
+  }
   // News prefs changed (the player's own toggle): forget the slot's state, and repaint if Home is what is showing. Registered ONCE, with the wiring.
   subscribeNewsPrefsChanged(() => {
     homeView.resetNews();
@@ -5578,6 +6773,8 @@ function getHomeWiring() {
 function renderHomePage() {
   getHomeWiring().homeView.renderHome();
   renderPausedLeagueBannerIfNeeded('home');
+  renderSportStallBannerIfNeeded('home');   // D1 / DI-557: below the other notices, outside #home-root like them
+  armLockFlipForPage();   // D1 / DI-510 (E1): Home's Now card reads the same week-lock state, so its paint watches the lock instant too
 }
 export const _getHomeWiringForTest = getHomeWiring;
 export const _renderHomePageForTest = renderHomePage;
@@ -5587,7 +6784,31 @@ export const _setupNavForTest = setupNav;        // homenavtest: the tab-change 
 export const _navigateToForTest = navigateTo;
 export const _resetHomeWiringForTest = () => { _homeWiring = null; _homeBoundRoot = null; };
 
+// ─── Reading position survives tab changes (D1 Lane B, DI-585(b); Interaction Principles "Tab Bar": changing tabs preserves state and scroll position) ─────────────────────────────────────
+// The window is ONE scroller shared by every tab, so before this the page you came back to inherited whatever offset the last tab left. Home, Dashboard and Standings now remember the window offset on
+// leaving and restore it on return — ONLY for the same identity and league (the key includes both) and, on the Dashboard, the same viewed week. In memory only; never persisted. The restore is an
+// INSTANT scroll through the house helper (the stylesheet's html{scroll-behavior:smooth} would turn it into a visible slide) and pauses the tab bar's hide-on-scroll for it, so the bar does not
+// read the app's own scroll as the reader's. Picks and Chat keep their own logic (RG-279 anchoring in Chat is untouched).
+const _tabScroll = {};
+const TAB_SCROLL_MEMORY = ['home', 'dashboard', 'leaderboard'];
+function rememberTabScroll(tab) {
+  if (!TAB_SCROLL_MEMORY.includes(tab) || typeof window === 'undefined') return;
+  const y = Number(window.scrollY);
+  _tabScroll[tab] = { y: Number.isFinite(y) ? y : 0, identity: currentIdentityKey(), week: state.viewingWeekId || null };
+}
+function restoreTabScroll(tab) {
+  if (!TAB_SCROLL_MEMORY.includes(tab) || typeof window === 'undefined') return;
+  const m = _tabScroll[tab];
+  if (!m) return;
+  if (m.identity !== currentIdentityKey()) { delete _tabScroll[tab]; return; }          // another account or league: never restore the departed one's place
+  if (tab === 'dashboard' && m.week !== (state.viewingWeekId || null)) return;          // a different week was just built; its top is the right place
+  pauseNavHide();
+  scrollWindow(window, { top: m.y, left: 0, behavior: 'instant' }, 'scrollTo');
+}
+export const _tabScrollForTest = _tabScroll;
+
 function navigateTo(tab) {
+  disarmLockFlip();   // D1 / DI-510: the one lock-flip timer is cleared on every navigation; the Picks / Dashboard paint below re-arms it, any other tab leaves it off
   // SECURITY S-2 — the render chokepoint refuses to paint league data while no
   // identity is proven. Deliberately BEFORE `state.currentTab` moves: a
   // navigation that renders nothing must not leave the app believing it is on a
@@ -5680,12 +6901,30 @@ function navigateTo(tab) {
   // capture — the ⚙ panel lost the edit on roughly every other repaint (reviewer BLOCK, 2026-09-19).
   const _fieldSnap = _priorTab === 'chat' ? null : captureDirtyFields(
     document.getElementById(`page-${_priorTab}`), currentIdentityKey(), { skipIds: ['chat-input'] });
+  // D1 Lane B: leaving a tab ends a Home visit (DI-587: the "last seen" marker advances after a visit of 2 s or more) and remembers where the reader was on Home / Dashboard / Standings (DI-585).
+  if (_priorTab !== tab) {
+    if (isScreenOpen()) closeAllScreens('navigate');   // D1 Lane B / DI-598: a pushed screen never covers the tab the reader is going to (the thread sheet's "Open in chat", a deep link): closed through its own door, once, on a real tab change
+    rememberTabScroll(_priorTab);
+    if (_priorTab === 'home' && _homeWiring) { try { _homeWiring.homeView.noteLeft(); } catch { /* a marker is never worth a failed navigation */ } }
+  }
+  if (tab !== 'chat') clearReadingChain();   // D1 DI-588: the Back chip ends on any tab change
+  if (tab !== _priorTab && (state.arrangeWeekId || _sortSheet)) {   // D1 DI-581 / DI-607: arranging and the Sort sheet belong to the Dashboard visit they were opened on
+    try { _gameArrangeCtl?.cancel?.(); } catch { /* best effort */ }
+    clearArrangeState();
+    closeSortSheet({ immediate: true });
+  }
+  if (_priorTab !== tab) _stallVisit = null;   // D1 / DI-557: a tab change is a navigation (its scroll is restored by restoreTabScroll), never a banner offset
   state.currentTab = tab;
   // UN-110: drives body[data-tab="..."] CSS (chat's own header-hidden layout,
   // UN-111's tz/theme visibility). MUST come after the chat-disabled redirect
   // above — otherwise a bounce to dashboard would leave the attribute reading
   // "chat" and the header would stay hidden on the wrong page.
   document.body.dataset.tab = tab;
+  // D1 DI-556 — in a league with several sports the header pill's label follows the TAB (the sport on Picks / Dashboard / Standings, the league alone elsewhere), so it is re-read when the
+  // tab changes. A league with one sport never takes this branch: its pill is exactly what it was.
+  if (_priorTab !== tab) { try { if (isMultiSport()) renderLeaguePill(); } catch (e) { console.warn('[sport] the pill could not follow the tab', e); } }
+  // D1 (Part 2 item 1) — and the header's week block follows the TAB the same way (the sport's week on a sport tab, the lens' in Comm, the pointer's elsewhere). A one-sport league never takes this branch.
+  try { if (isMultiSport()) renderHeaderWeek(); } catch (e) { console.warn('[sport] the header week could not follow the tab', e); }
   // DI-320 §Entry point 2 — 'admin' (reached for an admin-only viewer by the
   // redirect above) maps to 'commissioner'. Since v0.29.0 there is no Comm
   // button in the bar (both panels live in the control center, DESIGN_NEEDS_HOME
@@ -5739,6 +6978,10 @@ function navigateTo(tab) {
   // SP-57 (DI-385) — the "Rearranging" bar follows the page that is showing: mounted iff a layout page is in edit mode
   // and visible with two or more sections (a repaint into an empty state clears the mode), unmounted on every other tab.
   syncLayoutEditBar();
+  if (_priorTab !== tab) restoreTabScroll(tab);   // D1 Lane B / DI-585(b): back on Home / Dashboard / Standings, the reader is where they left (same identity, same week)
+  // D1 / DI-510 (fix round, E1) — EVERY tab watches the current week's lock instant, so the header badge (it sits above every page) flips at the instant wherever the member is. The Picks, Dashboard and
+  // Home paints above armed it already (one timer: arming again just replaces it); this covers the rest.
+  armLockFlipForPage();
   // DI-344/345 §Render paths — "isLeaguePaused(league) gates the banner
   // identically across all six nav destinations — one function, six call
   // sites, never six independent status==='paused' checks." Chat is handled
@@ -5760,6 +7003,8 @@ function navigateTo(tab) {
   // NOTE 6 / BLOCK 4 — same belt-and-suspenders shape, for the platform-wide
   // maintenance banner (independent of league-pause state).
   try { renderMaintenanceBannerIfNeeded(tab); } catch (e) { console.warn('[maintenance-banner] render failed', e); }
+  // D1 / DI-557 — and the stall banner, last: it seats itself below the two notices above. Not over a link-flow or league-flow screen (those own the section). The function never throws.
+  if (!linkFlow && !leagueFlow) renderSportStallBannerIfNeeded(tab);
   // RG-176 — put the in-progress edits back, immediately after the render that
   // destroyed them and before anything else can steal focus. The identity key
   // is re-read rather than reused: the guard is checked on BOTH sides, so a
@@ -5795,6 +7040,9 @@ function navigateTo(tab) {
   // catches an AUTO-lock that happened while every device was closed. Same
   // chokepoint, same one-post-per-invocation bound, active week only.
   try { checkLifecyclePostDue(); } catch {}
+  // UN-412 / DI-502e — SCREEN ENTRY refreshes "Who's in": the same chokepoint, the same reason. Asks only when a strip is actually on this page
+  // and only in Supabase mode, and the throttle makes a Realtime repaint (which also lands here) cost nothing inside 20 s. Never throws.
+  mountPickStatus('enter');
   // N1 / DI-N5 — the bell no longer carries a badge, so this is now visibility
   // only. Kept on navigation because the bell's visibility is still session-
   // dependent and this is the cheapest honest place to refresh it.
@@ -5913,7 +7161,7 @@ function navigateTo(tab) {
         // list, and the swipe used to rubber-band dead from index -1.
         return { weekIds: chronologicalWeekIds(picksNavWeeks()), currentWeekId: picksShowingWeek().showingWeekId, tab: 'picks' };
       }, (targetId) => {
-        const cur = getCurrentWeek();
+        const cur = getContextWeek();   // D1 DI-520: the swipe moves between THIS sport's weeks
         state.viewingWeekId = (targetId === cur?.weekId) ? null : targetId;
         renderPicksPage();
         // SB-23 — still "Picks lands at the top" (DI-325), but INSTANT: under
@@ -5926,8 +7174,11 @@ function navigateTo(tab) {
       }, { renderPreview: (weekId) => renderWeekSwipePreview('picks', weekId), incomingAtTop: true });
     } else if (tab === 'dashboard') {
       bindWeekSwipe(document.getElementById('page-dashboard'), () => {
+        // D1 DI-525 rev 3 — in ALL SPORTS the in-tab week swipe is INERT: it does not claim the touch and does not bounce (each sport's week has its own number, lock and finalization, so
+        // "previous week" is ambiguous across sports). The drawer's edge swipe is a separate binder and still works.
+        if (isMultiSport() && getDashboardScope() === DASHBOARD_ALL) return { inert: true, weekIds: [], currentWeekId: null, tab: 'dashboard' };
         const isCommissioner = !!getSession()?.isAdmin;
-        const weeks = selectableDashboardWeeks(getWeeks(), isCommissioner);
+        const weeks = selectableDashboardWeeks(getContextWeeks(), isCommissioner);
         // v0.27.0 — `weeks` is NEWEST-FIRST (it feeds the week <select>);
         // chronologicalWeekIds() is what the direction table requires. Passing
         // this list raw is what made Dashboard swipes run backwards.
@@ -5942,7 +7193,7 @@ function navigateTo(tab) {
         // nothing on screen and a swipe appeared to do nothing. Mirrored here,
         // exactly, so the swipe always starts from the SAME week the Dashboard
         // displays.
-        const cur = getCurrentWeek();
+        const cur = getContextWeek();
         const curVisible = cur && (cur.dataSourceMode !== 'demo' || isCommissioner);
         return { weekIds: chronologicalWeekIds(weeks), currentWeekId: state.viewingWeekId || (curVisible ? cur?.weekId : null) || weeks[0]?.weekId || null, tab: 'dashboard' };
       }, (targetId) => {
@@ -5951,10 +7202,25 @@ function navigateTo(tab) {
         // above: a swipe that lands back on the CURRENT week writes the
         // shared sentinel, not the week's own concrete id, so every writer
         // of state.viewingWeekId agrees on what "current" looks like.
-        const cur = getCurrentWeek();
+        const cur = getContextWeek();
         state.viewingWeekId = (targetId === cur?.weekId) ? null : targetId;
         renderDashboard();
       }, { renderPreview: (weekId) => renderWeekSwipePreview('dashboard', weekId) });
+    } else if (tab === 'commissioner') {
+      // W-70 (DI-W70.3 / DI-W70.4, 2026-10-14) - swipe left/right between the five Comm tabs, the week swipe's own engine and semantics (left = next). The drawer rule is the Picks/
+      // Dashboard one (isInDrawerOpenZone treats 'commissioner' like them): a left-to-right swipe that STARTS in the left quarter opens the Control Center, anywhere else it changes tab.
+      // The tab strip, text fields and sideways scrollers keep their own touches (isPagerYieldTarget). The pager changes the Comm TAB only: no gesture sets state.currentTab (T-27).
+      const commRoot = document.getElementById('page-commissioner');
+      bindWeekSwipe(commRoot, () => {
+        // No tab strip (the sign-in / not-a-commissioner card): nothing to page through, nothing claimed.
+        if (!commRoot.querySelector('.comm-tabbar')) return { inert: true, weekIds: [], currentWeekId: null, tab: 'commissioner' };
+        return { weekIds: COMM_TABS.map((t) => t.key), currentWeekId: state.commTab, tab: 'commissioner' };
+      }, (key) => { setCommTab(key, { source: 'swipe' }); }, {
+        renderPreview: renderCommPanePreview, incomingAtTop: true, decorateOutgoing: decorateCommOutgoing, navigateRepaints: false,
+        shouldYield: (target) => isPagerYieldTarget(target, commRoot),
+        // N-7 (review 2026-10-14): the instant-switch flag lives for the slide only; once the layers are gone it is cleared, so a later entry to Comm fades in as it always did.
+        onSettled: () => commRoot.removeAttribute('data-comm-instant'),
+      });
     }
   } catch (e) { console.warn('[nav-gestures] per-tab gesture rebind failed', e); }
 }
@@ -6007,7 +7273,7 @@ function renderWeekSwipePreview(tab, weekId) {
   const html = document.documentElement;
   const saved = { viewingWeekId: state.viewingWeekId, layoutAnnounce: state.layoutAnnounce, className: root.className,
     minHeight: html.style.minHeight, x: window.scrollX, y: window.scrollY };
-  const cur = getCurrentWeek();
+  const cur = getContextWeek();
   let out = null;
   try {
     // N3 (reviewer) — the DOCUMENT's height is pinned, not the page's: a page
@@ -6039,15 +7305,41 @@ function renderWeekSwipePreview(tab, weekId) {
 }
 
 function refreshHeader() {
-  const week = getCurrentWeek();
+  renderHeaderIdentity();
+  renderLeaguePill();
+  renderControlCenterTrigger();
+  renderHeaderWeek();
+}
+
+/**
+ * D1 (Part 2 item 1, 2026-10-08; the FB-001 class) — WHICH WEEK THE HEADER'S WEEK BLOCK AND THE LOCK-FLIP TIMER DESCRIBE. They used to read getCurrentWeek(), the DEFAULT sport's week, on every tab, so under
+ * the NFL switcher the header said "Week 2 OPEN" about the college week. In a league with ONE sport nothing changes (the league's current week, no code, byte-identical). With several:
+ *   Picks / Dashboard / Standings   the CONTEXT sport's week (what the page below is about), with its code: "NFL Week 6";
+ *   Dashboard, All sports           NO single week (each row follows its own); the block is empty;
+ *   Commissioner                    the LENS week (the sport Comm acts on, which the player's pointer may refuse);
+ *   Home, Chat, every other tab     the week of the member's sport POINTER - which only ever lands on a sport they play, so a member who plays only the NFL never sees the college week.
+ * Returns { week, code, all }: `code` is '' in a one-sport league; `all` marks the All sports view.
+ */
+function headerWeekFor(tab = state.currentTab) {
+  try {
+    if (isMultiSport()) {
+      if (tab === 'dashboard' && getDashboardScope() === DASHBOARD_ALL) return { week: null, code: '', all: true };
+      const week = tab === 'commissioner' ? commWeek() : getContextWeek();
+      return { week, code: commSportCodeFor(week), all: false };
+    }
+  } catch (e) { console.warn('[header] the sport week could not be resolved; falling back to the league\'s current week', e); }
+  return { week: getCurrentWeek(), code: '', all: false };
+}
+
+/** The header's week block (#header-meta-week) alone: repainted on boot, on every navigation and sport switch in a several-sport league, and by every writer that calls refreshHeader(). */
+function renderHeaderWeek() {
+  const hw = headerWeekFor();
+  const week = hw.week;
   // UN-127 (change 1): #header-meta-week, NOT #header-meta itself. #header-meta
   // is now the flex-row host for BOTH the week block and the feedback button
   // (setupHeaderFeedbackButton(), appended once at boot) — writing innerHTML
   // on #header-meta directly would wipe that button on every refresh.
   const el   = document.getElementById('header-meta-week');
-  renderHeaderIdentity();
-  renderLeaguePill();
-  renderControlCenterTrigger();
   if (!el) return;
   // ── SECURITY F-4 (sixth gate, 2026-09-17) — THE WEEK BLOCK IS LEAGUE DATA ──
   // A6's teardown empties `#header-meta-week` because a week's NAME and DATES
@@ -6063,6 +7355,7 @@ function refreshHeader() {
   // there, and on the DI-180m banner path (post-identity, no hold) the element
   // legitimately holds the previous week. One assignment, no ambiguity.
   if (isContentWithheld()) { el.innerHTML = ''; return; }
+  if (hw.all) { el.innerHTML = ''; return; }   // All sports: no single week to badge
   // DI-393 (UN-353, 2026-09-27) — the header is now a ONE-LINE row: name +
   // status badge only, no date line. The date moved to DI-394's viewing-week
   // card (Picks/Dashboard, renderPicksWeekNav()) — this is no longer the
@@ -6073,8 +7366,9 @@ function refreshHeader() {
   // that it is structurally one line (headermetatest.mjs [css2]).
   if (week) {
     const wl = formatWeekLabelParts(week);
+    const headBadge = weekBadgePhase({ week, games: getGames(week.weekId) });   // D1 / DI-510: the header badge reads the same week-lock state as the week navigator's
     el.innerHTML = `<span class="week-heading week-heading-inline">
-      <span class="week-heading-name"><strong>${escHtml(wl.name)}</strong><span class="badge badge-${escHtml(week.status)} ml-sm">${escHtml(week.status.toUpperCase())}</span></span>
+      <span class="week-heading-name"><strong>${escHtml(hw.code ? hw.code + ' ' + wl.name : wl.name)}</strong><span class="badge badge-${escHtml(headBadge.phase)}${lockFlipClass()} ml-sm">${escHtml(headBadge.label)}</span></span>
     </span>`;
   } else if (isNativeShell()) {
     // DI-213a (PASS 1b) — shell brand, not league name: native says
@@ -6092,7 +7386,8 @@ function refreshHeader() {
     // all), so that duplication can no longer happen either way; "No week
     // yet" stays because it is still the correct copy for the state, not
     // because of the now-retired duplication concern.
-    el.innerHTML = `<span class="text-muted">No week yet</span>`;
+    const noCode = contextSportCode();   // Part 2 item 10: in a several-sport league the missing week is NAMED ("No NFL week yet"); a one-sport league keeps "No week yet"
+    el.innerHTML = `<span class="text-muted">${escHtml(noCode ? 'No ' + noCode + ' week yet' : 'No week yet')}</span>`;
   }
 }
 
@@ -6222,7 +7517,7 @@ export function setupHeaderIdentity() {
  *
  * Inert (hidden, empty) in 'pins'/'prelink'.
  */
-function _leaguePillClick() { showLeagueSelectorSheet(); }
+function _leaguePillClick() { openLeagueOverview(); }   // D1 DI-556: the league name opens the league OVERVIEW (the old "Choose a League" sheet is its "Switch or join a league" row)
 // 2026-09-28 — the multi-league pill carries role="button" + tabindex="0", and
 // a role="button" element must activate on Enter AND Space the way a native
 // <button> does (ARIA APG button pattern); a click listener alone only covers
@@ -6263,6 +7558,15 @@ const LEAGUE_PILL_MIN_PX = 48;
  * the slot empty rather than guess" rule.
  */
 function _leaguePillSportInfo() {
+  // D1 DI-556 — in a league with SEVERAL sports the pill names the sport only on the sport-aware tabs (Picks, Dashboard, Standings); on Home, Chat and Rules it reads the league alone, which is
+  // how a member sees at a glance that those tabs are the whole league. On the Dashboard with All sports selected it reads "All sports". A league with ONE sport keeps today's lookup below.
+  if (isMultiSport()) {
+    if (!SPORT_TABS.includes(state.currentTab)) return null;
+    if (state.currentTab === 'dashboard' && getDashboardScope() === DASHBOARD_ALL) return { label: 'All sports', code: 'All sports' };
+    const key = getActiveSportKey();
+    const s = playedSports().find((x) => x.dbCode === key) || leagueSports().find((x) => x.dbCode === key);
+    return s ? { label: s.label, code: s.code } : null;
+  }
   const week = getCurrentWeek();
   const membershipSport = getCachedMemberships().find(m => m.leagueId === getActiveLeagueId())?.sportDefault;
   const key = normalizeSportKey(week?.sport) || normalizeSportKey(membershipSport);
@@ -6276,16 +7580,29 @@ function _leaguePillSportInfo() {
  * three variants collapse to the same "league name alone" string, so
  * degradation is a no-op, matching pre-DI-417 behavior exactly).
  */
-function _leaguePillContentVariants(name, sport, interactive) {
+function _leaguePillContentVariants(name, sport, interactive, hasDue = false) {
   const caret = interactive ? ' <span aria-hidden="true">▾</span>' : '';
-  const leagueOnly = `${escHtml(name)}${caret}`;
+  // D1 DI-556 — an 8 pt gold dot LEADS all three variants when any sport the member plays has picks due (it leads rather than trails because the pill ellipsizes at its end, so a trailing dot
+  // would be the first thing clipped, and it survives _fitLeaguePill()'s full -> code -> league-only degradation). Never a number. `hasDue` is false for every one-sport league: today's strings.
+  const dot = hasDue ? '<span class="league-pill-badge" aria-hidden="true"></span>' : '';
+  const leagueOnly = `${dot}${escHtml(name)}${caret}`;
   if (!sport) return { full: leagueOnly, code: leagueOnly, leagueOnly };
   const sportSpan = (text) => ` <span class="league-pill-sport">· ${escHtml(text)}</span>`;
   return {
-    full: `${escHtml(name)}${sportSpan(sport.label)}${caret}`,
-    code: `${escHtml(name)}${sportSpan(sport.code)}${caret}`,
+    full: `${dot}${escHtml(name)}${sportSpan(sport.label)}${caret}`,
+    code: `${dot}${escHtml(name)}${sportSpan(sport.code)}${caret}`,
     leagueOnly,
   };
+}
+/** "2h 10m" -> "2 hours 10 minutes" for a screen reader (the visible text stays compact). */
+function spokenTimeLeft(ms) {
+  const mins = Math.floor(Number(ms) / 60000);
+  if (!Number.isFinite(mins) || mins < 1) return 'under a minute';
+  const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+  const part = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  if (d > 0) return [part(d, 'day'), h ? part(h, 'hour') : ''].filter(Boolean).join(' ');
+  if (h > 0) return [part(h, 'hour'), m ? part(m, 'minute') : ''].filter(Boolean).join(' ');
+  return part(m, 'minute');
 }
 // DI-417 — the same overflow test `_updateScrollFadeState()` already uses
 // (js/app.js, `hasOverflow = el.scrollWidth > el.clientWidth + 1`): strictly
@@ -6403,7 +7720,8 @@ export function renderLeaguePill() {
   // sport key) — the pill degrades straight to the league name alone, the
   // same as before this DI.
   const sport = _leaguePillSportInfo();
-  const variants = _leaguePillContentVariants(name, sport, interactive);
+  const due = isMultiSport() ? sportDueItems() : [];   // D1 DI-556: the SAME list the switcher's dots and the overview's chip read; one-sport leagues never compute it
+  const variants = _leaguePillContentVariants(name, sport, interactive, due.length > 0);
   // Bind/unbind EVERY render against the same named handler, so the "no click
   // handler" half of DI-184b is a fact about the element a test can read, not
   // a claim about a code path — and so a re-render can never stack listeners.
@@ -6427,10 +7745,9 @@ export function renderLeaguePill() {
     // options that don't exist yet; several memberships still says "Tap to
     // switch." — the phrasing DI-184c's own aria-label rule already used
     // before this DI, unchanged for that case.
-    const tapPhrase = getCachedMemberships().length > 1 ? 'Tap to switch.' : 'Tap for leagues.';
-    el.setAttribute('aria-label', sport
-      ? `Active league: ${name}, viewing: ${sport.label}. ${tapPhrase}`
-      : `Active league: ${name}. ${tapPhrase}`);
+    // D1 DI-556 — the tap now opens the league OVERVIEW, so the accessible name says so (and names a due deadline in WORDS, the dot being only its visual twin).
+    const dueClause = due.length ? ` ${due[0].code} picks due in ${spokenTimeLeft(due[0].lockAtMs - Date.now())}.` : '';
+    el.setAttribute('aria-label', `${name}. League overview.${sport ? ` Viewing ${sport.label}.` : ''}${dueClause} Opens the overview.`);
     el.addEventListener('click', _leaguePillClick);
     el.addEventListener('keydown', _leaguePillKeydown);
   } else {
@@ -7098,6 +8415,11 @@ function resyncPlayerPreferences({ preserveLayoutEditing = false } = {}) {
   // login/logout handlers, and every identity change that is not a restore)
   // passes nothing and clears it, exactly as before.
   if (!preserveLayoutEditing) state.layoutEditing = null;
+  // D1 DI-607 (fix round 1): a session change also drops the Dashboard's Sort SHEET (and an arrangement, just below), with the Live first order it froze under itself. Its frozen list is the previous member's view of their own week; it is dropped, not replayed (frozen = null
+  // first, so closing it does not repaint the Dashboard for a move that belonged to the departed session). Immediate: nothing slides for someone who is no longer there.
+  if (_sortSheet) { _sortSheet.frozen = null; closeSortSheet({ immediate: true }); }
+  if (_shareSheet) closeShareSheet({ immediate: true });   // D1 DI-597: a Share sheet belongs to the session that opened it (its comment and its item are that member's)
+  clearArrangeState();                                      // D1 DI-581: a session change ends a Custom arrangement in progress (the next person never inherits the rows' grips)
   state.layoutAnnounce = null;
   state.layoutFocus = null;
   // SP-57 (DI-385) — the fixed "Rearranging" bar is derived from state.layoutEditing, so it comes off with it. Only
@@ -7919,6 +9241,18 @@ function deepLinkTo(destination) {
   // stashPendingDeepLink() above for why "not now" stopped meaning "never".
   if (isContentWithheld()) { stashPendingDeepLink(destination); return; }
   if (!destination?.tab) { navigateTo('dashboard'); return; }
+  // D1 DI-523 (security A4) — a link's `sport` is UNTRUSTED input (the server shape-checks it; nothing else does): it is used only when it names a non-archived sport of THIS league.
+  // A valid sport the member PLAYS lands on that sport's tab (the pointer moves first); a valid one they have not joined opens the overview at its Join; an unknown or archived one keeps
+  // the sport already in view and lands on the tab as before. `weekId` is honoured only when it is a week of that sport (enterSportContext).
+  {
+    const sp = destination.params && typeof destination.params.sport === 'string' ? destination.params.sport : '';
+    if (sp && SPORT_TABS.includes(destination.tab) && leagueSports().some((s) => s.dbCode === sp)) {
+      enterSportContext(sp, { tab: destination.tab, weekId: destination.params.weekId, gameId: destination.params.gameId, source: 'deeplink' });
+      return;
+    }
+  }
+  // D1 (DI-553): a push or link to a message must never land hidden behind the Locker Room's sport pill — if the selected pill would hide the target, the filter goes back to All BEFORE the room paints.
+  if (destination.tab === 'chat' && destination.params?.messageId) { try { ensureChatTargetVisible({ messageId: destination.params.messageId }); } catch { /* the pill is a courtesy; the link still opens */ } }
   navigateTo(destination.tab);
   const params = destination.params || {};
   // BUG-12 (2026-09-12) — THE TAP, on the path that actually happens most: the
@@ -7939,8 +9273,7 @@ function deepLinkTo(destination) {
   ready.then(() => {
   setTimeout(() => {
     if (destination.tab === 'chat' && params.messageId) {
-      const safeId = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(params.messageId) : params.messageId;
-      const el = document.querySelector(`[data-mid="${safeId}"]`);
+      const el = document.querySelector(`[data-mid="${cssId(params.messageId)}"]`);
       if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('chat-flash'); setTimeout(() => el.classList.remove('chat-flash'), 1200); }
     } else if (destination.tab === 'leaderboard' && params.section === 'obligations') {
       document.getElementById('obligations-section')?.scrollIntoView({ block: 'start' });
@@ -7952,8 +9285,7 @@ function deepLinkTo(destination) {
       // simply lands on the Rules tab, same graceful degradation the chat
       // message-id case already has. No flash animation — .chat-flash is
       // chat-scoped and stays there.
-      const safeV = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(params.whatsNew) : params.whatsNew;
-      const el = document.querySelector(`[data-release="${safeV}"]`);
+      const el = document.querySelector(`[data-release="${cssId(params.whatsNew)}"]`);
       if (el) { el.open = true; el.scrollIntoView({ block: 'start' }); }
     }
   }, 60);
@@ -8446,7 +9778,7 @@ export function _scribeMemoryTransportDefaultsForTest() { return SCRIBE_MEMORY_T
 // `wagers` is the league-wide wager+wagerack set the kinds:['wager'] carve-out
 // returns. Collapsing them would leak other players' wager rows into My SCRIBE
 // File, which DI-202l explicitly forbids.
-const scribeMemoryCache = { playerId: null, rows: [], wagers: [], loading: false, error: '' };
+const scribeMemoryCache = { playerId: null, rows: [], wagers: [], lore: [], loading: false, error: '' };
 /** Inline write error (DI-D4's error state), SCOPED to the control that
  *  failed — `{ scope:'row'|'hardline'|'tolerance'|'file', id, message }` or
  *  null. Item 9: a delete that fails must say so ON THAT ROW, not in a
@@ -8535,11 +9867,15 @@ export function seasonGroupTieContexts(allWeeks, players) {
  * profile view and the page it must agree with have one definition between
  * them; renderLeaderboard() now calls this.
  */
-export function seasonStandingsRows() {
-  const players = getPlayers().filter(p => p.active);
+export function seasonStandingsRows({ competitionId = null } = {}) {
+  // D1 DI-526 (R3) — STANDINGS ARE PER SPORT, and there is no all-sports total anywhere: in a league with several sports the rows are the context sport's (or `competitionId`'s) weeks, its
+  // ENTRANTS and its results — nothing crosses a sport. With ONE sport this is exactly what it always was.
+  const scoped = isMultiSport();
+  const cid = scoped ? (competitionId || getContextCompetition()?.id || null) : null;
+  const players = scoped ? playersForCompetition(cid) : getPlayers().filter(p => p.active);
   // Unfiltered on purpose — group membership must see every week, including
   // drafts, to know a group's TRUE size (renderLeaderboard's own note).
-  const allWeeksRaw = getWeeks();
+  const allWeeksRaw = scoped ? getWeeksForCompetition(cid) : getWeeks();
   const visibleWeekIds = new Set(allWeeksRaw.filter(isWeekShownInStandings).map(w => w.weekId));
   const allResults = getWeeklyResults().filter(r => visibleWeekIds.has(r.weekId));
   // SP-54 / DI-467 — a multi-part group's season win/loss uses the SAME tie context the finalize and History paths use (needs doc F8, the UN-126 class).
@@ -8547,6 +9883,17 @@ export function seasonStandingsRows() {
   const tieContexts = seasonGroupTieContexts(allWeeksRaw, players);
   return calculateSeasonStandings(players, allResults, allWeeksRaw, tieContexts);
 }
+
+/** The sport the player's pointer is on, as { dbCode, code, label }, or null (a one-sport league, or nothing resolves). The words a sport tab uses to name the sport it is showing. */
+function contextSportEntry() {
+  try {
+    if (!isMultiSport()) return null;
+    const c = getContextCompetition();
+    const e = c ? leagueSports().find((x) => x.competitionId === c.id) : null;
+    return e ? { dbCode: e.dbCode, code: e.code, label: e.label } : null;
+  } catch { return null; }
+}
+const contextSportCode = () => { const e = contextSportEntry(); return e ? String(e.code || '') : ''; };
 
 /**
  * DI-D3 — `getPlayerProfile(playerId, { rows, withStats })`. A PURE
@@ -8598,6 +9945,8 @@ export function getPlayerProfile(playerId, { rows = null, withStats = false } = 
     // `null` when not requested, never a half-populated object.
     stats: withStats ? (id ? (seasonStandingsRows().find(s => s.playerId === id) || null) : null) : null,
     statsIncluded: !!withStats,
+    // D1 (Part 2 item 10, 2026-10-08) — those stats are ONE sport's standings row (the pointer's); in a several-sport league they say which. A one-sport profile carries no label (the unmodified object).
+    ...(withStats && isMultiSport() ? { statsSport: contextSportEntry() } : {}),
     preferences: { ...(player?.preferences || {}) },
     facts,
     relations,
@@ -8753,7 +10102,7 @@ function scribeMemoryRowHTML(row, errorHTML = '') {
  * groupdtest.mjs's RENDERED OUTPUT rather than only in source (RG-27: a
  * source-grep test passes when the guard is reverted).
  */
-export function renderScribeFileBodyHTML({ profile = null, loading = false, error = '', rowError = null } = {}) {
+export function renderScribeFileBodyHTML({ profile = null, loading = false, error = '', rowError = null, lore = [] } = {}) {
   const footnote = `<p class="text-muted text-xs scribe-file-footnote">${escHtml(SCRIBE_PRIVACY_FOOTNOTE)}</p>`;
   // Item 9 (reviewer, 2026-09-11) — A ROW-LEVEL ERROR BELONGS ON ITS ROW.
   // This used to render one banner at the top of the modal, which on a 375px
@@ -8824,6 +10173,7 @@ export function renderScribeFileBodyHTML({ profile = null, loading = false, erro
       <p class="text-muted text-xs scribe-tolerance-note">${escHtml(SCRIBE_TOLERANCE_NOTE)}</p>
       ${errAt('tolerance')}
     </div>
+    ${scribeMemberLoreBlockHTML(lore)}
     ${footnote}`;
 }
 
@@ -8953,6 +10303,7 @@ function repaintScribeFileBody(ov) {
     loading: scribeMemoryCache.loading,
     error: scribeMemoryCache.error,
     rowError: scribeFileRowError,
+    lore: scribeMemoryCache.lore,
   });
   bindScribeFileBody(ov);
 }
@@ -9015,8 +10366,27 @@ export async function openScribeFileModal() {
   ov.querySelector('#scribe-file-close')?.addEventListener('click', () => ov.remove());
   ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
   await refreshScribeMemory(playerId);
+  // D-51 (DI-682): every member reads the league's lore, read-only. A pilot league only (lore is a pilot-league feature); a quiet auxiliary read, never a write path.
+  await refreshScribeLoreForMember();
   repaintScribeFileBody(ov);
   return ov;
+}
+
+/**
+ * D-51 (Drew, 2026-10-07, "M-26 yes"; DI-682) — the league's lore entries, READ-ONLY, for any member (migration 0052 widens `scribe_memory_select` to the lore arm; only the
+ * commissioner can write one, through the `scribe-profile` function). Pilot league in Supabase mode only, so every other league makes no extra request. FAILS QUIET, like the wager
+ * cache: lore is auxiliary and non-authoritative on this surface; a failed read shows no lore block rather than a wrong one.
+ */
+export async function refreshScribeLoreForMember() {
+  if (getAuthMode() !== 'supabase' || !isPilotLeague(activeLeagueRow())) { scribeMemoryCache.lore = []; return scribeMemoryCache.lore; }
+  try {
+    const r = await scribeMemoryTransport.list({ playerId: getSession()?.playerId || '', kinds: ['lore'] });
+    scribeMemoryCache.lore = ((r && r.records) || []).filter(row => row && row.kind === 'lore' && row.key && row.value);
+  } catch (err) {
+    console.warn('[scribe-memory] lore read failed', err);
+    scribeMemoryCache.lore = [];
+  }
+  return scribeMemoryCache.lore;
 }
 
 /**
@@ -9515,7 +10885,7 @@ export async function openWagerModal(messageId) {
  * field only once you can no longer act on what you see — and they have to be
  * asserted together or one can silently drift away from the other.
  */
-export function canPlayerSubmitPicks(week, playerId) {
+export function canPlayerSubmitPicks(week, playerId, { asIfEntrant = false } = {}) {
   if (!week)     return { allowed:false, reason:'No active week.' };
   if (!playerId) return { allowed:false, reason:'Not logged in.' };
   const eff = getEffectiveWeekStatus(week);
@@ -9541,6 +10911,20 @@ export function canPlayerSubmitPicks(week, playerId) {
   // whole field and then changed a pick on a game that had not kicked off yet.
   // Fail-closed: this only ever DENIES, and only once the week is really live.
   if (eff==='live' || week.status==='live') return { allowed:false, reason:'Games are in progress — picks closed.' };
+  // PF-1 / DI-495(a) (2026-10-01) — THE CLIENT CLOSES AT THE SERVER'S INSTANT. From migration 0043 pick_window_open() refuses a write once the week's LOCK INSTANT has passed
+  // (picks_lock_at, else the week's own first kickoff minus the offset; a demo week is exempt; no dated game means no instant), whether or not any device has flipped the stored
+  // status. getEffectiveWeekStatus() above reads only an EXPLICIT picksLockAt, so on the ordinary week (derived instant, status still `open` for up to a minute) the Picks page,
+  // the submit button and the guess inputs would stay editable while every save was refused. This adds the same `now >= instant` test (the boundary is CLOSED, like the server's
+  // `now() <`) and, like the two fail-closed additions above it, can only ever DENY — closing early reveals nothing, so the blind rule is untouched.
+  // D1 / DI-509 (2026-10-07) — the same test, now asked of the ONE helper every lock surface reads (js/week-lock.js weekLockState): `derived` is true exactly when this week is stored
+  // open, not a demo week, has a lock instant and `now >= instant`. The clause, its position (after every existing denial, before the one allow) and its sentence are unchanged;
+  // lockclienttest [1] runs over it unmodified.
+  if (week.status === 'open' && weekLockState({ week, games: getGames(week.weekId) }).derived) return { allowed:false, reason:'Week is locked — no new picks accepted.' };
+  // D1 DI-531 (C4) — in a several-sport league only the ENTRANTS of the week's own sport may pick it (a member who has not joined NFL has no NFL form, and a pick written for them by a stale
+  // draft or a forged call is refused here before it is built). Like the clauses above it can only ever DENY; a one-sport league never reaches it, so its answer is unchanged.
+  // `asIfEntrant` (security F1, 2026-10-08) asks the question the BLIND RULE needs - "would this person have a stake here if they joined?" - and skips ONLY this clause. Joining is open until the lock,
+  // so a commissioner who has not joined a sport can still join, pick and edit; canViewOtherPicks() must judge his stake that way or a sport he has not joined reads as "he cannot act" and opens RG-37's bypass.
+  if (!asIfEntrant && isMultiSport() && !playersForWeek(week).some((p) => p && String(p.playerId) === String(playerId))) return { allowed:false, reason:"You haven't joined this sport's picks." };
   return { allowed:true, reason:'' };
 }
 
@@ -9599,8 +10983,11 @@ export function canViewOtherPicks(week) {
   // The invariant, asserted directly in loadtest [34g] across every status ×
   // date-field combination for BOTH roles: you may never be able to submit
   // your own picks and see someone else's at the same time.
+  //
+  // D1 / security F1 (2026-10-08) — "NO STAKE" means he could not act EVEN IF HE JOINED the week's sport: the stake is judged as an entrant's (asIfEntrant), so a sport he runs but has not joined,
+  // still open, counts as a stake. Otherwise the entrant clause ("You haven't joined this sport's picks") read as "cannot act", the bypass opened, and he read the NFL field and then joined and picked.
   const sess = getSession();
-  if (sess.isAdmin && !canPlayerSubmitPicks(week, sess.playerId).allowed) return true;
+  if (sess.isAdmin && !canPlayerSubmitPicks(week, sess.playerId, { asIfEntrant: true }).allowed) return true;
   return false;
 }
 
@@ -9722,10 +11109,13 @@ function renderPicksPage() {
     // Branch A shows THAT week's own recap (it is the week being read), not the
     // previous week's — and it moves from the bottom of the page into the slot.
     fillPicksHeadSlot(c, viewWeek.status === 'final' ? renderWeekRecapCardHTML(viewWeek) : '');
+    paintSportSwitcher(c, 'picks');   // D1 DI-521: the sport switcher is the page's first element (absent unless the member plays two or more sports)
     // BLOCK 3 (2026-09-25) — every renderPicksPage() exit paints the banner
     // itself now; see the function's own doc comment.
     renderPausedLeagueBannerIfNeeded('picks');
     renderMaintenanceBannerIfNeeded('picks');
+    renderSportStallBannerIfNeeded('picks');   // D1 / DI-557: last, so it seats itself below the two notices above it
+    armLockFlipForPage();   // D1 / DI-510: the current week's lock instant may still be ahead while a past week is on screen
     return;
   }
   // Only normalize the shared field to null when PICKS ITSELF is the one
@@ -9774,6 +11164,7 @@ function renderPicksPage() {
   if (!recapHtml && !playerActivelyInPicks) {
     c.insertAdjacentHTML('beforeend', renderSeasonSummaryHTML(currentWeek));
   }
+  paintSportSwitcher(c, 'picks');   // D1 DI-521: the sport switcher is the page's first element (absent unless the member plays two or more sports)
   // BLOCK 3 (2026-09-25) — see the function's own doc comment above
   // renderPausedLeagueBannerIfNeeded(). This covers every direct
   // renderPicksPage() call site that bypasses navigateTo() (week nav,
@@ -9781,6 +11172,8 @@ function renderPicksPage() {
   // navigation.
   renderPausedLeagueBannerIfNeeded('picks');
   renderMaintenanceBannerIfNeeded('picks');
+  renderSportStallBannerIfNeeded('picks');   // D1 / DI-557: last, so it seats itself below the two notices above it
+  armLockFlipForPage();   // D1 / DI-510: watch the current week's lock instant; at the instant the page repaints once, in one pass
 }
 
 /**
@@ -9808,7 +11201,7 @@ function renderPicksPage() {
  * Pure read: never writes state.
  */
 function picksShowingWeek() {
-  const currentWeek = getCurrentWeek();
+  const currentWeek = getContextWeek();   // D1 DI-520: the CONTEXT sport's current week (with one sport, exactly getCurrentWeek())
   const picksViewableIds = chronologicalWeekIds(picksNavWeeks());
   const rawViewWeek = state.viewingWeekId ? getWeek(state.viewingWeekId) : null;
   const picksCanShowIt = !!rawViewWeek && picksViewableIds.includes(rawViewWeek.weekId);
@@ -9822,10 +11215,11 @@ export const _picksShowingWeekForTest = picksShowingWeek;
 
 /** Weeks a player may browse on the Picks tab: current week + anything locked/live/final. Demo weeks are commissioner-only. */
 function picksNavWeeks() {
-  const cur = getCurrentWeek();
+  const cur = getContextWeek();
   const session = getSession();
   const isCommissioner = !!session?.isAdmin;
-  const weeks = getWeeks().filter(w => w.showInHistory !== false && w.status !== WEEK_STATUS.DRAFT &&
+  // D1 DI-524: only THIS sport's weeks (getContextWeeks); with one sport that is every week, as before.
+  const weeks = getContextWeeks().filter(w => w.showInHistory !== false && w.status !== WEEK_STATUS.DRAFT &&
     // Demo weeks: commissioner sees always; non-commissioners never see (even if it's the active week).
     (w.dataSourceMode !== 'demo' || isCommissioner));
   return weeks.sort((a, b) => String(a.season).localeCompare(String(b.season)) || a.weekNumber - b.weekNumber);
@@ -9862,7 +11256,13 @@ function weekNavCardHTML(viewWeek, currentWeek, weeksForOrder, { dataAttr }) {
   const prevId = hasMultiple && idx > 0 ? orderedIds[idx - 1] : null;
   const nextId = hasMultiple && idx >= 0 && idx < orderedIds.length - 1 ? orderedIds[idx + 1] : null;
   const isCurrent = viewWeek.weekId === currentWeek?.weekId;
+  // D1 / DI-510 (UN-414): the badge reads the ONE week-lock state, not the stored status — a week past its lock instant reads LOCKED here the moment it does on the countdown, the
+  // submit button and Edit My Picks. Every other state (draft, a stored lock, live, final) prints exactly what it always did.
+  const statusBadge = weekBadgePhase({ week: viewWeek, games: getGames(viewWeek.weekId) });
   const wl = formatWeekLabelParts(viewWeek, { collapseYear: true });
+  // Part 2 item 10: the navigator names the sport in a several-sport league; '' in a one-sport one. Third pass item 3e (DI-524 REV 5): the IN-PAGE form "NFL · Week 6" - only the header badge is
+  // the compact "NFL Week 6" (renderHeaderWeek), so the two never read as two different labels for one thing.
+  const navCode = commSportCodeFor(viewWeek);
   const annotation = isCurrent ? 'current' : 'past week (read-only)';
   const dateLine = wl.dates ? `${escHtml(wl.dates)} · ${annotation}` : annotation;
   const prevBtn = hasMultiple
@@ -9875,11 +11275,29 @@ function weekNavCardHTML(viewWeek, currentWeek, weeksForOrder, { dataAttr }) {
     <div class="picks-week-nav">
       ${prevBtn}
       <div class="week-heading">
-        <span class="picks-week-nav-label">${escHtml(wl.name)}</span> <span class="badge badge-${escHtml(viewWeek.status)}">${escHtml(String(viewWeek.status || '').toUpperCase())}</span>
+        <span class="picks-week-nav-label">${escHtml(navCode ? navCode + ' · ' + wl.name : wl.name)}</span> <span class="badge badge-${escHtml(statusBadge.phase)}${lockFlipClass()}">${escHtml(statusBadge.label)}</span>
         <span class="week-heading-dates">${dateLine}</span>
       </div>
       ${nextBtn}
     </div>`;
+}
+
+/** Test-only aliases (the `_xForTest` convention) — D1 / DI-509/510: weeklocktest drives the three lock surfaces directly and walks a pinned clock across the instant. */
+export const _weekNavCardHTMLForTest = weekNavCardHTML;
+export const _refreshHeaderForTest = () => refreshHeader();
+export const _renderPicksPageForTest = () => renderPicksPage();      // T1: a DIRECT page paint (a Realtime repaint / the flip's own repaint do not come through navigateTo)
+export const _renderDashboardForTest = () => renderDashboard();
+export const _renderLockCountdownHTMLForTest = (...a) => renderLockCountdownHTML(...a);
+export const _renderPicksTimingForTest = (...a) => renderPicksTiming(...a);
+/** Test-only seam: set (only) the given pieces of the Picks draft state; returns the state's draft fields. D1 / DI-510: the week locks under a draft. */
+export function _setDraftForTest({ draftPicks, draftTiebreaker, draftExtraPoint, pickFormShownFor, editingPicks, lockDraftAnnouncedFor } = {}) {
+  if (draftPicks !== undefined) state.draftPicks = draftPicks;
+  if (draftTiebreaker !== undefined) state.draftTiebreaker = draftTiebreaker;
+  if (draftExtraPoint !== undefined) state.draftExtraPoint = draftExtraPoint;
+  if (pickFormShownFor !== undefined) state.pickFormShownFor = pickFormShownFor;
+  if (editingPicks !== undefined) state.editingPicks = editingPicks;
+  if (lockDraftAnnouncedFor !== undefined) state.lockDraftAnnouncedFor = lockDraftAnnouncedFor;
+  return { draftPicks: state.draftPicks, draftTiebreaker: state.draftTiebreaker, draftExtraPoint: state.draftExtraPoint, pickFormShownFor: state.pickFormShownFor, editingPicks: state.editingPicks };
 }
 
 function renderPicksWeekNav(viewWeek, currentWeek) {
@@ -9889,7 +11307,7 @@ function renderPicksWeekNav(viewWeek, currentWeek) {
 function bindPicksWeekNav() {
   document.querySelectorAll('[data-picks-week]').forEach(b => b.addEventListener('click', () => {
     if (!b.dataset.picksWeek) return;
-    const cur = getCurrentWeek();
+    const cur = getContextWeek();
     // DI-426 — writes the shared state.viewingWeekId (formerly state.picksWeekId).
     state.viewingWeekId = (b.dataset.picksWeek === cur?.weekId) ? null : b.dataset.picksWeek;
     renderPicksPage();
@@ -9907,14 +11325,14 @@ function bindPicksWeekNav() {
  *  (the "web app smell" DI-394's own research flagged). */
 function renderDashboardWeekNav(viewWeek, currentWeek) {
   const isCommissioner = !!getSession()?.isAdmin;
-  const weeks = selectableDashboardWeeks(getWeeks(), isCommissioner);
+  const weeks = selectableDashboardWeeks(getContextWeeks(), isCommissioner);   // D1 DI-525: this sport's weeks
   return weekNavCardHTML(viewWeek, currentWeek, weeks, { dataAttr: 'dashboard-week' });
 }
 
 function bindDashboardWeekNav() {
   document.querySelectorAll('[data-dashboard-week]').forEach(b => b.addEventListener('click', () => {
     if (!b.dataset.dashboardWeek) return;
-    const cur = getCurrentWeek();
+    const cur = getContextWeek();
     // DI-426 — writes the shared state.viewingWeekId (formerly state.dashboardWeekId).
     state.viewingWeekId = (b.dataset.dashboardWeek === cur?.weekId) ? null : b.dataset.dashboardWeek;
     renderDashboard();
@@ -10044,7 +11462,7 @@ function supabaseNoPlayerRecordHTML() {
 function renderPicksPageCurrent() {
   const c = document.getElementById('page-picks'); if (!c) return;
   const session = getSession();
-  const week    = getCurrentWeek();
+  const week    = getContextWeek();   // D1 DI-524: the context sport's current week (one sport: getCurrentWeek())
 
   if (!session.playerId || !session.playerVerified) {
     // DI-180g — renderLoginScreen()/bindLoginScreen() are retired entirely
@@ -10079,21 +11497,48 @@ function renderPicksPageCurrent() {
     clearSession(); clearPickDraft(); resyncPlayerPreferences(); renderPicksPage(); return;
   }
 
+  // D1 DI-555 / DI-524 — a signed-in member of a multi-sport league who plays NO sport has no Picks page to fill: a calm state with the one way forward (the overview, where Join lives).
+  // (The Picks "Join" card of the first draft is retired: joining happens in the league overview and nowhere else.)
+  if (isMultiSport() && playedSports().length === 0) {
+    c.innerHTML = `<div class="week-status-card" id="picks-no-sport">
+      <div class="week-status-icon">${icon('calendarWeek')}</div>
+      <div class="week-status-body">
+        <div class="week-status-title">You're not in any sport's picks yet.</div>
+        <div class="week-status-msg">Join one from the league overview to start making picks.</div>
+        <button type="button" class="btn btn-primary mt-md" id="picks-open-overview-btn">Open league overview</button>
+      </div></div>`;
+    document.getElementById('picks-open-overview-btn')?.addEventListener('click', () => { haptic('selection'); openLeagueOverview(); });
+    return;
+  }
   const games       = week ? getGames(week.weekId).sort((a,b) => new Date(a.kickoff)-new Date(b.kickoff)) : [];
   const submitted   = week ? hasPlayerSubmitted(week.weekId, session.playerId) : false;
   const displayName = week ? getDisplayNamePlain(week.weekId, session.playerId, getPlayers()) : player.displayName;
   const { allowed, reason } = canPlayerSubmitPicks(week, session.playerId);
 
+  // D1 / DI-510 (fix round, B1) — THE LOCKED-DRAFT NOTICE IS ABOUT THE LOCK WINDOW, NOT THE WEEK. It exists for one moment: the instant the week locks under a member who is mid-edit
+  // (phase LOCKED, derived or stored). Once the week is LIVE or FINAL the saved picks are the truth: the edit session ends (editingPicks off, draft cleared) and the page falls
+  // through to the ordinary view for that status (a submitted member sees the picks he submitted; everyone else the locked card). Nothing here can open a week.
+  const lockNow = week ? weekLockState({ week, games }) : null;
+  if (lockNow && lockNow.closed && lockNow.phase !== LOCK_PHASE.LOCKED && state.pickFormShownFor === week.weekId) { state.editingPicks = false; clearPickDraft({ weekId: week.weekId }); }
+
   if (submitted && !state.editingPicks) { renderSubmittedView(c, week, games, session, displayName); return; }
 
   if (!allowed) {
+    // D1 / DI-510 — THE WEEK LOCKED UNDER THE MEMBER. When this session was showing the editable form for this very week and the member holds an unsaved draft, nothing is wiped
+    // silently: the draft stays on screen, read-only, under one calm notice (title / detail / hint, the PF-1 copy). No unsaved draft: a member who had already submitted sees the
+    // picks he submitted (not a bare padlock card); anyone else sees the locked card as before.
+    if (week && lockNow && lockNow.phase === LOCK_PHASE.LOCKED && state.pickFormShownFor === week.weekId) {
+      if (hasUnsavedDraft(week, session.playerId)) { renderLockedDraftView(c, week, games, session, displayName); return; }
+      if (submitted) { state.editingPicks = false; clearPickDraft({ weekId: week.weekId }); renderSubmittedView(c, week, games, session, displayName); return; }
+    }
     const ep = week ? getPicks(week.weekId, session.playerId) : [];
     // N1 (DI-430 touched-screen audit, 2026-09-30) — a league with NO WEEKS at all is not a "locked" state (a padlock and "No active week." told a player nothing): it says WHAT
     // ("No picks to make yet"), WHY, and — for the commissioner — the NEXT step as a button. Role-aware, no league name, no IRB copy. The same card, so the three-render logout
     // structure below is untouched.
     const noWeek = !week;
-    const lockedTitle = noWeek ? 'No picks to make yet' : 'Logged in as ' + escHtml(displayName);
-    const lockedMsg = noWeek ? zeroWeekMessage(!!session.isAdmin) : reason;
+    const zeroCode = noWeek ? contextSportCode() : '';   // Part 2 item 10: a several-sport league names the sport that has no week
+    const lockedTitle = noWeek ? zeroWeekTitle(zeroCode) : 'Logged in as ' + escHtml(displayName);
+    const lockedMsg = noWeek ? zeroWeekMessage(!!session.isAdmin, zeroCode) : reason;
     const lockedExtra = (noWeek && session.isAdmin ? zeroWeekSetupButtonHTML() : '')
       + (ep.length ? `<div class="text-muted text-xs mt-sm">${ep.length}/${games.length} picks saved.</div>` : '');
     c.innerHTML = `
@@ -10107,6 +11552,7 @@ function renderPicksPageCurrent() {
           ${lockedExtra}
         </div>
       </div>
+      ${week ? pickStatusCardHTML(week.weekId) : ''}
       ${picksLogoutButtonHTML('Log Out / Switch Player', 'mt-md')}`;
     bindZeroWeekEmptyState(c);
     document.getElementById('logout-btn')?.addEventListener('click', () => { clearSession(); clearPickDraft(); resyncPlayerPreferences(); renderPicksPage(); });
@@ -10125,9 +11571,11 @@ function renderPicksPageCurrent() {
     if (ep !== null && ep !== undefined) state.draftExtraPoint = ep;
   }
 
+  state.pickFormShownFor = week.weekId;   // D1 / DI-510: this session now has the editable form up for this week (see the !allowed branch above)
   c.innerHTML = `
     ${renderWeekBanner(week)}
     ${renderPicksTiming(week, games)}
+    ${pickStatusCardHTML(week.weekId)}
     <div id="picks-head-slot"></div>
     <div class="flex-between mb-md">
       <div><span class="text-maroon font-display" style="font-size:1.05rem">${escHtml(displayName)}</span>
@@ -10185,16 +11633,53 @@ function renderPicksPageCurrent() {
   updateSubmitEnabled(games, week);
 }
 
+/**
+ * D1 / DI-510 — the Picks page when the week locked while the member was mid-edit with an unsaved draft. The draft is shown exactly as the member left it, read-only (the game cards
+ * are the locked variant, the tiebreaker and Extra Point fields are disabled, there is no submit bar), under one `.warning-box` notice. The member's OWN draft only: the blind rule is untouched.
+ */
+function renderLockedDraftView(c, week, games, session, displayName) {
+  // B1: the notice is announced to a screen reader ONCE (role="alert" on the first paint only); every later repaint (the flip timer, a tick, a hydrate) swaps the same words in silently.
+  const announce = state.lockDraftAnnouncedFor !== week.weekId;
+  state.lockDraftAnnouncedFor = week.weekId;
+  const hasSaved = getPicks(week.weekId, session.playerId).length > 0;
+  c.innerHTML = `
+    ${renderWeekBanner(week)}
+    ${renderPicksTiming(week, games)}
+    <div id="picks-head-slot"></div>
+    <div class="warning-box lock-draft-notice mb-md"${announce ? ' role="alert"' : ''}>
+      <div><strong>This week is locked.</strong></div>
+      <div>Your last change was not saved.</div>
+      <div class="text-muted text-xs">Picks and guesses close when the week locks.</div>
+      <button class="btn btn-ghost btn-sm" id="lock-draft-dismiss-btn" type="button">${hasSaved ? 'Show my saved picks' : 'Close'}</button>
+    </div>
+    <div class="flex-between mb-md">
+      <div><span class="text-maroon font-display" style="font-size:1.05rem">${escHtml(displayName)}</span>
+      <span class="text-muted text-sm"> — your unsaved picks</span></div>
+      ${picksLogoutButtonHTML('Log Out')}
+    </div>
+    <div id="locked-draft-games"></div>
+    ${renderTiebreakerInput(week, { disabled: true })}
+    ${renderExtraPointInput(week, { disabled: true })}`;
+  document.getElementById('logout-btn')?.addEventListener('click', () => { clearSession(); clearPickDraft(); resyncPlayerPreferences(); renderPicksPage(); });
+  // B1: the way out. Ends the edit session (the draft was never saved and cannot be now) and repaints the ordinary view for the locked week: the saved picks, or the locked card.
+  document.getElementById('lock-draft-dismiss-btn')?.addEventListener('click', () => { state.editingPicks = false; clearPickDraft({ weekId: week.weekId }); renderPicksPage(); });
+  bindLogoImageEvents(c);
+  const list = document.getElementById('locked-draft-games'); if (!list) return;
+  list.innerHTML = games.map((game) => renderGameCard(game, state.draftPicks[game.gameId], PICK_RESULT.PENDING, true, false)).join('');
+}
+/** Test-only alias (the `_xForTest` convention) — D1 / DI-510. */
+export const _renderLockedDraftViewForTest = renderLockedDraftView;
+
 /** v0.16.0 — The Ischemic Extra Point guess input (optional side bet). */
-function renderExtraPointInput(week) {
+function renderExtraPointInput(week, { disabled = false } = {}) {
   if (!week || week.extraPointEnabled === false) return '';
   const val = state.draftExtraPoint !== null && state.draftExtraPoint !== undefined ? state.draftExtraPoint : '';
   return `
     <div class="card mb-md ep-input-card">
-      <label class="form-label" for="ep-input">🎯 The Ischemic Extra Point <span class="text-muted text-xs">(blackjack rules)</span></label>
+      <label class="form-label" for="ep-input">The Ischemic Extra Point <span class="text-muted text-xs">(blackjack rules)</span></label>
       <p class="text-muted text-xs mb-sm">Longest MADE field goal on this week's slate, in yards. Closest without going over wins. Over = bust. Exact = blackjack.</p>
       <input class="form-input" id="ep-input" type="number" inputmode="numeric" min="15" max="75" step="1"
-        placeholder="e.g. 52" value="${numHtml(val)}" />
+        placeholder="e.g. 52" value="${numHtml(val)}"${disabled ? ' disabled aria-disabled="true"' : ''} />
     </div>`;
 }
 // Test-only seam (the `_rulesEditorHTMLForTest` convention, app.js:13221) —
@@ -10202,14 +11687,14 @@ function renderExtraPointInput(week) {
 // live container, so xsstest [14] drives them directly. No production caller.
 export const _extraPointInputHTMLForTest = renderExtraPointInput;
 
-function renderTiebreakerInput(week) {
+function renderTiebreakerInput(week, { disabled = false } = {}) {
   if (!week?.tiebreakerQuestion) return '';
   return `<div class="tiebreaker-card">
-    <div class="tiebreaker-label">🎯 Weekly Tiebreaker (Required)</div>
+    <div class="tiebreaker-label">Weekly Tiebreaker (Required)</div>
     <div class="tiebreaker-question">${escHtml(week.tiebreakerQuestion)}</div>
     <input class="form-input" id="tb-input" type="number" min="0" step="1"
       placeholder="Your numeric guess…" style="margin-top:10px"
-      value="${numHtml(state.draftTiebreaker !== null && state.draftTiebreaker !== undefined ? state.draftTiebreaker : '')}" />
+      value="${numHtml(state.draftTiebreaker !== null && state.draftTiebreaker !== undefined ? state.draftTiebreaker : '')}"${disabled ? ' disabled aria-disabled="true"' : ''} />
     <p class="text-muted text-xs mt-sm">Required. Closest guess wins ties.</p>
   </div>`;
 }
@@ -10354,6 +11839,7 @@ function renderSubmittedView(c, week, games, session, displayName) {
   c.innerHTML = `
     ${renderWeekBanner(week)}
     ${renderPicksTiming(week, games)}
+    ${pickStatusCardHTML(week.weekId)}
     <div id="picks-head-slot"></div>
     <div class="flex-between mb-md">
       <div><span class="text-maroon font-display" style="font-size:1.05rem">${escHtml(displayName)}</span>
@@ -10377,7 +11863,7 @@ function renderSubmittedView(c, week, games, session, displayName) {
     // Enter edit mode. The picks-page render will pre-fill draftPicks from
     // existing picks and show the editable UI with an explanatory banner.
     state.editingPicks = true;
-    clearPickDraft();           // cleared so the prefill block sees a fresh slate
+    clearPickDraft({ weekId: week.weekId });           // cleared so the prefill block sees a fresh slate (THIS week's draft only: the other sport's is not ours to wipe, DI-527)
     renderPicksPage();
     window.scrollTo({ top: 0 });   // UN-115 (DI-115b): same driver as login — the form replaces the submitted view
   });
@@ -10430,13 +11916,20 @@ function renderPicksTiming(week, games) {
   if (!lockAt && !liveAt) return '';
   const tz = getTimezone();
   const fmt = (d) => d ? formatGameTime(d.toISOString(), tz) : '—';
-  const isLocked = week.status === WEEK_STATUS.LOCKED;
+  // D1 / DI-510 row 3: the "(locked)" suffix and the passed styling come from the ONE week-lock state, so a week past its instant reads locked here exactly when the badge and
+  // the countdown say so; and DI-511: a week the commissioner RE-OPENED says so, with the new lock time (a visible exception, never a silent one).
+  const ls = weekLockState({ week, games });
+  const isLocked = ls.closed;
   const now = Date.now();
   const lockPassed = lockAt && now >= lockAt.getTime();
   const livePassed = liveAt && now >= liveAt.getTime();
+  const lockText = ls.reopened && ls.phase === WEEK_STATUS.OPEN
+    ? `<strong>Re-opened by the commissioner</strong> · locks ${escHtml(fmt(lockAt))}`
+    : `<strong>Picks lock:</strong> ${escHtml(fmt(lockAt))}${isLocked?' <em>(locked)</em>':''}`;
+  // D1-1 audit (D-1): the chrome glyphs are the Munera family (icon()), not emoji; the written text is unchanged.
   return `<div class="picks-timing-info mb-md">
-    <span class="pt-item ${lockPassed?'pt-passed':''}">🔒 <strong>Picks lock:</strong> ${escHtml(fmt(lockAt))}${isLocked?' <em>(locked)</em>':''}</span>
-    <span class="pt-item ${livePassed?'pt-passed':''}">🏈 <strong>Games live:</strong> ${escHtml(fmt(liveAt))}</span>
+    <span class="pt-item ${lockPassed?'pt-passed':''}">${icon('lock')} ${lockText}</span>
+    <span class="pt-item ${livePassed?'pt-passed':''}">${icon('sportFootball')} <strong>Games live:</strong> ${escHtml(fmt(liveAt))}</span>
   </div>`;
 }
 
@@ -10446,15 +11939,7 @@ function renderPicksTiming(week, games) {
  */
 function timeUntil(target) {
   if (!target) return '';
-  const ms = target.getTime() - Date.now();
-  if (ms <= 0) return '';
-  const mins = Math.floor(ms / 60000);
-  const d = Math.floor(mins / 1440);
-  const h = Math.floor((mins % 1440) / 60);
-  const m = mins % 60;
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
+  return formatTimeLeft(target.getTime() - Date.now());   // D1: the ONE time-left formatter (js/sport-status.js); sportstatustest pins it equal to this function's former inline body
 }
 
 /**
@@ -10475,22 +11960,150 @@ function renderLockCountdownHTML(week, games, { compact = false } = {}) {
   const tz = getTimezone();
   const when = formatGameTime(lockAt.toISOString(), tz);
   const left = timeUntil(lockAt);
-  const locked = week.status === WEEK_STATUS.LOCKED || !left;
+  // D1 / DI-510 row 2: "Picks are locked" shows whenever the ONE week-lock state says the week is closed (a stored lock, or the instant has passed); `!left` keeps a demo week past
+  // its instant (exempt from the lock, so phase stays open) from ever printing "Picks lock in " with nothing after it.
+  const locked = weekLockState({ week, games }).closed || !left;
 
   if (locked) {
-    return `<div class="lock-countdown lock-countdown-closed${compact ? ' lock-countdown-compact' : ''}">
-      <span class="lock-countdown-icon">🔒</span>
+    return `<div class="lock-countdown lock-countdown-closed${compact ? ' lock-countdown-compact' : ''}${lockFlipClass()}">
+      <span class="lock-countdown-icon">${icon('lock')}</span>
       <div><div class="lock-countdown-main">Picks are locked</div>
       <div class="lock-countdown-sub">Locked ${escHtml(when)}</div></div>
     </div>`;
   }
   const urgent = lockAt.getTime() - Date.now() < 3 * 3600 * 1000;
-  return `<div class="lock-countdown${urgent ? ' lock-countdown-urgent' : ''}${compact ? ' lock-countdown-compact' : ''}">
-    <span class="lock-countdown-icon">⏳</span>
+  return `<div class="lock-countdown${urgent ? ' lock-countdown-urgent' : ''}${compact ? ' lock-countdown-compact' : ''}${lockFlipClass()}">
+    <span class="lock-countdown-icon">${icon('clock')}</span>
     <div><div class="lock-countdown-main">Picks lock in ${escHtml(left)}</div>
     <div class="lock-countdown-sub">${escHtml(when)} · ${games.length} game${games.length === 1 ? '' : 's'} on the slate</div></div>
   </div>`;
 }
+
+// ─── D1 / DI-510 — THE FLIP AT THE INSTANT ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// The lock instant is a clock time, not an event: nothing in the page changes when it passes unless something repaints. The 60-second tick repaints the Dashboard but (by design) not the
+// Picks page, and Realtime repaints only when the stored status moves, so without this a member could stare at "Picks lock in 1m" and an enabled Submit button for a minute after the
+// server began refusing writes. ONE module-level timer is armed after every Picks or Dashboard paint whose week is open with a finite instant; it fires 250 ms after the instant
+// and calls the page's normal repaint, so the badge, the countdown, the submit button and Edit My Picks all flip in one pass. It is cleared by navigateTo(), re-armed by every
+// paint, and re-checked when the app returns to the foreground (iOS suspends timers while the app is backgrounded). No haptic: the flip is passive (haptics are for actions).
+const LOCK_FLIP_SLACK_MS = 250;
+const LOCK_FLIP_HORIZON_MS = 24 * 3600 * 1000;      // a longer wait re-arms itself at this cadence instead of trusting one huge timer
+const LOCK_FLIP_MAX_MS = 2 ** 31 - 1;               // setTimeout stores its delay in a signed 32-bit int: anything larger fires at once
+let _lockFlipTimer = null;                          // the ONE timer
+let _lockFlipWeekId = null;                         // the week it watches
+let _lockFlipRepaint = false;                       // true only inside the repaint the timer causes: the badge and countdown fade in once (150 ms; Reduce Motion: none)
+let _lockFlipDeps = null;                           // the test seam's injected clock / timers / repaint; null in production
+
+/** The class the flip repaint puts on the badge and the countdown (empty on every other paint). */
+function lockFlipClass() { return _lockFlipRepaint ? ' lock-flip-in' : ''; }
+
+/** Stop watching (navigateTo does this; the next paint re-arms). */
+export function disarmLockFlip() {
+  const clear = _lockFlipDeps?.clearTimer || clearTimeout;
+  if (_lockFlipTimer !== null) clear(_lockFlipTimer);
+  _lockFlipTimer = null; _lockFlipWeekId = null;
+}
+
+function lockFlipRepaintNow() {
+  // E1 (fix round): the header badge is on EVERY tab, so it always refreshes; the page body repaints only where the lock state is painted in it (Picks, Dashboard, Home). The commissioner panel and
+  // the other tabs are NOT repainted (a repaint would swallow a half-typed field, RG-176): their lock text catches up on their next paint.
+  const tab = state.currentTab;
+  if (tab === 'picks') renderPicksPage();
+  else if (tab === 'dashboard') renderDashboard();
+  else if (tab === 'home') renderHomePage();
+  try { refreshHeader(); } catch (e) { console.warn('[lockFlip] header refresh failed', e); }
+}
+
+/**
+ * Arm the flip for `week` (a no-op, with the timer cleared, unless the week is open with a finite lock instant). Returns what it did, for the harness.
+ * The delay is clamped to 24 h; when it fires before the instant (a longer horizon) it re-arms without repainting.
+ */
+function armLockFlip(week, games, { now = Date.now() } = {}) {
+  disarmLockFlip();
+  if (!week) return { armed: false, reason: 'no-week' };
+  const st = weekLockState({ week, games, now });
+  if (st.phase !== WEEK_STATUS.OPEN || !Number.isFinite(st.lockAtMs)) return { armed: false, reason: st.phase === WEEK_STATUS.OPEN ? 'no-instant' : 'not-open' };
+  const wait = Math.max(0, st.lockAtMs - now + LOCK_FLIP_SLACK_MS);
+  const delay = Math.min(wait, LOCK_FLIP_HORIZON_MS, LOCK_FLIP_MAX_MS);
+  _lockFlipWeekId = week.weekId;
+  wireLockFlipVisibility();
+  const set = _lockFlipDeps?.setTimer || setTimeout;
+  _lockFlipTimer = set(() => onLockFlipFired(), delay);
+  // Node-only (authtest/boottest, the scheduleAuthHoldRecheck precedent): a timer armed by a test's render must not hold the process open for hours.
+  if (typeof _lockFlipTimer?.unref === 'function') _lockFlipTimer.unref();
+  return { armed: true, delay, atMs: st.lockAtMs };
+}
+
+function onLockFlipFired() {
+  _lockFlipTimer = null;
+  const id = _lockFlipWeekId;
+  const week = id ? getWeek(id) : null;
+  if (!week) { _lockFlipWeekId = null; return; }
+  const games = getGames(week.weekId);
+  const now = _lockFlipDeps?.now ? _lockFlipDeps.now() : Date.now();
+  const st = weekLockState({ week, games, now });
+  if (st.phase === WEEK_STATUS.OPEN) { armLockFlip(week, games, { now }); return; }       // still before the instant (a long horizon, or the commissioner moved it): wait again, no repaint
+  _lockFlipWeekId = null;
+  _lockFlipRepaint = true;
+  try { (_lockFlipDeps?.repaint || lockFlipRepaintNow)(); }
+  catch (e) { console.warn('[lockFlip] repaint failed', e); }
+  finally { _lockFlipRepaint = false; }
+}
+
+/**
+ * D1 DI-520/527 — WHICH week the one lock-flip timer watches. In a league with several sports the Picks, Dashboard and Standings pages watch the lock of the sport they are SHOWING (an NFL
+ * page must repaint at the NFL instant); every other page, and any league with ONE sport, watches getCurrentWeek() exactly as before (the header badge and Home read that week).
+ */
+function lockFlipWeek() {
+  // The timer watches the week the HEADER describes (headerWeekFor): the context sport's on a sport tab, the lens' in Comm, the pointer's elsewhere. On the All sports view the header has no single week, so the
+  // timer keeps the pointer's sport (the page repaints when it locks; each sport's own rows follow their own week on every paint).
+  try {
+    if (isMultiSport()) { const hw = headerWeekFor(); return hw.all ? getContextWeek() : hw.week; }
+  } catch { /* fall through to the league's current week */ }
+  return getCurrentWeek();
+}
+export const _lockFlipWeekForTest = lockFlipWeek;
+
+/** After a Picks, Dashboard or Home paint, and after every navigation: watch the CURRENT week (the only editable one). Past weeks are final and never need it. */
+function armLockFlipForPage() {
+  try {
+    const week = lockFlipWeek();
+    if (!week) { disarmLockFlip(); return; }
+    armLockFlip(week, getGames(week.weekId));
+  } catch (e) { console.warn('[lockFlip] could not arm', e); }
+}
+
+/** The app came back to the foreground: iOS froze the timer, so re-check at once. A week that closed meanwhile repaints now; otherwise the timer is re-armed from the real clock. */
+function recheckLockFlipOnVisible() {
+  if (typeof document !== 'undefined' && document.hidden) return;
+  const week = lockFlipWeek();
+  if (!week) return;
+  const games = getGames(week.weekId);
+  const prior = _lockFlipWeekId;
+  const st = weekLockState({ week, games });
+  // Repaint only when the page was showing this week as open and it is not open any more; otherwise just re-arm (the page may legitimately be a locked week already).
+  if (prior === week.weekId && st.phase !== WEEK_STATUS.OPEN) {
+    disarmLockFlip();
+    _lockFlipRepaint = true;
+    try { (_lockFlipDeps?.repaint || lockFlipRepaintNow)(); } catch (e) { console.warn('[lockFlip] repaint failed', e); } finally { _lockFlipRepaint = false; }
+  } else armLockFlip(week, games);
+}
+let _lockFlipVisibilityWired = false;
+/** Lazy, once, on the first arm (the _wireAuthHoldVisibility precedent): no listener is registered at import time, so a bare module load has no side effects. */
+function wireLockFlipVisibility() {
+  if (_lockFlipVisibilityWired) return;
+  if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+  _lockFlipVisibilityWired = true;
+  document.addEventListener('visibilitychange', recheckLockFlipOnVisible);
+}
+
+/** Test seam (the `_xForTest` convention): drive the flip with an injected clock, timers and repaint. Pass `null` to restore production behaviour. */
+export function _armLockFlipForTest(week, games, deps) {
+  _lockFlipDeps = deps || null;
+  return deps ? armLockFlip(week, games, { now: deps.now ? deps.now() : Date.now() }) : (disarmLockFlip(), { armed: false });
+}
+export const _fireLockFlipForTest = () => onLockFlipFired();
+export const _recheckLockFlipForTest = () => recheckLockFlipOnVisible();
+export const _lockFlipStateForTest = () => ({ armed: _lockFlipTimer !== null, weekId: _lockFlipWeekId, repainting: _lockFlipRepaint });
 
 /**
  * The calendar day a kickoff falls on, pinned to CENTRAL — the same league
@@ -10643,7 +12256,7 @@ function renderLiveScoreBlockHTML(game) {
 export function updatePicksLiveStatusInPlace(games) {
   for (const game of games) {
     if (game.status !== GAME_STATUS.LIVE) continue;
-    const cards = document.querySelectorAll(`#page-picks .game-card[data-game-id="${game.gameId}"]`);
+    const cards = document.querySelectorAll(`#page-picks .game-card[data-game-id="${cssId(game.gameId)}"]`);
     if (!cards.length) continue;
     const html = renderLiveScoreBlockHTML(game);
     cards.forEach(card => {
@@ -10695,7 +12308,7 @@ export function updatePicksLiveStatusInPlace(games) {
  * reuses this exact template rather than a second hand-written `<img>`.
  */
 function teamLogoImgHTML(url, cssClass, extraAttrs = '') {
-  return `<img class="${escHtml(cssClass)}" src="${escHtml(url)}" alt="" ${extraAttrs}referrerpolicy="no-referrer">`;
+  return `<img class="${escHtml(cssClass)}" ${logoSrcAttr(url)} alt="" ${extraAttrs}referrerpolicy="no-referrer">`;
 }
 
 function pickButtonContentHTML(displayName, logoUrl, logoViewOn, isManual) {
@@ -10742,29 +12355,42 @@ function bindLogoImageEvents(container) {
   container.addEventListener('load', e => {
     const img = e.target;
     if (img?.classList?.contains('pick-btn-logo') || img?.classList?.contains('dc-chip-logo') || img?.classList?.contains('matrix-hdr-logo') || img?.classList?.contains('slate-row-logo')) {
+      rememberLoadedLogo(img);   // FB-024 — BEFORE the swap: the file that just loaded, never the one it is about to request
       if (!swapLogoForDarkSurface(img)) img.classList.add('is-loaded');
     }
   }, true);
   container.addEventListener('error', e => {
-    const img = e.target; if (revertDarkLogo(img)) return;
-    if (img?.classList?.contains('pick-btn-logo')) {
-      img.closest('.pick-btn-logo-wrap')?.classList.add('logo-broken');
-    } else if (img?.classList?.contains('dc-chip-logo')) {
-      img.closest('.dc-chip-pick')?.classList.add('logo-broken');
-    } else if (img?.classList?.contains('slate-row-logo')) {
-      // DI-428(b) — unlike the two branches above, the team name here is
-      // ALWAYS rendered beside the logo (never swapped in) — nothing to
-      // fall back to but hiding the broken-image glyph itself.
-      img.style.display = 'none';
-    } else if (img?.classList?.contains('matrix-hdr-logo')) {
-      // DI-428(c) — fourth render path sharing this one binder, same shape as
-      // the dc-chip-logo arm above: the nearest fixed-box ancestor gets
-      // `.logo-broken` so CSS can hide the broken box and fall back to the
-      // abbreviation text that's already sitting right next to it (never a
-      // DOM text-injection — same rule as every other arm here).
-      img.closest('.matrix-hdr-logo-box')?.classList.add('logo-broken');
-    }
+    const img = e.target; forgetLoadedLogo(img); if (revertDarkLogo(img)) return;
+    rememberFailedLogo(img);   // D1 (batch L follow-up): the DEFAULT file failed — no repaint asks for it again this session (logoSrcAttr())
+    markLogoBroken(img);
   }, true);
+  // FB-024 — a repaint never blanks a logo this page has already loaded (primeLoadedLogo(), the SB-07 block at the end of this file):
+  // once now, for a page painted before its first bind, then after every repaint of this container.
+  primeLoadedLogosIn(container);
+  observeLogoRepaints(container);
+}
+/**
+ * The error arm's fallback, per logo class (moved here verbatim from the binder's listener so a REPAINT can apply the same fallback to a logo whose file is already known to be broken, without a
+ * request — applyKnownFailedLogo()). Every arm only ever adds a class (or hides the broken glyph); never a DOM text injection.
+ */
+function markLogoBroken(img) {
+  if (img?.classList?.contains('pick-btn-logo')) {
+    img.closest('.pick-btn-logo-wrap')?.classList.add('logo-broken');
+  } else if (img?.classList?.contains('dc-chip-logo')) {
+    img.closest('.dc-chip-pick')?.classList.add('logo-broken');
+  } else if (img?.classList?.contains('slate-row-logo')) {
+    // DI-428(b) — unlike the two branches above, the team name here is
+    // ALWAYS rendered beside the logo (never swapped in) — nothing to
+    // fall back to but hiding the broken-image glyph itself.
+    img.style.display = 'none';
+  } else if (img?.classList?.contains('matrix-hdr-logo')) {
+    // DI-428(c) — fourth render path sharing this one binder, same shape as
+    // the dc-chip-logo arm above: the nearest fixed-box ancestor gets
+    // `.logo-broken` so CSS can hide the broken box and fall back to the
+    // abbreviation text that's already sitting right next to it (never a
+    // DOM text-injection — same rule as every other arm here).
+    img.closest('.matrix-hdr-logo-box')?.classList.add('logo-broken');
+  }
 }
 /** Test-only alias (same convention as every other `_xForTest` seam). */
 export const _bindLogoImageEventsForTest = bindLogoImageEvents;
@@ -11014,18 +12640,7 @@ function getBtnClass(team, pickedTeam, result, showResult, game=null) {
  * (distinct from finalized green/red ✓/✗ boxes).
  */
 function livePickStatus(pick, game) {
-  if (!pick || !game) return null;
-  if (game.status !== GAME_STATUS.LIVE) return null;
-  if (game.homeScore === null || game.awayScore === null) return null;
-  const sv = game.lockedSpread !== null ? game.lockedSpread : game.spread;
-  if (sv === null || sv === undefined) return null;
-  const adj = game.homeScore + sv;        // home-perspective adjusted score
-  const margin = adj - game.awayScore;    // >0 home covering, <0 away covering
-  if (Math.abs(margin) < 0.01) return 'even';
-  const homeCovering = margin > 0;
-  const pickedHome = pick.selectedTeam === game.homeTeam;
-  const covering = pickedHome ? homeCovering : !homeCovering;
-  return covering ? 'covering' : 'trailing';
+  return livePickStatusOf(pick, game);   // D1 Lane B: the arithmetic moved VERBATIM to js/pick-chips.js (pick-groups.js draws the same marks); this stays the app's name and window.livePickStatus
 }
 function getResultBadgeClass(r) { return{win:'badge-win',loss:'badge-loss',no_decision:'badge-nd',live:'badge-live'}[r]||'badge-draft'; }
 
@@ -11034,7 +12649,7 @@ function bindPickButtons(games, week) {
     btn.addEventListener('click', () => {
       const gid=btn.dataset.gameId; const team=btn.dataset.team;
       state.draftPicks[gid]=team;
-      document.querySelectorAll(`.pick-btn[data-game-id="${gid}"]`).forEach(b=>b.classList.toggle('selected',b.dataset.team===team));
+      document.querySelectorAll(`.pick-btn[data-game-id="${cssId(gid)}"]`).forEach(b=>b.classList.toggle('selected',b.dataset.team===team));
       updateSubmitEnabled(games, week);
     });
   });
@@ -11058,6 +12673,20 @@ function updateSubmitEnabled(games, week) {
   btn.disabled = count<games.length||!tbOk;
 }
 
+/** Reviewer note 3 (0046 round 3) — IS THE RED BANNER A SYNC FAILURE? Only when it is up AND its owner is 'app' (the owner every sync /
+ *  hydrate / write-refusal show uses). The same node also carries the 2K25 refusal ('ob2025'), a feedback refusal ('feedback') and the
+ *  week wizard's ESPN-fetch failure ('wizard'); none of those means sync is off, so none may raise "Cross-device sync is currently OFF".
+ *  A node with no owner is read as 'app', exactly as showBackendErrorBanner()'s own B8 rule reads it. */
+function isSyncFailureBannerUp() {
+  const banner = document.getElementById?.('backend-error-banner');
+  if (!banner || banner.style?.display === 'none') return false;
+  // PF-416 / FB-026 follow-up, item 5 (thread 100726-D1, 2026-10-07) — PF-1's two NOTICES ride this node under owner 'app' and are not a sync
+  // failure: "This week is locked." (showLockRefusalNotice(), a refusal the server was right to make) and the status-moved notice (a correction
+  // already applied). Read as one, they made the layout toast say "Sync is off." and the pick submit ask "Cross-device sync is currently OFF".
+  if (['lock-closed', 'status-moved'].includes(banner.getAttribute?.('data-notice') || '')) return false;
+  return (banner.getAttribute?.('data-owner') || 'app') === 'app';
+}
+
 function submitPicks(week, games) {
   const session=getSession();
   if(!session.playerId||!session.playerVerified)return;
@@ -11067,14 +12696,23 @@ function submitPicks(week, games) {
   // accepting the submit. We don't block — the player needs to be able to
   // submit even offline — but they must explicitly acknowledge their picks
   // may not reach the league until sync recovers.
-  const banner = document.getElementById('backend-error-banner');
-  const syncBroken = isBackendConfigured() && banner && banner.style.display !== 'none';
-  if (syncBroken) {
-    const ok = confirm(
-      '⚠️ Cross-device sync is currently OFF.\n\n' +
-      'Your picks will be saved on THIS device but may not reach other ' +
-      'players or the commissioner until the connection is restored.\n\n' +
-      'Submit anyway?'
+  const syncBroken = isBackendConfigured() && isSyncFailureBannerUp();   // reviewer note 3: a sync failure, never another banner
+  // D1 (N3) - A PICK KEY HELD REFUSED IS "NOT SYNCED" TOO. An earlier pick / tiebreaker / Extra Point write was refused by the server (typically a week that locked) and is still latched and queued.
+  // WHAT THAT DOES TO THESE PICKS (D1 third pass, item 1; lockclienttest [2t]/[2u] over a fake that models the guard): the adapter plans a key's NEW rows as ONE insert and each EDITED row as its own
+  // update, and a refused operation does not stop the run. So a held refused INSERT sinks a NEW pick with it (one statement, refused whole), while an edited pick, or any pick behind a held refused EDIT,
+  // still reaches the league. Submit cannot tell which (that needs the adapter's server rows), and a REOPEN keeps nothing unsaved (the device snapshot is never written while a key is dirty; the draft is
+  // in memory). So the words promise neither a save on this device nor a wait for a reopen, and never say flatly "not sent": they say these picks MAY not be sent and name the one action that always
+  // works - reopen the app, then make the picks again ([2t-7]: that lands). Not "by the server", not "sync is OFF" (sync is working).
+  const refusedHeld = pickKeysHeldRefused();
+  if (syncBroken || refusedHeld) {
+    const ok = confirm(refusedHeld
+      ? '⚠️ An earlier change to your picks couldn\u2019t be saved, and it can stop these picks from being sent.\n\n' +
+        'To be sure they count, reopen the app, then make these picks again.\n\n' +
+        'Submit anyway?'
+      : '⚠️ Cross-device sync is currently OFF.\n\n' +
+        'Your picks will be saved on THIS device but may not reach other ' +
+        'players or the commissioner until the connection is restored.\n\n' +
+        'Submit anyway?'
     );
     if (!ok) return;
   }
@@ -11091,20 +12729,35 @@ function submitPicks(week, games) {
   if(state.draftExtraPoint!==null&&!isNaN(state.draftExtraPoint))
     setExtraPointGuess(week.weekId,session.playerId,state.draftExtraPoint);
   // v0.16.0 — system chat event. HARD RULE: count only, never the selections.
-  try {
-    const totalPicks = getPicks(week.weekId, session.playerId).length;
-    emitPicksLockedEvent(week.weekId, session.playerId, totalPicks, games.length);
-  } catch {}
+  //
+  // UN-413 / DI-506(a) (Drew, 2026-10-01) — RETIRED IN SUPABASE MODE. This emitter posts `sys_lock_<week>_<player>` ("Kevin locked 10/10"), and
+  // since the 2026-09-19 cutover the server has refused every one of them: `chat_append_system`'s state gate (0010 A1) requires a `sys_lock_`
+  // post to name a week that is locked, live or final, and a submit happens while the week is OPEN — `bad_state`, parked 60 s by the transport,
+  // then dropped. The room line that replaces it is written by the database itself when a slate completes (migration 0044's trigger), once per
+  // player per week, on every build, with no client in the claim. Skipping the call changes nothing a player sees today; it removes a futile
+  // request and its 60 s retry. LOCAL mode (authMode other than supabase: no server, no trigger) keeps the post exactly as it was.
+  if (!isSupabaseDataMode()) {
+    try {
+      const totalPicks = getPicks(week.weekId, session.playerId).length;
+      emitPicksLockedEvent(week.weekId, session.playerId, totalPicks, games.length);
+    } catch {}
+  }
   const wasEditing = state.editingPicks;
-  clearPickDraft(); state.editingPicks=false;
-  showToast(syncBroken
+  clearPickDraft({ weekId: week.weekId }); state.editingPicks=false;
+  // D1 (Part 2 item 10, security N3; third pass item 1): a held earlier refusal is a WARNING, not a success - no check mark, and the toast names the one next action. A reopen drops everything unsaved
+  // (lockclienttest [2t-6]), so it never says the picks were kept on this device; whether THESE picks were sent depends on how they and the held row are written ([2t] / [2u]), so it says "may not".
+  if (refusedHeld) showToast('Your picks may not have been sent. Reopen the app, then make any missing picks again.', 'warning');
+  else showToast(syncBroken
     ? '✅ Picks saved locally. ⚠️ Sync still off — picks not yet shared.'
     : (wasEditing ? '✅ Picks updated!' : '✅ Picks submitted! Good luck!'),'success');
   // DI-210a (PASS 1b) — the other of the two named "success" haptic moments:
   // a successful pick submission. Fires even on the syncBroken path (the
-  // submit itself still succeeded locally); no-ops on web.
-  nativeHapticImpact('LIGHT');
-  setTimeout(()=>{ renderPicksPage(); window.scrollTo({ top: 0 }); },300);   // UN-115 (DI-115b): submitted view replaces the form
+  // submit itself still succeeded locally); no-ops on web. D1 third pass (item 1): NOT on the held-refusal path - the member is being warned, not
+  // congratulated, and a success tap under a warning toast says the opposite of the words (lockclienttest [2t-2c]; [2t-7] proves it still fires on a real success).
+  if (!refusedHeld) nativeHapticImpact('LIGHT');
+  // UN-115 (DI-115b): submitted view replaces the form. UN-412 / DI-502e: and once it is painted, ask for "Who's in" again — my own tile is
+  // already exact (it reads my rows); the OTHER tiles are re-asked, throttled with every other trigger.
+  setTimeout(()=>{ renderPicksPage(); window.scrollTo({ top: 0 }); mountPickStatus('own-submit'); },300);
 }
 /**
  * REVIEWER F7 (sixth gate, 2026-09-17) — authtest [40] used to prove
@@ -11394,6 +13047,20 @@ export function almaMatersForAutoCalc(week) {
     || week?.status === WEEK_STATUS.FINAL;
   if (isFrozenStatus && Array.isArray(week?.lockedAlmaMaters)) return week.lockedAlmaMaters;
   return claimedAlmaMaters();
+}
+
+/**
+ * D1 / DI-516 (FB-002, UN-415, PF-415) — THE TIEBREAKER VALUE EVERY SURFACE RANKS WITH. One answer per week (js/live-tiebreak.js effectiveTiebreakerActual): a STORED actual wins
+ * (a commissioner's override, or the value written at finalize); otherwise, on a week that is not final, the alma-mater total computed from the scores this device already holds over
+ * the roster frozen at lock (`almaMatersForAutoCalc`), PROVISIONAL until every alma game is final; otherwise none. No button is needed and no commissioner device has to be awake: every
+ * device computes it itself as the polled scores arrive. A FINAL week never falls back to the live number (its persisted results used the stored value, or none).
+ * Returns `{ value: number|null, source: 'manual'|'calculated'|'none', provisional, matchesCalculated, calculated }`.
+ */
+export function effectiveTiebreakerActualForWeek(week, games = null) {
+  if (!week) return effectiveTiebreakerActual({ week: null, games: [], almaMaters: [] });
+  let roster = [];
+  try { roster = almaMatersForAutoCalc(week); } catch { roster = []; }
+  return effectiveTiebreakerActual({ week, games: games || getGames(week.weekId), almaMaters: roster });
 }
 
 /**
@@ -11990,8 +13657,7 @@ function resetLayoutPage(pageKey, rerender) {
 
 /** DI-385 B12 / C10 — the save toast is honest: with the red sync banner up the layout lives on this device only. */
 function layoutSavedToast() {
-  const banner = document.getElementById?.('backend-error-banner');
-  const syncBroken = isBackendConfigured() && banner && banner.style.display !== 'none';
+  const syncBroken = isBackendConfigured() && isSyncFailureBannerUp();   // the SAME predicate submitPicks() uses (reviewer note 3)
   if (syncBroken) showToast('Layout saved on this device only. Sync is off.', 'warning');
   else showToast('Layout saved to your account.', 'success');
 }
@@ -12131,8 +13797,211 @@ function resolveDashboardLayout() {
   return getSettings().dashboardLayout || 'standard';
 }
 
+/**
+ * D1 / DI-517 — RANK MOVEMENT, not a flash (Design Philosophy, "Standings": animate rank movement; Interaction Principles: large layout 300-400 ms, nothing overshoots). A LIVE week's summary
+ * rows carry data-player-id (renderScoreSummaryRowsHTML); before a Dashboard repaint every row's vertical position is read, and after it any row that moved is played from where it was to
+ * where it is (a transform over --motion-large, 300-400 ms, with --ease-native, both read from the stylesheet's tokens, via the Web Animations API). Reduce Motion, a missing API, or no row that moved: nothing happens and the repaint
+ * is exactly what it always was. The page keeps its scroll position (the repaint is one synchronous innerHTML swap). Implemented per spec, unverified on a device.
+ */
+export function captureRankRows(root = (typeof document !== 'undefined' ? document : null)) {
+  const out = new Map();
+  try {
+    root?.querySelectorAll?.('#page-dashboard .leaderboard-table tbody tr[data-player-id]')?.forEach?.((tr) => {
+      const id = tr.getAttribute ? tr.getAttribute('data-player-id') : tr.dataset?.playerId;
+      if (id) out.set(id, tr.getBoundingClientRect().top);
+    });
+  } catch { /* a detached or stubbed DOM: no motion, no harm */ }
+  return out;
+}
+/** A CSS custom property's computed value, trimmed ('' → the fallback). The Web Animations API cannot take `var(...)`, so the JS reads the SAME token the stylesheet owns instead of a second copy of the number. */
+function cssToken(name, fallback) {
+  try {
+    if (typeof getComputedStyle === 'function' && typeof document !== 'undefined' && document.documentElement) {
+      const v = String(getComputedStyle(document.documentElement).getPropertyValue(name) || '').trim();
+      if (v) return v;
+    }
+  } catch { /* no styles in this environment (a Node harness): the fallback is the token's own value */ }
+  return fallback;
+}
+/** A duration token in milliseconds (`350ms` or `0.35s`); the fallback is the token's value in the stylesheet. */
+function motionMs(name, fallback) {
+  const v = cssToken(name, '');
+  const n = parseFloat(v);
+  if (!v || !Number.isFinite(n)) return fallback;
+  return /ms\s*$/.test(v) ? n : /s\s*$/.test(v) ? n * 1000 : fallback;
+}
+export function playRankMovement(before, root = (typeof document !== 'undefined' ? document : null)) {
+  if (!before || !before.size) return 0;
+  try { if (prefersReducedMotion()) return 0; } catch { return 0; }
+  let moved = 0;
+  try {
+    root?.querySelectorAll?.('#page-dashboard .leaderboard-table tbody tr[data-player-id]')?.forEach?.((tr) => {
+      const id = tr.getAttribute ? tr.getAttribute('data-player-id') : tr.dataset?.playerId;
+      if (!id || !before.has(id) || typeof tr.animate !== 'function') return;
+      const delta = before.get(id) - tr.getBoundingClientRect().top;
+      if (!Number.isFinite(delta) || Math.abs(delta) < 1) return;
+      moved += 1;
+      tr.animate([{ transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' }], { duration: motionMs('--motion-large', 350), easing: cssToken('--ease-native', 'cubic-bezier(.32,.72,0,1)') });
+    });
+  } catch { /* never let a decorative animation break a repaint */ }
+  return moved;
+}
+
+/**
+ * The Dashboard's saved game-sort mode, as Lane B's Sort sheet (DI-607) will set it. Until that lands the Dashboard has no sort control and games are in kickoff order, which is what
+ * 'kickoff' means; ALL SPORTS reads this through effectiveSortMode() (Custom is per sport, so a saved 'manual' is shown as Kickoff time and is NEVER overwritten).
+ */
+function dashboardSavedSortMode() { const m = getGameOrderMode(); return m === 'live-first' ? 'live' : m; }   // the member's saved mode, in all-sports.js's words ('live' = Live first); Custom reads as Kickoff time there
+
+/**
+ * Other members' picks for this week are READABLE on this device: the week is public (arePicksPublic) AND, in supabase data mode, a landed hydrate read it as public (S-C10, RG-255: a week goes
+ * public on this device the moment a Realtime weeks event lands, but the other members' picks only arrive with the next hydrate). A pure function of (week, data mode, the hydrate flag) so the matrix
+ * can be driven; it never looks at the viewer, so no role and no stake can widen it.
+ */
+function otherPicksReadableWith(week, supabaseMode, confirmedFor) {
+  if (!week || !arePicksPublic(week)) return false;
+  if (!supabaseMode) return true;
+  try { return confirmedFor(week.weekId) === true; } catch { return false; }
+}
+function picksReadConfirmedFor(weekId) { try { return sb.picksReadWhilePublic(weekId) === true; } catch { return false; } }
+function otherPicksReadable(week) { return otherPicksReadableWith(week, isSupabaseDataMode(), picksReadConfirmedFor); }
+export const _otherPicksReadableWithForTest = otherPicksReadableWith;
+
+/**
+ * D1 DI-525 rev 3 (Drew D-59: "maybe add an option for 'all sports' on the right next to cfb/nfl") — the Dashboard's ALL SPORTS view.
+ * The combined slate of THIS week across the sports the member plays: one "All Picks by Game" card of the Dashboard's own compact rows (compactGameCardHTML), each tagged with its sport,
+ * sorted across sports. The week navigator is replaced by a static "This week" block (no arrows) and the in-tab week swipe is inert (nav-gestures `inert`).
+ *   - EACH ROW FOLLOWS ITS OWN WEEK (security C2): `canSeeOthers`, the entrants (C4: playersForWeek, never the active roster) and the "Submit your picks first" gate are computed per sport from
+ *     that sport's week, then handed to the row. A CFB week that is Live next to an NFL week that is Locked shows names on CFB rows and the viewer's own chip + ••• on NFL rows, in one list,
+ *     and a live or final update in one sport cannot hide or reveal another's picks because nothing carries a flag between them.
+ *   - Alma Mater Watch and the weekly summary are per sport and are not shown; a calm line says so.
+ * Rows carry data-game-id and data-sport. (In-place keyed patching of live scores, DI-572, is Lane B's; this repaint is the Dashboard's own whole-page repaint.)
+ */
+function renderDashboardAllSports(c, session) {
+  const isCommissioner = !!session?.isAdmin;
+  const logoViewOn = getLogoView();
+  const inputs = playedSports().map((sp, order) => {
+    let week = null;
+    try { week = getCurrentWeekFor(sp.competitionId); } catch { week = null; }
+    const hidden = !week || !sportWeekVisible(week, isCommissioner) || (week.status === WEEK_STATUS.DRAFT && !isCommissioner);
+    const games = hidden ? [] : getGames(week.weekId);
+    const isPublic = !hidden && arePicksPublic(week);
+    // The single-sport Dashboard's own gate ("Submit Your Picks First"), asked of THIS sport's week.
+    const gate = !hidden && !isPublic && !!session.playerId && !!session.playerVerified && !session.isAdmin && !hasPlayerSubmitted(week.weekId, session.playerId);
+    // F1b / C6 (security, 2026-10-08): a row reveals ONLY what the WEEK has made public - arePicksPublic(week) plus, in supabase data mode, a landed hydrate that read that week as public (Std-8, S-C10) -
+    // never the viewer's role or stake. canViewOtherPicks() judges a commissioner's stake, which is the single-sport Dashboard's rule; here the commissioner sees what a player sees.
+    const canSeeOthers = !hidden && !gate && otherPicksReadable(week);
+    return { sp, order, week, games, hidden, gate, canSeeOthers };
+  });
+  const model = allSportsModel(inputs.map((i) => ({
+    dbCode: i.sp.dbCode, code: i.sp.code, order: i.order, weekId: i.week?.weekId, weekLabel: i.week ? formatWeekLabelParts(i.week).name : '',
+    hidden: i.hidden, gate: i.gate, canSeeOthers: i.canSeeOthers,
+    games: i.games.map((g) => ({ gameId: g.gameId, kickoff: g.kickoff, status: g.status })),
+  })), { mode: effectiveSortMode(dashboardSavedSortMode()) });
+  // DI-607 (All sports, REV 3): the Sort sheet's Live first parks its movement while the sheet is open, exactly as on one sport's Dashboard — the rows keep the order they had when it opened.
+  const sortEff = effectiveMode(getGameOrderMode(), { allSports: true });
+  if (_sortSheet && _sortSheet.frozen && _sortSheet.weekId === DASHBOARD_ALL && sortEff === 'live-first') {
+    const at = new Map(_sortSheet.frozen.map((id, i) => [id, i]));
+    model.rows = model.rows.map((r, i) => ({ r, i })).sort((a, b) => ((at.has(a.r.gameId) ? at.get(a.r.gameId) : Infinity) - (at.has(b.r.gameId) ? at.get(b.r.gameId) : Infinity)) || (a.i - b.i)).map((x) => x.r);
+  }
+
+  // one rendering context per sport: its entrants, its picks, its abbreviations (the same preamble renderDashboardCompact() runs for one week)
+  const ctxBySport = new Map();
+  const allPlayers = new Map();
+  for (const i of inputs) {
+    if (i.hidden || i.gate) continue;
+    const players = playersForWeek(i.week);
+    players.forEach((p) => allPlayers.set(p.playerId, p));
+    const picks = getPicks(i.week.weekId);
+    const submittedRaw = players.filter((p) => picks.some((pk) => pk.playerId === p.playerId) || submissionStateFor(i.week.weekId, p.playerId) !== 'no');
+    const abbrMap = buildAbbrMap(i.games);
+    ctxBySport.set(i.sp.dbCode, {
+      session, picks, submitted: getOrderedPlayersForDashboard(submittedRaw, session.playerId),
+      shortLabel: (name) => abbrMap.get(name) || (name || '').slice(0, 4).toUpperCase(),
+      canSeeOthers: i.canSeeOthers, logoViewOn, weekId: i.week.weekId, players,
+      games: new Map(i.games.map((g) => [g.gameId, g])),
+    });
+  }
+  const rowsHTML = model.rows.map((r) => {
+    const ctx = ctxBySport.get(r.dbCode);
+    const game = ctx && ctx.games.get(r.gameId);
+    return game ? compactGameCardHTML(game, { ...ctx, sportTag: { dbCode: r.dbCode, code: r.code } }) : '';
+  }).join('');
+  const gatesHTML = model.gates.map((g) => `<div class="empty-state all-sports-gate" data-all-gate="${escHtml(g.dbCode)}">
+      <div class="empty-state-icon">${icon('lock')}</div>
+      <h3>Submit your ${escHtml(g.code)} picks to see who's in.</h3>
+      <p class="text-secondary text-sm">The ${escHtml(g.code)} games stay hidden until you submit — keeps it blind.</p>
+      <button type="button" class="btn btn-primary mt-md" data-all-gate-btn="${escHtml(g.dbCode)}">Make your ${escHtml(g.code)} picks</button>
+    </div>`).join('');
+  const header = thisWeekHeader(model.sports, { span: allSportsDateSpan(inputs) });
+  const ps = getProviderState();
+  const counts = `${numHtml(model.counts.total)} ${model.counts.total === 1 ? 'game' : 'games'}${model.counts.live ? ` · ${numHtml(model.counts.live)} live` : ''}`;
+  const empty = !model.rows.length && !model.gates.length
+    ? '<div class="info-box">No games on the slate yet.</div>' : '';
+  // DI-607 (All sports, REV 3): the same Sort row as one sport's Dashboard (signed in, two or more games), reading the EFFECTIVE mode (a saved Custom reads as Kickoff time and is never overwritten).
+  const shownGames = model.rows.map((r) => ctxBySport.get(r.dbCode)?.games.get(r.gameId)).filter(Boolean);
+  const sortRowHTML = session && session.playerId && shownGames.length >= 2
+    ? listControlHTML({ n: shownGames.length, caption: allSportsSortCaption(shownGames), mode: sortEff, arranging: false, weekN: '', escHtml, numHtml }) : '';
+  c.innerHTML = `
+    <div class="section-header"><h2>Dashboard</h2></div>
+    <div class="picks-week-nav all-sports-weeknav" role="group" aria-label="This week">
+      <div class="week-heading">
+        <span class="picks-week-nav-label">${escHtml(header.title)}</span>
+        ${header.caption ? `<span class="week-heading-dates">${escHtml(header.caption)}</span>` : ''}
+      </div>
+    </div>
+    <div class="refresh-bar">
+      <span>${ps.lastScoreRefresh ? `Scores: ${escHtml(new Date(ps.lastScoreRefresh).toLocaleTimeString())}` : 'Not refreshed'}</span>
+      <button class="refresh-btn-mini" id="manual-refresh-btn">↻ Refresh</button>
+    </div>
+    <div class="card mb-md">
+      <div class="card-header card-header-row"><span class="card-title">${icon('calendarWeek')} All Picks by Game</span></div>
+      ${model.blindAny ? `<p class="blind-note"><span class="blind-note-icon">🙈</span><span>Other players' picks stay hidden until the games kick off — that way nobody can peek and then change their own. Check back at kickoff to compare.</span></p>` : ''}
+      ${sortRowHTML}
+      <p class="all-sports-count text-muted text-sm">${counts}</p>
+      ${gatesHTML}
+      <div class="dashboard-compact" id="all-sports-rows">${rowsHTML}</div>
+      ${empty}
+    </div>
+    <article class="card mb-md"><p class="body text-muted" style="margin:0">${escHtml(ALL_SPORTS_NOTE)}</p></article>`;
+  c.querySelectorAll('[data-all-gate-btn]').forEach((b) => b.addEventListener('click', () => {
+    haptic('selection');
+    enterSportContext(b.getAttribute('data-all-gate-btn'), { tab: 'picks', source: 'all-sports-gate' });
+  }));
+  bindReactionHandlers([...allPlayers.values()]); bindCommentBubbleHandlers();
+  bindColumnReorderHandlers();
+  if (sortRowHTML) afterDashboardSortPaint(c, { week: { weekId: DASHBOARD_ALL }, games: shownGames, layout: 'compact', ctx: { arranging: false } });   // the Sort button's handler and the context the sheet reads
+  document.getElementById('manual-refresh-btn')?.addEventListener('click', async () => {
+    showToast('🔄 Refreshing…', 'warning');
+    for (const i of inputs) { if (!i.hidden) { try { await doRefreshScores(i.week, i.games); } catch (e) { console.warn('[all-sports] refresh failed for', i.sp.dbCode, e); } } }
+    renderDashboard();
+  });
+}
+
+/** The All sports Sort row's caption (DI-607): "{L} live", else the first kickoff still to come, else "None live" — facts from the schedule and the game states, nothing from any pick. */
+function allSportsSortCaption(games) {
+  let live = 0, first = null;
+  for (const g of games) {
+    const ph = gamePhaseOf(g);
+    if (ph === 'live' || ph === 'live-stale') live += 1;
+    const ms = g && g.kickoff && ph !== 'final' ? Date.parse(g.kickoff) : NaN;
+    if (Number.isFinite(ms) && ms > Date.now() && (first === null || ms < first)) first = ms;
+  }
+  if (live > 0) return `${live} live`;
+  if (first !== null) { const when = shortWhen(first, getTimezone()); if (when) return `First kickoff ${when}`; }
+  return 'None live';
+}
+
+/** The date span of the sports' current weeks for the "This week" caption, in the viewer's zone: "Sat Oct 10 – Mon Oct 12" (first kickoff of any played sport to the last). */
+function allSportsDateSpan(inputs) {
+  const kicks = [];
+  for (const i of inputs) if (!i.hidden) for (const g of i.games) { const t = Date.parse(g.kickoff); if (Number.isFinite(t)) kicks.push(t); }
+  if (!kicks.length) return '';
+  return formatGameWindow(Math.min(...kicks), Math.max(...kicks), sportViewerZone().iana);
+}
+
 function renderDashboard() {
-  if (deferRenderWhileWeekSwiping('dashboard', renderDashboard)) return; renderDashboardInner();   // reviewer note on RG-TBD-A1: a repaint under an active week swipe waits for the release (nav-gestures.js)
+  if (deferRenderWhileWeekSwiping('dashboard', renderDashboard)) return; const rankBefore = captureRankRows(); const rowsBefore = captureGameRows(); renderDashboardInner();   // D1 / DI-557: the two movement passes run at the END of this function (below), over the finished page   // reviewer note on RG-TBD-A1: a repaint under an active week swipe waits for the release (nav-gestures.js)
   // The chat teaser card (v0.16.0, DI-93) was inserted here — `afterbegin` on
   // the page host, pinned above every ordered section. Retired 2026-09-24
   // (Option A, Drew): push is the channel for chat activity now, and the chat
@@ -12140,6 +14009,7 @@ function renderDashboard() {
   // comment in js/chat-ui.js where dashboardChatTeaserHTML() was defined.
   // `host` stays — the prelink banner below shares it.
   const host = document.getElementById('page-dashboard');
+  paintSportSwitcher(host, 'dashboard');   // D1 DI-521: the switcher (CFB · NFL · All sports) is the first element under the title; absent unless the member plays two or more sports
   // DI-331g — idempotent; see bindLogoImageEvents()'s own header. Covers the
   // compact layout's `.dc-chip-logo` images (renderDashboardCompact()) AND,
   // since DI-428(c) (2026-09-28), the standard matrix's `.matrix-hdr-logo`
@@ -12147,6 +14017,7 @@ function renderDashboard() {
   // stale note corrected round 2, reviewer F3, 2026-09-29: this WAS
   // DI-331f's deliberate non-conversion of the matrix; it no longer is).
   bindLogoImageEvents(host);
+  armLockFlipForPage();   // D1 / DI-510: watch the current week's lock instant (the Dashboard's badge and "Go to Picks" countdown flip with Picks')
   // ── DI-183a-ii (Step 3b) — "Set up your account", ABOVE EVERYTHING ────────
   // Inserted the way the chat teaser was: `afterbegin` on the page host,
   // AFTER renderDashboardInner() has painted. That makes it a banner ABOVE the
@@ -12176,6 +14047,11 @@ function renderDashboard() {
   // survive, not just the initial navigation.
   renderPausedLeagueBannerIfNeeded('dashboard');
   renderMaintenanceBannerIfNeeded('dashboard');
+  renderSportStallBannerIfNeeded('dashboard');   // D1 / DI-557
+  // D1 / DI-557 (touched-screen audit, 2026-10-14) - THE MOVEMENT PASSES MEASURE THE FINISHED PAGE. They ran straight after renderDashboardInner(), BEFORE everything this function still paints (the sport
+  // switcher, then the notices above the page), so each of those looked like the rows having moved: a rebuild played a spurious bounce (the 66 px switcher of a multi-sport league on every tick,
+  // reproduced on ec3c7205; with the stall banner up, 144 px). A row now animates only for a change the READER caused or the DATA made (a reorder, a score), never for what the page paints around it.
+  playRankMovement(rankBefore); playGameMovement(rowsBefore);
   // SP-57 (DI-385) — covers renderDashboardInner()'s early-return empty states too, which replace the page with nothing
   // to rearrange: the "Rearranging" bar is unmounted and the mode cleared (no ghost mode).
   syncLayoutEditBar();
@@ -12193,10 +14069,12 @@ function renderDashboardInner() {
   try { c.classList.remove('layout-editing'); } catch {}
   const session=getSession();
   const isCommissioner = !!session?.isAdmin;
+  // D1 DI-525 rev 3 (Drew D-59) — ALL SPORTS: the combined slate of this week across the sports the member plays. Reached only by a member who plays two or more sports (getDashboardScope()).
+  if (isMultiSport() && getDashboardScope() === DASHBOARD_ALL) { renderDashboardAllSports(c, session); return; }
   // Demo weeks are commissioner-only; so are drafts. Filter them out of the
   // week list players see (see selectableDashboardWeeks() for the why).
-  const allWeeks=selectableDashboardWeeks(getWeeks(), isCommissioner);
-  const currentWeek=getCurrentWeek();
+  const allWeeks=selectableDashboardWeeks(getContextWeeks(), isCommissioner);   // D1 DI-525: THIS sport's weeks (one sport: every week)
+  const currentWeek=getContextWeek();
   const currentWeekVisible = currentWeek && (currentWeek.dataSourceMode !== 'demo' || isCommissioner);
   // N1 (DI-430 touched-screen audit): what / why / next, role-aware, no IRB copy (was a bare "No Weeks Yet — Commissioner needs to open a week.").
   if(!currentWeekVisible && !allWeeks.length){c.innerHTML=zeroWeekEmptyStateHTML();bindZeroWeekEmptyState(c);return;}
@@ -12228,19 +14106,19 @@ function renderDashboardInner() {
   // Live and final weeks are always visible — no login or submission required.
   if (!isPublic && session.playerId && session.playerVerified && !session.isAdmin) {
     if (!hasPlayerSubmitted(week.weekId, session.playerId)) {
-      c.innerHTML=`<div class="empty-state"><div class="empty-state-icon">🔒</div>
-        <h3>Submit Your Picks First</h3>
-        <p class="text-secondary text-sm">Dashboard is hidden until you submit — keeps it blind.</p>
-        <button class="btn btn-primary mt-md" id="go-picks-btn">Make My Picks</button></div>`;
+      c.innerHTML=dashboardGateHTML(week);   // UN-412 / DI-502b — see dashboardGateHTML(): the gate now says who he is waiting on
       document.getElementById('go-picks-btn')?.addEventListener('click',()=>navigateTo('picks'));
       return;
     }
   }
 
-  const players=getPlayers().filter(p=>p.active);
-  const games=getGames(week.weekId).sort((a,b)=>new Date(a.kickoff)-new Date(b.kickoff));
+  const players=playersForWeek(week);   // D1 DI-531/A3: the ENTRANTS of this week's sport (one sport: every active player, exactly as before)
+  const games=orderedWeekGames(getGames(week.weekId), week.weekId);
   const allPicks=getPicks(week.weekId);
-  const actualTB=week.actualTiebreakerValue;
+  // D1 / DI-516/517 (FB-002) — the Dashboard ranks with the EFFECTIVE tiebreaker value (a stored actual, else the live alma-mater total over the scores on screen, provisional until every
+  // alma game is final), so the "This Week" order, the Δ column and the tiebreaker line move by themselves as scores arrive. A final week's value is exactly what it was.
+  const tbEff=effectiveTiebreakerActualForWeek(week,games);
+  const actualTB=tbEff.value;
   const weeklyResults=weeklyResultsWithTie(week,players,allPicks,games,actualTB);
   const ps=getProviderState();
 
@@ -12261,17 +14139,22 @@ function renderDashboardInner() {
   // Behavior": "Disabled buttons — clearly reduced emphasis," and a control
   // that visibly writes a preference the app then structurally ignores is a
   // worse experience than no control at all, not merely a disabled one.
+  // D1 Lane B / DI-607 + DI-581 — the Sort row under the card header and, while the member arranges a Custom list, the arrange rows. Computed ONCE per paint from the same inputs the rows use.
+  const sortCtx = dashboardSortContext({ week, games, layout: currentDashLayout, session });
+  const arrangingAttr = sortCtx.arranging ? ' data-games-arranging="true"' : '';   // the one attribute gesturesSuspended() and the drawer read to stand down while a row is held
+  const liveNotes=liveTiebreakerNotesHTML(week,weeklyResults,tbEff,games);   // D1 / DI-517: the Provisional chip and the "so far" / tie / order lines on a LIVE week; '' on every other status
   const dashSections = {
     // 1. ALL PICKS BY GAME — primary section per requirements (DI-22)
     'dash-picks': `<div class="card mb-md">
       <div class="card-header card-header-row" data-section-header>
-        <span class="card-title">📋 All Picks by Game</span>
+        <span class="card-title"><span class="card-title-glyph" aria-hidden="true">${icon('clipboard')}</span>All Picks by Game</span>
         ${isNativeShell() ? '' : `
         <div class="layout-toggle" role="group" aria-label="View density">
           <button class="layout-toggle-btn${currentDashLayout==='standard'?' active':''}" data-layout="standard" title="Wide matrix">Standard</button>
           <button class="layout-toggle-btn${currentDashLayout==='compact'?' active':''}" data-layout="compact" title="Mobile-friendly stacked view">Compact</button>
         </div>`}
       </div>
+      ${sortCtx.listHTML}
       ${/* DI-116f — players are used to seeing everyone's picks the moment they
             submitted. Without a word of explanation the new blind cells read as
             a bug, and the commissioner fields the question.
@@ -12284,6 +14167,7 @@ function renderDashboardInner() {
             predicate that draws the cells, so the note and the blinding cannot
             disagree. For a non-admin the two conditions are identical, so no
             player-facing behaviour changes. */''}
+      ${pickStatusBlockHTML(week.weekId)}
       ${!canViewOtherPicks(week)
         ? `<p class="blind-note"><span class="blind-note-icon">🙈</span><span>Other players' picks stay hidden until the games kick off — that way nobody can peek and then change their own. Check back at kickoff to compare.</span></p>`
         : ''}
@@ -12295,10 +14179,10 @@ function renderDashboardInner() {
             FINAL COPY IS OWED TO user-experience — the design input names "a
             dash or skeleton chip" and leaves the wording to it; this is the
             factual placeholder, not a UX decision taken here. */''}
-      ${supabaseProgressUnknownNoteHTML(week)}
+      ${dashboardUnknownNoteHTML(week)}
       ${(currentDashLayout==='compact')
-        ? `<div class="dashboard-compact">${renderDashboardCompact(players,games,allPicks,weeklyResults,week.weekId,actualTB)}</div>`
-        : `<div class="dashboard-scroll">${renderDashboardTable(players,games,allPicks,weeklyResults,week.weekId,actualTB)}</div>`}
+        ? `<div class="dashboard-compact"${arrangingAttr}>${renderDashboardCompact(players,games,allPicks,weeklyResults,week.weekId,actualTB,{ arrange: sortCtx.arranging })}</div>`
+        : `${standardPicksNoteHTML()}<div class="dashboard-scroll">${renderDashboardTable(players,games,allPicks,weeklyResults,week.weekId,actualTB)}</div>`}
       ${/* FEAT-7 / DI-174e — the legend is the touch-accessible replacement for
             the tooltip this design is not allowed to use (tooltips do not fire
             on touch). Conditional so it is not permanent clutter: it appears on
@@ -12318,12 +14202,13 @@ function renderDashboardInner() {
     </div>`,
 
     // 2. ALMA MATER WATCH
-    'dash-alma': renderAlmaMaterWatch(week.weekId, games),
+    // D1 DI-525: Alma Mater Watch renders only when the sport's profile has an affinity step (college football; not the NFL, D-31). A CFB week is unchanged.
+    'dash-alma': weekUsesAlmaAffinity(week) ? renderAlmaMaterWatch(week.weekId, games) : '',
 
     // 3. THIS WEEK SCORE SUMMARY (tiebreaker question card now appears below this)
     'dash-summary': `<div class="card mb-md">
-      <div class="card-header" data-section-header><span class="card-title">This Week Score Summary</span></div>
-      <table class="leaderboard-table">
+      <div class="card-header" data-section-header><span class="card-title">This Week Score Summary</span>${liveNotes.chip}</div>
+      ${liveNotes.lines}<table class="leaderboard-table">
         <thead><tr><th>#</th><th>Player</th><th>✅</th><th>❌</th><th>Tiebreaker</th></tr></thead>
         <tbody>
           ${renderScoreSummaryRowsHTML(week, weeklyResults, players, actualTB)}
@@ -12338,7 +14223,11 @@ function renderDashboardInner() {
     // the week a question exists again.
     'dash-tiebreaker': week.tiebreakerQuestion?`<div class="tiebreaker-card tiebreaker-dashboard">
       <span class="tiebreaker-label" data-section-header>🎯 Tiebreaker: ${escHtml(week.tiebreakerQuestion)}</span>
-      ${actualTB!==null?`<div class="tb-actual">Actual: <strong>${numHtml(actualTB)}</strong></div>`:'<div class="text-muted text-xs">Actual answer not entered yet.</div>'}
+      ${actualTB!==null
+        ? (tbEff.provisional
+            ? `<div class="tb-actual">So far: <strong>${numHtml(actualTB)}</strong>${tbEff.calculated.basis==='alma'?` <span class="text-muted text-xs">(${numHtml(tbEff.calculated.final)} of ${numHtml(tbEff.calculated.total)} alma games final)</span>`:''}</div>`
+            : `<div class="tb-actual">Actual: <strong>${numHtml(actualTB)}</strong></div>`)
+        : '<div class="text-muted text-xs">Actual answer not entered yet.</div>'}
     </div>`:'',
   };
   const dashComposed = composeSections('dashboard', dashSections);
@@ -12358,19 +14247,21 @@ function renderDashboardInner() {
     ${renderDashboardWeekNav(week, currentWeek)}
     <div class="refresh-bar">
       <span>${ps.lastScoreRefresh?`Scores: ${new Date(ps.lastScoreRefresh).toLocaleTimeString()}`:'Not refreshed'}</span>
-      <button class="refresh-btn-mini" id="manual-refresh-btn">↻ Refresh</button>
+      <button class="refresh-btn-mini" id="manual-refresh-btn"><span class="refresh-btn-glyph" aria-hidden="true">${icon('refresh')}</span><span>Refresh</span></button>
     </div>
 ${dashComposed.html}
 `;
 
   bindLayoutEditHandlers(c, 'dashboard', dashComposed.visible, renderDashboard);
+  afterDashboardSortPaint(c, { week, games, layout: currentDashLayout, ctx: sortCtx });   // D1 Lane B: the delegated Sort / arrange handlers (bound once), the context they read, the arrow-focus one-shot
   bindDashboardWeekNav();
+  bindDashboardGateButtons(c);
   // DI-311 (T-32) — Standard / Compact view toggle for the All-Picks-by-Game
   // card. The EXPLICIT override now writes to player.preferences.dashboardLayout
   // (Architecture bullet 4 — follows the player across devices) when signed
   // in; settings.dashboardLayout (device-local) is the anonymous-viewer
   // fallback only.
-  document.querySelectorAll('.layout-toggle-btn').forEach(btn => {
+  document.querySelectorAll('.layout-toggle-btn, [data-pg-std-compact]').forEach(btn => {      // (the Standard matrix's "Compact" note button does exactly what the toggle's Compact does)
     btn.addEventListener('click', () => {
       const session = getSession();
       if (session?.playerId) {
@@ -12567,6 +14458,44 @@ function reorderPlayerColumn(sourceId, targetId) {
    the reason renderDashboardTable() below is: the blind rule is only
    meaningfully tested against the markup a player is actually served, and the
    surrounding renderer needs a real DOM to drive. Pure HTML, no side effects. */
+/**
+ * D1 / DI-517 (FB-002) — what the "This Week Score Summary" says about the ORDER while the week is LIVE, so a ranking that is still moving is never read as a result:
+ *   a muted `Provisional` chip beside the title (never styled as final), and under it
+ *   - no game has a score yet: `Ranks appear once games start.` (DI-517 wrote "Order appears…"; UN-77's guard bans the word "order" in every string literal, so the line says "Ranks")
+ *   - the calculated tiebreaker so far: `Tiebreaker so far: {value} · {k} of {m} alma games final` (an NFL game: `… · {Away} at {Home}`); a stored override is not "so far", so it adds no line
+ *   - the numeric tiebreaker leaves a tie at the top or the bottom of the order while the week is not final: `Tied — settles when the week is final` (the alma-mater step, the Extra Point
+ *     and the draw exist only for final weeks, SP-54)
+ * Everything here rides the same gate as the rank column (`canViewOtherPicks`): a viewer who cannot see standing is told nothing about it. Every other status returns empty strings,
+ * so a draft, open, locked or final week renders exactly what it always did. Pure over its arguments (no storage, no clock).
+ */
+export function liveTiebreakerNotesHTML(week, weeklyResults, tbEff, games) {
+  const none = { chip: '', lines: '' };
+  if (!week || week.status !== WEEK_STATUS.LIVE) return none;
+  if (!canViewOtherPicks(week)) return none;
+  const gs = Array.isArray(games) ? games : [];
+  const scored = (g) => (g.status === GAME_STATUS.FINAL || g.status === GAME_STATUS.LIVE) && g.homeScore !== null && g.homeScore !== undefined && g.awayScore !== null && g.awayScore !== undefined;
+  const lines = [];
+  if (!gs.some(scored)) {
+    lines.push('Ranks appear once games start.');
+  } else {
+    const calc = tbEff && tbEff.calculated;
+    // The lines are PLAIN TEXT here and escaped once, at the sink below (escHtml(line)) — never pre-escaped pieces concatenated, so a team name with an ampersand is escaped exactly once.
+    if (tbEff && tbEff.source === 'calculated' && tbEff.value !== null && calc) {
+      if (calc.basis === 'game' && calc.game) lines.push(`Tiebreaker so far: ${String(tbEff.value)} · ${calc.game.awayTeam} at ${calc.game.homeTeam}`);
+      else if (calc.basis === 'alma') lines.push(`Tiebreaker so far: ${String(tbEff.value)} · ${String(calc.final)} of ${String(calc.total)} alma games final`);
+    }
+    const rows = Array.isArray(weeklyResults) ? weeklyResults : [];
+    const sameAs = (a, b) => !!a && !!b && a.correctPicks === b.correctPicks && (a.tiebreakerDelta ?? null) === (b.tiebreakerDelta ?? null);
+    if (gs.some((g) => g.status === GAME_STATUS.FINAL) && rows.length > 1 && (sameAs(rows[0], rows[1]) || sameAs(rows[rows.length - 1], rows[rows.length - 2]))) {
+      lines.push('Tied — settles when the week is final');
+    }
+  }
+  return {
+    chip: ' <span class="badge badge-draft tb-provisional-chip">Provisional</span>',
+    lines: lines.map((line, i) => `<p class="text-muted text-xs tb-live-line${i ? ' mt-sm' : ''}">${escHtml(line)}</p>`).join(''),
+  };
+}
+
 export function renderScoreSummaryRowsHTML(week, weeklyResults, players, actualTB) {
   const session = getSession();
   // Hoisted out of the row loop — it never depended on the row, and the
@@ -12620,7 +14549,7 @@ export function renderScoreSummaryRowsHTML(week, weeklyResults, players, actualT
     const tb = (!hideStanding && validTieBreak(r.tieBreak) && r.tieBreak.end === (r.isWinner ? 'winner' : r.isLoser ? 'loser' : null)) ? r.tieBreak : null;
     const noteText = tb ? tieCaption(tb, { named: false, otherName: getDisplayNamePlain(week.weekId, tb.vs, players) }) : '';
     const noteRow = noteText ? `<tr class="${tint} tie-note-row"><td colspan="5"><p class="tie-note">${escHtml(noteText)}</p></td></tr>` : '';
-    return `<tr class="${tint}${noteText ? ' has-note' : ''}">
+    return `<tr class="${tint}${noteText ? ' has-note' : ''}"${week.status === WEEK_STATUS.LIVE ? ` data-player-id="${escHtml(r.playerId)}"` : ''}>
       ${hideStanding
         ? '<td class="rank-cell">—</td>'
         : `<td class="rank-cell rank-${numHtml(r.rank)}">${numHtml(r.rank)}</td>`}
@@ -12631,6 +14560,21 @@ export function renderScoreSummaryRowsHTML(week, weeklyResults, players, actualT
     </tr>${noteRow}`;
   }).join('');
 }
+
+/**
+ * The matrix-level gate's button, bound by listener instead of an inline `onclick` (UN-412 / DI-502 touched-screen audit). The target comes
+ * from `data-go-tab` and is checked against a one-entry allow-list, so markup can never make this navigate anywhere but Picks.
+ */
+function bindDashboardGateButtons(root) {
+  if (!root || typeof root.querySelectorAll !== 'function') return;
+  root.querySelectorAll('[data-go-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tab = btn.getAttribute ? btn.getAttribute('data-go-tab') : (btn.dataset && btn.dataset.goTab);
+      if (tab === 'picks') navigateTo('picks');
+    });
+  });
+}
+export const _bindDashboardGateButtonsForTest = bindDashboardGateButtons;
 
 /* Exported for UN-116's regression suite (same rationale as
    buildObligationsCsvRows): this returns pure HTML, and the blind rule is only
@@ -12657,18 +14601,23 @@ export function renderDashboardTable(players,games,allPicks,weeklyResults,weekId
     // a signed-out viewer lands, so it's the highest-leverage place to show what
     // they're about to miss. Contains no pick data; blind rule is unaffected.
     const countdown = renderLockCountdownHTML(week, games, { compact: true });
+    // UN-412 / DI-502 touched-screen audit (2026-10-01) — this gate's button was `.btn-sm` (34 px, under the 40 px house floor) with an inline
+    // `onclick` where the full-page gate binds a listener. Now a full-size `.btn` in its own centred `.btn-row` (Breathing Room: the space comes
+    // from the container), wired by bindDashboardGateButtons() from `data-go-tab`. The signed-out variant gets the same fix; it shows no strip
+    // (a signed-out visitor has no data to show).
     if (!session.playerVerified) {
       return `<div class="text-center" style="padding:24px">
         ${countdown}
         <p class="text-muted text-sm mb-md">Log in and submit your picks to view the pick matrix.</p>
-        <button class="btn btn-primary btn-sm" onclick="navigateTo('picks')">Go to Picks</button>
+        <div class="btn-row"><button class="btn btn-primary" data-go-tab="picks">Go to Picks</button></div>
       </div>`;
     }
     if (!hasPlayerSubmitted(weekId, session.playerId)) {
       return `<div class="text-center" style="padding:24px">
         ${countdown}
         <p class="text-muted text-sm mb-md">Submit your picks first — keeps it blind until you're in.</p>
-        <button class="btn btn-primary btn-sm" onclick="navigateTo('picks')">Submit My Picks</button>
+        ${pickStatusBlockHTML(weekId)}
+        <div class="btn-row"><button class="btn btn-primary" data-go-tab="picks">Submit My Picks</button></div>
       </div>`;
     }
   }
@@ -12733,8 +14682,10 @@ export function renderDashboardTable(players,games,allPicks,weeklyResults,weekId
       // Item 2 Pass B (DI-4) — append the captured quarter/clock text, verbatim,
       // right next to the existing LIVE pill. No entry -> disp is null -> the
       // pill renders exactly as before (no added text).
-      const liveDisp = liveStatusDisplay(liveStatusById.get(game.gameId));
-      const dotCls = liveDisp && liveDisp.pulse===false ? ' live-dot-static' : '';
+      // DI-570 — the same honest word as the compact layout: a missing / over-3-minute-old capture is "Score may be behind", never a stale quarter and clock.
+      const gsChip = gameStateChipHTML(game, 'status-pill');
+      const liveDisp = gsChip ? null : liveStatusDisplay(liveStatusById.get(game.gameId));
+      const dotCls = gsChip || (liveDisp && liveDisp.pulse===false) ? ' live-dot-static' : '';
       const detailText = liveDisp ? ` · ${escHtml(liveDisp.text)}` : '';
       // FEAT-7 / DI-174c — red-zone mark, appended AFTER the LIVE pill as its
       // own inline span inside the existing .game-info-meta flex-wrap row. It
@@ -12744,7 +14695,9 @@ export function renderDashboardTable(players,games,allPicks,weeklyResults,weekId
       // it renders once per row and never inside the blinded •••/▲/▽ language.
       const rz = redZoneDisplay(liveStatusById.get(game.gameId), game, { teamLabel: shortTeam });
       const rzMark = rz ? `<span class="rz-mark" aria-label="${escHtml(rz.ariaLabel)}">${escHtml(rz.label)}</span>` : '';
-      stateIndicator = `<span class="live-pill" style="font-size:.66rem"><span class="live-dot${dotCls}"></span>LIVE ${numHtml(game.awayScore)}–${numHtml(game.homeScore)}${detailText}</span>${rzMark}`;
+      stateIndicator = `<span class="live-pill" style="font-size:.66rem"><span class="live-dot${dotCls}"></span>LIVE ${numHtml(game.awayScore)}–${numHtml(game.homeScore)}${detailText}</span>${gsChip}${rzMark}`;
+    } else {
+      stateIndicator = gameStateChipHTML(game, 'status-pill');   // DI-570: "Waiting for a score update" / "Score not available yet" — '' for upcoming
     }
     const statusInfo = `<span class="kickoff-time">${escHtml(kickoffStr)}</span>${stateIndicator}`;
 
@@ -12873,8 +14826,8 @@ export const _reactionStripForTest = renderReactionStrip;
  * attribute and replaces its innerHTML.
  */
 function refreshReactionStrip(weekId, gameId, players) {
-  const sel = `[data-reaction-strip="${weekId}::${gameId}"]`;
-  document.querySelectorAll(sel).forEach(node => {
+  const stripKey = `${weekId}::${gameId}`;   // W-20 / DI-541 — week and game ids are never trusted to be selector-safe
+  document.querySelectorAll(`[data-reaction-strip="${cssId(stripKey)}"]`).forEach(node => {
     const fresh = renderReactionStrip(weekId, gameId, players);
     // Replace the whole element so its data-* attributes stay current.
     const tmp = document.createElement('div');
@@ -13078,7 +15031,7 @@ function openCommentThreadModal(weekId, gameId) {
  */
 function refreshCommentBubbles(gameId) {
   const count = getGameComments(gameId).length;
-  document.querySelectorAll(`.comment-bubble[data-comment-game="${gameId}"]`).forEach(el => {
+  document.querySelectorAll(`.comment-bubble[data-comment-game="${cssId(gameId)}"]`).forEach(el => {
     if (count > 0) {
       el.classList.add('has-comments');
       const existing = el.querySelector('.cb-count');
@@ -13107,6 +15060,40 @@ function bindCommentBubbleHandlers() {
 }
 
 
+// ─── D1 Lane B · the pick modules' app-owned helpers (DI-591 / DI-612) ──────────────────────────────────────────────────────────────────────────────────────────────
+// js/pick-chips.js (the gate + the member chips) and js/pick-groups.js (By person / By team) are leaves: every helper they need that lives in this file arrives here, once.
+// (Merge of int, 2026-10-08: Lane B's own `entrantsForWeek` placeholder is GONE. WHO IS IN A SPORT for a week — the roster behind every cluster, "No pick", "•••" and "{k} of {n}" on a Game Day / Game view /
+// By team surface (security C4 / A3) — is js/sport-seam.js's `entrantsForWeek(week)`, imported above: the ONE thin call into competition.js's `playersForWeek(week)` (the week's own competition, joined before
+// the week's lock, C1; a one-sport league: every active player). One roster function, not two.)
+/**
+ * D1 Lane B / DI-612 (PBD-B11), reviewer N1 (fix round 1). The Standard WEB matrix has members as its columns, so it is always By person. When the member chose "By team" on the Dashboard and the layout is
+ * Standard, ONE line above the matrix says so, with a 44 pt Compact button (the toggle's own Compact, so one write, one repaint). Nothing is drawn for By person (nothing is overridden), when signed out
+ * (no preference exists) or on the iOS shell (always Compact, so By team always applies). The words are literal: no data reaches this markup.
+ */
+function standardPicksNoteHTML() {
+  let team = false;
+  try { team = getPicksView('dashboard') === 'team'; } catch { team = false; }
+  if (!team) return '';
+  return '<div class="pg-std-note" data-pg-std-note><p class="pg-std-note-tx">Showing picks by person. Switch to Compact to see them by team.</p><button type="button" class="btn btn-secondary pg-std-compact" data-layout="compact" data-pg-std-compact>Compact</button></div>';
+}
+let _pickModulesConfigured = false;
+function ensurePickModules() {
+  if (_pickModulesConfigured) return;
+  configurePickGate({
+    picksReadConfirmed: (id) => { try { return sb.picksReadWhilePublic(id) === true; } catch { return false; } },   // S-C10 / RG-255: other members' rows have LANDED for this week
+    submissionStateFor: (weekId, playerId) => submissionStateFor(weekId, playerId),                                 // the ONE who-has-submitted rule (DI-T4.11), unchanged
+  });
+  configurePickGroups({
+    orderPlayers: (players, viewerId) => getOrderedPlayersForDashboard(players, viewerId),
+    initialsOf: getPlayerInitials,
+    shortLabelFor: (game) => { const m = buildAbbrMap(getGames(game && game.weekId)); return (name) => m.get(name) || (name || '').slice(0, 4).toUpperCase(); },
+    logoOk, logoSrcAttr, teamSchool, logoViewOn: getLogoView,
+  });
+  _pickModulesConfigured = true;
+}
+export const _ensurePickModulesForTest = ensurePickModules;
+export const _entrantsForWeekForTest = entrantsForWeek;
+
 /**
  * Compact alternative to the wide matrix above — optimized for narrow phone
  * screens. Each game is one stacked card; player picks are rendered as small
@@ -13127,8 +15114,9 @@ function bindCommentBubbleHandlers() {
  * markup actually served, not on a source-text regex — a regex can't tell a
  * working relocation from one that silently reverted.
  */
-export function renderDashboardCompact(players, games, allPicks, weeklyResults, weekId, actualTB) {
+export function renderDashboardCompact(players, games, allPicks, weeklyResults, weekId, actualTB, opts = {}) {
   const session = getSession();
+  const arrange = opts && opts.arrange === true;   // D1 Lane B / DI-581: while the member ARRANGES their Custom list each row gains a grip and Move up / Move down (js/game-sort.js); the chips stop being drag handles
   const picks = allPicks;
   // DI-T4.11 — the same rule as the matrix, and it has to BE the same rule:
   // the compact layout is the one six of six players see on a phone, so "who
@@ -13147,7 +15135,7 @@ export function renderDashboardCompact(players, games, allPicks, weeklyResults, 
   const abbrMap = buildAbbrMap(games);
   const shortLabel = (name) => abbrMap.get(name) || (name || '').slice(0,4).toUpperCase();
 
-  const sortedGames = [...games].sort((a,b) => new Date(a.kickoff||0) - new Date(b.kickoff||0));
+  const sortedGames = orderedWeekGames(games, weekId);   // DI-579: sorted by the viewer-chosen game sort (Kickoff by default, equal kickoffs on gameId); the Live Peek rows come through here too
 
   // Blinding rule (Priority 3): hide other players' chip contents from a viewer
   // who hasn't earned the right to see picks yet. The viewer ALWAYS sees their
@@ -13156,8 +15144,22 @@ export function renderDashboardCompact(players, games, allPicks, weeklyResults, 
   const canSeeOthers = week ? canViewOtherPicks(week) : false;
   // DI-331f — read once for the whole dashboard render, same as renderGameCard().
   const logoViewOn = getLogoView();
+  ensurePickModules();
+  const picksViewOn = getPicksView('dashboard') === 'team';   // D1 Lane B / DI-611: read once per render; the default is 'person' (byte-identical to v0.29.0)
 
-  const gameCards = sortedGames.map(game => {
+  const cardCtx = { session, picks, submitted, shortLabel, canSeeOthers, logoViewOn, weekId, players, week, picksViewOn, arrange, sortedGames };   // (merge of int, 2026-10-08: Lane B's By team / arrange inputs ride the extracted card's context)
+  const gameCards = sortedGames.map(game => compactGameCardHTML(game, cardCtx)).join('');
+
+  return gameCards;
+}
+
+/**
+ * ONE game's compact card, extracted from renderDashboardCompact() (D1 DI-525 rev 3) so the Dashboard's ALL SPORTS list can render single rows from DIFFERENT weeks with the SAME markup and
+ * the SAME blind-rule logic (CONVENTIONS #21). `sportTag` is null for every single-sport call: the output is then BYTE-IDENTICAL to what the inlined callback produced (pinned by
+ * sportsurfacetest's golden); All sports passes `{ dbCode, code }` and each row carries its sport's chip. Every pick chip is decided by `canSeeOthers`,
+ * which the CALLER computes from THAT game's own week — never once for a mixed list.
+ */
+function compactGameCardHTML(game, { session, picks, submitted, shortLabel, canSeeOthers, logoViewOn, weekId, players, sportTag = null, week = null, picksViewOn = false, arrange = false, sortedGames = null }) {
     const sv = game.lockedSpread !== null ? game.lockedSpread : game.spread;
     const spreadStr = sv !== null ? fmtSpread(sv, game.favorite, game) : (game.status === GAME_STATUS.FINAL ? 'Final' : 'TBD');
     // Priority 4: kickoff time + state indicator, same pattern as the matrix
@@ -13171,9 +15173,11 @@ export function renderDashboardCompact(players, games, allPicks, weeklyResults, 
       // appended inline into the score chip's text, so the ≤14-char budget
       // from liveStatusDisplayShort() can't push the score itself around.
       // No entry -> liveDisp null -> no chip added (unchanged today).
-      const liveDisp = liveStatusDisplayShort(liveStatusById.get(game.gameId));
-      const dotCls = liveDisp && liveDisp.pulse===false ? ' live-dot-static' : '';
-      const detailChip = liveDisp ? `<span class="dc-status dc-live-detail">${escHtml(liveDisp.text)}</span>` : '';
+      // DI-570 — a live game whose capture is missing or over 3 minutes old says so ("Score may be behind") instead of a minutes-old quarter and clock; fresh = today's chip.
+      const gsChip = gameStateChipHTML(game, 'dc-status');
+      const liveDisp = gsChip ? null : liveStatusDisplayShort(liveStatusById.get(game.gameId));
+      const dotCls = gsChip || (liveDisp && liveDisp.pulse===false) ? ' live-dot-static' : '';
+      const detailChip = gsChip || (liveDisp ? `<span class="dc-status dc-live-detail">${escHtml(liveDisp.text)}</span>` : '');
       // FEAT-7 / DI-174c — a SEPARATE chip, never appended into another chip's
       // text (the Item 2 DI-5 precedent): a long label can then never push the
       // score chip around. A player on the compact layout must not silently
@@ -13181,49 +15185,22 @@ export function renderDashboardCompact(players, games, allPicks, weeklyResults, 
       const rz = redZoneDisplay(liveStatusById.get(game.gameId), game, { teamLabel: shortLabel });
       const rzChip = rz ? `<span class="dc-status dc-redzone" aria-label="${escHtml(rz.ariaLabel)}">${escHtml(rz.label)}</span>` : '';
       stateIndicator = `<span class="dc-status dc-live"><span class="live-dot${dotCls}"></span>${numHtml(game.awayScore)}–${numHtml(game.homeScore)}</span>${detailChip}${rzChip}`;
+    } else {
+      stateIndicator = gameStateChipHTML(game, 'dc-status');   // DI-570: "Waiting for a score update" (past kickoff, no result yet) / "Score not available yet" — '' for upcoming
     }
     const statusInfo = `<span class="dc-status dc-scheduled">${escHtml(kickoffStr)}</span>${stateIndicator}`;
 
-    const chips = submitted.map(player => {
-      const pick = picks.find(pk => pk.gameId === game.gameId && pk.playerId === player.playerId);
-      const initials = escHtml(getPlayerInitials(player));
-      if (!pick) {
-        return `<div class="dc-chip dc-chip-none" data-player-id="${escHtml(player.playerId)}" draggable="true" title="${escHtml(player.displayName)}: no pick"><span class="dc-chip-init">${initials}</span><span class="dc-chip-pick">—</span></div>`;
-      }
-      const isSelf = session.playerId === player.playerId;
-      // Blinding: if the viewer can't see others' picks yet AND this isn't
-      // their own pick, render an opaque "•••" chip. The chip still shows
-      // initials so they can see WHO has submitted, just not WHAT they picked.
-      if (!isSelf && !canSeeOthers) {
-        return `<div class="dc-chip dc-chip-blind" data-player-id="${escHtml(player.playerId)}" draggable="true" title="${escHtml(player.displayName)}: picks hidden until the games kick off"><span class="dc-chip-init">${initials}</span><span class="dc-chip-pick">•••</span></div>`;
-      }
-      const result = evaluatePick(pick, game);
-      const pickedSide = pick.selectedTeam === game.homeTeam ? 'home' : pick.selectedTeam === game.awayTeam ? 'away' : null;
-      const pickShort = pickedSide ? shortLabel(teamSchool(game, pickedSide)) : shortLabel(pick.selectedTeam);
-      let cls = 'dc-chip-pending';
-      let icon = '';
-      if (result === PICK_RESULT.LIVE) {
-        const ls = livePickStatus(pick, game);
-        if (ls === 'covering') { cls = 'dc-chip-live-covering'; icon = '▲'; }
-        else if (ls === 'trailing') { cls = 'dc-chip-live-trailing'; icon = '▽'; }
-        else { cls = 'dc-chip-live'; }
-      } else if (result === PICK_RESULT.WIN) { cls = 'dc-chip-win'; icon = '✓'; }
-      else if (result === PICK_RESULT.LOSS) { cls = 'dc-chip-loss'; icon = '✗'; }
-      else if (result === PICK_RESULT.NO_DECISION) { cls = 'dc-chip-nd'; icon = '—'; }
-      // DI-331f — "converts" per the render-path table: the compact dashboard
-      // shows a logo in place of the abbrMap chip shorthand when logo view is
-      // on. Reached ONLY past the blind-rule branches above (the "no pick"
-      // and "blind" returns happen earlier in this map callback), so a
-      // hidden pick can never resolve a team here — same non-negotiable as
-      // renderGameCard's pick buttons. Manual games have no homeLogo/
-      // awayLogo (data-model.js factory default), so `logoOk(null)` already
-      // falls through to the text chip with no extra `isManual` check needed.
-      const pickLogoUrl = (logoViewOn && pickedSide) ? logoOk(pickedSide === 'home' ? game.homeLogo : game.awayLogo) : null;
-      const pickContent = pickLogoUrl
-        ? `<span class="dc-chip-pick-logo"><img class="dc-chip-logo" src="${escHtml(pickLogoUrl)}" alt="${escHtml(pick.selectedTeam)}" loading="lazy" referrerpolicy="no-referrer"><span class="dc-chip-pick-fallback">${escHtml(pickShort)}</span></span>`
-        : escHtml(pickShort);
-      return `<div class="dc-chip ${cls}" data-player-id="${escHtml(player.playerId)}" draggable="true" title="${escHtml(player.displayName)} picked ${escHtml(pick.selectedTeam)}"><span class="dc-chip-init">${initials}</span><span class="dc-chip-pick">${pickContent}${icon?` ${icon}`:''}</span></div>`;
-    }).join('');
+    // D1 Lane B / DI-612: the member chips are js/pick-chips.js's `gamePickChipsHTML` — the loop body that lived here, moved VERBATIM, so the Dashboard, the Game view and the blind form draw one chip.
+    // The Dashboard still asks its OWN gate (`canSeeOthers` = canViewOtherPicks) and lists its own `submitted` players: its default (By person) output is byte-identical (picksviewtest golden).
+    // Show picks → By team (a member's own choice, Control Center) replaces the chip row of a game ONLY when `picksRowHTML` returns something: it asks the shared gate for THIS game's own week and groups
+    // only a public week (a non-public week is the By person blind form), so By team never shows more than By person. A '' answer (the viewer is not in this sport) falls back to By person exactly.
+    const personChips = () => gamePickChipsHTML({
+      game, players: submitted, lookup: (pid) => picks.find(pk => pk.gameId === game.gameId && pk.playerId === pid),
+      viewerId: session.playerId, canSeeOthers, shortLabel, logoViewOn,
+      escHtml, initialsOf: getPlayerInitials, logoOk, logoSrcAttr, teamSchool,
+    });
+    const teamChips = (picksViewOn && week) ? picksRowHTML({ game, week, entrants: entrantsForWeek(week), viewerId: session.playerId || '', view: 'team', form: 'dash', escHtml, numHtml }) : '';
+    const chips = teamChips || personChips();
 
     const espn = game.espnEventId
       ? ` · <a class="espn-link" href="https://www.espn.com/${game.isManual && game.espnSport ? escHtml(game.espnSport) : 'college-football'}/game/_/gameId/${encodeURIComponent(game.espnEventId)}" target="_blank" rel="noopener noreferrer">ESPN ↗</a>`
@@ -13243,16 +15220,26 @@ export function renderDashboardCompact(players, games, allPicks, weeklyResults, 
     // both at the bottom of the game-info cell, unchanged.
     const chatInd = gameChatBubbleHTML(game.gameId);
     const reactionInd = renderReactionStrip(weekId, game.gameId, players);
-    return `<div class="dc-game">
+    if (arrange) {   // DI-581: grip + arrows; the row's own links (ESPN, chat bubble, reactions) stay out of the way — no taps are armed while a row is being moved
+      const i = sortedGames.indexOf(game);
+      const label = `${game.awayTeam} at ${game.homeTeam}`;
+      const { grip, arrows } = arrangeRowControlsHTML({ label, index: i, count: sortedGames.length, escHtml });
+      return `<div class="dc-game dc-game--arrange" data-game-id="${escHtml(game.gameId)}" data-arrange-row>${grip}
+      <div class="dc-game-main">
+        <div class="dc-game-head">
+          <div class="dc-matchup">${escHtml(matchupBare(game))}</div>
+          <div class="dc-meta"><span class="spread-badge-sm">${escHtml(spreadStr)}</span>${statusInfo}</div>
+        </div>
+      </div>${arrows}
+    </div>`;
+    }
+    return `<div class="dc-game"${sportTag ? ` data-sport="${escHtml(sportTag.dbCode)}"` : ''} data-game-id="${escHtml(game.gameId)}">
       <div class="dc-game-head">
-        <div class="dc-matchup">${escHtml(matchupBare(game))} ${renderGameBadges(game)}</div>
+        <div class="dc-matchup">${escHtml(matchupBare(game))} ${renderGameBadges(game)}${sportTag ? `<span class="dc-sport-tag">${escHtml(sportTag.code)}</span>` : ''}</div>
         <div class="dc-meta"><span class="spread-badge-sm">${escHtml(spreadStr)}</span>${statusInfo}${espn}${chatInd}${reactionInd}</div>
       </div>
       <div class="dc-chips">${chips}</div>
     </div>`;
-  }).join('');
-
-  return gameCards;
 }
 
 // ─── LEADERBOARD / STANDINGS ──────────────────────────────────────────────────
@@ -13273,10 +15260,15 @@ export function renderDashboardCompact(players, games, allPicks, weeklyResults, 
  * Exported for eptest.mjs, same rationale as renderLeaderboard() itself.
  */
 export function renderExtraPointLedgerHTML() {
-  const players = getPlayers().filter(p => p.active);
+  // D1 DI-526 — this sport's entrants and weeks (one sport: every active player and every week, as before)
+  const scoped = isMultiSport();
+  const players = scoped ? playersForCompetition(getContextCompetition()?.id || null) : getPlayers().filter(p => p.active);
   // The SAME predicate object both this card and exportExtraPointCSV() pass,
   // and THE app's one definition of the blind rule — not a copy of its logic.
-  const tally = seasonExtraPointTally(getWeeks(), players, { canViewOtherPicks });
+  const tally = seasonExtraPointTally(scoped ? getContextWeeks() : getWeeks(), players, { canViewOtherPicks });
+  // D1 DI-551 - the Ischemic Extra Point is college football's game. A sport whose profile has no alma-mater affinity step (the NFL, D-31) shows its ledger only once a commissioner has turned the contest on
+  // for some week; until then a league whose main sport is the NFL does not print "The Extra Point isn't running this season yet." (a college wording) as a Standings section.
+  if (!contextSportHasAffinity() && tally.enabledWeeks === 0) return '';
 
   let body;
   if (!tally.rows.length) {
@@ -13355,7 +15347,7 @@ export function renderExtraPointLedgerHTML() {
  * result or a money record exists. "In progress" names no status (open vs
  * locked vs live), exactly as the three dashes it replaces never did.
  */
-function historyGroupHTML({ gid, parts, inProgress, winner, loser }, i, obligations, sess) {
+function historyGroupHTML({ gid, parts, inProgress, winner, loser, openWeekId=null }, i, obligations, sess) {
   // UN-126 — presence of an obligation for this gid no longer
   // implies it's the settled answer. If more than one ACTIVE
   // (non-voided) 'weekly' obligation exists for this gid, or any
@@ -13396,7 +15388,11 @@ function historyGroupHTML({ gid, parts, inProgress, winner, loser }, i, obligati
     : ob ? obligationBadgeHTML(ob.status, ob, payment) : '<span class="text-muted text-xs">—</span>';
   const actions = ob ? obligationButtonsHTML(ob.status, ob, sess, payment) : '';
 
-  const weekCell = `<td class="stand-wk"><span class="stand-wk-name" id="stand-wk-${numHtml(i)}">${escHtml(parts.name)}</span>${parts.dates!==''?`<span class="stand-sub">${escHtml(parts.dates)}</span>`:''}</td>`;
+  const weekText = `<span class="stand-wk-name" id="stand-wk-${numHtml(i)}">${escHtml(parts.name)}</span>${parts.dates!==''?`<span class="stand-sub">${escHtml(parts.dates)}</span>`:''}`;
+  // D1 Lane B / DI-596: a revealed week's cell is a 44 pt button to its detail (labelled by the visible name, never a second copy of it); an Open or Locked week's cell is the plain text it always was.
+  const weekCell = openWeekId
+    ? `<td class="stand-wk"><button type="button" class="stand-wk-btn" data-wk-open="${escHtml(openWeekId)}" aria-labelledby="stand-wk-${numHtml(i)}">${weekText}<span class="stand-wk-chev" aria-hidden="true">${icon('chevronRight')}</span></button></td>`
+    : `<td class="stand-wk">${weekText}</td>`;
   // What a result-less cell says: "In progress" only when a member week is
   // truly not final yet; a final week with no result rows (hidden/legacy)
   // keeps the existing muted dash — it is not in progress, and must not claim to be.
@@ -13427,14 +15423,446 @@ function historyGroupHTML({ gid, parts, inProgress, winner, loser }, i, obligati
   // so it gets its own full-width row, <tr class="stand-note"><td colspan="4">…</td></tr>, emitted HERE: after the week row, before the action row, inside
   // this same <tbody> (so the zebra and the has-act join still hold, and the payment button keeps its own 44 pt row directly under the week). Σcolspan stays 4.
   // No note row for an in-progress row, a conflicted row or a week with no valid descriptor; the row order never changes. Every line is plain text, escaped here.
-  const noteRow = noteLines.length
-    ? `<tr class="stand-note${hasAct?' has-act':''}"><td colspan="4">${noteLines.map(l=>`<p class="tie-note">${escHtml(l.text)}</p>`).join('')}</td></tr>`
+  // M-30 (D-61): a denied payment's reason joins this same full-width row (after any tie note), so it sits under the week, above the button.
+  const deniedLine = ob ? obligationDeniedLineHTML(ob.status, ob) : '';
+  const noteRow = (noteLines.length || deniedLine)
+    ? `<tr class="stand-note${hasAct?' has-act':''}"><td colspan="4">${noteLines.map(l=>`<p class="tie-note">${escHtml(l.text)}</p>`).join('')}${deniedLine}</td></tr>`
     : '';
   return `<tbody class="stand-wk-group">
           <tr class="stand-row${noteRow?' has-note':(hasAct?' has-act':'')}">${weekCell}${cells}</tr>${noteRow}${hasAct?`
           <tr class="stand-act"><td colspan="4"><div class="btn-row stand-act-row" role="group" aria-labelledby="stand-wk-${numHtml(i)}">${actions}</div></td></tr>`:''}
         </tbody>`;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// D1 LANE B · HISTORY (DI-594 / 595 / 596 / 598, thread 100726-D1, 2026-10-08): the member comparison and the week detail
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// Two PUSHED SCREENS (js/pushed-screen.js) opened from Standings (and from a card detail): "You vs {name}" (js/compare.js) and "Week {N}" (js/week-detail.js). Both modules are pure leaves; this block is
+// the ONLY place that reads storage for them. Every figure is read for ONE competition (DI-594): the players through playersForCompetition() / playersForWeek() (never the league's active list), the weeks
+// through getWeeksForCompetition(), the standings through seasonStandingsRows({ competitionId }) - the SAME rows the Standings tab prints, never a second recompute (CONVENTIONS #21).
+// THE BLIND RULE: other members' picks reach a screen only through headToHeadRecord()'s isPublic gate (arePicksPublic AND the S-C10 "their rows have landed" flag) and the week detail's per-side COUNTS, and a
+// screen re-asks the gate on EVERY repaint (a week that stops being public becomes the calm unavailable state). Every button is allow-listed by `data-cmp-action` / `data-wd-action`, and every id it carries
+// is re-validated against the CURRENT model before anything happens (the DOM is only a request - Std-9). PARITY-BY-DESIGN: the swipe-back, the sheet's swipe-down and every haptic are iOS-only (behind
+// isNativeShell() inside haptic() and bindSwipeToDismiss()); the Back button, Esc, the sheet's close and backdrop are on both front ends.
+
+/** The Season Summary's name cell: a 44 pt button to the comparison for a signed-in member (the chevron is the disclosure), the plain cell it always was for anyone else (inert, no hint). */
+function standNameWrapHTML(s, viewerId, i) {
+  const mark = s.isSeasonLeader ? '<span class="stand-mark">👑</span>' : s.isCurrentLastPlace ? '<span class="stand-mark">🤡</span>' : '';
+  if (!viewerId) return `<div class="stand-name-wrap"><span class="stand-name-text player-name-cell">${escHtml(s.displayName)}</span>${mark}</div>`;
+  // The button is NAMED by the visible name (aria-labelledby) and DESCRIBED by one constant sentence: no player-typed text is ever put in an attribute, and the name is written once.
+  const text = `<span id="stand-pl-${numHtml(i)}" class="stand-name-text player-name-cell">${escHtml(s.displayName)}</span>${mark}`;
+  const hint = s.playerId === viewerId ? 'stand-cmp-hint-own' : 'stand-cmp-hint';
+  return `<button type="button" class="stand-name-wrap stand-cmp" data-cmp-player="${escHtml(s.playerId)}" aria-labelledby="stand-pl-${numHtml(i)}" aria-describedby="${hint}">${text}<span class="stand-cmp-chev" aria-hidden="true">${icon('chevronRight')}</span></button>`;
+}
+
+/** The competition a history screen reads: a one-sport league has exactly one (null = the default); otherwise the named one if it is a live sport of this league, else the context sport. */
+function historyCompetitionId(competitionId) {
+  if (!isMultiSport()) return null;
+  if (typeof competitionId === 'string' && competitionId && getLeagueCompetitions().some((c) => c && c.id === competitionId && !c.archivedAt)) return competitionId;
+  return getContextCompetition()?.id || null;
+}
+/** The server-CONFIRMED week status (RG-253), as Home's wiring reads it. */
+function confirmedWeekStatus(w) {
+  if (getBackendMode() !== 'supabase') return w.status;
+  try { return sb.getConfirmedWeekStatus(w.weekId) || w.status; } catch { return w.status; }
+}
+/** "Thread · n": the messages a reader can see on a game today (retention honoured, withdrawn and private rows not counted - the SAME number the Game view shows). null = chat is off. */
+function historyThreadCount(gameId) {
+  if (!isChatEnabled()) return null;
+  try { return getMessages({ tag: gameId, respectRetention: true, types: ['message'] }).filter((m) => m && !m.deleted && !isPrivateRow(m)).length; } catch { return null; }
+}
+/**
+ * Review B1: does this device hold the WHOLE of a game's thread? A game that kicked off before the oldest message the device has loaded (js/chat.js chatLoadedFromTs) may have messages it never fetched, so its
+ * row shows a bare "Thread" with no number and its sheet says so - never "0". The load-back point is resolved ONCE per pack, then compared with each game's kickoff.
+ */
+function historyThreadLoadedFor() {
+  let from = -Infinity;
+  try { from = chatLoadedFromTs(); } catch { from = -Infinity; }
+  return (gameId) => { const ko = Date.parse((getGame(gameId) || {}).kickoff); return !Number.isFinite(ko) || ko >= from; };
+}
+/** The same predicate Dashboard and Picks ask before they name another member's pick: arePicksPublic, and in supabase mode the hydrate flag (S-C10 / RG-255). */
+function historyPicksRead(weekId) { return !isSupabaseDataMode() || picksReadConfirmedFor(weekId); }
+
+/** ONE competition's data for the comparison (see js/compare.js). `picks` are narrowed to each week's ENTRANTS (security A3). */
+function comparisonPack(competitionId) {
+  const cid = historyCompetitionId(competitionId);
+  const weeks = getWeeksForCompetition(cid).filter((w) => w.status !== WEEK_STATUS.DRAFT && isWeekShownInStandings(w));   // a draft, a demo week and a week hidden from history are no part of any comparison
+  const roster = playersForCompetition(cid);
+  const entrants = new Map(weeks.map((w) => [w.weekId, playersForWeek(w)]));
+  const ids = new Set(weeks.map((w) => w.weekId));
+  const entry = isMultiSport() ? leagueSports().find((e) => e.competitionId === cid) : null;
+  return {
+    competitionId: cid, sport: entry ? { label: entry.label, code: entry.code } : null,
+    players: roster, weeks, allWeeks: weeks,
+    games: weeks.flatMap((w) => getGames(w.weekId)),
+    picks: weeks.flatMap((w) => picksOfRoster(getPicks(w.weekId), entrants.get(w.weekId))),
+    weeklyResults: getWeeklyResults().filter((r) => ids.has(r.weekId)),
+    standings: seasonStandingsRows({ competitionId: cid }),
+    tieContexts: seasonGroupTieContexts(weeks, roster),
+    entrantsOf: (w) => entrants.get(w.weekId) || playersForWeek(w),
+    isPublic: (w) => arePicksPublic(w),
+    picksRead: historyPicksRead,
+    confirmedStatusFor: confirmedWeekStatus,
+    threadCount: historyThreadCount,
+    threadLoaded: historyThreadLoadedFor(),
+    canShare: shareOffered(),                                   // DI-597: Share to chat is offered to a signed-in, verified member while chat is on
+  };
+}
+/** The sports BOTH members play (the comparison's sport control shows at two or more; a one-sport league has none). */
+function pairCompetitions(viewerId, rivalId) {
+  if (!isMultiSport()) return [];
+  return leagueSports().filter((e) => { const ids = playersForCompetition(e.competitionId).map((p) => p.playerId); return ids.includes(viewerId) && ids.includes(rivalId); }).map((e) => ({ id: e.competitionId, code: e.code, label: e.label }));
+}
+
+/**
+ * DI-597 - may THIS reader open a shared comparison? The reference is only a request, rebuilt from the reader's OWN data: it must parse (two member tokens, and the competition in a several-sport league), the
+ * reader must be a signed-in member with content not withheld, both named members must be members of this league AND entered in that competition (a forged id, a departed member or a sport they do not play
+ * is "not available"). Nothing else is gated here because the screen itself reveals only what the blind rule allows every member (revealed weeks, Standings' own rows). `memo` is this pass's cache.
+ * R1 (coordinator ruling 2026-10-14, DI-591 S2/C7: "a member not entered in a sport sees no picks and no per-side counts for it"): in a league that runs several sports the READER must be entered in the
+ * named competition too - a CFB-only member never opens an NFL comparison, whoever shared it. A one-sport league is unchanged (every active member plays its one sport).
+ */
+function compareRefOk(id, memo = null) {
+  if (memo && memo.has(id)) return memo.get(id);
+  let allowed = false;
+  try {
+    const p = parseCompareShareId(id);
+    if (p && viewerMemberId() && !isContentWithheld()) {
+      const multi = isMultiSport();
+      const live = multi && p.competitionId ? getLeagueCompetitions().some((c) => c && c.id === p.competitionId && !c.archivedAt) : false;
+      const shaped = multi ? live : !p.competitionId;                                  // a several-sport league names its sport; a one-sport league names none
+      if (shaped) {
+        const ids = playersForCompetition(multi ? p.competitionId : null).map((x) => x.playerId);
+        allowed = !!getPlayer(p.aId) && !!getPlayer(p.bId) && ids.includes(p.aId) && ids.includes(p.bId);
+        if (multi && !viewerPlaysCompetition(p.competitionId)) allowed = false;       // R1: the reader is one of that sport's entrants, or the reference is "not available" to them
+      }
+    }
+  } catch { allowed = false; }
+  if (memo) memo.set(id, allowed);
+  return allowed;
+}
+/** Opens a shared comparison for this reader: as "You vs {the other}" when they are one of the two sides, as "{A} vs {B}" when they are neither. False (nothing happens) when it is not available. */
+function openSharedComparison(id) {
+  const p = parseCompareShareId(id), me = viewerMemberId();
+  if (!p || !me || !compareRefOk(id, null)) return false;
+  const base = { competitionId: p.competitionId, backLabel: 'Chat' };
+  if (me === p.aId) return openComparison({ ...base, rivalId: p.bId });
+  if (me === p.bId) return openComparison({ ...base, rivalId: p.aId });
+  return openComparison({ ...base, rivalId: p.bId, firstId: p.aId });
+}
+
+/**
+ * "You vs {name}" (DI-595). Opens ABOVE whatever opened it; `backLabel` names that screen. Returns false (nothing happens) while content is withheld, with no signed-in member, for yourself, or for someone
+ * who is not a member. Changing the rival replaces this level (an instant pop, then the new push), so Back always returns to where the reader came from.
+ */
+export function openComparison({ rivalId, competitionId = null, backLabel = 'Standings', restore = null, firstId = null } = {}) {
+  if (isContentWithheld()) return false;
+  const readerId = viewerMemberId();
+  if (!readerId || typeof rivalId !== 'string' || !rivalId || !getPlayer(rivalId)) return false;
+  // `firstId` (DI-597): a SHARED comparison read by a member who is neither side opens as "{first} vs {rival}" - the same model, the same gates, both sides named. Otherwise the reader is the first side ("You vs ...").
+  const neutral = typeof firstId === 'string' && !!firstId && firstId !== readerId && firstId !== rivalId;
+  const aId = neutral ? firstId : readerId;
+  if (rivalId === aId || (neutral && !getPlayer(aId))) return false;
+  ensurePushedScreens();
+  const st = { competitionId: historyCompetitionId(competitionId), rivalId, backLabel, aId, readerId, neutral };
+  const build = () => comparisonModelFor(st);                                                  // the gates are asked again on every paint (and every tap, onComparisonClick)
+  const first = build();
+  return pushScreen({
+    id: neutral ? `compare:${aId}:${rivalId}` : `compare:${readerId}:${rivalId}`,
+    title: first ? first.title : 'Compare',
+    backLabel,
+    restoreKey: `cmp:${rivalId}`,
+    meta: { kind: 'compare', ref: rivalId, competitionId: st.competitionId, firstId: neutral ? aId : null },   // the Back chip's restore (DI-588) reopens it from this
+    instant: !!(restore && restore.instant), scrollTop: restore ? restore.scrollTop : 0,   // DI-588: a RESTORE of a recorded chain is instant and keeps the reader's scroll
+    render: () => {
+      const m = build();
+      return m ? { html: comparisonHTML(m, { escHtml }), right: neutral ? '' : '<button type="button" class="ps-action" data-cmp-action="change">Change</button>' }
+        : { html: unavailableComparisonHTML({ escHtml, backLabel, notEnteredIn: comparisonNotEnteredIn(st) }), right: '' };   // N1: its button names the screen Back returns to ("Back to Chat"), as the navigation bar does; pass 3: the body gives the TRUE reason
+    },
+    onClick: (e, api) => onComparisonClick(e, api, st),
+  });
+}
+
+/**
+ * The sports the comparison may switch between: the ones BOTH sides play; for a SHARED comparison read by a third member (R1), only the ones the READER plays as well, so the NFL is never one tap away
+ * from a CFB-only reader whatever the pair plays. (A one-sport league has none: pairCompetitions answers [].)
+ */
+function comparisonSports(st) {
+  const shared = pairCompetitions(st.aId, st.rivalId);
+  return st.neutral ? shared.filter((c) => viewerPlaysCompetition(c.id)) : shared;
+}
+/**
+ * The comparison's model for its CURRENT reader, built on every paint and every tap (the DOM is only a request). Null = the calm unavailable state: another account is signed in, or (R1, DI-591 S2/C7) a
+ * shared comparison's reader is not - or is no longer - entered in its sport. The Back chip's restore (restoreReadingChain -> openComparison) and a reader who leaves the sport while the screen is open both
+ * land here. A one-sport league is unchanged: there is no sport to be outside of.
+ */
+/**
+ * Pass 3 (coordinator, 2026-10-14): WHY a comparison is unavailable, when the reason is that its SIGNED-IN reader is not entered in its sport (R1): that sport's code ('' if unknown), so the calm state says so
+ * in plain words. null otherwise - signed out, another account, or the comparison itself is gone - and the general wording ("updated, or not signed in") stands.
+ */
+function comparisonNotEnteredIn(st) {
+  if (!st.neutral || viewerMemberId() !== st.readerId || !isMultiSport() || viewerPlaysCompetition(st.competitionId)) return null;
+  const e = leagueSports().find((x) => x.competitionId === st.competitionId);
+  return e && e.code ? e.code : '';
+}
+function comparisonModelFor(st) {
+  if (viewerMemberId() !== st.readerId) return null;                                          // another account: never the departed reader's comparison
+  if (st.neutral && isMultiSport() && !viewerPlaysCompetition(st.competitionId)) return null;  // R1: a third member reads a comparison only in a sport they are entered in
+  const competitions = comparisonSports(st);
+  if (competitions.length >= 2 && !competitions.some((c) => c.id === st.competitionId)) st.competitionId = competitions[0].id;   // a sport the pair does not share is never shown
+  return buildComparison(comparisonPack(st.competitionId), { viewerId: st.aId, rivalId: st.rivalId, rivalName: getPlayer(st.rivalId)?.displayName || '', viewerName: getPlayer(st.aId)?.displayName || '', competitions, neutral: st.neutral });
+}
+
+function onComparisonClick(e, api, st) {
+  const btn = e && e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-cmp-action]') : null;
+  if (!btn) return;
+  const act = btn.getAttribute('data-cmp-action');
+  if (act === 'back') { api.pop(); return; }
+  if (act === 'show-all') {                                              // a list's "Show all N" opens in place (no repaint, nothing above it moves)
+    const list = btn.closest('[data-cmp-list]');
+    if (!list) return;
+    const open = list.getAttribute('data-expanded') !== 'true';
+    list.setAttribute('data-expanded', open ? 'true' : 'false');
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    btn.textContent = open ? COMPARE_COPY.showFewer : `Show all ${list.querySelectorAll('.hx-item').length}`;
+    return;
+  }
+  const model = comparisonModelFor(st);                                                   // the SAME model the paint built, re-derived for this tap (R1's gate included)
+  if (!model) return;
+  if (act === 'change') {
+    if (st.neutral) return;                                                              // a shared comparison between two OTHER members has no "Change" (there is no "you" to swap)
+    haptic('light');
+    openRivalPicker({
+      competitionId: st.competitionId, rivalId: st.rivalId, opener: btn,
+      onPick: (next) => { if (next === st.rivalId) return; popScreen({ instant: true }); openComparison({ rivalId: next, competitionId: st.competitionId, backLabel: st.backLabel }); },
+    });
+    return;
+  }
+  if (act === 'sport') {
+    const id = btn.getAttribute('data-cmp-sport') || '';
+    if (!model.controls.some((c) => c.id === id) || id === st.competitionId) return;     // only a sport BOTH members play, and only a change
+    haptic('selection');
+    st.competitionId = id;
+    api.repaint();
+    return;
+  }
+  if (act === 'share') {                                                                  // DI-597: the share the model JUST re-derived (never the DOM); the screen stays beneath the sheet
+    if (!model.share) return;
+    haptic('light');
+    openShareSheet(model.share);
+    return;
+  }
+  const gameId = btn.getAttribute('data-cmp-game') || '';
+  if (!model.splits.some((s) => s.gameId === gameId)) return;                            // not a game this screen lists right now: nothing happens
+  if (act === 'open-game') { haptic('medium'); openHistoricalGame(gameId, model.title); return; }
+  if (act === 'open-thread') { haptic('light'); openHistoryThread(gameId); }
+}
+
+// ── the rival picker sheet (DI-595): a bottom sheet on the shared sheet shell ──
+const RIVAL_WRAP_ID = 'rival-picker-sheet-wrap';
+const RIVAL_SHEET_ID = 'rival-picker-sheet';
+let _rivalPicker = null;       // { competitionId, viewerId, rivalId, onPick, opener, unbind, onKey, closing }
+let _rivalOwnSwipe = false;    // true only while the picker asks whether ITS OWN swipe-down may arm (it must not block itself; a module flag keeps _dismissBlockingSurfaceUp's signature as the other branches extend it)
+
+function rivalPickerChoices(rp) { return rivalChoices({ players: playersForCompetition(rp.competitionId), viewerId: rp.viewerId, rivalId: rp.rivalId }); }
+export function openRivalPicker({ competitionId = null, rivalId = null, onPick, opener = null } = {}) {
+  if (isContentWithheld() || typeof onPick !== 'function') return false;
+  const viewerId = viewerMemberId();
+  if (!viewerId) return false;
+  closeRivalPicker({ immediate: true });
+  const cid = historyCompetitionId(competitionId);
+  const returnTo = opener || (typeof document !== 'undefined' ? document.activeElement : null);   // the control that opened it (a tap on iOS does not focus a button, so the caller names it)
+  const rp = { competitionId: cid, viewerId, rivalId, onPick, opener: returnTo, unbind: null, onKey: null, closing: false };
+  _rivalPicker = rp;
+  const entry = isMultiSport() ? leagueSports().find((e) => e.competitionId === cid) : null;
+  const { unbind } = mountSheetShell({
+    wrapId: RIVAL_WRAP_ID,
+    sheetId: RIVAL_SHEET_ID,
+    sheetAttrs: ' role="dialog" aria-modal="true" aria-labelledby="rival-picker-title"',
+    headerInnerHTML: `<div class="chat-sheet-title" id="rival-picker-title" tabindex="-1">${escHtml(COMPARE_COPY.pickerTitle)}</div>
+        <button type="button" class="chat-sheet-close rp-close" id="rival-picker-close" aria-label="Close">${icon('close')}</button>`,
+    bodyId: 'rival-picker-body',
+    closeId: 'rival-picker-close',
+    onBackdrop: () => closeRivalPicker(),
+    renderBody: () => paintRivalPicker(rp, entry),
+    drag: { getBlocked: isRivalPickerDismissGestureBlocked, onProgress: rivalPickerDragProgress, onSettle: settleRivalPickerDrag },
+  });
+  rp.unbind = unbind;
+  rp.onKey = (e) => {
+    if (e.key !== 'Escape') return;
+    if (!document.getElementById(RIVAL_WRAP_ID)) { closeRivalPicker({ immediate: true }); return; }
+    closeRivalPicker();
+  };
+  document.addEventListener('keydown', rp.onKey);
+  try { document.getElementById('rival-picker-title')?.focus({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+  return true;
+}
+function paintRivalPicker(rp, entry) {
+  const body = document.getElementById('rival-picker-body');
+  if (!body) return;
+  body.innerHTML = rivalPickerBodyHTML({ choices: rivalPickerChoices(rp), sportLabel: entry ? entry.label : '' }, { escHtml });
+  body.querySelectorAll('[data-cmp-action="pick-rival"]').forEach((btn) => btn.addEventListener('click', () => {
+    const id = btn.getAttribute('data-cmp-rival') || '';
+    if (!rivalPickerChoices(rp).some((c) => c.playerId === id) || viewerMemberId() !== rp.viewerId) return;   // the DOM is only a request: the id must be someone this sport lists right now
+    haptic('selection');
+    const done = rp.onPick;
+    closeRivalPicker({ immediate: true, restoreFocus: false });
+    done(id);
+  }));
+}
+function closeRivalPicker({ immediate = false, restoreFocus = true } = {}) {
+  const rp = _rivalPicker;
+  const wrap = document.getElementById(RIVAL_WRAP_ID);
+  if (rp) {
+    if (rp.closing && !immediate) return;
+    rp.closing = true;
+    try { rp.unbind?.(); } catch { /* the drag teardown is a courtesy */ }
+    rp.unbind = null;
+    if (rp.onKey) { try { document.removeEventListener('keydown', rp.onKey); } catch { /* courtesy */ } rp.onKey = null; }
+  }
+  const finish = () => {
+    // THE WRAP THIS CLOSE STARTED WITH, never "whatever has the id now": a tap on Change during the 260 ms slide-out opens a NEW sheet under the same id, and the old close must not remove it (P-3).
+    if (wrap) { try { wrap.remove(); } catch { /* already gone */ } } else document.getElementById(RIVAL_WRAP_ID)?.remove();
+    if (_rivalPicker === rp) _rivalPicker = null;
+    if (restoreFocus && rp && rp.opener && rp.opener.isConnected !== false) { try { rp.opener.focus({ preventScroll: true }); } catch { /* courtesy */ } }   // Std-7: focus returns to the control that opened it
+  };
+  if (!wrap || immediate) { finish(); return; }
+  const sheetEl = wrap.querySelector(`#${RIVAL_SHEET_ID}`);
+  let reduced = false; try { reduced = prefersReducedMotion(); } catch { reduced = false; }
+  finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--rival-drag-y', '1'), reducedMotion: reduced, done: finish });
+}
+function isRivalPickerDismissGestureBlocked() { _rivalOwnSwipe = true; try { return _dismissBlockingSurfaceUp({ excludePushed: true }); } finally { _rivalOwnSwipe = false; } }
+function rivalPickerDragProgress(wrap, sheetEl, progress) {
+  sheetEl.setAttribute('data-dragging', 'true');
+  wrap.setAttribute('data-dragging', 'true');
+  wrap.style.setProperty('--rival-drag-y', String(progress));
+}
+function settleRivalPickerDrag(wrap, sheetEl, { dismissed, reducedMotion } = {}) {
+  sheetEl.removeAttribute('data-dragging');
+  wrap.removeAttribute('data-dragging');
+  if (!dismissed) { wrap.style.setProperty('--rival-drag-y', '0'); return; }
+  finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--rival-drag-y', '1'), reducedMotion: !!reducedMotion, done: () => closeRivalPicker({ immediate: true }) });
+}
+export function _rivalPickerStateForTest() { return _rivalPicker ? { competitionId: _rivalPicker.competitionId, rivalId: _rivalPicker.rivalId, closing: _rivalPicker.closing } : null; }
+export function _resetRivalPickerForTest() { closeRivalPicker({ immediate: true, restoreFocus: false }); _rivalPicker = null; }
+
+// ── the week detail (DI-596) ──
+/** Can this week have a detail at all? It must be REVEALED (live or final): an Open, Locked or Draft week has none, and a demo week or one hidden from history is not part of Standings' history. */
+function historyWeekReachable(week) {
+  return !!week && week.status !== WEEK_STATUS.DRAFT && isWeekShownInStandings(week) && arePicksPublic(week);
+}
+/** ONE week (or pooled group) for the week detail (see js/week-detail.js): Weekly History's own winner/loser/in-progress, the Dashboard's own standings rows. */
+function weekDetailPack(week, viewerId) {
+  const multi = isMultiSport();
+  const cid = multi ? (competitionForWeek(week)?.id || null) : null;
+  const inputs = weeklyHistoryInputs(cid);
+  const hist = weeklyHistoryResult(week, inputs);
+  const members = hist.members;
+  const entry = multi ? leagueSports().find((e) => e.competitionId === cid) : null;
+  const nameOf = (pid) => getPlayer(pid)?.displayName || 'Unknown';
+  const done = !hist.inProgress && (!!hist.winner || !!hist.loser);
+  // C-1 (security, 2026-10-14): EVERY part must be public AND have had its rows read before any figure is built from the group's picks. The old test let a part the server still holds Open (a stale or
+  // altered local status of final) satisfy "not public, nothing to read", and pooledGroupResults then folded that part's picks into the standings.
+  const readable = members.every((m) => arePicksPublic(m) && historyPicksRead(m.weekId));
+  let standingsHtml = '';
+  if (done && readable) {
+    if (members.length > 1) standingsHtml = renderScoreSummaryRowsHTML(members[0], pooledGroupResults(members, inputs.players), inputs.players, null);
+    else {
+      const players = playersForWeek(week), games = getGames(week.weekId), tb = effectiveTiebreakerActualForWeek(week, games);
+      standingsHtml = renderScoreSummaryRowsHTML(week, weeklyResultsWithTie(week, players, picksOfRoster(getPicks(week.weekId), players), games, tb.value), players, tb.value);
+    }
+  }
+  const baseTitle = members.length > 1 ? formatWeekGroupLabel(members) : formatWeekLabelParts(week).name;
+  // R2 (DI-599 / PF-455 acceptance 2) and D1 (DI-591 S2/C7), pass 3: the parts the viewer was an ENTRANT of - playersForWeek(<that member week>), per part for a pooled group (C1: joined before THAT part
+  // locked). Only there do they get their own chip ("Your pick" / "No pick") and the per-side split; a member who is not in the sport, or a late joiner on a week from before they joined, is never told
+  // "No pick" and sees no count of how the entrants split. A signed-out viewer (S4) is a separate case the module keeps as it was (no chip, the split shown).
+  const viewerParts = viewerId ? members.filter((m) => playersForWeek(m).some((p) => p && p.playerId === viewerId)).map((m) => m.weekId) : [];
+  return {
+    weekId: week.weekId, title: entry && entry.code ? `${entry.code} · ${baseTitle}` : baseTitle, sport: entry ? { label: entry.label, code: entry.code } : null,
+    // N2 (pass 3): a part counts as final only when the SERVER has confirmed it final (RG-253: a stale or altered local 'final' is not enough) AND made it public (C-1)
+    members, finalParts: members.filter((m) => confirmedWeekStatus(m) === 'final' && arePicksPublic(m)).length, status: hist.inProgress ? 'in-progress' : 'final', winner: hist.winner, loser: hist.loser,
+    tieLines: done ? tieNoteLines(hist.winner, hist.loser, nameOf).map((l) => l.text) : [],
+    standingsHtml, standingsPending: done && !readable,
+    players: playersForWeek(week),
+    games: members.flatMap((m) => getGames(m.weekId)),
+    picks: members.flatMap((m) => picksOfRoster(getPicks(m.weekId), playersForWeek(m))),
+    viewerId, isPublic: (w) => arePicksPublic(w), picksRead: historyPicksRead,
+    viewerParts,                                                // R2 / D1: the member weeks the viewer was an entrant of (above); the module draws nothing personal and no split anywhere else
+    liveEntryFor: (gameId) => liveStatusById.get(gameId) || null, now: Date.now(), formatKickoff: (iso) => fmtTime(iso),
+    threadCount: historyThreadCount,
+    threadLoaded: historyThreadLoadedFor(),
+    canShare: shareOffered(),                                   // DI-597
+  };
+}
+/**
+ * "Week {N}" (DI-596). Any member week id of the group opens the group. `backLabel` names the screen it opens above. Returns false (nothing happens) for an unknown week, one that is not revealed, or while
+ * content is withheld. Game Day's "See week results" calls this (the seam RN-B1 item 4 named): `openWeekDetail(weekId, { backLabel })`.
+ */
+export function openWeekDetail(weekId, { backLabel = 'Standings', restore = null } = {}) {
+  if (isContentWithheld() || typeof weekId !== 'string' || !weekId) return false;
+  const week = getWeek(weekId);
+  if (!week || !historyWeekReachable(week)) return false;
+  ensurePushedScreens();
+  const build = () => { const w = getWeek(weekId); return w && historyWeekReachable(w) ? buildWeekDetail(weekDetailPack(w, viewerMemberId())) : null; };   // the gate is asked AGAIN on every repaint
+  const first = build();
+  return pushScreen({
+    id: `week:${getEffectiveGroupId(week)}`,
+    title: first ? first.title : 'Week',
+    backLabel,
+    restoreKey: `wk:${weekId}`,
+    meta: { kind: 'week', ref: weekId },                                                      // (recorded by the shell for the Back chip's restore once DI-588 lands; ignored until then)
+    instant: !!(restore && restore.instant), scrollTop: restore ? restore.scrollTop : 0,      // DI-588: a RESTORE is instant and keeps the scroll (ignored by the shell until DI-588 lands)
+    render: () => { const m = build(); return m ? { html: weekDetailHTML(m, { escHtml }), right: '' } : { html: unavailableWeekDetailHTML({ escHtml, backLabel }), right: '' }; },   // N1: "Back to {the screen below}"
+    onClick: (e, api) => {
+      const btn = e && e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-wd-action]') : null;
+      if (!btn) return;
+      const act = btn.getAttribute('data-wd-action');
+      if (act === 'back') { api.pop(); return; }
+      if (act === 'share') {                                                                   // DI-597: the share the model JUST re-derived (never the DOM); the screen stays beneath the sheet
+        const sm = build();
+        if (!sm || !sm.share) return;
+        haptic('light');
+        openShareSheet(sm.share);
+        return;
+      }
+      const gameId = btn.getAttribute('data-wd-game') || '';
+      const m = build();
+      if (!m || !m.games.some((g) => g.gameId === gameId)) return;                            // not a game this screen lists right now: nothing happens
+      if (act === 'open-game') { haptic('medium'); openHistoricalGame(gameId, m.title); return; }
+      if (act === 'open-thread') { haptic('light'); openHistoryThread(gameId); }
+    },
+  });
+}
+
+/**
+ * A past game's thread (DI-598): the EXISTING game thread sheet over the pushed screen, which stays where it is beneath it. Messages show their author and, from 24 h on, the date and time (DI-573), and
+ * the sheet's "Open in chat" opens the Chat tab filtered to the game (navigateTo closes the pushed stack on the way, and Chat labels the filter and offers the way back).
+ */
+function openHistoryThread(gameId) {
+  if (typeof gameId !== 'string' || !gameId || !isChatEnabled()) return;
+  openGameChatSheet(gameId);
+}
+/**
+ * A finished game on a history row opens the GAME VIEW in its Final state (DI-591 / DI-596), pushed ABOVE the screen that listed it, so Back returns to that screen (`backLabel` names it: "Week 2", "You vs Brayden").
+ * `from: 'card'` is the Game view's "opened from a detail screen" mode (its Back label is a screen's name, not Home).
+ */
+function openHistoricalGame(gameId, backLabel) { openGameView(gameId, { from: 'card', backLabel: backLabel || 'Details' }); }
+
+/** Standings' two entries (DI-595 / DI-596). Each tap is re-validated against the current standings / weeks, not trusted from the markup. */
+function bindHistoryEntries(c) {
+  c.querySelectorAll('[data-cmp-player]').forEach((btn) => btn.addEventListener('click', () => {
+    const id = btn.getAttribute('data-cmp-player') || '';
+    const me = viewerMemberId();
+    if (!me || !seasonStandingsRows().some((r) => r.playerId === id)) return;           // signed out, or not a row Standings lists now: inert
+    haptic('light');
+    if (id !== me) { openComparison({ rivalId: id, backLabel: 'Standings' }); return; }
+    openRivalPicker({ competitionId: getContextCompetition()?.id || null, rivalId: null, opener: btn, onPick: (rival) => openComparison({ rivalId: rival, backLabel: 'Standings' }) });
+  }));
+  c.querySelectorAll('[data-wk-open]').forEach((btn) => btn.addEventListener('click', () => {
+    haptic('light');
+    openWeekDetail(btn.getAttribute('data-wk-open') || '', { backLabel: 'Standings' });
+  }));
+}
+export const _openComparisonForTest = openComparison;
 
 /**
  * SB-19b follow-up (2026-10-01) — Weekly History's inputs and its per-group
@@ -13446,15 +15874,30 @@ function historyGroupHTML({ gid, parts, inProgress, winner, loser }, i, obligati
  * UNCHANGED (same inputs, same gates, same calls); the digest calls this
  * instead of re-deriving the result (CONVENTIONS #21).
  */
-export function weeklyHistoryInputs() {
-  const players=getPlayers().filter(p=>p.active);
+export function weeklyHistoryInputs(competitionId) {
+  // D1 DI-526 — the context sport's entrants and weeks (one sport: every active player and every week, as before)
+  // D1 Lane B / DI-596 — `competitionId` (optional) reads ANOTHER competition's history: the week detail of a week that belongs to a sport the Standings tab is not showing. Omitted = the context sport, as before.
+  const scoped=isMultiSport();
+  const cid=scoped?((typeof competitionId==='string'&&competitionId)||getContextCompetition()?.id||null):null;
+  const players=scoped?playersForCompetition(cid):getPlayers().filter(p=>p.active);
   // v0.17.0 — demo weeks never count toward standings, weekly history, or debts
-  const allWeeksRaw=getWeeks(); // unfiltered — group membership must see every week, incl. drafts, to know a group's TRUE size
+  const allWeeksRaw=scoped?getWeeksForCompetition(cid):getWeeks(); // unfiltered — group membership must see every week, incl. drafts, to know a group's TRUE size
   const visibleWeekIds=new Set(allWeeksRaw.filter(isWeekShownInStandings).map(w=>w.weekId)); // SB-19 — the one standings week-scope rule
   const allResults=getWeeklyResults().filter(r=>visibleWeekIds.has(r.weekId));
   return { players, allWeeksRaw, allResults };
 }
 
+/**
+ * D1 Lane B / DI-596 — a complete multi-part group's pooled weekly rows, extracted UNCHANGED from weeklyHistoryOutcome() so Weekly History's winner and loser and the week detail's
+ * standings are one computation (CONVENTIONS #21): pooled picks and games of every member week, the group's tie context from EVERY member week (SP-54 / DI-467).
+ */
+export function pooledGroupResults(memberWeeks, players) {
+  if (!memberWeeks.every(m=>m.status==='final')) return [];   // an unsettled group has NO pooled rows: nothing is read (the same gate finalizeWeek uses, DI-126d; the blind rule's structural guard pins it)
+  const groupPicks=memberWeeks.flatMap(m=>getPicks(m.weekId));
+  const groupGames=memberWeeks.flatMap(m=>getGames(m.weekId));
+  const groupTie=buildWeekTieContext({ weeks:memberWeeks, players, getGames, liveRoster:claimedAlmaMaters(), almaApplicable:memberWeeks.every(weekUsesAlmaAffinity) });
+  return calculateGroupWeeklyResults(memberWeeks,players,groupPicks,groupGames,groupTie);
+}
 /**
  * Weekly History's winner and loser for ONE row (a competitive-week group), extracted from renderLeaderboard() (SP-54 MC-1, reviewer, 2026-10-01) so the pooled-group branch is a real,
  * exported seam the harness drives directly: before this, dropping `groupTie` from the call below survived every suite, because the only "History-style" test rebuilt the call itself.
@@ -13475,11 +15918,7 @@ export function weeklyHistoryOutcome(w, memberWeeks, allResults, players) {
     // obligation itself (DI-126d). Recomputed fresh from pooled picks/games
     // rather than trusted from either part's own (per-part, pre-grouping)
     // stored isWinner flag.
-    const groupPicks=memberWeeks.flatMap(m=>getPicks(m.weekId));
-    const groupGames=memberWeeks.flatMap(m=>getGames(m.weekId));
-    // SP-54 / DI-467 — the group's context from EVERY member week, the same builder finalize's pooled branch and the season's pooled branch use.
-    const groupTie=buildWeekTieContext({ weeks:memberWeeks, players, getGames, liveRoster:claimedAlmaMaters(), almaApplicable:memberWeeks.every(weekUsesAlmaAffinity) });
-    const groupResults=calculateGroupWeeklyResults(memberWeeks,players,groupPicks,groupGames,groupTie);
+    const groupResults=pooledGroupResults(memberWeeks,players);   // D1 Lane B / DI-596: the SAME rows the week detail's standings print
     winner=groupResults.find(r=>r.isWinner)||null; loser=groupResults.find(r=>r.isLoser)||null;
   }
   // memberWeeks.length>1 && not every member final yet → winner/loser stay
@@ -13507,6 +15946,27 @@ export function weeklyHistoryResult(w, { players, allWeeksRaw, allResults } = we
    row per competitive-week group) is only meaningfully tested against the
    markup a commissioner/player actually sees, same rationale as every other
    render function this file already exports for the harness. */
+/** D1 DI-526 — does the context sport's profile have an alma-mater affinity step (college football yes, the NFL no)? An unregistered or unknown sport answers true: today's page. */
+function contextSportHasAffinity() {
+  try {
+    const sport = getContextCompetition()?.sport || 'cfb';
+    const p = listProfiles().find((x) => x.key === sport);
+    return p ? p.affinity?.kind === 'alma_mater' : true;
+  } catch { return true; }
+}
+
+/** D1 DI-551 (review F-2, 2026-10-08) - does THIS LEAGUE have an alma-mater affinity step? It is read from the league's DEFAULT competition's sport profile, exactly as DI-551 words it ("everything that read a
+ *  college-football default now reads the default competition's profile"): college football yes, the NFL no (D-31). It is NEVER read from the commissioner's lens: the lens is a view toggle, and a surface that
+ *  follows it makes a college-football league's alma-mater card and player alma line vanish when its commissioner looks at the NFL. A league with no default competition row yet (IRB's pre-backfill shape) is
+ *  college football; an unregistered or unknown sport answers true: today's page. A league whose MAIN sport is the NFL therefore has no "Alma maters & home teams" card and no alma-mater player line, on either lens. */
+function leagueHasAlmaAffinity() {
+  try {
+    const sport = getLeagueDefaultCompetition()?.sport || 'cfb';
+    const p = listProfiles().find((x) => x.key === sport);
+    return p ? p.affinity?.kind === 'alma_mater' : true;
+  } catch { return true; }
+}
+
 export function renderLeaderboard() {
   // SP-57 (2026-10-01, DI-476, C11) — the Standings half of "never by accident": a Realtime repaint reaches this page
   // through navigateTo(), and a repaint under a lifted section (or the title row under the finger) would replace the node
@@ -13527,10 +15987,13 @@ export function renderLeaderboard() {
   // (CONVENTIONS #21). The group rows below read `historyInputs` (above);
   // only this one line delegates.
   const standings=seasonStandingsRows();
-  const weeks=getWeeks().filter(w=>w.status!==WEEK_STATUS.DRAFT&&w.dataSourceMode!=='demo').sort((a,b)=>a.weekNumber-b.weekNumber);
+  const weeks=getContextWeeks().filter(w=>w.status!==WEEK_STATUS.DRAFT&&w.dataSourceMode!=='demo').sort((a,b)=>a.weekNumber-b.weekNumber);   // D1 DI-526: this sport's weeks only
   const settings=getSettings();
   const obligations=getObligations();
   const standSess=getSession(); // once per render — every Weekly History row resolves its payment role from the same session
+  // D1 Lane B / DI-595: a signed-in, verified member who is ONE OF THESE ROWS can compare; anyone else (signed out, unverified, or a member with no stake in this sport - review N3) gets plain name cells and no hint
+  const cmpViewer=(()=>{ const me=viewerMemberId(); return me&&standings.some(r=>r.playerId===me)?me:null; })();
+  const standingsHasCollegeSections=contextSportHasAffinity();   // D1 DI-526 (true for college football and for every one-sport CFB league)
 
   // Weekly History collapses to ONE ROW PER COMPETITIVE-WEEK GROUP, not one
   // per scheduling record — a split slate/bowl/CFP week must read as the one
@@ -13545,6 +16008,7 @@ export function renderLeaderboard() {
     if (seenGroupIds.has(gid)) continue;
     seenGroupIds.add(gid);
     const { members, winner, loser, inProgress }=weeklyHistoryResult(w, historyInputs);
+    const openMember=members.find(m=>arePicksPublic(m));   // D1 Lane B / DI-596: only a revealed (live or final) week has a detail; an Open or Locked row stays exactly as it was
     // SP-56 (2026-09-30, DI-472) — the row carries the week label as TWO parts
     // (name over a short date range, the UN-117 pattern) instead of one
     // 223 px single line. A multi-part group's label is the group name with
@@ -13552,7 +16016,7 @@ export function renderLeaderboard() {
     const parts=members.length>1
       ?{ name:formatWeekGroupLabel(members), dates:'' }
       :formatWeekLabelParts(w,{ compact:true });
-    groupRows.push({ gid, parts, inProgress, winner, loser });
+    groupRows.push({ gid, parts, inProgress, winner, loser, openWeekId:openMember?openMember.weekId:null });
   }
 
   // FEAT-8a / UN-179 — the six reorderable Standings sections. Two of them
@@ -13589,10 +16053,10 @@ export function renderLeaderboard() {
           <th scope="col" aria-label="Weeks won and lost">Weeks</th>
         </tr></thead>
         <tbody>
-          ${standings.length?standings.map(s=>{
+          ${standings.length?standings.map((s,i)=>{
             return`<tr class="${s.isSeasonLeader?'winner-row':s.isCurrentLastPlace?'loser-row':''}">
               <td class="rank-cell rank-${numHtml(s.currentRank)}">${numHtml(s.currentRank)}</td>
-              <td class="stand-name"><div class="stand-name-wrap"><span class="stand-name-text player-name-cell">${escHtml(s.displayName)}</span>${s.isSeasonLeader?'<span class="stand-mark">👑</span>':s.isCurrentLastPlace?'<span class="stand-mark">🤡</span>':''}</div></td>
+              <td class="stand-name">${standNameWrapHTML(s,cmpViewer,i)}</td>
               <td class="stand-num"><span class="result-win">${numHtml(s.totalCorrect)}</span><span class="stand-dash">–</span><span class="result-loss">${numHtml(s.totalIncorrect)}</span></td>
               <td class="stand-num">${numHtml(s.winPct)}%</td>
               <td class="stand-num">${numHtml(s.weeklyWins)}–${numHtml(s.weeklyLosses)}</td>
@@ -13602,7 +16066,7 @@ export function renderLeaderboard() {
         </tbody>
       </table>
     </div>
-    ${standings.length?'<p class="stand-foot">Picks count each game’s multiplier. Win % counts every pick once.</p>':''}`,
+    ${standings.length?`<p class="stand-foot">Picks count each game’s multiplier. Win % counts every pick once.${cmpViewer?' Tap a player to compare.':''}</p>`:''}${standings.length&&cmpViewer?'<span class="sr-only" id="stand-cmp-hint">Opens a comparison with this player.</span><span class="sr-only" id="stand-cmp-hint-own">Choose someone to compare with.</span>':''}`,
 
     /* FEAT-9 / DI-176a (UN-176) — its OWN card, deliberately not columns in
        the table above. Three reasons, all checkable: that table already
@@ -13624,11 +16088,12 @@ export function renderLeaderboard() {
        player and makes it movable for everyone else. */
     'stand-extrapoint': renderExtraPointLedgerHTML(),
 
-    'stand-alma': `<div class="admin-section-title" data-section-header>${icon('almaMater')} Alma Mater Rankings</div>
+    // D1 DI-526 — Alma Mater Rankings (and the 2K25 college-football records below) are college football's: a sport whose profile has no affinity step (the NFL, D-31) shows neither.
+    'stand-alma': standingsHasCollegeSections ? `<div class="admin-section-title" data-section-header>${icon('almaMater')} Alma Mater Rankings</div>
     <div class="card mb-md">
       <p class="text-muted text-xs mb-sm">Rankings sourced from ESPN when available. Fetch ESPN data in the Commissioner panel to update.</p>
       ${renderAlmaMaterRankings()}
-    </div>`,
+    </div>` : '',
 
     /* Groups A/B (2026-09-10, DI-A5): the obligation deep-link destination
        for OBLIGATION_CREATED/OBLIGATION_SETTLED — Weekly History IS the
@@ -13645,8 +16110,8 @@ export function renderLeaderboard() {
       </table>
     </div>`:'<p class="text-muted text-sm mb-md">Weekly history appears after weeks are finalized.</p>'}`,
 
-    'stand-2025-open': renderSeason2025OutstandingSection(),
-    'stand-2025-record': renderSeason2025RecordSection(),
+    'stand-2025-open': standingsHasCollegeSections ? renderSeason2025OutstandingSection() : '',
+    'stand-2025-record': standingsHasCollegeSections ? renderSeason2025RecordSection() : '',
   };
   const standComposed = composeSections('standings', standSections);
 
@@ -13654,8 +16119,10 @@ export function renderLeaderboard() {
     <div class="section-header"><h2>Standings</h2><div class="subtitle">Season ${settings.season}</div></div>
 ${standComposed.html}
   `;
+  paintSportSwitcher(c, 'leaderboard');   // D1 DI-521: the sport switcher under the title (absent unless the member plays two or more sports)
 
   bindLayoutEditHandlers(c, 'standings', standComposed.visible, renderLeaderboard);
+  bindHistoryEntries(c);   // D1 Lane B / DI-595, DI-596: a player's name opens the comparison, a revealed week opens its detail
   bindSeason2025Sections(c);
   // UN-105a — edge-fade cue for the two .dashboard-scroll wrappers nested
   // inside the collapsed 2K25 season <details> (initScrollFades binds a
@@ -13670,15 +16137,19 @@ ${standComposed.html}
   //    plain scrollTo(0,y) into a visible slide after every tap, worse than the
   //    jump it fixes.
   //  • HAPTIC (T8): one medium impact on a SUCCESSFUL Mark Paid / Confirm Paid /
-  //    Confirm (the status actually changed). None on Deny (a prompt() the user
-  //    may cancel), none on Undo (secondary, commissioner-only, and not offered
-  //    here any more — Amendment 1), none when the action was refused.
+  //    Confirm (the status actually changed). None for a Deny's RESULT, none on
+  //    Undo (secondary, commissioner-only, and not offered here any more —
+  //    Amendment 1), none when the action was refused.
   //    haptic() is a native-only no-op on web; the toast is the web feedback.
+  //    T8 / DI-474 NOTE (2026-10-07, 0046 / R-19 follow-up): Deny no longer opens a
+  //    prompt(). It opens the destructive-confirm ACTION SHEET, whose APPEARANCE
+  //    carries the warning notification every destructive confirm has
+  //    (lsShowActionSheet); the confirmed Deny itself gives none (layouttest SF9i/j).
   const obStatus=id=>getObligations().find(o=>o.obligationId===id)?.status;
   c.querySelectorAll('.ob-action-btn').forEach(btn=>{
     btn.addEventListener('click',()=>{
       const id=btn.dataset.obId, act=btn.dataset.obAction, y=Number(window.scrollY)||0, before=obStatus(id);
-      handleObligationAction(id, act);
+      handleObligationAction(id, act, { rerender: keepScrollRenderLeaderboard });
       renderLeaderboard();
       if (typeof window.scrollTo==='function') window.scrollTo({ top:y, left:0, behavior:'instant' });
       if ((act==='mark'||act==='confirm') && obStatus(id)!==before) haptic('medium');
@@ -13688,6 +16159,7 @@ ${standComposed.html}
   // comment; structural repaint coverage for Standings.
   renderPausedLeagueBannerIfNeeded('leaderboard');
   renderMaintenanceBannerIfNeeded('leaderboard');
+  renderSportStallBannerIfNeeded('leaderboard');   // D1 / DI-557
   syncLayoutEditBar();     // SP-57 — covers the page's own repaints (a payment tap, a parked repaint flushed at a drop)
 }
 
@@ -13984,6 +16456,13 @@ export const _inviteCodeChipHTMLForTest = inviteCodeChipHTML;
 
 export function renderCommPage() {
   const c=document.getElementById('page-commissioner'); if(!c)return;
+  // W-70 (DI-W70.3) - a repaint (a Realtime event, a live tick) must not replace the node under a finger while the Comm tab pager owns the touch: it is parked and runs when the touch
+  // ends (nav-gestures deferRenderWhileWeekSwiping), as Picks and Dashboard do. It parks as a navigateTo() so a half-typed field is carried across it (RG-176).
+  if (deferRenderWhileWeekSwiping('commissioner', () => { if (state.currentTab === 'commissioner') navigateTo('commissioner'); else renderCommPage(); })) return;
+  // D1 third pass (item 4, P-2): the Comm paint watches the week its header describes - the LENS week - exactly as the Picks, Dashboard and Home paints watch theirs. A lens press, a sport row's
+  // next action and the week selector all repaint Comm WITHOUT a navigation, so before this the header named the new lens week while the one timer kept watching the old one, and the badge did not
+  // flip at the new week's lock instant (sportsurfacetest [H-o2], [H-o4]). Every caller has already moved the lens / the week when it calls this, so arming first reads the state being painted.
+  armLockFlipForPage();
   const session=getSession();
   if(!session.isAdmin){
     // DI-180g — renderCommLogin() (the commissioner PASSWORD form) is
@@ -14031,7 +16510,7 @@ export function renderCommPage() {
 
   // Build page in safe sections — any crash shows which section failed
   try {
-    const week       = getCurrentWeek();
+    const week       = commWeek();       // D1 (DI-534): the lens sport's current week in a multi-sport league; getCurrentWeek() in a one-sport league (byte-identical)
     const games      = week ? getGames(week.weekId) : [];
     // DI-E — the tie preview needs the current slate's picks. Gated on
     // arePicksPublic(week) (blind rule — loadtest.mjs [64]): both call sites
@@ -14044,7 +16523,7 @@ export function renderCommPage() {
     const availGames = week ? getAvailableGames(week.weekId) : [];
     const players    = getPlayers();
     const settings   = getSettings();
-    const allWeeks   = getWeeks().sort((a,b)=>b.weekNumber-a.weekNumber);
+    const allWeeks   = commWeeks().sort((a,b)=>b.weekNumber-a.weekNumber);     // D1 (DI-534): the lens sport's weeks in a multi-sport league; every week in a one-sport league
     const proof      = getFetchProof();
     const ps         = getProviderState();
     // Drop any suggestions the Commissioner has dismissed for this week
@@ -14121,6 +16600,11 @@ export function renderCommPage() {
     // is defined in exactly one place.
     sections.push(renderCommTabBar({ activeTab: state.commTab, icon }));
 
+    // D1 (DI-534): in a MULTI-sport league the Week tab opens with the sport lens and the all-sports card. A one-sport league renders neither, so its Comm panel is byte-identical to v0.29.0's.
+    if (isMultiSportLeague()) {
+      for (const html of [commSportLensHTML(), commAllSportsCardHTML()]) if (html) sections.push(html);
+    }
+
     // DI-C1 §2.1 — the Week Setup Wizard's entry point, the FIRST card in
     // the Week tab (above Week Manager / Weekly Blurb — "Week Settings" is
     // retired, DI-356).
@@ -14150,6 +16634,9 @@ export function renderCommPage() {
           </div>
         </div>
       </div>`);
+
+    // D1 (DI-532/534): Sport options (Archive) for a non-default sport under the lens. '' in a one-sport league and for the league's main sport.
+    if (isMultiSportLeague()) { const optionsHTML = commSportOptionsCardHTML(); if (optionsHTML) sections.push(optionsHTML); }
 
     // Groups A/B (2026-09-10, DI-B5) — Commissioner Announcements. RG-10
     // tagging (data-comm-tab="week") so this renders ONLY on Week, not all
@@ -14225,6 +16712,7 @@ export function renderCommPage() {
     // DI-412 AMENDED (UN-367, reviewer round 2 B1, 2026-09-28) — the banner
     // that names WHICH week the cards below are showing, whenever it isn't
     // the live one (gamesTabBannerHTML computed above, near gamesTabWeek).
+    if (isMultiSportLeague()) sections.push(commSportLensHTML({ tab: 'games' }));   // S6: the lens on the Games tab too
     sections.push(gamesTabBannerHTML);
     // DI-412 (UN-367, 2026-09-28) — "Continue set up" card, immediately ABOVE
     // Build Slate, so it is the first thing the commissioner sees on this
@@ -14296,67 +16784,10 @@ export function renderCommPage() {
     // exactly the case this card exists for. B1: `gamesTabWeek`/games/pool.
     sections.push(renderGameRequestsAdminSectionHTML(gamesTabWeek, gamesTabAvailGames, gamesTabGames));
 
-    // Available Games Pool — B1: every read below is `gamesTabWeek`-scoped.
-    if (gamesTabAvailGames.length) {
-      sections.push(`
-        <div class="admin-section" data-comm-tab="games">
-          <div class="admin-section-title">📋 Available Games (${gamesTabAvailGames.length} from ESPN)</div>
-          <div class="card mb-sm">
-            <div class="flex gap-sm mb-md flex-wrap">
-              <button class="btn btn-primary btn-sm" id="apply-suggested-btn">✅ Apply Suggested 10</button>
-              <button class="btn btn-ghost btn-sm" id="clear-pool-btn">🗑 Clear Pool</button>
-              ${gamesTabRejectedCount>0?`<button class="btn btn-ghost btn-sm" id="restore-rejected-btn">↩ Restore ${gamesTabRejectedCount} dismissed</button>`:''}
-            </div>
-            ${renderSuggestedSlatePreview({suggested: gamesTabSuggested, shortlist: gamesTabShortlist, almaCount: gamesTabAlmaCount, morningAnchorFilled: gamesTabMorningAnchorFilled, closingAnchorFilled: gamesTabClosingAnchorFilled}, gamesTabGames, gamesTabWeek)}
-            <div class="card-title mb-sm mt-md">All Available Games</div>
-            ${renderAvailFilterBar(gamesTabAvailGames)}
-            <div id="avail-groups-list">${renderAvailableGroups(gamesTabAvailGames, gamesTabGames, gamesTabWeek)}</div>
-          </div>
-        </div>`);
-    }
-
-    // Selected Slate — B1: `gamesTabGames`/`gamesTabWeek`, so edit rows act
-    // on the wizard's parked target when one exists.
-    // R1 (reviewer round 3, BLOCK) — three of these buttons are LIVE-week-
-    // only actions that make no sense (and are actively dangerous) run
-    // against a DRAFT the wizard is still building: "Calculate ATS" would
-    // finalize a draft with zero real picks (results/obligations/a
-    // week-final chat event, from a week nobody has opened yet); "Unlock
-    // All" calls clearAllLockOverrides(), which wipes EVERY week's lock
-    // overrides, including the LIVE week's, just because the Games tab
-    // happens to be showing a parked draft; "Refresh Scores" polls a slate
-    // with no real kickoffs against it yet. Gated on the DRAFT status
-    // itself (`gamesTabWeek.status !== WEEK_STATUS.DRAFT`), not merely
-    // `gamesTabIsLive` — this also closes the OLDER, pre-existing hazard
-    // where the CURRENT week itself was a draft (no parked wizard session
-    // involved at all) and these three buttons were already live against it
-    // before this batch ever touched this card.
-    const gamesTabPastDraft = !!gamesTabWeek && gamesTabWeek.status !== WEEK_STATUS.DRAFT;
-    // Extracted to its own function — same xsstest.mjs [9c-2] reason as
-    // gameSourceLockedHTML()/manualLinkEditableHTML() in showGameModal()
-    // (round 1 of this review): a nested ternary inside a multi-line
-    // template is exactly where that classifier gives up tracing an
-    // interpolation, even though every branch here is plain literal markup
-    // with no user data in it. A named call ("every return classifies") is
-    // the shape the classifier resolves.
-    const slateControlsHTML = () => `
-          <button class="btn btn-ghost btn-sm" id="add-manual-game-btn">➕ Add Manually</button>
-          ${gamesTabPastDraft?`<button class="btn btn-ghost btn-sm" id="unlock-all-btn">🔓 Unlock All</button>`:''}
-          ${gamesTabGames.length?slateControlsWithGamesHTML():''}
-        `;
-    const slateControlsWithGamesHTML = () => `
-            ${gamesTabPastDraft?`
-            <button class="btn btn-secondary btn-sm" id="refresh-scores-btn">🔄 Refresh Scores</button>
-            <button class="btn btn-secondary btn-sm" id="finalize-scoring-btn">✅ Calculate ATS</button>
-            `:''}
-            <button class="btn btn-danger btn-sm" id="clear-slate-btn">🗑 Clear All Slate Games</button>
-          `;
-    sections.push(`
-      <div class="admin-section" data-comm-tab="games">
-        <div class="admin-section-title">🏈 Selected Slate (${gamesTabGames.length}/10 games)</div>
-        <div class="flex gap-sm mb-md flex-wrap">${slateControlsHTML()}</div>
-        <div id="admin-games-list">${renderAdminGamesList(gamesTabGames,gamesTabWeek,getGameLockOverrides())}</div>
-      </div>`);
+    // D1 (W-68 / W-69, 2026-10-14) - ONE games list. The Available Games card (with the Suggested box and "Next Best") and the Selected Slate card were the same games drawn in up to four
+    // places with two different remove dialogs (DESIGN_D1_D.md, DI-W69.1). They are one section now, in the position the Available Games card held (below Player Requests), tagged
+    // data-comm-tab="games" (RG-10: a card without it renders on all five tabs). B1: every read is `gamesTabWeek`-scoped, so a parked wizard target shows ITS slate.
+    sections.push(gamesSectionHTML(buildGamesModel({ week: gamesTabWeek, slate: gamesTabGames, pool: gamesTabAvailGames, built: gamesTabBuiltSlate, rejectedCount: gamesTabRejectedCount })));
 
     // Export Data moved whole to Admin → Data (DI-320, UX Revamp wiring pass
     // 3a) — see renderExportDataCardBody() and js/admin-panel.js's
@@ -14370,26 +16801,11 @@ export function renderCommPage() {
     // from renderAdminPage() instead, which also owns refreshBackgroundJobsCard()'s
     // cache-population call.
 
-    // Tiebreaker
-    if (week) {
-      sections.push(`
-        <div class="admin-section" data-comm-tab="week">
-          <div class="admin-section-title">🎯 Tiebreaker</div>
-          <div class="card">
-            <div class="form-group"><label class="form-label">Question</label>
-              <input class="form-input" id="tb-question" value="${escHtml(week.tiebreakerQuestion||'')}" /></div>
-            <div class="form-group"><label class="form-label">Actual Value</label>
-              <div class="flex gap-sm">
-                <input class="form-input" id="tb-actual" type="number" style="flex:1"
-                  value="${week.actualTiebreakerValue!==null?numHtml(week.actualTiebreakerValue):''}" placeholder="Enter actual…" />
-                <button class="btn btn-secondary btn-sm" id="auto-calc-tb-btn">Auto-Calc</button>
-              </div>
-            </div>
-            <button class="btn btn-primary btn-sm" id="save-tb-btn">Save Tiebreaker</button>
-            ${renderTiebreakerGuessesAdmin(week,players,week.actualTiebreakerValue)}
-          </div>
-        </div>`);
-    }
+    // Tiebreaker (D1 / DI-516: no Auto-Calc button — the value shows itself and updates as scores arrive)
+    if (week) sections.push(commTiebreakerCardHTML(week, players));
+
+    // D1 (DI-534): Sport entries - who plays the lens sport (an opt-in sport only; '' otherwise).
+    { const entriesHTML = commSportEntriesCardHTML(); if (entriesHTML) sections.push(entriesHTML); }   // S12: only when non-empty, so a one-sport Comm panel is byte-identical
 
     // Nicknames
     if (week) {
@@ -14473,7 +16889,7 @@ export function renderCommPage() {
                 <span class="player-admin-avatar${!p.active?' inactive':''}">${escHtml(getPlayerInitials(p))}</span>
                 <div>
                   <div class="font-display" style="font-size:.9rem">${escHtml(p.displayName)}${!p.active?' <em class="text-muted">(inactive)</em>':''}</div>
-                  <div class="text-xs text-muted">${escHtml(p.almaMater||'No alma mater set')}</div>
+                  ${leagueHasAlmaAffinity() ? `<div class="text-xs text-muted">${escHtml(p.almaMater||'No alma mater set')}</div>` : ''}
                 </div>
               </div>
               <div class="player-admin-controls">
@@ -14550,14 +16966,14 @@ export function renderCommPage() {
     // Alma Maters — READ-ONLY summary card. See renderAlmaMaterSettingsCard()'s
     // docstring above (2026-09-04) for the model this reflects. Rules tab
     // (retagged 'rules', UX Revamp wiring pass 3a — DI-319 §Rules).
-    sections.push(renderAlmaMaterSettingsCard());
+    if (leagueHasAlmaAffinity()) sections.push(renderAlmaMaterSettingsCard());   // D1 DI-551 (F-2): no alma-mater card in a league whose DEFAULT competition is the NFL, whichever lens the commissioner is on
 
     // Rules
     sections.push(`
       <div class="admin-section" data-comm-tab="rules">
         <div class="admin-section-title">League Rules</div>
         <div class="card">
-          <p class="text-secondary text-xs mb-sm">Weekly Ties, the Extra Point, Chat, Permissions and Debts &amp; Bylaws are built in and always appear on the Rules page. Only the text in this box is yours to edit.</p>
+          ${!rulesSports(liveLeagueCompetitions()).hasCfb ? '<p class="text-secondary text-xs mb-sm">The NFL rules, Chat, Permissions and Debts &amp; Bylaws are built in and always appear on the Rules page. Only the text in this box is yours to edit.</p>' : '<p class="text-secondary text-xs mb-sm">Weekly Ties, the Extra Point, Chat, Permissions and Debts &amp; Bylaws are built in and always appear on the Rules page. Only the text in this box is yours to edit.</p>'}
           ${rulesEditorHTML()}
           <div class="flex gap-sm mt-sm">
             <button class="btn btn-primary btn-sm" id="save-rules-btn">Save Rules</button>
@@ -14622,28 +17038,9 @@ export function renderCommPage() {
     // Tab visibility lives on the panel container as a data attribute so a
     // single CSS rule handles show/hide for all 18 sections at once.
     c.setAttribute('data-comm-active', state.commTab);
+    // W-70 (DI-W70.3) - the tap and the swipe are ONE path: setCommTab() (below renderCommPage).
     c.querySelectorAll('.comm-tab').forEach(btn => {
-      btn.addEventListener('click', () => {
-        state.commTab = btn.dataset.commTabBtn;
-        // Don't re-render the whole panel — just flip the active flag and
-        // re-flag the buttons. Cheaper and avoids losing form-field focus.
-        c.setAttribute('data-comm-active', state.commTab);
-        c.querySelectorAll('.comm-tab').forEach(b => {
-          const active = b.dataset.commTabBtn === state.commTab;
-          b.classList.toggle('active', active);
-          b.setAttribute('aria-selected', active);
-        });
-        // UN-105a — a scroll-fade wrapper elsewhere on this panel was
-        // display:none (0×0) if the panel opened on a different tab; a tab
-        // switch doesn't rebuild the DOM, so re-measure now that it may have
-        // just become visible. Demo Simulation's own .batch-grid-scroll
-        // moved to the Admin panel (DI-320, UX Revamp wiring pass 3a) — this
-        // call is general, not specific to that one wrapper.
-        initScrollFades(c);
-        // Scroll the panel to the top so users see the first section of the
-        // new tab rather than a mid-scroll fragment.
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      });
+      btn.addEventListener('click', () => setCommTab(btn.dataset.commTabBtn, { source: 'tap' }));
     });
     // REVIEWER ROUND 2, BLOCK B1 (2026-09-28) — renderCommExtrasV16() APPENDS
     // the Extra Point and "Chat & S.C.R.I.B.E." cards to `c` via
@@ -14695,6 +17092,80 @@ export function renderCommPage() {
   // (rendered panel or the crash-fallback card).
   renderPausedLeagueBannerIfNeeded('commissioner');
   renderMaintenanceBannerIfNeeded('commissioner');
+  renderSportStallBannerIfNeeded('commissioner');   // D1 / DI-557: every non-archived sport, whatever the lens says; above the tab strip like its siblings
+}
+
+/**
+ * W-70 (DI-W70.3, 2026-10-14) - THE ONE COMM TAB SWITCH. A tap on a tab and a swipe between tabs both land here, so the two cannot diverge. It flips the panel's visibility flag and the
+ * strip's buttons and nothing else: NO re-render, so typed text, collapsed sections and focus survive (what the tap always did). `source` is 'tap' or 'swipe':
+ *   - a tap scrolls the page to the top smoothly and plays the native `selection` haptic (Principles: tab changes);
+ *   - a swipe scrolls to the top INSTANTLY (nothing may glide vertically under the sideways slide, SB-23) and plays no haptic here: the pager engine's own `light` is the swipe's one.
+ * Either way the active tab's button is brought into view in the strip (the strip scrolls on a narrow phone). A swipe also sets `data-comm-instant` so the newly shown sections do not
+ * fade in over the slide (the preview layer already showed them fully drawn); a tap clears it, so the tap's fade-in is exactly what it was.
+ * Returns true when the tab changed or was re-asserted, false for an unknown key or no panel.
+ */
+export function setCommTab(key, { source = 'tap' } = {}) {
+  const c = document.getElementById('page-commissioner');
+  if (!c || !COMM_TABS.some((t) => t.key === key)) return false;
+  state.commTab = key;
+  c.setAttribute('data-comm-active', key);
+  if (source === 'swipe') c.setAttribute('data-comm-instant', 'true'); else c.removeAttribute('data-comm-instant');
+  let activeBtn = null;
+  c.querySelectorAll('.comm-tab').forEach((b) => {
+    const active = b.dataset.commTabBtn === key;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', active);
+    if (active) activeBtn = b;
+  });
+  // UN-105a - a scroll-fade wrapper elsewhere on this panel was display:none (0x0) if the panel opened on a different tab; a tab switch doesn't rebuild the DOM, so re-measure now that it
+  // may have just become visible.
+  initScrollFades(c);
+  // The strip follows the tab: centre the active button in it (a direct scrollLeft write: instant, and it can never scroll the page the way scrollIntoView can).
+  const strip = activeBtn && activeBtn.parentElement;
+  if (strip && strip.scrollWidth > strip.clientWidth + 1) strip.scrollLeft = Math.max(0, activeBtn.offsetLeft - (strip.clientWidth - activeBtn.offsetWidth) / 2);
+  if (source === 'swipe') scrollWindow(window, { top: 0, left: 0, behavior: 'instant' }, 'scrollTo');
+  else { window.scrollTo({ top: 0, behavior: 'smooth' }); haptic('selection'); }
+  return true;
+}
+
+/**
+ * W-70 (DI-W70.3) - the incoming tab for the Comm pager: an inert copy of the heading row, the tab strip (with `key` marked active) and the sections that belong to `key`. All five tabs'
+ * sections are already in the DOM (CSS hides four), so nothing is rendered: the page is cloned, filtered, and stripped of ids and radio group names (a cloned radio with a name would
+ * join the real group and un-check it). `.comm-pane` is what the stylesheet keys the layer's visibility on, so a layer shows ITS tab whatever the live panel's flag says.
+ */
+function renderCommPanePreview(key) {
+  const root = document.getElementById('page-commissioner');
+  if (!root || !COMM_TABS.some((t) => t.key === key)) return null;
+  const pane = document.createElement('div');
+  pane.className = 'comm-pane';
+  pane.setAttribute('data-comm-pane', key);
+  for (const child of root.children) {
+    if (child.classList.contains('week-swipe-incoming-layer')) continue;
+    const own = child.getAttribute('data-comm-tab');
+    if (own !== null && own !== key) continue;
+    pane.appendChild(child.cloneNode(true));
+  }
+  commPaneScrub(pane);
+  pane.querySelectorAll('.comm-tab').forEach((b) => {
+    const active = b.dataset.commTabBtn === key;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', active);
+  });
+  return pane.querySelector('[data-comm-tab]') || pane.querySelector('.comm-tabbar') ? pane : null;
+}
+function commPaneScrub(node) {
+  for (const el of node.querySelectorAll('[id], [name], [for]')) { el.removeAttribute('id'); el.removeAttribute('name'); el.removeAttribute('for'); }
+}
+/** W-70 - trim the outgoing exit layer (a copy of the whole panel, sitting OUTSIDE the rules keyed on the panel) to the tab the page was showing. */
+function decorateCommOutgoing(clone) {
+  const key = state.commTab;
+  clone.classList.add('comm-pane');
+  clone.setAttribute('data-comm-pane', key);
+  for (const sec of [...clone.children]) {
+    const own = sec.getAttribute && sec.getAttribute('data-comm-tab');
+    if (own !== null && own !== undefined && own !== key) sec.remove();
+  }
+  commPaneScrub(clone);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -14875,6 +17346,154 @@ function renderMaintenanceBannerIfNeeded(tab) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// SPORT STALL BANNER — D1 (DI-557, 2026-10-14), UN-425 / PF-425 (the player line: UN-229 / DI-224 R10).
+// A THIRD sibling of the two in-page notices above, painted by the same idempotent remove-then-decide shape from the same call sites (the end of the five page renderers, navigateTo()
+// as the catch-all) and, because Picks / Standings / Comm are never rebuilt by a poll, IN PLACE at the end of every poll that changes this device's poll-health record.
+//
+//   * WHICH rows, in whose words, and the markup: js/sport-stall.js (pure). THIS section is the DOM half: the facts it reads from the competition API, the page it paints into, where it
+//     sits among the other notices, the one fade, and the scroll offset.
+//   * LOUD-FAIL ALWAYS WINS (AD-06): while `#backend-error-banner` is visible this banner is WITHHELD (one alarm at a time, loudest first). Nothing here writes into, re-ids, restyles or
+//     hides the red node. The banner is in the page flow and the red one is position:fixed above everything, so it can never cover the red one and covers no control.
+//   * Not dismissible, no Retry button: poll health is never stored, so a dismissal would need remembered per-condition state, and the loop already retries every 60 s.
+//   * `#sport-stall-banner` is the only element of its kind: every paint removes any copy in another page, so there is never more than one in the document.
+// ═══════════════════════════════════════════════════════════════════════
+const STALL_PAGE_IDS = { home: 'page-home', picks: 'page-picks', dashboard: 'page-dashboard', leaderboard: 'page-leaderboard', commissioner: 'page-commissioner' };
+const _stallPainted = new Map();   // page -> { key, sig, h }: the row set last painted there (its repaint key, its markup without the fade class, the block height it took). In memory only.
+let _stallVisit = null;            // the page whose banner was last painted while it was the current tab; a tab change forgets it, so a navigation never offsets the scroll
+
+/** The viewer is the commissioner: the verified `league_members.role` for the active league, the same gate Comm uses. */
+function stallViewerIsCommissioner() {
+  try { return getSession()?.isAdmin === true; } catch { return false; }
+}
+
+/** One fact per NON-ARCHIVED competition, in competition order (see js/sport-stall.js): its current week and games, whether it is live, and the code a caught UnknownSportError carried. */
+function sportStallFacts(nowMs) {
+  const comps = (getLeagueCompetitions() || []).filter((c) => c && c.id && !c.archivedAt);
+  if (!comps.length) return [];   // before the backfill there is no competition to speak of; production leagues have had their default competition row since 0033
+  const liveIds = new Set(getLiveSports(undefined, nowMs).map((s) => s.competitionId));
+  const labels = new Map(leagueSports().map((s) => [s.dbCode, s.label]));
+  return comps.map((c) => {
+    let week = null;
+    try { week = getCurrentWeekFor(c.id); } catch { return null; }   // a competition that cannot be READ is left out: it is never read as "no week", which would be a false alarm for the commissioner
+    let unknownCode = null;
+    try { getProfile(c.sport); } catch (err) { if (err && err.name === 'UnknownSportError') unknownCode = err.dbCode || String(c.sport); }   // DI-224 §5: tested by NAME, never instanceof
+    return { competitionId: c.id, dbCode: c.sport, label: (labels.get(c.sport) || String(c.sport)).slice(0, 40), live: liveIds.has(c.id), week, games: week ? getGames(week.weekId) : [], unknownCode };
+  }).filter(Boolean);
+}
+
+/** Which sports a page is about: every sport on Home and Comm; the context sport on Picks and Standings; the Dashboard's own scope (the chosen sport, or every sport the viewer plays). */
+function stallScopeFor(tab) {
+  if (tab === 'home' || tab === 'commissioner') return null;
+  if (tab === 'dashboard') {
+    const scope = getDashboardScope();
+    return scope === DASHBOARD_ALL ? playedSports().map((s) => s.dbCode) : [scope];
+  }
+  return [getActiveSportKey()];
+}
+
+/** A game tag the app can fetch: an own key of ESPN_SPORT_ENDPOINTS ('college-football', 'nfl'). Anything else is the unrecognized tag of trigger 3. */
+const stallKnownSport = (tag) => typeof tag === 'string' && Object.prototype.hasOwnProperty.call(ESPN_SPORT_ENDPOINTS, tag);
+
+/** The red banner is up: `#backend-error-banner` exists and is not hidden. The stall banner reads this and never touches the node. */
+function backendErrorBannerShowing() {
+  const red = document.getElementById('backend-error-banner');
+  return !!red && red.style?.display !== 'none';
+}
+
+/** The vertical space the banner takes in the page: its height plus the margin under it. 0 for no banner (and in any DOM without layout). */
+function stallBlockHeight(el) {
+  try {
+    if (!el || typeof el.getBoundingClientRect !== 'function') return 0;
+    const cs = typeof getComputedStyle === 'function' ? getComputedStyle(el) : null;
+    return Math.round((el.getBoundingClientRect().height || 0) + (cs ? parseFloat(cs.marginBottom) || 0 : 0));
+  } catch { return 0; }
+}
+
+/**
+ * Nothing moves under the thumb (DI-557 #5): when the row set changes on a page the reader is already scrolled down in (scrollY > 8), the scroller is offset by the banner's height change
+ * in the same frame, so what they are reading stays put. At the top it simply pushes the page down. Only a device settles how WKWebView treats this.
+ */
+function offsetScrollForStall(delta) {
+  const y = Number(window.scrollY) || 0;
+  if (!delta || y <= 8) return;
+  scrollWindow(window, { top: Math.max(0, y + delta), left: 0, behavior: 'instant' }, 'scrollTo');
+}
+
+/**
+ * Paint (or clear) the banner for one page. Idempotent remove-then-decide, like its two siblings:
+ *   - rows come from the pure module over this device's facts; none are computed before the first hydrate or while content is withheld, and none while the red banner shows;
+ *   - an UNCHANGED row set leaves the node in the document exactly as it is (no animation, no new announcement); a page that was rebuilt gets the same node back already visible;
+ *   - a CHANGED row set adds the one fade (`.sport-stall-in`, --motion-fast) and, when the page is already scrolled, offsets the scroller by the height change;
+ *   - it sits BELOW the notices above it (top to bottom: maintenance, paused-league, stall): they insert at the top of the section, so this runs last at every site and seats itself after them.
+ * Only the page that is on screen is painted (a repaint of a hidden page must not take the visible page's banner away).
+ */
+function renderSportStallBannerIfNeeded(tab) {
+  try { paintSportStallBanner(tab); } catch (e) { console.warn('[sport-stall] the banner could not be painted', e); }   // a notice is never worth a failed render
+}
+function paintSportStallBanner(tab) {
+  if (!STALL_PAGES.includes(tab) || state.currentTab !== tab) return;
+  const c = document.getElementById(STALL_PAGE_IDS[tab]);
+  if (!c) return;
+  const prev = _stallPainted.get(tab) || { key: '', sig: '', h: 0 };
+  const wasVisit = _stallVisit === tab;   // already on this page at the last paint: only then does a change offset the scroller (a navigation restores its own scroll)
+  _stallVisit = tab;
+  const isComm = stallViewerIsCommissioner();
+  let rows = [];
+  const ownsPage = tab === 'home' ? !!c.querySelector('#home-root') : (tab !== 'commissioner' || isComm);   // a league-flow screen owns Home; a non-commissioner never reaches Comm's panel
+  if (ownsPage && !isContentWithheld() && !backendErrorBannerShowing()) {
+    const nowMs = Date.now();
+    rows = stallRows({ facts: sportStallFacts(nowMs), health: _sportPollHealth, isCommissioner: isComm, nowMs, sports: stallScopeFor(tab), isKnownSport: stallKnownSport });
+  }
+  const key = stallRowsKey(rows);
+  const sig = sportStallBannerHTML(rows, { escHtml, animate: false });
+  const here = c.querySelector('#sport-stall-banner');
+  // at most ONE banner in the document: a copy left in any other page goes now
+  for (const id of Object.values(STALL_PAGE_IDS)) { if (id !== STALL_PAGE_IDS[tab]) document.getElementById(id)?.querySelector?.('#sport-stall-banner')?.remove?.(); }
+  if (rows.length && here && prev.sig === sig && here.getAttribute?.('data-rows') === key) return;   // unchanged: the node is left as it is
+  here?.remove?.();
+  if (!rows.length) {
+    _stallPainted.set(tab, { key: '', sig: '', h: 0 });
+    if (prev.h) { if (wasVisit) offsetScrollForStall(-prev.h); }
+    return;
+  }
+  const html = sportStallBannerHTML(rows, { escHtml, animate: key !== prev.key });
+  const above = c.querySelector('#paused-league-banner') || c.querySelector('#maintenance-banner');
+  if (above && typeof above.insertAdjacentHTML === 'function') above.insertAdjacentHTML('afterend', html); else c.insertAdjacentHTML('afterbegin', html);
+  const h = stallBlockHeight(c.querySelector('#sport-stall-banner'));
+  _stallPainted.set(tab, { key, sig, h });
+  if (key !== prev.key && wasVisit) offsetScrollForStall(h - prev.h);
+}
+export const _renderSportStallBannerIfNeededForTest = renderSportStallBannerIfNeeded;
+export const _sportStallFactsForTest = sportStallFacts;
+export const _stallPaintedForTest = _stallPainted;
+export const _sportStallBannerHTMLForTest = (rows, { animate = false } = {}) => sportStallBannerHTML(rows, { escHtml, animate });   // xsstest: the real escaper over hostile rows
+export const _showBackendErrorBannerForTest = showBackendErrorBanner;   // sportstalltest: the REAL red banner, so "red wins" is proven against the real node, never a hand-built one
+export const _hideBackendErrorBannerForTest = hideBackendErrorBanner;
+
+/**
+ * The in-place paint for the page on screen, at the end of every poll that changed the poll-health record. It waits like every other repaint of the page: for a touch that owns it (a week
+ * swipe, a drag) AND for the page's own spring-back while it still slides (W-22; review N6). It parks under the PAGE key, so the spring hold applies, through deferInPlaceRepaint(), which never
+ * replaces a full repaint already parked for the page (that one paints the banner itself).
+ */
+function repaintSportStallBannerInPlace() {
+  const tab = state.currentTab;
+  if (!STALL_PAGES.includes(tab)) return;
+  if (deferInPlaceRepaint(tab, repaintSportStallBannerInPlace)) return;
+  renderSportStallBannerIfNeeded(tab);   // never throws
+}
+
+/** Score one poll for the polled week's competition from the per-bucket outcomes the fetch returned. A bucket the poll never reached (undefined) neither counts nor clears. True when the count changed. */
+function recordSportPoll(week, bucketOutcomes) {
+  if (!week || !bucketOutcomes || typeof bucketOutcomes.get !== 'function') return false;
+  const comp = competitionForWeek(week);
+  if (!comp || !comp.id) return false;
+  const bucket = espnKeyForSport(comp.sport);
+  if (!bucket) return false;
+  return notePoll(_sportPollHealth, comp.id, bucketOutcomes.get(bucket), Date.now());
+}
+export const _recordSportPollForTest = recordSportPoll;
+
+// ═══════════════════════════════════════════════════════════════════════
 // ADMIN PANEL — DI-320/344/345 (T-12/T-35). UX Revamp wiring pass 2
 // (2026-09-25). js/admin-panel.js/js/roles.js own the PURE render/permission
 // logic; this section is the DOM-side mount (composing the `viewer` bag,
@@ -14916,7 +17535,7 @@ function composeAdminViewer() {
 // back in after a failure is the card's own Retry button, which calls the
 // refresh function directly (bypassing the render-time guard entirely, same
 // as it always has).
-let _platformKvCache = { maintenanceBanner: '', signupsOpen: true, leagueCreationOpen: false, pushAliasModeLive: false, loading: false, loaded: false, error: null, attempted: false };
+let _platformKvCache = { maintenanceBanner: '', signupsOpen: true, leagueCreationOpen: false, pushAliasModeLive: false, pushNonpilotAliasOnly: false, loading: false, loaded: false, error: null, attempted: false };
 let _allLeaguesCache = { rows: null, loading: false, error: null, attempted: false };
 // WIRING_CHECKLIST_B_092526.md §Window(b) — the cross-league Users Across
 // Leagues / Platform Admins read. `rows: null` = never fetched (renders the
@@ -14947,6 +17566,184 @@ async function refreshPlatformKvCache() {
     _platformKvCache = { ..._platformKvCache, loading: false, error: e?.message || 'failed', attempted: true };
   }
   if (state.currentTab === 'admin') renderAdminPage();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// D1 Lane C (DI-634 / DI-637, UN-477 / UN-482) — THE ADMIN ROUTING CARD AND THE CONTENT AND AI STATUS CARD: the caches, the reads, the shared sheet and the one write.
+//
+// Cache-then-fetch-then-repaint, the same shape as `_platformKvCache` above: `attempted` is set on success AND failure so the render-time guard fires at most once per cache lifetime; the
+// card's own Retry (or a pull-to-refresh) is the only way back in after a failure. Nothing here is read by a player surface; both cards are Admin-only and render nothing for anyone else.
+//
+//   routing card  READ by platform admins; the ONE WRITE is `superSetPlatformKv('scribe_model_routes', …)`, Super Admin only (the server checks `is_super_admin()`; migration 0049 admits the key).
+//                 The sheet is the shared sheet shell (swipe-down on the phone, ✕/backdrop/Cancel/Esc everywhere); a failed save changes NOTHING on screen and says so (DI-634).
+//   status card   READ-ONLY. `content_status()` arrives with a later migration; until then the card says the service isn't installed, in words, and offers Retry.
+// PARITY-BY-DESIGN (J.4 PD-C1, PD-C2, PD-C4): the success / error haptic on a save and the swipe-down dismissal are native-only; the toast, the Cancel button and the refresh button are on both.
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+let _scribeRoutesCache = { kv: null, caps: null, search: null, loading: false, loaded: false, error: null, attempted: false, saving: null };
+let _contentStatusCache = { data: null, loading: false, loaded: false, error: null, attempted: false };
+const ADMIN_AI_SHEET_WRAP_ID = 'admin-ai-sheet-wrap';
+let _adminAiSheet = null;       // { kind: 'route' | 'status', cls, rowId, draft, status, closing, unbind, onKey }
+let _unbindAdminAiSheetDrag = null;
+/** Test seam (the `_xForTest` convention): back to a cold start - sheet closed, both caches empty and un-attempted, so a suite can drive the first-load, failure and retry paths in turn. */
+export function _resetAdminAiForTest() {
+  closeAdminAiSheet({ immediate: true });
+  _scribeRoutesCache = { kv: null, caps: null, search: null, loading: false, loaded: false, error: null, attempted: false, saving: null };
+  _contentStatusCache = { data: null, loading: false, loaded: false, error: null, attempted: false };
+}
+
+async function refreshScribeRoutesCache() {
+  if (_scribeRoutesCache.loading) return;
+  _scribeRoutesCache = { ..._scribeRoutesCache, loading: true, error: null };
+  try {
+    const kv = await getScribeRoutingKv();
+    _scribeRoutesCache = { ..._scribeRoutesCache, kv: kv.routes, caps: kv.caps, search: kv.search, loading: false, loaded: true, error: null, attempted: true };
+  } catch (e) {
+    console.error('[admin] scribe routing read failed', e);
+    _scribeRoutesCache = { ..._scribeRoutesCache, loading: false, error: e?.message || 'failed', attempted: true };
+  }
+  if (state.currentTab === 'admin') renderAdminPage();
+}
+
+async function refreshContentStatusCache() {
+  if (_contentStatusCache.loading) return;
+  _contentStatusCache = { ..._contentStatusCache, loading: true, error: null };
+  try {
+    const r = await getContentStatus();
+    if (r.unavailable) _contentStatusCache = { data: null, loading: false, loaded: false, error: 'unavailable', attempted: true };
+    else _contentStatusCache = { data: r.data, loading: false, loaded: true, error: null, attempted: true };
+  } catch (e) {
+    console.error('[admin] content_status read failed', e);
+    // A refresh that fails keeps the rows already on screen (the card says it could not refresh); a first load that fails shows the retry state.
+    _contentStatusCache = { ..._contentStatusCache, loading: false, error: 'failed', attempted: true };
+  }
+  if (state.currentTab === 'admin') renderAdminPage();
+}
+
+/** The pull-to-refresh / sync-tap leg for the Admin page: re-read both cards. Never rejects (a card failure is the card's own calm state, never the red sync banner). */
+async function refreshAdminAiCaches() {
+  await Promise.all([refreshScribeRoutesCache(), refreshContentStatusCache()]);
+}
+
+function adminAiSheetBodyHTML() {
+  const sh = _adminAiSheet;
+  if (!sh) return '';
+  if (sh.kind === 'route') return renderRouteSheetBody({ cls: sh.cls, draft: sh.draft, status: sh.status, escHtml });
+  const norm = normalizeContentStatus(_contentStatusCache.data);
+  return renderStatusSheetBody(norm.rows.find((r) => r.id === sh.rowId) || null, { escHtml, nowMs: Date.now() });
+}
+function adminAiSheetTitle() {
+  const sh = _adminAiSheet;
+  if (!sh) return '';
+  if (sh.kind === 'route') return (ROUTE_ROWS.find((r) => r.cls === sh.cls) || {}).label || 'SCRIBE model';
+  const row = normalizeContentStatus(_contentStatusCache.data).rows.find((r) => r.id === sh.rowId);
+  return row ? row.label : STATUS_COPY.TITLE;
+}
+function paintAdminAiSheet() {
+  const body = document.getElementById('admin-ai-sheet-body');
+  if (body) body.innerHTML = adminAiSheetBodyHTML();
+  const title = document.getElementById('admin-ai-sheet-title');
+  if (title) title.textContent = adminAiSheetTitle();
+}
+function adminAiSheetDragProgress(wrap, sheetEl, progress) {
+  sheetEl.setAttribute('data-dragging', 'true'); wrap.setAttribute('data-dragging', 'true');
+  wrap.style.setProperty('--ai-sheet-drag-y', String(progress));
+}
+function adminAiSheetSettleDrag(wrap, sheetEl, { dismissed, reducedMotion } = {}) {
+  sheetEl.removeAttribute('data-dragging'); wrap.removeAttribute('data-dragging');
+  if (!dismissed) { wrap.style.setProperty('--ai-sheet-drag-y', '0'); return; }
+  finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--ai-sheet-drag-y', '1'), reducedMotion: !!reducedMotion, done: () => closeAdminAiSheet({ immediate: true }) });
+}
+/** A sheet LEAVES the way it arrived (the same exit the profile pane's sheets use). Nothing in flight is abandoned silently: a save in flight keeps the sheet open (Cancel and the swipe are off). */
+function closeAdminAiSheet({ immediate = false } = {}) {
+  const sh = _adminAiSheet;
+  if (sh && sh.status === 'saving' && !immediate) return;
+  _unbindAdminAiSheetDrag?.(); _unbindAdminAiSheetDrag = null;
+  if (sh && sh.onKey) { try { document.removeEventListener('keydown', sh.onKey); } catch { /* courtesy */ } sh.onKey = null; }
+  _adminAiSheet = null;
+  const wrap = document.getElementById(ADMIN_AI_SHEET_WRAP_ID);
+  if (!wrap) return;
+  if (immediate) { wrap.remove(); return; }
+  playDeleteSheetExit(wrap, () => { try { if (document.getElementById(ADMIN_AI_SHEET_WRAP_ID) === wrap) wrap.remove(); } catch { /* already gone */ } }, { sheetId: 'admin-ai-sheet', dragVar: '--ai-sheet-drag-y' });
+}
+function openAdminAiSheet(sheet) {
+  if (isContentWithheld()) return;                           // the same guard every body-appended surface carries (SECURITY GATE FINDING 1)
+  closeAdminAiSheet({ immediate: true });
+  _adminAiSheet = { status: 'idle', closing: false, onKey: null, ...sheet };
+  const { unbind } = mountSheetShell({
+    wrapId: ADMIN_AI_SHEET_WRAP_ID, sheetId: 'admin-ai-sheet',
+    sheetAttrs: ' role="dialog" aria-modal="true" aria-labelledby="admin-ai-sheet-title"',
+    headerInnerHTML: `<div class="chat-sheet-title" id="admin-ai-sheet-title" tabindex="-1"></div><button type="button" class="chat-sheet-close admin-ai-close" id="admin-ai-sheet-close" aria-label="Close">${icon('close')}</button>`,
+    bodyId: 'admin-ai-sheet-body', closeId: 'admin-ai-sheet-close',
+    onBackdrop: () => closeAdminAiSheet(), renderBody: paintAdminAiSheet,
+    drag: { getBlocked: () => _dismissBlockingSurfaceUp({ excludeAdminAi: true }) || (_adminAiSheet && _adminAiSheet.status === 'saving'), onProgress: adminAiSheetDragProgress, onSettle: adminAiSheetSettleDrag },
+  });
+  _unbindAdminAiSheetDrag = unbind;
+  const wrap = document.getElementById(ADMIN_AI_SHEET_WRAP_ID);
+  wrap?.addEventListener('click', onAdminAiSheetClick);
+  _adminAiSheet.onKey = (e) => { if (e.key === 'Escape') { if (!document.getElementById(ADMIN_AI_SHEET_WRAP_ID)) closeAdminAiSheet({ immediate: true }); else closeAdminAiSheet(); } };
+  document.addEventListener('keydown', _adminAiSheet.onKey);
+  paintAdminAiSheet();
+  try { wrap?.querySelector('#admin-ai-sheet-title')?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+}
+function onAdminAiSheetClick(e) {
+  const sh = _adminAiSheet;
+  if (!sh || sh.kind !== 'route') return;
+  if (e.target.closest('#scribe-route-cancel')) { closeAdminAiSheet(); return; }
+  if (sh.status === 'saving') return;
+  const tierBtn = e.target.closest('[data-route-tier]');
+  if (tierBtn) {
+    const tier = tierBtn.getAttribute('data-route-tier');
+    sh.draft = { tier, fallback: sh.draft.fallback === tier ? null : sh.draft.fallback };
+    sh.status = 'idle'; haptic('selection'); paintAdminAiSheet(); return;
+  }
+  const fbBtn = e.target.closest('[data-route-fallback]');
+  if (fbBtn) {
+    const v = fbBtn.getAttribute('data-route-fallback');
+    sh.draft = { tier: sh.draft.tier, fallback: v === 'none' ? null : v };
+    sh.status = 'idle'; haptic('selection'); paintAdminAiSheet(); return;
+  }
+  if (e.target.closest('#scribe-route-save')) saveScribeRoute();
+}
+/** The one write. The previous route stays displayed until the server says yes; a failure changes nothing and says so; success updates the pill, toasts and fires the success haptic. */
+async function saveScribeRoute() {
+  const sh = _adminAiSheet;
+  if (!sh || sh.kind !== 'route' || sh.status === 'saving') return;
+  const next = nextRoutesValue(_scribeRoutesCache.kv, sh.cls, sh.draft.tier, sh.draft.fallback);
+  if (!next) { sh.status = 'failed'; paintAdminAiSheet(); haptic('error'); return; }
+  sh.status = 'saving'; _scribeRoutesCache = { ..._scribeRoutesCache, saving: sh.cls };
+  paintAdminAiSheet();
+  haptic('medium');
+  try {
+    await superSetPlatformKv('scribe_model_routes', next);
+    _scribeRoutesCache = { ..._scribeRoutesCache, kv: next, saving: null, loaded: true, error: null };
+    const tier = sh.draft.tier;
+    sh.status = 'idle';
+    showToast(scribeRouteSavedToast(tier), 'success');
+    haptic('success');
+    closeAdminAiSheet({ immediate: true });
+    if (state.currentTab === 'admin') renderAdminPage();
+  } catch (e) {
+    console.error('[admin] scribe_model_routes save failed', e);
+    _scribeRoutesCache = { ..._scribeRoutesCache, saving: null };
+    if (_adminAiSheet === sh) { sh.status = 'failed'; paintAdminAiSheet(); }
+    haptic('error');
+  }
+}
+/** Bind the two cards' controls after `renderAdminPage()` paints. Event delegation per paint; every handler is a no-op for a control that is not on the page. */
+function wireAdminAiCards(c) {
+  c.querySelectorAll('[data-route-class]').forEach((btn) => btn.addEventListener('click', () => {
+    if (!getIsSuperAdmin()) return;                    // the card renders no tap target for anyone else; this is the belt
+    const cls = btn.getAttribute('data-route-class');
+    haptic('light');
+    openAdminAiSheet({ kind: 'route', cls, draft: draftForClass({ kv: _scribeRoutesCache.kv, cls }) });
+  }));
+  c.querySelector('#scribe-routes-retry-btn')?.addEventListener('click', () => { refreshScribeRoutesCache(); });
+  c.querySelectorAll('[data-status-row]').forEach((btn) => btn.addEventListener('click', () => {
+    haptic('light');
+    openAdminAiSheet({ kind: 'status', rowId: btn.getAttribute('data-status-row') });
+  }));
+  c.querySelector('#content-status-retry-btn')?.addEventListener('click', () => { refreshContentStatusCache(); });
+  c.querySelector('#content-status-refresh-btn')?.addEventListener('click', () => { refreshContentStatusCache(); });
 }
 
 async function refreshAllLeaguesCache() {
@@ -15432,6 +18229,10 @@ export function renderAdminPage() {
     refreshUsersAcrossLeaguesCache();
   }
   const users = _usersAcrossLeaguesCache.rows || [];
+  // D1 Lane C (DI-634 / DI-637) — the routing rows and the status read, for platform admins (this page is reachable by no one else: the route guard above); at most one automatic fetch per
+  // cache lifetime (the cards' Retry is the way back). AFTER the users-read gate on purpose: that gate's preamble line count is pinned (rolestest F13-preamble), and these are not security gates.
+  if (getIsPlatformAdmin() && !_scribeRoutesCache.attempted && !_scribeRoutesCache.loading) refreshScribeRoutesCache();
+  if (getIsPlatformAdmin() && !_contentStatusCache.attempted && !_contentStatusCache.loading) refreshContentStatusCache();
 
   const week = getCurrentWeek();
   const games = week ? getGames(week.weekId) : [];
@@ -15458,6 +18259,12 @@ export function renderAdminPage() {
     'data-proof': () => renderDataProofPanel(proof, ps, week, games),
     'account-linking': () => `<div id="comm-link-status-card"><p class="text-muted">Loading members…</p></div>`,
     'scribe-model': () => renderScribeModelCardHTML(),
+    // D1 Lane C (DI-634 / DI-637) — the routing card (write: Super Admin only) and the content and AI status card (read-only).
+    'scribe-routes': () => renderScribeRoutesBody({
+      state: { ..._scribeRoutesCache, spend: spendByClassFromStatus(_contentStatusCache.loaded ? _contentStatusCache.data : null) },
+      canWrite: getIsSuperAdmin() === true, escHtml, icon,
+    }),
+    'content-ai-status': () => renderContentStatusBody({ state: _contentStatusCache, escHtml, icon, nowMs: Date.now() }),
     'recalculate-finalized-weeks': () => renderRecalculateFinalizedWeeksAdminSectionHTML(),
     'obligation-corrections': () => renderObligationCorrectionsAdminSectionHTML(),
     'background-jobs': () => renderBackgroundJobsAdminSectionHTML({ pilot: isPilotLeague(league) }),
@@ -15492,6 +18299,7 @@ export function renderAdminPage() {
     allLeaguesError: _allLeaguesCache.error,
   });
   c.setAttribute('data-admin-active', state.adminTab || 'week');
+  wireAdminAiCards(c);
 
   // REVIEWER ROUND 2 B1 (2026-09-28) — the Admin panel genuinely SHARES the
   // collapse mechanism now, not just the CSS class it happened to reuse.
@@ -15661,79 +18469,6 @@ function renderDemoBatchGrid(games) {
   </div>`;
 }
 
-/**
- * Renders one `.suggested-game-row`. `dismissable` distinguishes the primary
- * 10 (add-suggested-btn + reject-suggested-btn, unchanged) from the DI-4
- * shortlist (add-shortlist-btn only, NO dismiss control — these are
- * optional swap-ins, not primary suggestions the Commissioner needs to
- * actively reject). Both blocks reuse the same identity-based on-slate check
- * so a game already on the slate always shows "✓ On Slate" instead of a
- * button that would otherwise insert a duplicate slate row.
- */
-function renderSuggestedGameRow(game, i, currentSlate, dismissable, folded = null) {
-  const onSlate = currentSlate.some(g => g.homeTeam===game.homeTeam&&g.awayTeam===game.awayTeam);
-  const spreadStr = game.spread!==null ? fmtSpread(game.spread,game.favorite,game) : 'TBD';
-  const sKey = suggestionKeyOf(game);
-  return `<div class="suggested-game-row${onSlate?' on-slate':''}">
-    <span class="suggested-num">${numHtml(i+1)}</span>
-    <span class="suggested-matchup">${escHtml(matchup(game))}${gameRequestChipHTML(game, folded)}</span>
-    <span class="suggested-spread text-muted text-xs">${spreadStr}</span>
-    <span class="suggested-time text-muted text-xs">${fmtTime(game.kickoff,game)}</span>
-    <div class="flex gap-sm flex-center">
-      ${(game.suggestionReasons||[]).map(r=>`<span class="candidate-reason">${escHtml(r)}</span>`).join('')}
-      ${onSlate
-        ? `<span class="badge badge-open">✓ On Slate</span>`
-        : `<button class="btn btn-primary btn-sm ${dismissable?'add-suggested-btn':'add-shortlist-btn'}" data-idx="${numHtml(i)}">+ Add</button>`}
-      ${dismissable && !onSlate
-        ? `<button class="btn btn-ghost btn-sm reject-suggested-btn" data-key="${escHtml(sKey)}" data-idx="${numHtml(i)}" title="Dismiss this suggestion">✕</button>`
-        : ''}
-    </div>
-  </div>`;
-}
-
-export function renderSuggestedSlatePreview({suggested, shortlist, almaCount, morningAnchorFilled, closingAnchorFilled}, currentSlate, week) {
-  if (!suggested.length) return '';
-
-  // DI-6 — budget visibility, directly above the game list (placement is
-  // specified as not optional; buried below the fold defeats the purpose).
-  // TARGET_SLATE_SIZE is the product's fixed "10-game slate" decision — a UI
-  // constant, unrelated to how many schools are in the (now commissioner-
-  // configurable, incoming change) alma-mater list. almaCount can exceed it
-  // once that list is edited past 10 entries; Drew's ruling is "ALL" is
-  // absolute, so the slate is never truncated to force a round 10 — the
-  // banner just has to say so legibly instead of reading "12 of 10".
-  const TARGET_SLATE_SIZE = 10;
-  const budgetBanner = almaCount >= 1
-    ? (almaCount > TARGET_SLATE_SIZE
-        ? `<div class="suggested-budget-banner">🔒 ${almaCount} alma mater games this week — slate expanded</div>`
-        : `<div class="suggested-budget-banner">🔒 ${almaCount} of ${TARGET_SLATE_SIZE} slots reserved for alma mater games this week</div>`)
-    : '';
-  // An anchor with genuinely nothing to fill it (as opposed to already being
-  // covered by a Tier-1 alma game) gets an explicit muted note rather than
-  // silently having no game in that slot.
-  const anchorNotes = [
-    !morningAnchorFilled ? `<div class="text-muted text-xs suggested-anchor-note">No Saturday morning games this week — opening slot not filled automatically.</div>` : '',
-    !closingAnchorFilled ? `<div class="text-muted text-xs suggested-anchor-note">No Saturday games this week — closing slot not filled automatically.</div>` : '',
-  ].join('');
-
-  // F3 review finding (2026-09-12) — FOLD ONCE, PASS IT DOWN. This row renderer
-  // ran foldGameRequests() PER ROW through gameRequestChipHTML's `folded ||
-  // foldGameRequests()` default — a full read-and-fold of the whole append-only
-  // request log up to 20 times per render of this box. The other two chip call
-  // sites already hand a folded list down; this one was the outlier. Behaviour
-  // is unchanged — it is the same list, computed once.
-  const foldedRequests = foldGameRequests();
-  return `<div class="suggested-slate-box">
-    <div class="card-title mb-sm">⭐ Suggested 10-Game Slate <span class="text-muted text-xs">(✕ to dismiss a suggestion)</span></div>
-    ${budgetBanner}${anchorNotes}
-    ${suggested.map((game, i) => renderSuggestedGameRow(game, i, currentSlate, true, foldedRequests)).join('')}
-    ${(shortlist||[]).length ? `
-    <div class="card-title mb-sm mt-md">📋 Next Best — tap + to swap in</div>
-    ${shortlist.map((game, i) => renderSuggestedGameRow(game, i, currentSlate, false, foldedRequests)).join('')}
-    ` : ''}
-  </div>`;
-}
-
 // ─── AVAILABLE GAMES — filtering + grouping ──────────────────────────────────
 // Lets the Commissioner whittle a big ESPN-pulled list down by date, day,
 // conference, region, ranking, alma-mater involvement, or free-text search,
@@ -15837,7 +18572,14 @@ export function filterAndGroupAvailableGames(availGames) {
   return { buckets: entries, total: list.length, totalUnfiltered: availGames.length };
 }
 
-export function renderAvailFilterBar(availGames) {
+/** The "Alma mater games only" chip: a college concept, so the bar offers it only when its caller says the sport has an alma-mater affinity (gamesOfferAlmaChip()). */
+function availAlmaChipHTML(f) {
+  return `<label class="avail-chip-label">
+        <input type="checkbox" id="avail-alma-only" ${f.almaOnly?'checked':''} />
+        ${icon('almaMater')} Alma mater games only
+      </label>`;
+}
+export function renderAvailFilterBar(availGames, { almaChip = true } = {}) {
   const f = state.availFilter;
   // Build conference options from what's actually in the pool — sorted, deduped.
   const confs = [...new Set(
@@ -15872,10 +18614,7 @@ export function renderAvailFilterBar(availGames) {
           <option value="unranked"${f.rank==='unranked'?' selected':''}>Unranked only</option>
         </select>
       </label>
-      <label class="avail-chip-label">
-        <input type="checkbox" id="avail-alma-only" ${f.almaOnly?'checked':''} />
-        ${icon('almaMater')} Alma mater games only
-      </label>
+      ${almaChip ? availAlmaChipHTML(f) : ''}
       <label class="avail-chip-label">
         <input type="checkbox" id="avail-national-tv" ${f.nationalTV?'checked':''} />
         ${icon('tv')} On National TV
@@ -15889,195 +18628,872 @@ export function renderAvailFilterBar(availGames) {
   </div>`;
 }
 
-function renderAvailableGroups(availGames, currentSlate, week) {
-  const { buckets, total, totalUnfiltered } = filterAndGroupAvailableGames(availGames);
-  if (!buckets.length) {
-    return `<div class="info-box">No games match the current filters. <button class="btn btn-ghost btn-sm" id="avail-reset-filters-inline">Reset filters</button></div>`;
-  }
-  const countLine = `<div class="text-muted text-xs mb-sm">Showing <strong>${total}</strong> of ${totalUnfiltered} games${total!==totalUnfiltered?' (filtered)':''}.</div>`;
-  // When grouping is 'none' just render one flat list (skip the header chrome).
-  if (state.availFilter.groupBy === 'none' && buckets.length === 1) {
-    return countLine + renderAvailableGamesList(buckets[0][1], currentSlate, week);
-  }
-  return countLine + buckets.map(([label, games]) =>
-    `<details class="avail-group" open>
-      <summary class="avail-group-header"><span>${escHtml(label)}</span><span class="text-muted text-xs">${games.length} game${games.length>1?'s':''}</span></summary>
-      <div class="avail-group-body">${renderAvailableGamesList(games, currentSlate, week)}</div>
-    </details>`
-  ).join('');
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// COMM -> GAMES: ONE GAMES LIST, and the add-or-swap rule on a full slate (D1, thread 100726-D1, W-68 / W-69; docs/DESIGN_D1_D.md sections 3 and 4)
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// Drew, 2026-10-14. W-68: "If the slate is built with 10 teams and I select add a new team, it should ask me to add an extra (make it 11) or swap with another team currently on the slate,
+// then let me pick whichteam to swap it with roght now nothing happens". W-69: "There is no way to remove a team on the slate when the week is in draft mode. Oh wait there is, but its in
+// selected slate and I was looking in the available games section. This is confusing and contains redundant info ... This should be consolidated."
+//
+// What was wrong (found by tracing, not by guessing): every add path appended unconditionally and none read the slate count or the sport profile, the heading hard-coded "/10", the wizard's
+// manual add repainted a step with no slate list or count (so it looked like nothing happened), and the same game was drawn four times with two different remove dialogs. After any filter
+// change, reRenderAvail() re-bound EVERY `.add-avail-game-btn` in the document, including the Player Requests card's, whose next click then saved the game twice (DI-W68.7).
+//
+// Now: one section; one row per game (games-list.js); events DELEGATED on the section root and on the Player Requests card (nothing binds with a document-wide querySelectorAll); one door for every
+// add (`requestAddToSlate`); the slate's size read from the live mirror and the sport profile when the tap lands (RG-256 class: never a render closure); and an add / remove / swap / dismiss /
+// segment / filter change PATCHES the rows it touches (keyed-list.js) - no renderCommPage(), so scroll, open date groups, the search text and focus survive.
+
+const GAMES_COLLAPSE_MS = 200;   // DI-W69.3: a row leaving a segment collapses over 200 ms (a list row leaving sits between the small-feedback and navigation ranges)
+let _gamesListTimer = null;      // the pending "collapse, then reconcile" for rows that left the shown segment; a newer state supersedes it (never two)
+let _commStale = false;          // the other Comm tabs (Week's entry card, the tiebreaker card) were drawn before an in-place slate change; repainted when the commissioner leaves the Games tab
+let _commStaleObserver = null;
+let _swapPicker = null;          // { weekId, origin, data, outId, invoker, busy, closing, unbind, onKey } - the swap picker sheet's page-lifetime state
+let _weekWizardStep2Note = '';   // the line Step 2 shows after an add or a swap ("Added X. 11 games on your slate."), consumed by the next paint
+
+/** "Away @ Home" through td() - the one name the sheets, the toasts and the picker use. */
+function slateName(game) { return game ? `${td(game, 'away')} @ ${td(game, 'home')}` : ''; }
+function plural(n, one, many) { return Number(n) === 1 ? one : many; }
+
+/** The deps the pure add / swap / remove operations (slate-add.js) run over: the live storage functions, read fresh on every call. */
+function slateDeps() {
+  return { getWeek, getGames, saveGame, createGame, deleteGame, countPicksForGame, saveWeek, profileForWeek, tiebreakerGameOptions, tiebreakerFieldsFor, tiebreakerQuestionFor };
+}
+
+// ── the model ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/**
+ * Everything the Games section draws, from a week, its slate, its pool and the suggestion engine's output (DI-W69.2): the union rows, the unfiltered counts, the sport's slate size, how many
+ * suggested games a bulk add would take right now, and whether the week is past Draft (where Lock / Unlock and Refresh Scores have an effect).
+ */
+function buildGamesModel({ week, slate, pool, built, rejectedCount = 0 }) {
+  const profile = week ? profileForWeek(week) : null;
+  const target = slateTargetOf(profile);
+  const suggested = built && Array.isArray(built.slate) ? built.slate : [];
+  const rows = buildGameRows({ slate, pool, suggested, shortlist: built && built.shortlist, suggestionKeyOf });
+  const plan = planBulkAdd({ existingCount: slate.length, candidates: suggested, target, suggestedLength: suggested.length, isOnSlate: (g) => !!slateMatchFor(g, slate) });
+  return {
+    week, weekId: week ? week.weekId : '', slate, pool, built: built || { slate: [], shortlist: [], almaCount: 0, morningAnchorFilled: true, closingAnchorFilled: true }, rejectedCount,
+    profile, target, rows, counts: segmentCounts(rows), addable: plan.toAdd.length, pastDraft: !!week && week.status !== WEEK_STATUS.DRAFT,
+  };
+}
+
+/** A FRESH model from the mirror (RG-256: an action reads the live week, slate, pool and suggestions when it lands, never the render's closure). */
+function gamesTabModelNow() {
+  const base = gamesTabTargetWeek() || commWeek();
+  const week = base ? (getWeek(base.weekId) || base) : null;
+  const weekId = week ? week.weekId : '';
+  const slate = weekId ? getGames(weekId) : [];
+  const pool = weekId ? getAvailableGames(weekId) : [];
+  const candidates = weekId ? pool.filter((g) => !isSuggestionRejected(weekId, g)) : pool;
+  const scored = candidates.length > 0 ? scoreCandidateGames(candidates, weekId) : [];
+  return buildGamesModel({ week, slate, pool, built: buildSuggestedSlate(scored, 10), rejectedCount: weekId ? getRejectedSuggestions(weekId).length : 0 });
+}
+
+/** The helpers a row needs, bundled once per paint (the folds and reads happen ONCE per list, not once per row). */
+function gamesRowCtx(model) {
+  const canFindSpread = !!model.week && spreadFindUI().canRun(model.week);
+  const folded = foldGameRequests();
+  const logoViewOn = getLogoView();
+  const overrides = getGameLockOverrides();
+  return {
+    escHtml, icon, teamName: td, spreadText: fmtSpread, num: numHtml,
+    timeText: (g) => fmtTime(g.kickoff, g),
+    logo: (url, isManual) => slateRowLogoHTML(url, isManual, logoViewOn),
+    venue: (g) => formatVenueDisplay(g) || '',
+    requestChip: (g) => gameRequestChipHTML(g, folded),
+    sourceBadge: (g) => renderSourceBadge(g),   // the data-quality chip (ESPN Hist / Demo / Proposed / Partial) the old on-slate card carried; empty for the ordinary case
+    readiness: gameDataReadiness,
+    isUnlocked: (id) => overrides[id] === 'unlocked',
+    pastDraft: model.pastDraft,
+    // W-71 (DI-W71.2): a slate game without a spread, in a week that can still take one, offers "Find spread" on its row.
+    findSpread: (g) => canFindSpread && SF.isSpreadMissing(g),
+  };
 }
 
 /**
- * (Re-)binds the +Add / ✕Remove buttons inside the available-games groups.
- * Called both on initial render and after any partial re-render triggered by
- * filter changes, so we don't lose handlers when innerHTML is replaced.
+ * Whether the Search-and-filters bar of the Games list offers the alma-mater chip. The "Alma mater games only" chip is a college concept: a sport whose profile has no alma-mater affinity (the NFL, D-31) does not offer it, so an
+ * NFL-only league's Comm page prints no alma-mater wording (createdleaguetest [1b], DI-551.3). It was latent in the old Available Games card, which only ever drew for a non-empty pool.
  */
-function bindAvailGroupHandlers(week, currentSlate) {
-  if (!week) return;
-  document.querySelectorAll('.add-avail-game-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      try {
-        const data = JSON.parse(btn.dataset.game);
-        saveGame(createGame(week.weekId, data));
-        showToast(`✅ ${formatTeamName(data.homeTeam, data.homeMascot)} vs ${formatTeamName(data.awayTeam, data.awayMascot)} added`, 'success');
-        renderCommPage();
-      } catch (e) { showToast('❌ Error adding game', 'error'); }
-    });
-  });
-  document.querySelectorAll('.avail-remove-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const gid = btn.dataset.gameId;
-      if (!gid) { showToast('Could not match slate game', 'error'); return; }
-      const g = getGame(gid);
-      const pickCount = countPicksForGame(gid);
-      const label = g ? `${td(g,'home')} vs ${td(g,'away')}` : 'this game';
-      let msg = `Remove ${label} from the slate?`;
-      if (pickCount > 0) msg += `\n\n⚠️ ${pickCount} submitted pick${pickCount>1?'s':''} will be deleted.`;
-      if (!confirm(msg)) return;
-      deleteGame(gid);
-      showToast('Removed from slate', 'warning'); renderCommPage();
-    });
-  });
+function gamesOfferAlmaChip(model) {
+  const prof = model.week ? profileForWeek(model.week) : null;
+  return !!(prof && prof.affinity);
+}
+/** What is shown: the segment's rows, through the existing filter bar and grouping (filterAndGroupAvailableGames), mapped back to their rows. */
+function gamesVisible(model) {
+  // A chip that is not offered cannot be on: an alma-only filter left over from a college week would otherwise hide every NFL game with no control to clear it.
+  if (!gamesOfferAlmaChip(model) && state.availFilter.almaOnly) state.availFilter.almaOnly = false;
+  const segRows = rowsForSegment(model.rows, state.gamesListSegment || 'all');
+  const byGame = new Map(segRows.map((r) => [r.game, r]));
+  const res = filterAndGroupAvailableGames(segRows.map((r) => r.game));
+  const flat = state.availFilter.groupBy === 'none' && res.buckets.length === 1;
+  return { buckets: res.buckets.map(([label, games]) => ({ label, rows: games.map((g) => byGame.get(g)) })), flat, shown: res.total, totalRows: model.rows.length };
+}
+
+function gamesFilterActive() {
+  const f = state.availFilter;
+  return !!(f.search || f.conference || f.rank !== 'any' || f.almaOnly || f.nationalTV || f.tightOnly || f.groupBy !== 'date');
+}
+
+function gamesSummaryText(model) {
+  return summaryText({ onSlate: model.counts.on, notOnSlate: model.counts.off, poolEmpty: model.pool.length === 0, profile: model.profile });
+}
+function gamesControlsMarkup(model) {
+  const hasMore = moreSheetItems({ pastDraft: model.pastDraft, hasPool: model.pool.length > 0, hasSlate: model.slate.length > 0, rejectedCount: model.rejectedCount }).length > 0;
+  return controlsHTML({ escHtml, icon, addable: model.addable, atTarget: model.slate.length >= model.target, pastDraft: model.pastDraft, hasMore });
+}
+function gamesNotesMarkup(model) {
+  return suggestionNotes({ suggestedCount: model.built.slate.length, almaCount: model.built.almaCount, morningAnchorFilled: model.built.morningAnchorFilled, closingAnchorFilled: model.built.closingAnchorFilled, target: model.target })
+    .map((n) => (n.kind === 'budget'
+      ? `<div class="suggested-budget-banner games-note-budget">${icon('lock')} ${escHtml(n.text)}</div>`
+      : `<div class="text-muted text-xs suggested-anchor-note">${escHtml(n.text)}</div>`)).join('');
+}
+/** The one-line state under the count line (DI-W69.4): no games anywhere, the filters hide everything, or the slate stands without a pool. */
+function gamesStateMarkup(model, vis) {
+  const st = listStateOf({ rowsTotal: vis.totalRows, shown: vis.shown });
+  if (st === 'none') return `<div class="info-box" role="status">${escHtml(GAMES_COPY.noGames)}</div>`;
+  if (st === 'nomatch') return `<div class="info-box" role="status">${escHtml(GAMES_COPY.noMatch)} <button type="button" class="btn btn-ghost btn-sm games-row-btn" id="avail-reset-filters-inline">${escHtml(GAMES_COPY.resetFilters)}</button></div>`;
+  if (model.pool.length === 0 && model.slate.length > 0) return `<p class="text-muted text-xs games-pool-note">${escHtml(GAMES_COPY.poolEmptyNote)}</p>`;
+  return '';
 }
 
 /**
- * The `data-game` payload behind every `.add-avail-game-btn`, escaped for a
- * single-quoted attribute. EXTRACTED from renderAvailableGamesList() (FEAT-2 /
- * DI-175e) so the Player Requests card's `+ Add to slate` can reuse the add
- * path BYTE-FOR-BYTE rather than hand-copying twenty-five fields and losing one
- * of them — which is precisely the DI-7 failure this payload already documents
- * below. Both call sites pass the POOLED ESPN game object, never a stored
- * request snapshot, so the slate always gets ESPN's current spread and kickoff.
+ * W-71 (DI-W71.2) - the Games list's SUMMARY ENTRY for "Find spreads": under the summary line, only while a game on the slate is missing its spread and the week can still take one (a demo week,
+ * or one past Open, shows nothing). It is the same host, the same block and the same three taps as wizard Step 3; the rows below add a per-row "Find spread" that runs the same week-wide action.
  */
-function availAddPayloadJSON(game, week) {
-  const payload = JSON.stringify({
-    homeTeam:game.homeTeam, awayTeam:game.awayTeam,
-    homeMascot:game.homeMascot||'', awayMascot:game.awayMascot||'',
-    homeRank:game.homeRank, awayRank:game.awayRank,
-    homeConference:game.homeConference, awayConference:game.awayConference,
-    kickoff:game.kickoff, timeWindow:game.timeWindow,
-    // Same DI-7 gap as nationalTV below: createGame() defaults these to
-    // false/false, which is the "neither confirmed nor date-only" state that
-    // renders as "Time TBD". Omit them and every game added from this list
-    // shows Time TBD forever, however correct the parser is.
-    kickoffConfirmed:game.kickoffConfirmed, kickoffDateOnly:game.kickoffDateOnly,
-    spread:game.spread, favorite:game.favorite,
-    spreadSource:game.spreadSource||null, oddsProvider:game.oddsProvider||null,
-    espnEventId:game.espnEventId, isAlmaMaterGame:game.isAlmaMaterGame,
-    // DI-7 — this hand-built payload does NOT spread the whole game object
-    // (unlike "Apply Suggested 10" / "Add suggested individually", which
-    // carry these fields free). Miss this and a game added from Available
-    // Games silently loses its TV tag while the same game added from the
-    // suggested card keeps it.
-    nationalTV:game.nationalTV, broadcastNetwork:game.broadcastNetwork||null,
-    homeScore:game.homeScore, awayScore:game.awayScore,
-    status:game.status, actualWinner:game.actualWinner,
-    dataQuality:game.dataQuality||'partial',
-    dataSource:week?.dataSourceMode||'espn_historical',
-    venue:game.venue||null, neutralSite:game.neutralSite||false,
-    lastUpdated:new Date().toISOString(),
-  });
-  // NOTE (XSS-HARDEN round 2, 2026-09-12 — reported, NOT changed here): this
-  // JSON lands in a SINGLE-QUOTED attribute (`data-game='…'`) and escapes only
-  // `'`. That is sufficient — the attribute cannot be closed, and `<`/`>`
-  // inside an attribute VALUE are inert — so there is no vulnerability to fix
-  // and this batch leaves it alone. It is fragile rather than broken: anyone
-  // who requotes this attribute to double quotes makes it live. Widening the
-  // escape here is a separate change, because requesttest.mjs:405 asserts on
-  // the RAW attribute text round-tripping through JSON.parse() and would have
-  // to move with it (a browser decodes entities when it reads
-  // `btn.dataset.game`; that test does not).
-  return payload.replace(/'/g,"&#39;");
+function gamesSpreadsMarkup(model) {
+  const week = model.week;
+  if (!week || !spreadFindUI().canRun(week)) return '';
+  const n = SF.findMissingSpreads(model.slate).length;
+  if (!n) return '';
+  return `<p class="text-sm mb-sm" data-bind="spread-count">${escHtml(SF.stillNeedCopy(n))}</p>${spreadFindUI().hostHTML(week, model.slate)}`;
+}
+/** The patch half: the entry appears when a game loses its spread, goes when none is missing, and otherwise only its count line and (when the live state changed) its block are touched. */
+function patchGamesSpreads(root, model) {
+  const slot = root.querySelector('#games-spreads');
+  if (!slot) return;
+  const html = gamesSpreadsMarkup(model);
+  if (!html) { if (slot.innerHTML !== '') slot.innerHTML = ''; return; }
+  if (!slot.querySelector('[data-spread-host]')) { slot.innerHTML = html; spreadFindUI().bind(slot); return; }
+  const p = slot.querySelector('[data-bind="spread-count"]');
+  const text = SF.stillNeedCopy(SF.findMissingSpreads(model.slate).length);
+  if (p && p.textContent !== text) p.textContent = text;
+  spreadFindUI().paint(model.weekId);
 }
 
-export function renderAvailableGamesList(availGames, currentSlate, week) {
-  // ONE fold per list render rather than one per row (FEAT-2 / DI-175e chip).
-  const grFolded = foldGameRequests();
-  // DI-428(b) — read once per list render, same "read once, not per row"
-  // convention `pickButtonContentHTML()`'s own callers already use.
-  const logoViewOn = getLogoView();
-  return availGames.map(game => {
-    const onSlate = currentSlate.some(g => g.espnEventId&&g.espnEventId===game.espnEventId || (g.homeTeam===game.homeTeam&&g.awayTeam===game.awayTeam));
-    const spreadStr = game.spread!==null ? `${fmtSpread(game.spread,game.favorite,game)} ${game.spreadSource==='espn'?'(ESPN)':'(Manual)'}` : '⚠️ TBD';
-    // If on slate, find the matching slate game so we can offer a one-click remove.
-    const slateMatch = currentSlate.find(g => (g.espnEventId&&game.espnEventId&&g.espnEventId===game.espnEventId) || (g.homeTeam===game.homeTeam&&g.awayTeam===game.awayTeam));
-    return `<div class="game-admin-card" style="${onSlate?'opacity:.65':''}">
-      <div class="game-admin-header">
-        <div class="game-admin-matchup">
-          ${slateRowLogoHTML(game.awayLogo, game.isManual, logoViewOn)}${game.awayRank?`#${numHtml(game.awayRank)} `:''}${escHtml(td(game,'away'))}
-          <span class="text-muted"> ${game.neutralSite?'vs':'@'} </span>
-          ${slateRowLogoHTML(game.homeLogo, game.isManual, logoViewOn)}${game.homeRank?`#${numHtml(game.homeRank)} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
-          ${game.isAlmaMaterGame?`<span class="alma-mater-badge ml-sm">${icon('almaMater', { label: 'Alma mater game' })}</span>`:''}
-          ${game.nationalTV?`<span class="national-tv-badge ml-sm">${icon('tv')} ${escHtml(game.broadcastNetwork||'')}</span>`:''}
-          ${gameRequestChipHTML(game, grFolded)}
-        </div>
-        ${onSlate
-          ? `<div class="flex gap-sm flex-center">
-               <span class="badge badge-open">✓ On Slate</span>
-               <button class="btn btn-danger btn-sm avail-remove-btn" data-game-id="${slateMatch?slateMatch.gameId:''}" title="Remove from slate">✕ Remove</button>
-             </div>`
-          : `<button class="btn btn-primary btn-sm add-avail-game-btn" data-game='${availAddPayloadJSON(game, week)}'>+ Add</button>`}
-      </div>
-      <div class="game-admin-meta">
-        <span>${fmtTime(game.kickoff, game)}</span>
-        <span style="color:${game.spread!==null?'inherit':'var(--text-muted)'}">${spreadStr}</span>
-        ${(() => { const loc = formatVenueDisplay(game); return loc ? `<span class="text-muted text-xs">📍 ${escHtml(loc)}${game.neutralSite?' 🌍':''}</span>` : ''; })()}
-        ${game.espnEventId?`<code style="font-size:.65rem;color:var(--text-muted)">ESPN:${escHtml(game.espnEventId)}</code>`:''}
-      </div>
-    </div>`;
-  }).join('');
-}
-
-export function renderAdminGamesList(games, week, overrides) {
-  if (!games.length) return `<div class="info-box">No games on the slate. Fetch ESPN data and add games above, or add manually.</div>`;
-  // ONE fold per list render (FEAT-2 / DI-175e chip) — a requested game that
-  // has been added reads as satisfied right here, in the slate.
-  const grSlateFolded = foldGameRequests();
-  // DI-428(b) — read once per list render (same convention as
-  // renderAvailableGamesList() above).
-  const logoViewOn = getLogoView();
-  return games.sort((a,b)=>new Date(a.kickoff)-new Date(b.kickoff)).map(game => {
-    const mu = overrides[game.gameId]==='unlocked';
-    const sv = game.lockedSpread!==null?game.lockedSpread:game.spread;
-    const spreadStr = sv!==null
-      ? fmtSpread(sv,game.favorite,game)
-      : (game.status===GAME_STATUS.FINAL ? 'Final' : 'TBD');
-    const readiness = gameDataReadiness(game);
-    const readyBanner = readiness.level==='ok' ? '' :
-      `<div class="game-readiness game-readiness-${readiness.level}">
-        ${readiness.level==='incomplete'?'⛔ Incomplete — hidden from players':'⚠️ Pending confirmation'}:
-        ${readiness.issues.map(escHtml).join(' · ')}
+/** The section's first paint: a plain string (so a Node suite and the page read the same markup); a later change PATCHES this DOM. */
+function gamesSectionHTML(model) {
+  const ctx = gamesRowCtx(model);
+  const vis = gamesVisible(model);
+  const rowHtml = (row) => gameRowHTML(row, ctx);
+  const closed = state.gamesClosedGroups;
+  const listHtml = vis.flat
+    ? vis.buckets[0].rows.map(rowHtml).join('')
+    : vis.buckets.map((b) => groupShellHTML(escHtml, b.label, b.rows.length, closed.has(b.label), b.rows.map(rowHtml).join(''))).join('');
+  const almaChip = gamesOfferAlmaChip(model);
+  const filterBar = model.rows.length ? renderAvailFilterBar(model.rows.map((r) => r.game), { almaChip }) : '';
+  return `
+      <div class="admin-section games-section" data-comm-tab="games" id="games-section">
+        <div class="admin-section-title">${escHtml(GAMES_COPY.title)}</div>
+        <p class="games-summary" id="games-summary" role="status">${escHtml(gamesSummaryText(model))}</p>
+        <div class="games-spreads" id="games-spreads">${gamesSpreadsMarkup(model)}</div>
+        <div class="lc-segs games-segs" id="games-segs" role="group" aria-label="Show">${segmentsHTML({ escHtml, counts: model.counts, seg: state.gamesListSegment || 'all' })}</div>
+        <div class="games-controls" id="games-controls">${gamesControlsMarkup(model)}</div>
+        ${filterBar ? `<details class="games-filters" id="games-filters"${gamesFilterActive() ? ' open' : ''}><summary class="games-filters-summary">${escHtml(GAMES_COPY.filtersSummary)}</summary><div id="games-filter-bar">${filterBar}</div></details>` : ''}
+        <div class="games-notes" id="games-notes">${gamesNotesMarkup(model)}</div>
+        <div class="text-muted text-xs mb-sm games-count-line" id="games-count-line">${escHtml(countLineText({ shown: vis.shown, total: vis.totalRows }))}</div>
+        <div id="games-state">${gamesStateMarkup(model, vis)}</div>
+        <div id="games-groups" class="games-groups" role="${vis.flat ? 'list' : 'presentation'}">${listHtml}</div>
       </div>`;
-    return `<div class="game-admin-card${readiness.level!=='ok'?' game-admin-card-'+readiness.level:''}">
-      ${readyBanner}
-      <div class="game-admin-header">
-        <div class="game-admin-matchup">
-          ${slateRowLogoHTML(game.awayLogo, game.isManual, logoViewOn)}${game.awayRank?`#${numHtml(game.awayRank)} `:''}${escHtml(td(game,'away'))}
-          <span class="text-muted"> ${game.neutralSite?'vs':'@'} </span>
-          ${slateRowLogoHTML(game.homeLogo, game.isManual, logoViewOn)}${game.homeRank?`#${numHtml(game.homeRank)} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
-          ${game.isAlmaMaterGame?`<span class="alma-mater-badge">${icon('almaMater', { label: 'Alma mater game' })}</span>`:''}
-          ${game.nationalTV?`<span class="national-tv-badge">${icon('tv')} ${escHtml(game.broadcastNetwork||'')}</span>`:''}
-          ${gameRequestChipHTML(game, grSlateFolded)}
-          ${renderSourceBadge(game)}
-        </div>
-        <div class="flex gap-sm">
-          <button class="btn btn-ghost btn-sm edit-game-btn" data-game-id="${escHtml(game.gameId)}">Edit</button>
-          <button class="btn btn-ghost btn-sm lock-toggle-btn" data-game-id="${escHtml(game.gameId)}" data-unlocked="${mu}">${mu?'🔒 Lock':'🔓 Unlock'}</button>
-          <button class="btn btn-danger btn-sm remove-game-btn" data-game-id="${escHtml(game.gameId)}">✕</button>
-        </div>
-      </div>
-      <div class="game-admin-meta">
-        <span>${fmtTime(game.kickoff, game)}</span>
-        <span>Spread: <strong style="color:${sv!==null?'inherit':'var(--text-muted)'}">${spreadStr}</strong>
-          <em class="text-muted text-xs">${game.spreadSource==='espn'?'ESPN':'Manual'}</em></span>
-        <span class="badge badge-${escHtml(game.status)}">${escHtml(game.status)}</span>
-        ${game.status===GAME_STATUS.FINAL&&game.homeScore!==null?`<span>FINAL ${numHtml(game.awayScore)}–${numHtml(game.homeScore)}</span>`:''}
-        ${game.espnEventId?`<code style="font-size:.65rem">ESPN:${escHtml(game.espnEventId)}</code>`:''}
-        ${mu?'<span class="badge badge-open">🔓 Unlocked</span>':''}
-      </div>
-    </div>`;
-  }).join('');
 }
+
+// ── the in-place patch (DI-W69.8) ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+function gamesFocusSnapshot(root) {
+  const a = typeof document !== 'undefined' ? document.activeElement : null;
+  if (!a || typeof a.closest !== 'function' || !root.contains(a)) return null;
+  const row = a.closest('.games-row');
+  return { rowKey: row ? row.getAttribute('data-key') : null, action: a.getAttribute ? a.getAttribute('data-action') : null, id: a.id || '' };
+}
+function gamesFocusRestore(root, snap) {
+  if (!snap) return;
+  const a = document.activeElement;
+  if (a && a !== document.body && root.contains(a) && a.isConnected !== false) return;   // it survived the patch
+  try {
+    let target = null;
+    if (snap.id) target = document.getElementById(snap.id);
+    if (!target && snap.rowKey) {
+      const row = Array.from(root.querySelectorAll('.games-row')).find((n) => n.getAttribute('data-key') === snap.rowKey);
+      if (row) target = Array.from(row.querySelectorAll('[data-action]')).find((b) => b.getAttribute('data-action') === snap.action) || row.querySelector('[data-action]');
+    }
+    if (target && typeof target.focus === 'function') target.focus({ preventScroll: true });
+  } catch { /* focus is a courtesy */ }
+}
+
+/** Reconcile the rows (and date groups) by key. A key that survives with new markup is the SAME row flipping (Add <-> Remove): it fades in over --motion-fast; one that is gone is removed. */
+function applyGamesList(root, model, vis, ctx) {
+  const holder = root.querySelector('#games-groups');
+  if (!holder) return;
+  const before = new Map();
+  for (const n of holder.querySelectorAll('.games-row')) before.set(n.getAttribute('data-key'), n.getAttribute('data-sig'));
+  const focus = gamesFocusSnapshot(root);
+  const rowFor = (row) => { const html = gameRowHTML(row, ctx); return { key: row.key, html, sig: sigOfHtml(html) }; };
+  if (vis.flat) {
+    holder.setAttribute('role', 'list');
+    patchKeyedRows(holder, vis.buckets[0].rows.map(rowFor));
+  } else {
+    holder.setAttribute('role', 'presentation');
+    const closed = state.gamesClosedGroups;
+    patchKeyedRows(holder, vis.buckets.map((b) => ({
+      key: `grp:${b.label}`, html: groupShellHTML(escHtml, b.label, b.rows.length, closed.has(b.label)),
+      sig: groupSig(b.label, b.rows.length), bind: { count: { text: groupCountText(b.rows.length) } },
+    })));
+    const groups = Array.from(holder.children || []);
+    for (const b of vis.buckets) {
+      const node = groups.find((c) => c.getAttribute('data-key') === `grp:${b.label}`);
+      const body = node ? node.querySelector('.avail-group-body') : null;
+      if (body) patchKeyedRows(body, b.rows.map(rowFor));
+    }
+  }
+  for (const n of holder.querySelectorAll('.games-row')) {
+    const k = n.getAttribute('data-key');
+    if (before.has(k) && before.get(k) !== n.getAttribute('data-sig')) {
+      n.classList.add('games-row--flip');
+      n.addEventListener('animationend', () => n.classList.remove('games-row--flip'), { once: true });
+    }
+  }
+  gamesFocusRestore(root, focus);
+}
+
+/** Paint the live model into the section already on the page. Summary, segments and controls patch at once; rows that LEFT the shown segment collapse over 200 ms first (never under Reduce Motion). */
+function paintGamesSection(root, model, { animate = true } = {}) {
+  if (_gamesListTimer) { clearTimeout(_gamesListTimer); _gamesListTimer = null; }   // a newer state supersedes a pending collapse
+  const ctx = gamesRowCtx(model);
+  const vis = gamesVisible(model);
+  const setText = (sel, text) => { const el = root.querySelector(sel); if (el && el.textContent !== text) el.textContent = text; };
+  setText('#games-summary', gamesSummaryText(model));
+  patchGamesSpreads(root, model);
+  const seg = state.gamesListSegment || 'all';
+  for (const b of root.querySelectorAll('#games-segs [data-seg]')) {
+    const id = b.getAttribute('data-seg');
+    const label = id === 'all' ? GAMES_COPY.segAll(model.counts.all) : (id === 'on' ? GAMES_COPY.segOn(model.counts.on) : GAMES_COPY.segOff(model.counts.off));
+    if (b.textContent !== label) b.textContent = label;
+    b.classList.toggle('lc-seg-on', id === seg);
+    b.setAttribute('aria-pressed', id === seg ? 'true' : 'false');
+  }
+  const ctl = root.querySelector('#games-controls');
+  if (ctl) {
+    const html = gamesControlsMarkup(model);
+    if (ctl._sig !== html) {
+      const focus = gamesFocusSnapshot(ctl);
+      ctl.innerHTML = html; ctl._sig = html;
+      gamesFocusRestore(ctl, focus);
+    }
+  }
+  const notes = root.querySelector('#games-notes');
+  if (notes) { const html = gamesNotesMarkup(model); if (notes._sig !== html) { notes.innerHTML = html; notes._sig = html; } }
+  setText('#games-count-line', countLineText({ shown: vis.shown, total: vis.totalRows }));
+  const stateEl = root.querySelector('#games-state');
+  if (stateEl) { const html = gamesStateMarkup(model, vis); if (stateEl._sig !== html) { stateEl.innerHTML = html; stateEl._sig = html; } }
+  const keep = new Set();
+  for (const b of vis.buckets) for (const r of b.rows) keep.add(r.key);
+  const leaving = Array.from(root.querySelectorAll('.games-row')).filter((n) => !keep.has(n.getAttribute('data-key')));
+  let reduced = false; try { reduced = prefersReducedMotion(); } catch { reduced = false; }
+  if (animate && !reduced && leaving.length) {
+    for (const n of leaving) {
+      try {
+        const h = n.offsetHeight;
+        if (h) { n.style.maxHeight = `${h}px`; void n.offsetHeight; }   // the reflow commits the pixel height as the transition's START (else none -> 0 does not animate)
+        n.classList.add('is-leaving');
+      } catch { /* a row that cannot be measured is simply removed with the patch */ }
+    }
+    _gamesListTimer = setTimeout(() => {
+      _gamesListTimer = null;
+      if (root.isConnected === false || document.getElementById('games-section') !== root) return;   // a full repaint replaced the section while the rows collapsed
+      applyGamesList(root, model, vis, ctx);
+    }, GAMES_COLLAPSE_MS);
+    return;
+  }
+  applyGamesList(root, model, vis, ctx);
+}
+
+/** Re-read the mirror and patch the Games section (and the Player Requests card's rows) in place. Returns whether there was a section on the page to patch. */
+function patchGamesSection({ animate = true } = {}) {
+  const root = document.getElementById('games-section');
+  if (!root) return false;
+  const model = gamesTabModelNow();
+  paintGamesSection(root, model, { animate });
+  patchGameRequestRows(model);
+  return true;
+}
+
+/**
+ * After ANY slate change (a list row, the Player Requests card, a bulk add, the wizard's manual add, the picker): the Games section and the Player Requests rows patch in place, the wizard's
+ * slate steps repaint (only Step 2 / 3 of the sheet that is on top, so a typed Step 4 field is never touched), and the OTHER Comm tabs - drawn before this change - are marked to repaint when
+ * the commissioner leaves Games. `note` is the line Step 2 shows.
+ */
+function afterSlateChange({ note = '' } = {}) {
+  // The note is the line Step 2 shows for a change made WHILE the wizard is on Step 2 (the manual add, a swap raised from it). A change made anywhere else (the Games list with the wizard closed, Step 3's Remove)
+  // has no Step 2 to announce it, so it is not stored: an old note would otherwise greet the commissioner the next time Step 2 opens, as if it had just happened.
+  _weekWizardStep2Note = (note && document.getElementById('week-wizard-sheet-wrap') && _weekWizardStep === 2) ? note : '';
+  patchGamesSection();
+  if (document.getElementById('week-wizard-sheet-wrap') && (_weekWizardStep === 2 || _weekWizardStep === 3) && typeof renderWeekWizardSheetBody === 'function') renderWeekWizardSheetBody();
+  markCommStale();
+}
+
+/** The Week tab's entry card and the tiebreaker card are drawn from the slate and are hidden while Games is up; repaint them once, when the commissioner moves to another Comm tab. */
+function markCommStale() {
+  _commStale = true;
+  const c = typeof document !== 'undefined' ? document.getElementById('page-commissioner') : null;
+  if (!c || _commStaleObserver || typeof MutationObserver !== 'function') return;
+  try {
+    _commStaleObserver = new MutationObserver(() => {
+      if (!_commStale || c.getAttribute('data-comm-active') === 'games') return;
+      _commStale = false;
+      if (state.currentTab === 'commissioner') renderCommPage();
+    });
+    _commStaleObserver.observe(c, { attributes: true, attributeFilter: ['data-comm-active'] });
+  } catch { _commStaleObserver = null; }
+}
+export function _commStaleForTest() { return _commStale; }
+export function _commStaleResetForTest() { _commStale = false; }
+
+// ── the door: ONE function every add goes through (DI-W68.1) ──────────────────────────────────────────────────────────────────────────────────────────────────
+/**
+ * Add a game to a week's slate, or ASK first when the slate is already at its size. The slate's count and the week are read from the mirror NOW (RG-256 class), and the rule is the pure
+ * `slateAddDecision` over the week's sport profile. `origin: 'pool'` carries the game's data; `origin: 'manual'` has none yet (the form comes AFTER the choice, so nothing typed is lost).
+ *   duplicate         the game is already on the slate under the join rule: nothing is added, no sheet, a toast says so
+ *   added             below the slate size: the game is on the slate and a toast names it
+ *   prompt            at or over it: the choice sheet is up and NOTHING has been saved
+ *   open-form         (manual, below the size) the caller opens the game form
+ */
+function requestAddToSlate({ weekId, data = null, origin = 'pool', invoker = null } = {}) {
+  const week = weekId ? getWeek(weekId) : null;
+  if (!week) { showToast('Couldn’t find that week. Nothing was added.', 'error'); return { status: 'no_week' }; }
+  const games = getGames(weekId);
+  if (origin === 'pool' && data && slateMatchFor(data, games)) {
+    showToast(SLATE_COPY.alreadyOn(slateName(data)), 'warning');
+    return { status: 'duplicate' };
+  }
+  const decision = slateAddDecision({ count: games.length, profile: profileForWeek(week) });
+  if (!decision.prompt) {
+    if (origin === 'manual') return { status: 'open-form' };
+    const game = addGameToSlate({ weekId, data, deps: slateDeps() });
+    showToast(SLATE_COPY.added(slateName(game)), 'success');
+    afterSlateChange({ note: `${SLATE_COPY.added(slateName(game))} ${slateCountLine(weekId)}` });
+    return { status: 'added', game };
+  }
+  lsShowActionSheet('slate-add', choiceSheetHTML({ escHtml, decision, incomingName: origin === 'manual' ? null : slateName(data), profile: profileForWeek(week) }), { weekId, data, origin, decision, invoker, noHaptic: true });
+  return { status: 'prompt', decision };
+}
+export const _requestAddToSlateForTest = requestAddToSlate;
+
+/** "11 games on your slate" / "No games on your slate yet." (Step 2's standing line and its status). */
+function slateCountLine(weekId) {
+  const n = getGames(weekId).length;
+  return n ? `${n} ${plural(n, 'game', 'games')} on your slate.` : 'No games on your slate yet.';
+}
+
+/** Extend: the sheet's "Add as game N+1" - the count is re-read when the tap lands. */
+function commitSlateExtend({ weekId, data }) {
+  const games = getGames(weekId);
+  if (slateMatchFor(data, games)) { showToast(SLATE_COPY.alreadyOn(slateName(data)), 'warning'); afterSlateChange(); return; }
+  const game = addGameToSlate({ weekId, data, deps: slateDeps() });
+  haptic('light');
+  showToast(SLATE_COPY.addedAs(games.length + 1), 'success');
+  afterSlateChange({ note: `${SLATE_COPY.added(slateName(game))} ${slateCountLine(weekId)}` });
+}
+
+/** Add a game by hand: ask first at the slate's size (the form comes after), else open the unchanged game form (Favorite + Margin, AD-03). */
+function startManualAdd({ weekId, invoker = null } = {}) {
+  const r = requestAddToSlate({ weekId, origin: 'manual', invoker });
+  if (r.status === 'open-form') openSlateGameForm({ weekId, mode: 'add' });
+}
+/** The game form for a hand-added game. `mode`: 'add' (below the size), 'extend' (after the choice), 'swap' (the swap happens only on this form's Save; Cancel leaves everything as it was). */
+function openSlateGameForm({ weekId, mode, outGameId = null }) {
+  const week = getWeek(weekId);
+  if (!week) return;
+  showGameModal(null, week, (data) => finishSlateGameForm({ weekId, mode, outGameId, data }));
+}
+function finishSlateGameForm({ weekId, mode, outGameId, data }) {
+  const games = getGames(weekId);
+  if (slateMatchFor(data, games)) { showToast(SLATE_COPY.alreadyOn(slateName(data)), 'warning'); afterSlateChange(); return; }
+  if (mode === 'swap') { runSlateSwap({ weekId, outGameId, data }); return; }
+  const game = addGameToSlate({ weekId, data, deps: slateDeps() });
+  if (mode === 'extend') haptic('light');
+  const said = mode === 'extend' ? SLATE_COPY.addedAs(games.length + 1) : SLATE_COPY.added(slateName(game));
+  showToast(said, 'success');
+  afterSlateChange({ note: `${SLATE_COPY.added(slateName(game))} ${slateCountLine(weekId)}` });
+}
+
+/** The swap itself, from the picker (a pool game) or from the form's Save (a hand-added one). Reports in the sheet's words; the loud-fail banner stays the adapter's. */
+function runSlateSwap({ weekId, outGameId, data, announce = true }) {
+  const res = swapSlateGame({ weekId, outGameId, inData: data, deps: slateDeps() });
+  if (!res.ok) {
+    if (res.reason === 'write_failed' && res.slateLong) {
+      const oldGame = getGame(outGameId);
+      showToast(SLATE_COPY.swapHalf(slateName(oldGame), slateName(res.added)), 'error');
+    } else if (res.reason === 'duplicate') showToast(SLATE_COPY.alreadyOn(slateName(data)), 'warning');
+    else showToast(SLATE_COPY.swapGone, 'error');
+    haptic('error');
+    afterSlateChange();
+    return res;
+  }
+  haptic('success');
+  let said = SLATE_COPY.swapped(slateName(res.removed), slateName(res.added));
+  if (res.tiebreakerMoved && res.tiebreakerMovedTo) said += ` ${SLATE_COPY.tiebreakerMoved(slateName(res.tiebreakerMovedTo))}`;
+  if (announce) showToast(said, 'success');
+  afterSlateChange({ note: `${SLATE_COPY.swapped(slateName(res.removed), slateName(res.added))} ${slateCountLine(weekId)}` });
+  return { ...res, said };
+}
+
+/** Remove one slate game (the Games list and the wizard's Step 3): the app's action sheet names the picks that go, then the shared operation runs. */
+function askRemoveSlateGame({ weekId, gameId, invoker = null, hasCounterpart = false }) {
+  const g = getGames(weekId).find((x) => x.gameId === gameId);
+  if (!g) { showToast(SLATE_COPY.swapGone, 'error'); afterSlateChange(); return; }
+  lsShowActionSheet('slate-remove', removeSheetHTML({ escHtml, name: slateName(g), pickCount: countPicksForGame(gameId), hasCounterpart }), { weekId, gameId, invoker });
+}
+export const _askRemoveSlateGameForTest = askRemoveSlateGame;
+function runSlateRemove({ weekId, gameId, onDone = null }) {
+  const res = removeGameFromSlate({ weekId, gameId, deps: slateDeps() });
+  if (!res.ok) { showToast(SLATE_COPY.swapGone, 'error'); afterSlateChange(); return res; }
+  let said = removedToastText(res.pickCount);
+  if (res.tiebreakerMoved && res.tiebreakerMovedTo) said += ` ${SLATE_COPY.tiebreakerMoved(slateName(res.tiebreakerMovedTo))}`;
+  showToast(said, 'warning');
+  if (typeof onDone === 'function') onDone(res); else afterSlateChange({ note: `Removed ${slateName(res.removed)}. ${slateCountLine(weekId)}` });
+  return res;
+}
+export const _runSlateRemoveForTest = runSlateRemove;
+
+// ── the action-sheet layer's slate actions (lsOnLayerClick routes every `slate-*` action here) ───────────────────────────────────────────────────────────────
+function slateSheetAction(act, p) {
+  if (typeof act !== 'string' || !act.startsWith('slate-')) return;
+  const ctx = p || {};
+  lsHideActionSheet({ restoreFocus: false });
+  switch (act) {
+    case 'slate-extend':
+      if (ctx.origin === 'manual') openSlateGameForm({ weekId: ctx.weekId, mode: 'extend' });
+      else commitSlateExtend({ weekId: ctx.weekId, data: ctx.data });
+      break;
+    case 'slate-swap': openSwapPicker({ weekId: ctx.weekId, origin: ctx.origin, data: ctx.data, invoker: ctx.invoker }); break;
+    case 'slate-remove-confirm': {
+      const done = ctx.onDone;
+      runSlateRemove({ weekId: ctx.weekId, gameId: ctx.gameId, onDone: typeof done === 'function' ? done : null });
+      break;
+    }
+    case 'slate-clear-confirm': gamesClearSlate(ctx.weekId); break;
+    case 'slate-more-unlock-all': gamesUnlockAll(ctx.weekId); break;
+    case 'slate-more-calc-ats': gamesCalcAts(ctx.weekId); break;
+    case 'slate-more-clear-pool': gamesClearPool(ctx.weekId); break;
+    case 'slate-more-restore': gamesRestoreDismissed(ctx.weekId); break;
+    case 'slate-more-clear-slate': lsShowActionSheet('slate-clear', clearSlateSheetHTML({ escHtml }), { weekId: ctx.weekId, invoker: ctx.invoker }); break;
+    default: break;
+  }
+}
+
+// ── the More... sheet's actions, and the controls that stay visible ───────────────────────────────────────────────────────────────────────────────────────────
+function gamesClearSlate(weekId) {
+  if (!weekId) return;
+  clearSlateForWeek(weekId);
+  showToast('Slate cleared', 'warning');
+  afterSlateChange({ note: slateCountLine(weekId) });
+}
+function gamesClearPool(weekId) {
+  if (!weekId) return;
+  clearAvailableGames(weekId);
+  showToast('Available pool cleared', 'warning');
+  afterSlateChange();
+}
+function gamesRestoreDismissed(weekId) {
+  if (!weekId) return;
+  clearRejectedSuggestions(weekId);
+  showToast('Dismissed suggestions restored', 'success');
+  afterSlateChange();
+}
+function gamesUnlockAll(weekId) {
+  const cur = weekId ? getWeek(weekId) : null;
+  if (!cur || cur.status === WEEK_STATUS.DRAFT) return;   // RG-256 precedent: fresh status, not the render-time snapshot
+  clearAllLockOverrides();
+  getGames(weekId).forEach((g) => setGameLockOverride(g.gameId, true));
+  showToast('🔓 All games unlocked', 'warning');
+  afterSlateChange();
+}
+function gamesCalcAts(weekId) {
+  const cur = weekId ? getWeek(weekId) : null;
+  if (!cur || cur.status === WEEK_STATUS.DRAFT) return;
+  let count = 0;
+  getGames(weekId).forEach((g) => {
+    if (g.status === GAME_STATUS.FINAL && g.lockedSpread !== null) { saveGame({ ...g, atsWinner: calculateAtsWinner(g) }); count++; }
+  });
+  finalizeWeek(cur);
+  showToast(`✅ ATS calculated for ${count} games`, 'success');
+  afterSlateChange();
+}
+async function gamesRefreshScores(weekId) {
+  const cur = weekId ? getWeek(weekId) : null;
+  if (!cur || cur.status === WEEK_STATUS.DRAFT) return;
+  showToast('⏳ Refreshing scores…', 'warning');
+  await doRefreshScores(cur, getGames(weekId));
+  showToast('✅ Scores updated', 'success');
+  afterSlateChange();
+}
+/** "Add k suggested": the suggestion engine's games not on the slate, up to the sport's slate size (R-3). Same data a bulk add always used. */
+function gamesAddSuggested() {
+  const m = gamesTabModelNow();
+  if (!m.weekId) return;
+  const plan = planBulkAdd({ existingCount: m.slate.length, candidates: m.built.slate, target: m.target, suggestedLength: m.built.slate.length, isOnSlate: (g) => !!slateMatchFor(g, getGames(m.weekId)) });
+  let added = 0;
+  for (const game of plan.toAdd) {
+    if (slateMatchFor(game, getGames(m.weekId))) continue;
+    addGameToSlate({ weekId: m.weekId, data: { ...game, weekId: m.weekId }, deps: slateDeps() });
+    added += 1;
+  }
+  showToast(plan.held.length ? SLATE_COPY.bulkHeld(added, m.target) : `✅ ${added} suggested ${plural(added, 'game', 'games')} added to slate`, plan.held.length ? 'warning' : 'success');
+  afterSlateChange({ note: slateCountLine(m.weekId) });
+}
+function gamesMoreSheet(invoker) {
+  const m = gamesTabModelNow();
+  const items = moreSheetItems({ pastDraft: m.pastDraft, hasPool: m.pool.length > 0, hasSlate: m.slate.length > 0, rejectedCount: m.rejectedCount });
+  if (!items.length) return;
+  lsShowActionSheet('slate-more', moreSheetHTML({ escHtml, items }), { weekId: m.weekId, invoker, noHaptic: true });
+}
+
+// ── the delegated handlers (DI-W69.8): one listener on the section, one on the Player Requests card ──────────────────────────────────────────────────────────
+function gamesRowFromEvent(e, model) {
+  const rowEl = e.target && typeof e.target.closest === 'function' ? e.target.closest('.games-row') : null;
+  const key = rowEl ? rowEl.getAttribute('data-key') : null;
+  return key ? (model.rows.find((r) => r.key === key) || null) : null;
+}
+/**
+ * Edit a slate game in the game form (the UNCHANGED showGameModal: Favorite + Margin, AD-03). DI-415 (UN-370) fix kept: the REAL week is passed, so a manual game's static fields lock once the week leaves
+ * DRAFT. The save writes over the mirror's CURRENT row (RG-256 class), then the Games section patches in place.
+ */
+function openGameEditor(gameId, week) {
+  const g = getGame(gameId);
+  if (!g) return;
+  showGameModal(g, week, (data) => {
+    const cur = getGame(g.gameId) || g;
+    saveGame({ ...cur, ...data, updatedAt: new Date().toISOString() });
+    showToast('Updated', 'success');
+    afterSlateChange();
+  });
+}
+export const _openGameEditorForTest = openGameEditor;
+/** What the More… sheet would hold for the Games tab right now (a Node suite reads the gating without raising a sheet). */
+export function _gamesMoreItemsNowForTest() { const m = gamesTabModelNow(); return moreSheetItems({ pastDraft: m.pastDraft, hasPool: m.pool.length > 0, hasSlate: m.slate.length > 0, rejectedCount: m.rejectedCount }).map((i) => i.action); }
+/** The action sheet's slate dispatcher, driven directly (the belt-and-suspenders week-status gates are checked at the handler, not only at the markup). */
+export const _slateSheetActionForTest = (act, ctx) => slateSheetAction(act, ctx);
+export const _startManualAddForTest = (args) => startManualAdd(args);
+
+/**
+ * A row's button was tapped on a list that has since moved (another device added or removed the game, the pool was cleared). Never a silent no-op: say what changed and bring the list up to date.
+ * Returns true when the tap must stop here.
+ */
+function gamesRowGone(row, model, { wantOnSlate }) {
+  if (!model.weekId) return true;
+  if (row && row.onSlate === wantOnSlate && (wantOnSlate ? row.slateGame : row.poolGame)) return false;
+  if (row && row.onSlate && !wantOnSlate) showToast(SLATE_COPY.alreadyOn(slateName(row.game)), 'warning');
+  else if (row && !row.onSlate && wantOnSlate) showToast(`${slateName(row.game)} isn\u2019t on the slate any more.`, 'warning');
+  else showToast('That game isn\u2019t in the list any more.', 'warning');
+  patchGamesSection({ animate: false });
+  return true;
+}
+/**
+ * W-71 (DI-W71.2) - a row's "Find spread". The lookup is per WEEK, so this runs the same action as the summary entry's "Find spreads" (ESPN again, then the other source) and the lines it finds
+ * appear as cards in that block, each naming its game. The tapped button shows the busy state itself (DOM only: the row's change signature does not include it, so no row flips while it runs),
+ * and when the answer is in, the block is brought into view if it is off screen (a polite 'nearest' scroll: nothing moves if it is already visible).
+ */
+async function gamesRowFindSpread({ weekId, gameId, btn }) {
+  const ui = spreadFindUI();
+  const was = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.setAttribute('aria-busy', 'true'); btn.textContent = SF.SPREAD_COPY.CHECKING_ESPN; }
+  try {
+    await ui.find(weekId, { onPhase: (ph) => { if (btn) btn.textContent = ph === 'other' ? SF.SPREAD_COPY.CHECKING_OTHER : SF.SPREAD_COPY.CHECKING_ESPN; } });
+  } catch (err) {
+    console.warn('[spreads] row find failed', err);
+  } finally {
+    if (btn && btn.isConnected !== false) { btn.disabled = false; btn.removeAttribute('aria-busy'); btn.textContent = was; }
+  }
+  void gameId;
+  try {
+    const host = document.querySelector('#games-spreads [data-spread-host]');
+    if (!host || typeof host.getBoundingClientRect !== 'function') return;
+    const r = host.getBoundingClientRect();
+    if (r.top < 0 || r.bottom > (window.innerHeight || 0)) host.scrollIntoView({ block: 'nearest', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+  } catch { /* the reveal is a courtesy */ }
+}
+function onGamesSectionClick(e) {
+  const t = e && e.target;
+  if (!t || typeof t.closest !== 'function') return;
+  if (t.closest('#avail-reset-filters, #avail-reset-filters-inline')) { resetGamesFilters(); return; }
+  const btn = t.closest('[data-action]');
+  if (!btn || btn.disabled) return;
+  const action = btn.getAttribute('data-action');
+  const model = gamesTabModelNow();     // RG-256: the live week, slate and pool when the tap lands
+  const weekId = model.weekId;
+  switch (action) {
+    case 'seg':
+      state.gamesListSegment = btn.getAttribute('data-seg') || 'all';
+      haptic('selection');
+      patchGamesSection({ animate: false });
+      break;
+    case 'add-manual': if (weekId) startManualAdd({ weekId, invoker: btn }); break;
+    case 'add-suggested': gamesAddSuggested(); break;
+    case 'refresh-scores': gamesRefreshScores(weekId); break;
+    case 'more': gamesMoreSheet(btn); break;
+    case 'row-add': {
+      const row = gamesRowFromEvent(e, model);
+      if (gamesRowGone(row, model, { wantOnSlate: false })) break;
+      requestAddToSlate({ weekId, data: poolGameToSlateData(row.poolGame, model.week), origin: 'pool', invoker: btn });
+      break;
+    }
+    case 'row-dismiss': {
+      const row = gamesRowFromEvent(e, model);
+      if (gamesRowGone(row, model, { wantOnSlate: false })) break;
+      rejectSuggestion(weekId, row.poolGame);
+      showToast(`Suggestion dismissed — ${td(row.poolGame, 'home')} vs ${td(row.poolGame, 'away')}`, 'warning');
+      afterSlateChange();
+      break;
+    }
+    case 'row-edit': {
+      const row = gamesRowFromEvent(e, model);
+      if (gamesRowGone(row, model, { wantOnSlate: true })) break;
+      openGameEditor(row.slateGame.gameId, model.week);
+      break;
+    }
+    case 'row-find-spread': {
+      const row = gamesRowFromEvent(e, model);
+      if (gamesRowGone(row, model, { wantOnSlate: true })) break;
+      gamesRowFindSpread({ weekId, gameId: row.slateGame.gameId, btn });
+      break;
+    }
+    case 'row-lock': {
+      const row = gamesRowFromEvent(e, model);
+      if (gamesRowGone(row, model, { wantOnSlate: true }) || !model.pastDraft) break;
+      const was = getGameLockOverrides()[row.slateGame.gameId] === 'unlocked';
+      setGameLockOverride(row.slateGame.gameId, !was);
+      showToast(was ? '🔒 Locked' : '🔓 Unlocked', 'success');
+      afterSlateChange();
+      break;
+    }
+    case 'row-remove': {
+      const row = gamesRowFromEvent(e, model);
+      if (gamesRowGone(row, model, { wantOnSlate: true })) break;
+      askRemoveSlateGame({ weekId, gameId: row.slateGame.gameId, invoker: btn, hasCounterpart: !!row.poolGame });
+      break;
+    }
+    default: break;
+  }
+}
+/** The filter bar's controls (group / conference / rank / the three chips): they change state and PATCH the list; the bar itself is not repainted, so a focused control keeps focus. */
+function onGamesFilterChange(e) {
+  const t = e && e.target;
+  if (!t || typeof t.closest !== 'function' || !t.closest('#games-filter-bar')) return;
+  const f = state.availFilter;
+  switch (t.id) {
+    case 'avail-group': f.groupBy = t.value; break;
+    case 'avail-conf': f.conference = t.value; break;
+    case 'avail-rank': f.rank = t.value; break;
+    case 'avail-alma-only': f.almaOnly = !!t.checked; break;
+    case 'avail-national-tv': f.nationalTV = !!t.checked; break;
+    case 'avail-tight-only': f.tightOnly = !!t.checked; break;
+    default: return;
+  }
+  patchGamesSection({ animate: false });
+}
+let _gamesSearchTimer = null;
+function onGamesFilterInput(e) {
+  const t = e && e.target;
+  if (!t || t.id !== 'avail-search') return;
+  clearTimeout(_gamesSearchTimer);
+  const val = t.value;
+  _gamesSearchTimer = setTimeout(() => {   // debounced like it always was: the list patches 200 ms after the last keystroke, the field is never repainted
+    _gamesSearchTimer = null;
+    state.availFilter.search = val;
+    patchGamesSection({ animate: false });
+  }, 200);
+}
+function onGamesGroupToggle(e) {
+  const d = e && e.target;
+  if (!d || typeof d.getAttribute !== 'function' || !String(d.className).includes('avail-group')) return;
+  const key = d.getAttribute('data-key');
+  if (!key || !key.startsWith('grp:')) return;
+  const label = key.slice(4);
+  const isOpen = typeof d.open === 'boolean' ? d.open : d.hasAttribute('open');
+  if (!isOpen) state.gamesClosedGroups.add(label); else state.gamesClosedGroups.delete(label);
+}
+function resetGamesFilters() {
+  state.availFilter = { groupBy: 'date', conference: '', rank: 'any', almaOnly: false, nationalTV: false, tightOnly: false, search: '' };
+  state.gamesListSegment = 'all';
+  const bar = document.getElementById('games-filter-bar');
+  if (bar) { const m = gamesTabModelNow(); bar.innerHTML = renderAvailFilterBar(m.rows.map((r) => r.game), { almaChip: gamesOfferAlmaChip(m) }); }   // the bar's own controls show the reset values; focus was on the Reset button, which is going away
+  patchGamesSection({ animate: false });
+  const d = document.getElementById('games-filters');
+  if (d && d.removeAttribute) d.removeAttribute('open');
+}
+/** The Player Requests card's "+ Add to slate": the SAME door as the list's Add, built from the pool game as it is NOW (never a stored request snapshot). */
+function onGameRequestsClick(e) {
+  const btn = e && e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-action="gr-add"]') : null;
+  if (!btn || btn.disabled) return;
+  const model = gamesTabModelNow();
+  const eid = btn.getAttribute('data-event-id') || '';
+  const pooled = eid ? model.pool.find((g) => g && g.espnEventId != null && String(g.espnEventId) === eid) : null;
+  if (!pooled || !model.weekId) { showToast('That game is not in the pool any more. Build the slate again to refresh it.', 'warning'); return; }
+  requestAddToSlate({ weekId: model.weekId, data: poolGameToSlateData(pooled, model.week), origin: 'pool', invoker: btn });
+}
+
+/** Bind the section ONCE per node (the page repaint discards the node and its listeners together; a repeat bind on the same node is a no-op). */
+function bindGamesSection() {
+  const root = document.getElementById('games-section');
+  if (root && !root._gamesBound) {
+    root._gamesBound = true;
+    root.addEventListener('click', onGamesSectionClick);
+    root.addEventListener('change', onGamesFilterChange);
+    root.addEventListener('input', onGamesFilterInput);
+    root.addEventListener('toggle', onGamesGroupToggle, true);   // `toggle` does not bubble: capture on the stable ancestor
+  }
+  const gr = document.getElementById('game-requests-section');
+  if (gr && !gr._gamesBound) { gr._gamesBound = true; stampKeyedSigs(document.getElementById('gr-comm-rows')); gr.addEventListener('click', onGameRequestsClick); }
+}
+export const _bindGamesSectionForTest = bindGamesSection;
+/** Test seams (the `_xForTest` convention): the Games section's markup, and just its rows, for a given week / slate / pool / suggestion output - what the retired renderAvailableGamesList() and renderAdminGamesList() gave the render-path suites. */
+function gamesModelForTest({ week = null, slate = [], pool = [], suggested = [], shortlist = [], almaCount = 0, morningAnchorFilled = true, closingAnchorFilled = true, rejectedCount = 0 } = {}) {
+  return buildGamesModel({ week, slate, pool, built: { slate: suggested, shortlist, almaCount, morningAnchorFilled, closingAnchorFilled }, rejectedCount });
+}
+/** "Add k suggested", driven without a page (the render-path suites have no section to tap): the same function the button's delegated handler runs. */
+export const _gamesAddSuggestedForTest = () => gamesAddSuggested();
+export function _gamesSectionHTMLForTest(args = {}) { return gamesSectionHTML(gamesModelForTest(args)); }
+export function _gamesRowsHTMLForTest(args = {}) { const m = gamesModelForTest(args); const ctx = gamesRowCtx(m); return m.rows.map((r) => gameRowHTML(r, ctx)).join(''); }
+
+// ── the swap picker sheet (DI-W68.3; docs/mockups/d1/swap-picker.html) ───────────────────────────────────────────────────────────────────────────────────────
+const SWAP_PICKER_WRAP_ID = 'swap-picker-sheet-wrap';
+const SWAP_PICKER_SHEET_ID = 'swap-picker-sheet';
+
+function swapPickerRows(weekId, selectedId) {
+  return getGames(weekId).slice().sort((a, b) => new Date(a.kickoff || 0) - new Date(b.kickoff || 0)).map((g) => {
+    const sv = g.lockedSpread != null ? g.lockedSpread : g.spread;
+    const line = sv !== null && sv !== undefined ? fmtSpread(sv, g.favorite, g) : GAMES_COPY.noSpread;
+    const picks = countPicksForGame(g.gameId);
+    return {
+      gameId: g.gameId, name: slateName(g), caption: `${fmtTime(g.kickoff, g)} · ${line}`, picks,
+      aria: `${td(g, 'away')} at ${td(g, 'home')}, ${fmtTime(g.kickoff, g)}, ${line}${picks ? `, ${picks} ${plural(picks, 'pick', 'picks')}` : ''}, ${g.gameId === selectedId ? 'selected' : 'not selected'}`,
+    };
+  });
+}
+function swapPickerIncoming(sp) {
+  if (sp.origin === 'manual') return { manual: true };
+  const d = sp.data || {};
+  const sv = d.spread;
+  const line = sv !== null && sv !== undefined ? `${fmtSpread(sv, d.favorite, d)} (${SF.spreadSourceLabel(d)})` : GAMES_COPY.noSpread;
+  return { manual: false, name: slateName(d), caption: `${fmtTime(d.kickoff, d)} · ${line}` };
+}
+function paintSwapPickerFooter(sp) {
+  const foot = document.getElementById('swap-picker-footer');
+  if (!foot) return;
+  const sel = sp.outId ? getGames(sp.weekId).find((g) => g.gameId === sp.outId) : null;
+  foot.innerHTML = swapPickerFooterHTML({ escHtml, icon, selected: sel ? { name: slateName(sel), picks: countPicksForGame(sel.gameId) } : null, manual: sp.origin === 'manual' });
+  foot.querySelector('#swap-picker-go')?.addEventListener('click', () => swapPickerGo());
+}
+function selectSwapRow(sp, gameId) {
+  if (sp.busy || sp.outId === gameId) return;
+  sp.outId = gameId;
+  haptic('selection');
+  const rows = swapPickerRows(sp.weekId, gameId);
+  for (const b of document.querySelectorAll('#swap-picker-body [data-swap-game]')) {
+    const id = b.getAttribute('data-swap-game');
+    const r = rows.find((x) => x.gameId === id);
+    b.setAttribute('aria-checked', id === gameId ? 'true' : 'false');
+    if (r) b.setAttribute('aria-label', r.aria);
+  }
+  paintSwapPickerFooter(sp);
+}
+function paintSwapPickerBody(sp) {
+  const body = document.getElementById('swap-picker-body');
+  if (!body) return;
+  body.innerHTML = swapPickerBodyHTML({ escHtml, incoming: swapPickerIncoming(sp), rows: swapPickerRows(sp.weekId, sp.outId), selectedId: sp.outId });
+  body.querySelectorAll('[data-swap-game]').forEach((b) => b.addEventListener('click', () => selectSwapRow(sp, b.getAttribute('data-swap-game'))));
+}
+
+function openSwapPicker({ weekId, origin = 'pool', data = null, invoker = null } = {}) {
+  if (isContentWithheld()) return;
+  const week = weekId ? getWeek(weekId) : null;
+  if (!week) return;
+  closeSwapPicker({ immediate: true, restoreFocus: false });
+  const sp = { weekId, origin, data, outId: null, invoker, busy: false, closing: false, unbind: null, onKey: null };
+  _swapPicker = sp;
+  const { sheetEl, unbind } = mountSheetShell({
+    wrapId: SWAP_PICKER_WRAP_ID,
+    sheetId: SWAP_PICKER_SHEET_ID,
+    sheetAttrs: ' role="dialog" aria-modal="true" aria-labelledby="swap-picker-title"',
+    headerInnerHTML: `<div class="chat-sheet-title" id="swap-picker-title" tabindex="-1">${escHtml(SLATE_COPY.pickerTitle)}</div>${isNativeShell() ? '' : `
+        <button type="button" class="chat-sheet-close swap-pk-close" id="swap-picker-close" aria-label="Close">${icon('close')}</button>`}`,
+    bodyId: 'swap-picker-body',
+    closeId: isNativeShell() ? null : 'swap-picker-close',
+    onBackdrop: () => closeSwapPicker(),
+    renderBody: () => paintSwapPickerBody(sp),
+    // The picker's OWN swipe-down yields to every OTHER surface, but not to the week wizard it was raised over (Step 2's manual add at the slate size raises it above the wizard sheet, which stays up
+    // underneath): excludeWizard, like the choice sheet's own carve-outs, so the gesture can arm there.
+    drag: { getBlocked: () => _dismissBlockingSurfaceUp({ excludeSwap: true, excludeWizard: true }) || sp.busy, onProgress: swapPickerDragProgress, onSettle: settleSwapPickerDrag },
+  });
+  sp.unbind = unbind;
+  if (sheetEl) {
+    const foot = document.createElement('div');
+    foot.id = 'swap-picker-footer';
+    foot.className = 'swap-pk-footer';
+    sheetEl.appendChild(foot);
+    paintSwapPickerFooter(sp);
+  }
+  sp.onKey = (ev) => { if (ev.key === 'Escape') closeSwapPicker(); };
+  document.addEventListener('keydown', sp.onKey);
+  try { document.getElementById('swap-picker-title')?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+}
+function swapPickerGo() {
+  const sp = _swapPicker;
+  if (!sp || !sp.outId || sp.busy || sp.closing) return;
+  if (sp.origin === 'manual') {
+    const { weekId, outId } = sp;
+    closeSwapPicker({ immediate: true, restoreFocus: false });
+    openSlateGameForm({ weekId, mode: 'swap', outGameId: outId });   // the swap happens only on the form's Save; Cancel there leaves everything as it was
+    return;
+  }
+  sp.busy = true;
+  // DI-W68.3 motion: a successful swap slides the sheet out, THEN the toast (the write and the list behind the sheet are already done); a refusal toasts at once and the sheet closes with it.
+  const res = runSlateSwap({ weekId: sp.weekId, outGameId: sp.outId, data: sp.data, announce: false });
+  if (res && res.ok) closeSwapPicker({ restoreFocus: false, then: () => showToast(res.said, 'success') });
+  else closeSwapPicker({ restoreFocus: true });
+}
+function closeSwapPicker({ immediate = false, restoreFocus = true, then = null } = {}) {
+  const sp = _swapPicker;
+  const wrap = document.getElementById(SWAP_PICKER_WRAP_ID);
+  if (sp) {
+    if (sp.closing && !immediate) return;
+    sp.closing = true;
+    try { sp.unbind?.(); } catch { /* the drag teardown is a courtesy */ }
+    sp.unbind = null;
+    if (sp.onKey) { try { document.removeEventListener('keydown', sp.onKey); } catch { /* courtesy */ } sp.onKey = null; }
+  }
+  const finish = () => {
+    document.getElementById(SWAP_PICKER_WRAP_ID)?.remove();
+    if (_swapPicker === sp) _swapPicker = null;
+    const inv = sp && sp.invoker;
+    if (restoreFocus && inv && inv.isConnected !== false) { try { inv.focus?.({ preventScroll: true }); } catch { /* courtesy */ } }
+    if (typeof then === 'function') { try { then(); } catch { /* a toast is never worth a throw */ } }
+  };
+  if (!wrap || immediate) { finish(); return; }
+  const sheetEl = wrap.querySelector('#swap-picker-sheet');   // (a literal: the W-20 id-in-selector census wants no interpolation here)
+  let reduced = false; try { reduced = prefersReducedMotion(); } catch { reduced = false; }
+  finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--swap-drag-y', '1'), reducedMotion: reduced, done: finish });
+}
+function swapPickerDragProgress(wrap, sheetEl, progress) {
+  sheetEl.setAttribute('data-dragging', 'true');
+  wrap.setAttribute('data-dragging', 'true');
+  wrap.style.setProperty('--swap-drag-y', String(progress));
+}
+function settleSwapPickerDrag(wrap, sheetEl, { dismissed, reducedMotion } = {}) {
+  sheetEl.removeAttribute('data-dragging');
+  wrap.removeAttribute('data-dragging');
+  if (!dismissed) { wrap.style.setProperty('--swap-drag-y', '0'); return; }
+  finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--swap-drag-y', '1'), reducedMotion: !!reducedMotion, done: () => closeSwapPicker({ immediate: true }) });
+}
+export function _swapPickerStateForTest() { return _swapPicker ? { weekId: _swapPicker.weekId, origin: _swapPicker.origin, outId: _swapPicker.outId, busy: _swapPicker.busy, closing: _swapPicker.closing } : null; }
+export function _resetSwapPickerForTest() { closeSwapPicker({ immediate: true, restoreFocus: false }); _swapPicker = null; }
 
 // ─── COLLAPSIBLE COMMISSIONER SECTIONS ───────────────────────────────────────
 // Each .admin-section title becomes a click-to-collapse header; open/closed
@@ -16242,8 +19658,18 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
 
   // Week manager
   document.getElementById('active-week-selector')?.addEventListener('change', e => {
-    setActiveWeekId(e.target.value); refreshHeader(); renderCommPage();
+    setCommActiveWeekId(e.target.value); refreshHeader(); renderCommPage();     // D1 (DI-534): the lens sport's own pointer in a multi-sport league
   });
+  // D1 (DI-534): the sport lens (a radiogroup), the all-sports card's one-action buttons, and Sport options -> Archive. Each selects the lens first; every control below then acts on that sport only.
+  document.querySelectorAll('.comm-lens [data-action="comm-lens"]').forEach((b) => b.addEventListener('click', () => {
+    if (b.dataset.sport === getLensSport()) return;
+    haptic('selection'); setLensSport(b.dataset.sport); refreshHeader(); renderCommPage();
+  }));
+  document.querySelectorAll('#comm-all-sports-card [data-action="comm-sport-action"]').forEach((b) => b.addEventListener('click', () => {
+    runSportNextAction({ kind: b.dataset.kind, sport: b.dataset.sport });
+  }));
+  document.getElementById('comm-archive-sport-btn')?.addEventListener('click', () => confirmArchiveLensSport());
+  bindCommSportEntries();
   // DI-355 (UN-313) — "create-week-btn" retired along with showCreateWeekModal().
   // DI-C1 §2.1 — the Week Setup Wizard's entry point.
   document.getElementById('week-wizard-entry-btn')?.addEventListener('click', () => openWeekWizardSheet());
@@ -16325,6 +19751,13 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     // SP-54 / DI-465 — a duplicated week never carries a stale per-player snapshot (the next lock writes its own). (Finding, not widened: this
     // handler also copies `lockedAlmaMaters`; harmless because every lock overwrites it on both paths. A one-line reset is DESIGN OQ-6.)
     delete newW.lockedAlmaByPlayer;
+    // D1 (DI-533): a duplicate of an NFL week is a NEW week of the same sport (`competitionId` rides the spread above) with its OWN tiebreaker game: the copied game id and the question
+    // naming the old matchup are dropped, and the sport's own default question is put back (a college week is untouched: its profile question has no placeholder).
+    if (newW.competitionId) {
+      delete newW.tiebreakerGameId;
+      const dupQ = tiebreakerQuestionFor(profileForWeek(newW));
+      if (dupQ && profileForWeek(newW).key !== 'cfb') newW.tiebreakerQuestion = dupQ;
+    }
     saveWeek(newW); wizardSetActiveWeekId(newW.weekId);
     showToast(`✅ Week ${newW.weekNumber} created`,'success'); refreshHeader(); renderCommPage();
   });
@@ -16339,8 +19772,8 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
       : '';
     if(!confirm(`Delete "${formatWeekLabel(week)}"?${groupNote}`))return;
     deleteWeek(week.weekId);
-    const remaining=getWeeks();
-    if(remaining.length)setActiveWeekId(remaining[0].weekId);
+    const remaining=commWeeks();       // D1 (DI-534): this sport's remaining weeks (every week in a one-sport league)
+    if(remaining.length)setCommActiveWeekId(remaining[0].weekId);
     showToast('Week deleted','warning'); refreshHeader(); renderCommPage();
   });
 
@@ -16348,31 +19781,20 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.querySelectorAll('.week-status-btn').forEach(btn=>{
     btn.addEventListener('click',()=>{
       const to=btn.dataset.to; if(!week)return;
-      // DI-E (2026-09-02) — the manual Finalize button (the only other path
-      // that reaches 'final', alongside the auto pendingFinalization banner
-      // above) had ZERO confirmation before this. Same native confirm()
-      // pattern as remove-game-btn/clear-slate-btn, gated on the same
-      // narrow tie condition as the auto banner. arePicksPublic(week) is
-      // always true here in practice — 'final' is reachable only from
-      // 'live' (renderWeekStatusButtons) — but made explicit (blind rule,
-      // loadtest.mjs [64]) rather than left implicit, and it genuinely
-      // short-circuits the getPicks() read below when it is not.
-      // SP-54 / DI-469 — the old "the winner/loser will be assigned" sentence (it claimed the order was a coin toss) was false the moment the tie-break shipped. finalizeTieNotice() says what
-      // will ACTUALLY decide the tie (alma mater against the spread, then the Extra Point, then the week's draw) and what to do first.
-      if(to==='final' && arePicksPublic(week)){
-        const notice=finalizeTieNotice(week, getPlayers().filter(p=>p.active), getPicks(week.weekId), getGames(week.weekId), 'confirm');
-        if(notice.show && !confirm(notice.text))return;
-      }
+      // PF-1 / Amendment 1 (A1.1) — "Re-open Picks" on a week whose lock instant has passed asks for a NEW lock time first (the sheet writes it, then re-opens). Before the instant: exactly as before.
+      if(to==='open' && maybeOpenLateEntrySheet(getWeek(week.weekId)||week,{onDone:()=>renderCommPage()}))return;
+      // FB-027 / DI-518 (bug batch W, 2026-10-07) — "Finalize" OPENS THE GUIDED FLOW for this week (Approve Scores → Confirm Tiebreaker → Longest field
+      // goal → the review card); it never applies `final` here. This branch used to (DI-E, 2026-09-02, behind a confirm() of the SP-54 tie notice), which
+      // finalized a week with no tiebreaker and no longest field goal. The tie notice is Step 4's inline warning now. (Comm → Week has not rendered this
+      // status row since v0.27.0 — renderWeekStatusButtons() has no caller — so this is defence in depth for the day it is rendered again.)
+      if(to==='final'){ openFinalizeWeekFlow(getWeek(week.weekId)||week); return; }
       const statusResult=applyWeekStatusChange(week,to);
       refreshHeader(); showToast(`Week: ${to}`,'success');
       // Item SS (runtime) — LOUD-FAIL: surface any games whose spread was
       // refused rather than frozen (sign contradicted the recorded
       // favorite). A second, separate toast so it can't be lost in/confused
       // with the ordinary "Week: locked" success toast above.
-      if(statusResult?.spreadLockRefusals?.length){
-        const names=statusResult.spreadLockRefusals.map(g=>`${g.awayTeam} @ ${g.homeTeam}`).join(', ');
-        showToast(`⚠️ Spread NOT locked for ${statusResult.spreadLockRefusals.length} game${statusResult.spreadLockRefusals.length>1?'s':''} — sign contradicts recorded favorite: ${names}. Fix the spread/favorite in Games, then lock again.`,'error');
-      }
+      notifySpreadLockRefusals(week.weekId, statusResult?.spreadLockRefusals);   // PF-1 / DI-496: this device told the commissioner; the server's echo of the same lock must not toast it a second time
       renderCommPage();
     });
   });
@@ -16469,21 +19891,9 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     if (state.currentTab === 'admin') renderAdminPage();
   });
 
-  // "Not yet" (dismiss the pending-finalization prompt without finalizing) —
-  // DI-359 relocates the ENTRY POINT to the wizard's Manage screen
-  // (bindWeekWizardManage()), but reuses this SAME id/handler unchanged;
-  // "Confirm Finalization" itself is retired here — DI-359's guided
-  // Finalize Week flow (weekWizardApi().confirmFinalizeWeek(), Step 4)
-  // replaces it, never a raw status write from this file directly.
-  document.getElementById('dismiss-pending-btn')?.addEventListener('click', ()=>{
-    if(!week)return;
-    // RG-256 (2026-09-26) — spread the week as the MIRROR holds it NOW, never the render-time `week`
-    // this listener closed over: if the week locked while this tab stayed painted (the tick repaints
-    // only the Commissioner tab), a stale `status:'open'` spread back in plans locked->open and
-    // silently reopens picks. Same rule as saveWizardTiming()'s `liveWeek`.
-    saveWeek({ ...(getWeek(week.weekId) || week), pendingFinalization: false });
-    renderCommPage();
-  });
+  // FB-027 / DI-518 (2026-10-07) — the "Not yet" handler that lived here (`dismiss-pending-btn`, which wrote pendingFinalization:false) is REMOVED.
+  // Nothing rendered that id once DI-359 moved the prompt into the wizard; it bound only when a Comm repaint happened to run while the wizard's banner
+  // was up. "Not yet" is the wizard's own `wiz-final-not-yet` now, and it writes nothing (the flag also drives the 24 h commissioner reminder).
   const armBlurbLive = bindBlurbLiveValidation(document.getElementById('blurb-input'), document.getElementById('blurb-error'),
     () => ((week && getWeek(week.weekId)) || week)?.blurb || '');
   document.getElementById('save-blurb-btn')?.addEventListener('click', ()=>{
@@ -16551,6 +19961,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   // (weekWizardApi().fetchAndApplySuggestedSlate()) — fetch ESPN games for
   // this week's dates, then score + apply the suggested 10, all in one tap.
   // No "ESPN"/"fetch" in any user-visible copy this handler writes.
+  spreadFindUI().bind(document.getElementById('page-commissioner'));   // W-71: the Games tab's Find spreads block
   document.getElementById('comm-build-slate-btn')?.addEventListener('click', async () => {
     if (!gtWeek) { showToast('Select a week first', 'error'); return; }
     const btn = document.getElementById('comm-build-slate-btn');
@@ -16564,7 +19975,9 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
         if (btn) btn.disabled = false;
         return;
       }
-      if (status) status.textContent = result.partial ? WIZARD_COPY.FETCH_PARTIAL(result.fetched) : WIZARD_COPY.FETCH_SUCCESS(result.added);
+      if (status) status.textContent = (result.partial ? WIZARD_COPY.FETCH_PARTIAL(result.fetched) : WIZARD_COPY.FETCH_SUCCESS(result.added)) + (result.held > 0 ? SLATE_COPY.bulkHeldTail(result.target) : '');
+      if (result.held > 0) showToast(SLATE_COPY.bulkHeld(result.added, result.target), 'warning');   // the repaint below replaces the status line, so the held-back games are named in a toast too (DI-W68.6)
+      spreadFindUI().autoCheck(gtWeek.weekId);   // W-71: ask the other source ONCE, quietly, for any game ESPN left without a line
       renderCommPage();
     } catch (e) {
       console.warn('[comm] build slate failed', e);
@@ -16591,7 +20004,9 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     const rangeLabel = endDate && endDate!==startDate ? `${startDate} to ${endDate}` : startDate;
     showToast(`⏳ Fetching ESPN games for ${rangeLabel}…`,'warning');
     // Pass season for context only — dates are source of truth
-    const result=await fetchByDateRange({startDate,endDate:endDate||startDate,season:week.season,almaMaters:claimedAlmaMaters()});
+    // D1 (DI-533 #3): a week of another sport fetches ITS scoreboard and flags no alma-mater games (the NFL has none, D-31); a college week passes exactly what it always did.
+    const fetchProfile=profileForWeek(week); const fetchOtherSport=fetchProfile.key!=='cfb';
+    const result=await fetchByDateRange({startDate,endDate:endDate||startDate,season:week.season,almaMaters:fetchOtherSport&&!fetchProfile.affinity?[]:claimedAlmaMaters(),...(fetchOtherSport?{sport:fetchProfile.key}:{})});
     state.lastFetchResult=result;
     if(result.qualityReport)saveFetchProof(result.qualityReport);
     if(result.error||!result.games?.length){
@@ -16618,173 +20033,16 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     refreshHeader(); renderCommPage();
   });
 
-  // Suggested slate — apply all 10 at once. B1: acts on `gtWeek` — `suggested`
-  // is already the GAMES-TAB-scoped pool (renderCommPage() passes
-  // `gamesTabSuggested` into this param).
-  document.getElementById('apply-suggested-btn')?.addEventListener('click', ()=>{
-    if(!gtWeek||!suggested.length)return;
-    let added=0;
-    for(const game of suggested){
-      const alreadyOn=getGames(gtWeek.weekId).some(g=>g.homeTeam===game.homeTeam&&g.awayTeam===game.awayTeam);
-      if(!alreadyOn){saveGame(createGame(gtWeek.weekId,{...game,weekId:gtWeek.weekId}));added++;}
-    }
-    showToast(`✅ ${added} suggested games added to slate`,'success'); renderCommPage();
-  });
-
-  // Add suggested game individually
-  document.querySelectorAll('.add-suggested-btn').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      if(!gtWeek)return;
-      const idx=parseInt(btn.dataset.idx);
-      const game=suggested[idx]; if(!game)return;
-      saveGame(createGame(gtWeek.weekId,{...game,weekId:gtWeek.weekId}));
-      showToast(`✅ ${td(game,'home')} vs ${td(game,'away')} added`,'success'); renderCommPage();
-    });
-  });
-
-  // DI-4 — shortlist "+ Add": identical add behaviour to add-suggested-btn,
-  // sourced from `shortlist` instead of `suggested`. Adding does NOT remove
-  // anything automatically — Drew bumps a game he's swapping out via the
-  // existing ✕ Remove in the built slate; no new removal mechanism here.
-  document.querySelectorAll('.add-shortlist-btn').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      if(!gtWeek)return;
-      const idx=parseInt(btn.dataset.idx);
-      const game=(shortlist||[])[idx]; if(!game)return;
-      saveGame(createGame(gtWeek.weekId,{...game,weekId:gtWeek.weekId}));
-      showToast(`✅ ${td(game,'home')} vs ${td(game,'away')} added`,'success'); renderCommPage();
-    });
-  });
-
-  // Dismiss (reject) a suggested game so it stops reappearing
-  document.querySelectorAll('.reject-suggested-btn').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      if(!gtWeek)return;
-      const idx=parseInt(btn.dataset.idx);
-      const game=suggested[idx]; if(!game)return;
-      rejectSuggestion(gtWeek.weekId, game);
-      showToast(`Suggestion dismissed — ${td(game,'home')} vs ${td(game,'away')}`,'warning'); renderCommPage();
-    });
-  });
-
-  // Restore all dismissed suggestions for the week
-  document.getElementById('restore-rejected-btn')?.addEventListener('click', ()=>{
-    if(!gtWeek)return;
-    clearRejectedSuggestions(gtWeek.weekId);
-    showToast('Dismissed suggestions restored','success'); renderCommPage();
-  });
-
-  // NOTE: bindAvailGroupHandlers(week, games) used to be called here AND
-  // again below ("Wire add/remove buttons inside the initial render of the
-  // groups") — an exact duplicate call with identical arguments and nothing
-  // rendered in between. That double-bound every .add-avail-game-btn /
-  // .avail-remove-btn element, so a single click fired its handler TWICE —
-  // silently saving two duplicate slate entries per "+ Add" click from
-  // Available Games. Pre-existing (present at 93e5f6c, before this batch),
-  // found incidentally while verifying DI-7's add-path in slatetest.mjs
-  // [11]. Removed here rather than left in, since it's a one-line duplicate
-  // call directly in the code this batch already touches — flagged to
-  // reviewer/design-matrix-pm as an incidental fix, not a DI-1..8 item.
-
-  // Clear pool
-  document.getElementById('clear-pool-btn')?.addEventListener('click', ()=>{
-    if(!gtWeek)return;
-    clearAvailableGames(gtWeek.weekId);
-    showToast('Available pool cleared','warning'); renderCommPage();
-  });
-
-  // ── Available-games filter bar (group/conf/rank/alma/search) ──
-  // Re-renders only the groups container (not the whole panel) on each change
-  // so the user keeps their focus / scroll position. B1: `gtWeek`/`gtGames`.
-  const reRenderAvail = () => {
-    const c = document.getElementById('avail-groups-list');
-    if (c) c.innerHTML = renderAvailableGroups(getAvailableGames(gtWeek?.weekId||''), gtGames, gtWeek);
-    // Re-bind buttons inside the freshly rendered list
-    bindAvailGroupHandlers(gtWeek, gtGames);
-  };
-  document.getElementById('avail-group')?.addEventListener('change', e => {
-    state.availFilter.groupBy = e.target.value; reRenderAvail();
-  });
-  document.getElementById('avail-conf')?.addEventListener('change', e => {
-    state.availFilter.conference = e.target.value; reRenderAvail();
-  });
-  document.getElementById('avail-rank')?.addEventListener('change', e => {
-    state.availFilter.rank = e.target.value; reRenderAvail();
-  });
-  document.getElementById('avail-alma-only')?.addEventListener('change', e => {
-    state.availFilter.almaOnly = !!e.target.checked; reRenderAvail();
-  });
-  // DI-3 — same wiring pattern as avail-alma-only, mirrored not invented.
-  document.getElementById('avail-national-tv')?.addEventListener('change', e => {
-    state.availFilter.nationalTV = !!e.target.checked; reRenderAvail();
-  });
-  document.getElementById('avail-tight-only')?.addEventListener('change', e => {
-    state.availFilter.tightOnly = !!e.target.checked; reRenderAvail();
-  });
-  // Debounce the search input — re-render after 200 ms of inactivity
-  let searchTimer = null;
-  const searchEl = document.getElementById('avail-search');
-  searchEl?.addEventListener('input', e => {
-    clearTimeout(searchTimer);
-    const val = e.target.value;
-    searchTimer = setTimeout(() => {
-      state.availFilter.search = val;
-      reRenderAvail();
-      // Restore focus + cursor position after the re-render
-      const again = document.getElementById('avail-search');
-      if (again) { again.focus(); again.setSelectionRange(val.length, val.length); }
-    }, 200);
-  });
-  const resetFilters = () => {
-    state.availFilter = { groupBy: 'date', conference: '', rank: 'any', almaOnly: false, nationalTV: false, tightOnly: false, search: '' };
-    renderCommPage(); // full re-render to refresh the filter bar inputs
-  };
-  document.getElementById('avail-reset-filters')?.addEventListener('click', resetFilters);
-  document.getElementById('avail-reset-filters-inline')?.addEventListener('click', resetFilters);
-  // Wire add/remove buttons inside the initial render of the groups
-  bindAvailGroupHandlers(gtWeek, gtGames);
+  // D1 (W-68 / W-69, 2026-10-14) - Comm -> Games is ONE list now (DI-W69.1). Its Add / Remove / Edit / Lock / Dismiss / Add-suggested / More / segment / filter controls, and the Player Requests
+  // card's "+ Add to slate", are DELEGATED on the section roots (bindGamesSection): nothing here binds with a document-wide querySelectorAll, which is what double-bound the Player Requests Add
+  // after a filter change (DI-W68.7). The old per-button loops (.add-avail-game-btn, .avail-remove-btn, .add-suggested-btn, .add-shortlist-btn, .reject-suggested-btn, .remove-game-btn, .edit-game-btn,
+  // .lock-toggle-btn), the reRenderAvail() re-binder, bindAvailGroupHandlers() and the browser confirm() dialogs are deleted. `suggested` / `shortlist` (this function's 4th / 7th parameters) stay
+  // for the exported signature gradetest and ranktest call; the section reads the live mirror itself (RG-256), never these.
+  bindGamesSection();
   // DI-428(b) — same delegated load/error handling `.pick-btn-logo`/
   // `.dc-chip-logo` already get, idempotent per container (see
   // bindLogoImageEvents()'s own header comment).
   bindLogoImageEvents(document.getElementById('page-commissioner'));
-
-  // Slate controls — B1: `gtWeek`/`gtGames` throughout.
-  document.getElementById('clear-slate-btn')?.addEventListener('click', ()=>{
-    if(!gtWeek||!confirm('Remove all games from the slate? This does not affect picks already submitted.'))return;
-    clearSlateForWeek(gtWeek.weekId);
-    showToast('Slate cleared','warning'); renderCommPage();
-  });
-  document.getElementById('add-manual-game-btn')?.addEventListener('click', ()=>{
-    if(gtWeek)showGameModal(null,gtWeek,data=>{saveGame(createGame(gtWeek.weekId,data));showToast('Game added','success');renderCommPage();});
-  });
-  // R1 (reviewer round 3, BLOCK) — DRAFT-gated at the handler, not just at
-  // the DOM (the button not rendering already covers a real click, but a
-  // handler that would silently do the dangerous thing anyway is the wrong
-  // shape to leave behind — belt and suspenders, same posture as every other
-  // `if(!gtWeek)return;` guard in this file).
-  document.getElementById('unlock-all-btn')?.addEventListener('click', ()=>{
-    if(!gtWeek||(getWeek(gtWeek.weekId)||gtWeek).status===WEEK_STATUS.DRAFT)return; // RG-256 precedent: fresh status, not the render-time snapshot
-    clearAllLockOverrides();
-    getGames(gtWeek.weekId).forEach(g=>setGameLockOverride(g.gameId,true));
-    showToast('🔓 All games unlocked','warning'); renderCommPage();
-  });
-  document.getElementById('refresh-scores-btn')?.addEventListener('click', async()=>{
-    if(!gtWeek||(getWeek(gtWeek.weekId)||gtWeek).status===WEEK_STATUS.DRAFT)return; // RG-256 precedent: fresh status, not the render-time snapshot
-    showToast('⏳ Refreshing scores…','warning');
-    await doRefreshScores(gtWeek,getGames(gtWeek.weekId));
-    showToast('✅ Scores updated','success'); renderCommPage();
-  });
-  document.getElementById('finalize-scoring-btn')?.addEventListener('click', ()=>{
-    if(!gtWeek||(getWeek(gtWeek.weekId)||gtWeek).status===WEEK_STATUS.DRAFT)return; // RG-256 precedent: fresh status, not the render-time snapshot
-    let count=0;
-    getGames(gtWeek.weekId).forEach(g=>{
-      if(g.status===GAME_STATUS.FINAL&&g.lockedSpread!==null){
-        saveGame({...g,atsWinner:calculateAtsWinner(g)});count++;
-      }
-    });
-    finalizeWeek(gtWeek);
-    showToast(`✅ ATS calculated for ${count} games`,'success'); renderCommPage();
-  });
 
   // ── Export bindings (expanded) ──
   document.getElementById('export-week-picks-csv-btn')?.addEventListener('click', ()=>exportWeekPicksCSV(week));
@@ -16856,6 +20114,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   });
 
   // ── SCRIBE Trainer (Build 2b, E5b, 2026-09-10, UN-161…163) ──
+  bindScribeProfileEntryPoints();
   document.getElementById('scribe-run-trainer-btn')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     // Reviewer SIGNIFICANT #8 — a Trainer run spends real money at Anthropic,
@@ -16896,7 +20155,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     // second failure. `functions.invoke()` sets NO client-side deadline (the
     // browser's own connection timeouts are the only ceiling), so the client
     // really does wait for the answer; the copy now says how long that is.
-    btn.disabled = true; const original = btn.textContent; btn.textContent = 'Running… up to 2 min';
+    btn.disabled = true; const originalHTML = btn.innerHTML; btn.textContent = 'Running… up to 2 min';      // N7: the button carries an icon now, so the idle label is restored as markup
     try {
       // ── Phase III Step 6 PHASE 4 (trainer) — DI-T6.4's client half. ─────────────────────────
       // Call the Edge Function ONLY when `settings.serverJobs.trainer` is true; otherwise this
@@ -16948,7 +20207,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     } catch (err) {
       showToast(`⚠️ Trainer run failed: ${err && err.message ? err.message : err}`, 'error');
     } finally {
-      btn.disabled = false; btn.textContent = original;
+      btn.disabled = false; btn.innerHTML = originalHTML;
       renderCommPage();
     }
   });
@@ -16976,17 +20235,20 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
       //    matter, and "remind Kevin about his wager debt" is held by it and is not an
       //    attack on anything.
       if (approving && before && before.flaggedHostile
-        && !confirm('This proposal was held because it touches safety, a hard line, or a player\'s real life. SCRIBE will follow it if you approve it.')) return;
+        && !confirm(HOLD_CONFIRM)) return;
       const r = applyScribeLearningDecision(idx, approving);
-      if (!r.ok) return;
-      let extra = '';
-      if (approving && before && before.kind === 'experiment') {
-        // THE ONE EXPERIMENT EFFECT. Everything else stays a proposal log.
-        const moved = applyExperimentPacingNudge(before);
-        if (moved.moved) extra = ` (SCRIBE now waits ${Math.round(moved.ms / 60000)} min between unprompted posts)`;
-      }
-      showToast(r.approved ? `✅ Approved${extra}` : '✖ Rejected', 'success');
+      // PF-467 — the row reads "Saving…" (or "Couldn't save" if the seam refused up front) from this render on.
       renderCommPage();
+      if (!r.saved) return;
+      r.saved.then(({ state, paced }) => {
+        // "Approved" only once the server has it. THE ONE EXPERIMENT EFFECT (`paced`) was applied by
+        // applyScribeLearningDecision() at the same moment, and never for a save that failed.
+        if (state === 'saved') {
+          const extra = paced && paced.moved ? ` (SCRIBE now waits ${Math.round(paced.ms / 60000)} min between unprompted posts)` : '';
+          showToast(r.approved ? `✅ Approved${extra}` : '✖ Rejected', 'success');
+        }
+        renderCommPage();
+      });
     });
   });
   // ── DI-279 — the Learnings-list on/off toggle (SCRIBE v3, Package C) ──
@@ -16999,8 +20261,13 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     btn.addEventListener('click', () => {
       const r = toggleScribeLearningStatus(Number(btn.dataset.learningIdx));
       if (!r.ok) return;
-      showToast(r.on ? '⏻ Back on. SCRIBE will use this again' : '⏻ Off. SCRIBE stops using this', 'success');
+      // PF-467 — the row reads "Saving…" from this render on; the toast says "Off"/"Back on" only once the server has it.
       renderCommPage();
+      if (!r.saved) return;
+      r.saved.then(({ state }) => {
+        if (state === 'saved') showToast(r.on ? 'Back on. SCRIBE will use this again' : 'Off. SCRIBE stops using this', 'success');
+        renderCommPage();
+      });
     });
   });
   // ── DI-281 — "Export for SCRIBE.md" (SCRIBE v3, Package C) ──
@@ -17017,13 +20284,15 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   });
   document.querySelectorAll('.scribe-canon-approve-btn, .scribe-canon-reject-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      const idx = Number(btn.dataset.canonIdx);
-      const all = getScribeCanon();
-      if (!all[idx]) return;
-      all[idx] = { ...all[idx], approvalStatus: btn.classList.contains('scribe-canon-approve-btn') ? 'approved' : 'rejected' };
-      setScribeCanon(all);
-      showToast(btn.classList.contains('scribe-canon-approve-btn') ? '✅ Approved' : '✖ Rejected', 'success');
+      // PF-467 — the same three states as the learnings rows: "Saving…", then "Approved" only on confirm,
+      // or "Couldn't save" with Retry.
+      const r = applyScribeCanonDecision(Number(btn.dataset.canonIdx), btn.classList.contains('scribe-canon-approve-btn'));
       renderCommPage();
+      if (!r.saved) return;
+      r.saved.then(({ state }) => {
+        if (state === 'saved') showToast(r.approved ? '✅ Approved' : '✖ Rejected', 'success');
+        renderCommPage();
+      });
     });
   });
   // Item 10 (DI-B1) — per-row exclude-from-export checkbox. Persists through
@@ -17299,71 +20568,8 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
 
 
 
-  document.querySelectorAll('.lock-toggle-btn').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const mu=btn.dataset.unlocked==='true';
-      setGameLockOverride(btn.dataset.gameId,!mu);
-      showToast(mu?'🔒 Locked':'🔓 Unlocked','success'); renderCommPage();
-    });
-  });
-  document.querySelectorAll('.remove-game-btn').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const gid=btn.dataset.gameId;
-      const g=getGame(gid);
-      const pickCount=countPicksForGame(gid);
-      const label=g?`${td(g,'home')} vs ${td(g,'away')}`:'this game';
-      let msg=`Remove ${label} from the slate?`;
-      if(pickCount>0) msg+=`\n\n⚠️ ${pickCount} player pick${pickCount>1?'s have':' has'} already been submitted for this game. Removing it will permanently delete ${pickCount>1?'those picks':'that pick'} and they will no longer count toward scoring.`;
-      if(!confirm(msg))return;
-      deleteGame(gid); // cascades: deletes associated picks + lock override
-      showToast(pickCount>0?`Removed — ${pickCount} pick${pickCount>1?'s':''} also deleted`:'Game removed','warning');
-      renderCommPage();
-    });
-  });
-  document.querySelectorAll('.edit-game-btn').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const g=getGame(btn.dataset.gameId);
-      // DI-415 (UN-370) fix — this passed `null` for `week`, which
-      // `gameModalFieldLocks()` reads to decide whether a manual game's
-      // static fields have left their DRAFT-only editable phase
-      // (`!week` was read as "treat as draft," so a manual game past DRAFT
-      // could never actually lock through THIS call site — the Games tab's
-      // own primary edit entry point). The real week was available and
-      // simply not passed. B1 (reviewer round 2): that week is now `gtWeek`
-      // — the wizard's parked target when one exists, not necessarily the
-      // live `week` — so the lock reflects the week this row is ACTUALLY
-      // being edited under.
-      if(g)showGameModal(g,gtWeek,data=>{saveGame({...g,...data,updatedAt:new Date().toISOString()});showToast('Updated','success');renderCommPage();});
-    });
-  });
-
   // Tiebreaker
-  document.getElementById('save-tb-btn')?.addEventListener('click', ()=>{
-    if(!week)return;
-    const q=document.getElementById('tb-question')?.value||'';
-    const aRaw=document.getElementById('tb-actual')?.value;
-    const actual=aRaw!==''&&aRaw!==undefined?parseFloat(aRaw):null;
-    // The body lives in saveTiebreakerActual() (below, exported: the applyWeekStatusChange / saveExtraPointActual precedent) so the harness can reach the order of operations
-    // and the shared-league answer without a real Comm page. RG-256 and DI-D, which govern it, are documented there.
-    const t=saveTiebreakerActual(week,{ question:q, actual });
-    showToast(t.msg,t.type); renderCommPage();
-  });
-  document.getElementById('auto-calc-tb-btn')?.addEventListener('click', ()=>{
-    if(!week)return;
-    // Drew's ruling (2026-09-04): the auto-calc sums CLAIMED schools (an
-    // active player has that alma mater) — same claimedAlmaMaters() list
-    // every other alma-mater consumer in this file reads. See its docstring
-    // above; there is no separate "configured roster" anymore.
-    // F4 (2026-09-04) — for LOCKED/LIVE/FINAL weeks, almaMatersForAutoCalc()
-    // substitutes the roster FROZEN at lock (week.lockedAlmaMaters) instead
-    // of the live claimedAlmaMaters(), so a claim edit after lock can't
-    // silently move this number. See its docstring for the fallback story
-    // on a week locked before this shipped.
-    const total=calculateAlmaMaterTotal(getGames(week.weekId),almaMatersForAutoCalc(week),week.tiebreakerCalculationMode||'selectedSlateOnly');
-    if(total===null){showToast('⚠️ No final alma mater scores yet.','warning');return;}
-    const inp=document.getElementById('tb-actual'); if(inp)inp.value=total;
-    showToast(`Auto-calculated: ${total} pts`,'success');
-  });
+  bindCommTiebreakerCard(week);   // D1 / DI-516: the card's buttons (no Auto-Calc); re-bound by refreshCommTiebreakerCard() after an in-place refresh
 
   // Nicknames
   document.querySelectorAll('.save-nick-btn').forEach(btn=>{
@@ -17506,13 +20712,13 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   // can never disagree about a transition.
   document.querySelectorAll('.ob-action-btn').forEach(btn=>{
     btn.addEventListener('click',()=>{
-      handleObligationAction(btn.dataset.obId, btn.dataset.obAction);
+      handleObligationAction(btn.dataset.obId, btn.dataset.obAction, { rerender: renderCommPage });
       renderCommPage();
     });
   });
   document.querySelectorAll('.ob2025-action-btn').forEach(btn=>{
     btn.addEventListener('click',()=>{
-      handleOb2025Action(btn.dataset.obId, btn.dataset.obAction);
+      handleOb2025Action(btn.dataset.obId, btn.dataset.obAction, { rerender: renderCommPage });
       renderCommPage();
     });
   });
@@ -17796,10 +21002,10 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
  */
 export function buildWeeklySummary(week) {
   if (!week) return '';
-  const players = getPlayers().filter(p => p.active);
+  const players = playersForWeek(week);   // D1 DI-531 (C4): the digest ranks the week's own sport's entrants
   const picks = getPicks(week.weekId);
   const games = getGames(week.weekId);
-  const actualTB = week.actualTiebreakerValue ?? null;
+  const actualTB = effectiveTiebreakerActualForWeek(week, games).value;   // D1 / DI-517: the same value every ranking surface uses (a final week's is its stored value, unchanged)
   // SP-54 / DI-468 — a final week in force carries its tie context, so the recap names WHY (today's lines exactly otherwise).
   const results = weeklyResultsWithTie(week, players, picks, games, actualTB);
   // SB-19b follow-up (2026-10-01) — on a SPLIT week the weekly winner/loser are
@@ -17902,7 +21108,8 @@ export function buildWeeklySummary(week) {
   // parallel recompute): the same active players, the same week scope
   // (isWeekShownInStandings) and the same grouping-aware scorer call, by
   // construction. standingscopetest [4b]/[5] pin it.
-  const standings = seasonStandingsRows();
+  // D1 (Part 2 item 2, 2026-10-08): the WEEK'S OWN sport's standings - seasonStandingsRows() answers for the player's pointer unless handed a competition, and a digest for an NFL week printed the college table under it.
+  const standings = seasonStandingsRows({ competitionId: weekCompetitionId(week) });
   if (standings.length) {
     lines.push('');
     lines.push('━━━ Season standings ━━━');
@@ -18302,12 +21509,122 @@ export const _renderDataProofPanelForTest = renderDataProofPanel;
  * Δ) stays visible — the commissioner is a player too and needs to see what he
  * entered.
  */
+/**
+ * D1 / DI-516 — the Comm tiebreaker card's three actions. `Save question` / `Save override` both go through ONE commit: the question is saved with the week, and the actual value is
+ * written only when the field was EDITED (it differs from `data-initial`, the value the card showed); an unedited field leaves the stored actual exactly as it is. `Use calculated
+ * value` clears the stored actual (null), so the card shows the live total again. A field with no `data-initial` (a bare harness DOM) counts as edited — the pre-D1 behavior.
+ */
+export function bindCommTiebreakerCard(week) {
+  const commit = ({ clear = false } = {}) => {
+    const cur = (week && getWeek(week.weekId)) || week;
+    if (!cur) return;
+    const q = document.getElementById('tb-question')?.value || '';
+    const field = document.getElementById('tb-actual');
+    const aRaw = field?.value;
+    const initial = field?.dataset ? field.dataset.initial : undefined;
+    const edited = initial === undefined || String(aRaw) !== String(initial);
+    const actual = clear ? null
+      : edited ? (aRaw !== '' && aRaw !== undefined ? parseFloat(aRaw) : null)
+      : (cur.actualTiebreakerValue ?? null);
+    if (actual !== null && !Number.isFinite(actual)) { showToast('Enter a number, or leave blank.', 'warning'); return; }
+    // The body lives in saveTiebreakerActual() (exported: the applyWeekStatusChange / saveExtraPointActual precedent) so the harness can reach the order of operations and the
+    // shared-league answer without a real Comm page. RG-256 and DI-D, which govern it, are documented there.
+    const t = saveTiebreakerActual(cur, { question: q, actual });
+    showToast(t.msg, t.type); renderCommPage();
+  };
+  document.getElementById('save-tb-btn')?.addEventListener('click', () => commit());
+  document.getElementById('tb-save-override-btn')?.addEventListener('click', () => commit());
+  document.getElementById('tb-use-calculated-btn')?.addEventListener('click', () => commit({ clear: true }));
+  document.getElementById('tb-actual')?.addEventListener('input', () => {
+    const field = document.getElementById('tb-actual'); const btn = document.getElementById('tb-save-override-btn');
+    if (!field || !btn) return;
+    btn.disabled = !(field.dataset && field.dataset.initial !== undefined && String(field.value) !== String(field.dataset.initial));   // typing ENABLES the one button (it is always on the card, so nothing shifts when it wakes)
+  });
+}
+
+/**
+ * D1 / DI-516 (FB-002, UN-415) — THE COMM TIEBREAKER CARD, with no Auto-Calc button. "Actual value" shows the EFFECTIVE value (effectiveTiebreakerActualForWeek): the commissioner's stored
+ * override if there is one, else the alma-mater total computed from the scores on screen, which `refreshCommTiebreakerCard()` keeps current on every score poll. A chip says which it is
+ * (`Calculated` / `Commissioner-set`); a provisional total says how far along it is (`So far: 59 (2 of 3 alma games final)`). Typing in the field enables the single `Save override` (always on the card, disabled until the field is edited: no layout jump); a
+ * stored override can be cleared with the text link `Use calculated value`. `Save question` saves the question only: the displayed value is never silently stored as an override.
+ * The field carries `data-initial` (the value shown) — an UNEDITED field is not an override, so saving the question cannot turn the calculated number into one.
+ */
+export function commTiebreakerCardHTML(week, players) {
+  if (!week) return '';
+  // The section keeps the Comm panel's standard shape (`.admin-section[data-comm-tab="week"]` whose FIRST child is `.admin-section-title`, which is what the per-card collapse and the 80-7 guard
+  // look for); the live part is the inner `.card#comm-tb-card`, the only element refreshCommTiebreakerCard() ever replaces, so a collapsed card stays collapsed through a score poll.
+  return `
+        <div class="admin-section" data-comm-tab="week">
+          <div class="admin-section-title">Tiebreaker</div>
+          ${commTiebreakerCardBodyHTML(week, players)}
+        </div>`;
+}
+function commTiebreakerCardBodyHTML(week, players) {
+  const eff = effectiveTiebreakerActualForWeek(week);
+  const stored = week.actualTiebreakerValue !== null && week.actualTiebreakerValue !== undefined;
+  const calc = eff.calculated || {};
+  // D1 integration (2026-10-07): the chip's words come from tiebreakerSourceChip() (js/week-wizard.js), the ONE rule the guided Finalize flow uses too.
+  const chipText = tiebreakerSourceChip(eff);
+  const chip = chipText ? ` <span class="badge badge-draft tb-source-chip">${escHtml(chipText)}</span>` : '';
+  const progress = eff.provisional && eff.value !== null
+    ? (calc.basis === 'game' && calc.game
+        ? `So far: ${numHtml(eff.value)} (${escHtml(calc.game.awayTeam)} at ${escHtml(calc.game.homeTeam)})`
+        : `So far: ${numHtml(eff.value)} (${numHtml(calc.final)} of ${numHtml(calc.total)} alma games final)`)
+    : '';
+  const shown = eff.value !== null ? numHtml(eff.value) : '';
+  // N1 (fix round): the empty-field hint says what is true. A week still being played waits on alma scores; a FINAL week with nothing stored is waiting on the commissioner, not on scores.
+  const placeholder = eff.source !== 'none' ? 'Actual value' : (week.status === WEEK_STATUS.FINAL ? 'No actual value entered' : (week.tiebreakerType === 'custom' ? 'Appears once the tiebreaker game has a score' : 'Appears once alma games have scores'));   // D1 DI-551: an NFL week's tiebreaker is one game's total
+  // The NFL's designated game (D-31): a select defaulting to the slate's last kickoff, shown only for a `custom` tiebreaker. Weeks of that kind arrive with the NFL slate.
+  // NOT BOUND YET (known, for DI-533): the select shows the designated game but no handler writes a change back; choosing the game is the multisport lane's work, not this card's.
+  const gameRow = week.tiebreakerType === 'custom' ? (() => {
+    const gs = getGames(week.weekId).slice().sort((a, b) => new Date(a.kickoff || 0) - new Date(b.kickoff || 0));
+    const chosen = (calc.game && calc.game.gameId) || '';
+    return `<div class="form-group"><label class="form-label" for="tb-game">Tiebreaker game</label>
+        <select class="form-input" id="tb-game">${gs.map((g) => `<option value="${escHtml(g.gameId)}"${g.gameId === chosen ? ' selected' : ''}>${escHtml(g.awayTeam)} at ${escHtml(g.homeTeam)}</option>`).join('')}</select></div>`;
+  })() : '';
+  return `<div class="card" id="comm-tb-card">
+            <div class="form-group"><label class="form-label" for="tb-question">Question</label>
+              <input class="form-input" id="tb-question" value="${escHtml(week.tiebreakerQuestion||'')}" />
+              <button class="btn btn-secondary btn-sm mt-sm" id="save-tb-btn">Save question</button></div>
+            ${gameRow}
+            <div class="form-group"><label class="form-label" for="tb-actual">Actual value${chip}</label>
+              <input class="form-input" id="tb-actual" type="number" data-initial="${shown}" value="${shown}" placeholder="${placeholder}" />
+              <p class="text-muted text-xs mt-sm">Updates by itself as scores arrive.</p>
+              ${progress ? `<p class="text-muted text-xs mt-sm tb-so-far">${progress}</p>` : ''}
+              <div class="btn-row mt-sm">
+                <button class="btn btn-primary btn-sm" id="tb-save-override-btn" disabled>Save override</button>
+                ${stored ? '<button class="btn btn-ghost btn-sm" id="tb-use-calculated-btn" type="button">Use calculated value</button>' : ''}
+              </div>
+            </div>
+            ${renderTiebreakerGuessesAdmin(week,players,eff.value)}
+          </div>`;
+}
+
+/** D1 / DI-516 — re-render ONLY the Comm tiebreaker card in place (the score poll's repaint of the Commissioner tab), unless the commissioner is in the middle of typing in it. */
+export function refreshCommTiebreakerCard() {
+  const el = document.getElementById('comm-tb-card');
+  const week = commWeek();      // D1 (DI-534): the card on screen is the lens sport's
+  if (!el || !week || typeof el.replaceWith !== 'function') return false;
+  const active = document.activeElement;
+  if (active && el.contains && el.contains(active)) return false;                                   // typing in the question or the override: leave it alone
+  const input = document.getElementById('tb-actual');
+  if (input && input.dataset && input.dataset.initial !== undefined && String(input.value) !== String(input.dataset.initial)) return false;   // an unsaved override is in the field
+  const tpl = document.createElement('template');
+  tpl.innerHTML = commTiebreakerCardBodyHTML(week, getPlayers()).trim();
+  const fresh = tpl.content ? tpl.content.firstElementChild : null;
+  if (!fresh) return false;
+  el.replaceWith(fresh);
+  bindCommTiebreakerCard(week);
+  return true;
+}
+
 export function renderTiebreakerGuessesAdmin(week, players, actualTB) {
   if(!week)return'';
   const weekId=week.weekId;
   const canSeeOthers=canViewOtherPicks(week);
   const myId=getSession().playerId;
-  const guesses=players.filter(p=>p.active).map(p=>{
+  const entrantIds=new Set(playersForWeek(week).map(p=>p.playerId));   // D1 DI-531 (C4): only the week's own sport's entrants (a one-sport league: every active player, as before)
+  const guesses=players.filter(p=>p.active&&entrantIds.has(p.playerId)).map(p=>{
     const g=getTiebreakerGuess(weekId,p.playerId);
     const d=actualTB!==null&&g!==null?Math.abs(g-actualTB):null;
     return{player:p,guess:g,delta:d,blind:!canSeeOthers&&p.playerId!==myId};
@@ -18390,6 +21707,15 @@ function obligationBadgeHTML(status, ob, { recipientName }) {
   return `<span class="badge ${disp.badgeClass}"${title ? ` title="${escHtml(title)}"` : ''}>${escHtml(disp.label)}</span>`;
 }
 
+/** M-30 (Drew D-61, 2026-10-07) — THE DENIAL REASON, VISIBLE. A muted "Denied: <reason>" line under an UNPAID row — the Standings
+ *  Weekly History note row and the Comm Obligations card — for everyone who can see that row. Until now the reason lived only in the
+ *  badge's hover title, which no phone shows (the title stays, for a desktop hover). Plain text through escHtml(); NO line when there is
+ *  no reason, or the row is not Unpaid. Styled by .ob-denied-line (token colour, wraps at any width and text size). */
+export function obligationDeniedLineHTML(status, ob) {
+  const reason = status === 'unpaid' && ob && typeof ob.deniedReason === 'string' ? ob.deniedReason.trim() : '';
+  return reason ? `<div class="ob-denied-line">Denied: ${escHtml(reason)}</div>` : '';
+}
+
 function obligationButtonsHTML(status, ob, sess, { recipientName, obClass, withUndo = true }) {
   const role = obligationRole(sess, ob);
   const btn = (action, label, cls = 'btn-win') =>
@@ -18432,7 +21758,7 @@ export function obligationActionsHTML(status, ob, sess, opts) {
  *  store rather than trusting the caller — the UI hides buttons a viewer
  *  shouldn't see, but a sufficiently motivated person could DOM one in, and
  *  this is the actual permission boundary (existing pattern in this file). */
-function handleObligationAction(obId, action) {
+function handleObligationAction(obId, action, { rerender = null } = {}) {
   const ob = getObligations().find(o => o.obligationId === obId); if (!ob) return;
   // UN-126 — a voided/merged-away obligation is no longer a live debt; the
   // UI never renders an action button for one (see renderObligationsAdmin /
@@ -18447,10 +21773,13 @@ function handleObligationAction(obId, action) {
   const recipientName = getPlayer(ob.recipientPlayerId)?.displayName || '?';
 
   if (action === 'deny') {
-    const reason = prompt('Why are you denying this? (optional — leave blank to skip)');
-    if (reason === null) return;                          // cancelled the prompt — no change
-    saveObligation({ ...ob, status: next, deniedReason: reason.trim() || null, paidAt: null });
-    showToast('Denied — back to unpaid.', 'error');
+    // R-19 follow-up (0046) — the destructive-confirm ACTION SHEET (the Waive sheet's layer and builder) replaces
+    // window.prompt(). The optional reason is kept in obligations.denied_reason; Cancel, the scrim and Esc change nothing.
+    obOpenDenySheet({
+      payerName, recipientName, prize: ob.amountOrPrize || '', withReason: true,
+      onConfirm: (reason) => applyObligationDeny(obId, reason, rerender),
+    });
+    return;
   } else if (action === 'mark' && next === 'pending') {
     saveObligation({ ...ob, status: next, deniedReason: null });
     showToast(`Marked as paid — waiting on ${recipientName} or the commissioner to confirm.`, 'warning');
@@ -18466,44 +21795,152 @@ function handleObligationAction(obId, action) {
     try { postObligationSettledNotice(settled); } catch (e) { console.warn('[lifecycle] obligation-settled hook failed', e); }
     showToast(`Confirmed — ${payerName} paid ${recipientName}.`, 'success');
   } else if (action === 'undo') {
-    saveObligation({ ...ob, status: next, paidAt: null });
+    // 0046 (F1, review): Undo puts a paid row back to Unpaid WITHOUT a reason — a reason from an earlier denial must never reappear.
+    saveObligation({ ...ob, status: next, paidAt: null, deniedReason: null });
   }
+}
+
+/** The CONFIRMED Deny. Re-derived from the store at the moment of confirming: the sheet may have been open while
+ *  another device moved the row, and a Deny is only ever pending -> unpaid. The reason is normalised to the server's
+ *  CHECK (data-model.js normalizeDeniedReason); empty is "no reason". */
+function applyObligationDeny(obId, reason, rerender) {
+  const ob = getObligations().find(o => o.obligationId === obId);
+  const next = ob && isObligationActive(ob) ? obligationNextStatus(ob.status, obligationRole(getSession(), ob), 'deny') : null;
+  if (next !== 'unpaid') {
+    showToast('That payment changed before you denied it — nothing was changed.', 'error');
+    if (typeof rerender === 'function') rerender();
+    return;
+  }
+  saveObligation({ ...ob, status: next, deniedReason: normalizeDeniedReason(reason), paidAt: null });
+  // No haptic here: T8 (Standings) gives none on Deny. The sheet's own appearance is the warning notification every destructive confirm has.
+  showToast('Denied — back to unpaid.', 'error');
+  if (typeof rerender === 'function') rerender();
 }
 
 /** Same transitions, applied to the 2K25 CARRYOVER ledger — a status-map
  *  overlay (settings.ob2025) on baked history, not a stored record. See
  *  history-2025.js `ob2025Status()` for the legacy-boolean migration story.
- *  No denial-reason prompt: the map's value shape is intentionally a bare
- *  status string ('pending'|'paid', absence=unpaid) with nowhere to carry an
- *  optional reason, so unlike the current-season ledger, deny here does not
- *  ask for one. */
-function handleOb2025Action(obligationId, action) {
+ *  No denial REASON: the map's value shape is intentionally a bare status
+ *  string ('pending'|'paid', absence=unpaid) with nowhere to carry one, so the
+ *  Deny sheet here is the confirmation alone (0046: the same sheet, no field).
+ *
+ *  0046 (R-19 follow-up) — WHO WRITES IT. The map lives in the league_kv
+ *  `settings` row, which only the commissioner may write, so a PLAYER's
+ *  saveSetting() here was refused on his own device and never saved. A player
+ *  in Supabase mode now goes through the server's narrow path
+ *  (sb.settleOb2025 -> settle_2025_obligation): the server re-checks the pilot
+ *  league, his own seat, that he is party to the row, and the move, and any
+ *  refusal is the loud-fail banner — never a silent no-op. The commissioner
+ *  (a commissioner write) and PIN/local mode keep the settings overlay. */
+/** obligationId -> the action on its way to the server (a Map, so the card can label the TAPPED button and quietly disable the other). */
+const _ob2025InFlight = new Map();
+/** The server call a player's 2K25 move makes (sb.settleOb2025). A variable only so leaguesettingsuitest can watch it (_setOb2025SettleForTest). */
+let _ob2025Settle = (args) => sb.settleOb2025(args);
+function handleOb2025Action(obligationId, action, { rerender = null } = {}) {
   const row = season2025Obligations().find(r => r.obligationId === obligationId); if (!row) return;
+  if (_ob2025InFlight.has(obligationId)) return;           // a second tap while the first is still on its way changes nothing
   const sess = getSession();
   const role = obligationRole(sess, row);
   const status = ob2025Status(getSettings().ob2025 || {}, obligationId);
   const next = obligationNextStatus(status, role, action);
   if (!next) { showToast("You don't have permission to do that", 'error'); return; }
-  const applyStatus = (s) => {
-    const map = { ...(getSettings().ob2025 || {}) };
-    if (s === 'unpaid') delete map[obligationId]; else map[obligationId] = s;
-    saveSetting('ob2025', map);
-  };
   if (action === 'deny') {
-    applyStatus(next);
-    showToast('Denied — back to unpaid.', 'error');
-  } else if (action === 'mark' && next === 'pending') {
-    applyStatus(next);
-    showToast(`Marked as paid — waiting on ${row.recipientName} or the commissioner to confirm.`, 'warning');
-  } else if (action === 'mark' && next === 'paid') {
-    applyStatus(next);
-    showToast(role === 'creditor' ? 'Confirmed — marked paid.' : 'Marked paid ✅', 'success');
-  } else if (action === 'confirm') {
-    applyStatus(next);
-    showToast(`Confirmed — ${row.payerName} paid ${row.recipientName}.`, 'success');
-  } else if (action === 'undo') {
-    applyStatus(next);
+    obOpenDenySheet({
+      payerName: row.payerName, recipientName: row.recipientName, prize: row.prize, withReason: false,
+      onConfirm: () => applyOb2025Action(obligationId, 'deny', rerender),
+    });
+    return;
   }
+  applyOb2025Action(obligationId, action, rerender);
+}
+
+/** One 2K25 transition, re-derived at the moment it is applied (a confirmed Deny may come seconds after the tap). */
+function applyOb2025Action(obligationId, action, rerender) {
+  const row = season2025Obligations().find(r => r.obligationId === obligationId); if (!row) return;
+  const sess = getSession();
+  const role = obligationRole(sess, row);
+  const next = obligationNextStatus(ob2025Status(getSettings().ob2025 || {}, obligationId), role, action);
+  const redraw = () => { if (typeof rerender === 'function') rerender(); };
+  if (!next) { showToast('That balance changed before your tap landed — nothing was changed.', 'error'); redraw(); return; }
+  const done = () => {
+    if (action === 'deny') showToast('Denied — back to unpaid.', 'error');   // no haptic on Deny (T8)
+    else if (action === 'mark' && next === 'pending') showToast(`Marked as paid — waiting on ${row.recipientName} or the commissioner to confirm.`, 'warning');
+    else if (action === 'mark' && next === 'paid') showToast(role === 'creditor' ? 'Confirmed — marked paid.' : 'Marked paid ✅', 'success');
+    else if (action === 'confirm') showToast(`Confirmed — ${row.payerName} paid ${row.recipientName}.`, 'success');
+    redraw();
+  };
+  if (isSupabaseDataMode() && role !== 'admin') {
+    _ob2025InFlight.set(obligationId, action);
+    // N3 (review round 3): redraw NOW, so the row reads "Saving…" the moment the request leaves — a Deny confirmed from the sheet has no
+    // delegate re-render of its own, and until this redraw its idle buttons could still be tapped.
+    redraw();
+    _ob2025Settle({ obligationId, action }).then(() => {
+      _ob2025InFlight.delete(obligationId);
+      if (action === 'mark' || action === 'confirm') haptic('medium');
+      done();
+    }, (err) => {
+      _ob2025InFlight.delete(obligationId);
+      // N2 (review, 0046): a 2K25 refusal never REPLACES a red banner already on screen — a real sync failure outranks it. B8's owner
+      // rule does exactly this: a non-'app' owner refuses a visible 'app' banner and returns false; the message is then a toast.
+      if (showBackendErrorBanner(ob2025RefusalBody(err), { ...OB2025_REFUSAL_COPY, owner: 'ob2025' }) === false) {
+        showToast(`${OB2025_REFUSAL_COPY.title} ${ob2025RefusalBody(err)}`, 'error');
+      }
+      haptic('error');
+      redraw();
+    });
+    return;
+  }
+  const map = { ...(getSettings().ob2025 || {}) };
+  if (next === 'unpaid') delete map[obligationId]; else map[obligationId] = next;
+  saveSetting('ob2025', map);
+  done();
+}
+
+/** 0046 — the loud-fail banner's words for a refused 2K25 save (B-05's per-surface override shape). Calm, no
+ *  technical message (Interaction Principles §Error States): what happened, then what to do next. */
+const OB2025_REFUSAL_COPY = {
+  title: 'That 2K25 balance was not saved.',
+  hint: 'Nothing else on this device is affected. Refresh and try again; if it keeps failing, tell the commissioner.',
+};
+function ob2025RefusalBody(err) {
+  switch (err && err.code) {
+    case 'not_party': return 'Only the two people on that balance, or the commissioner, can change it.';
+    case 'illegal_transition': return 'That balance changed on another device first. Refresh to see where it stands.';
+    case 'not_pilot': return 'This league has no 2K25 ledger.';
+    case 'league_paused': return 'This league is paused, so balances can’t change right now.';
+    case 'not_member': case 'not_authenticated': return 'Your sign-in no longer matches a seat in this league. Sign in again, then try once more.';
+    default: return 'The server couldn’t be reached, or didn’t answer.';
+  }
+}
+
+/** The Deny confirmation (R-19 follow-up, 0046): the League Settings action-sheet layer — the same one Waive uses from
+ *  the Comm Obligations card — so the scrim, Esc, focus return, inert background and the warning haptic are the ones
+ *  every destructive confirm here already has. `withReason` adds the optional reason field and its live count. */
+function obOpenDenySheet({ payerName = '', recipientName = '', prize = '', withReason = true, onConfirm = null } = {}) {
+  lsShowActionSheet('deny', LSV.denySheetHTML({ payerName, recipientName, prize, withReason, max: DENIED_REASON_MAX }, { escHtml }), { onConfirm });
+  const input = document.getElementById('ob-deny-reason');
+  if (!input) return;
+  const count = document.getElementById('ob-deny-count');
+  // N5 (review): the count and the cap are ONE unit, characters (code points). `maxlength` counts UTF-16 units, so two-unit emoji
+  // stopped at "100/200"; the field carries no maxlength and is cut here, to the same 200 the server's CHECK counts.
+  input.addEventListener('input', () => {
+    const chars = [...String(input.value || '')];
+    if (chars.length > DENIED_REASON_MAX) input.value = chars.slice(0, DENIED_REASON_MAX).join('');
+    if (count) count.textContent = `${Math.min(chars.length, DENIED_REASON_MAX)}/${DENIED_REASON_MAX}`;
+  });
+  // Return dismisses the keyboard and never confirms (Interaction Principles §Forms: a destructive action is never one Return away).
+  input.addEventListener('keydown', (e) => { if (e && e.key === 'Enter') { e.preventDefault?.(); try { input.blur?.(); } catch { /* courtesy */ } } });
+  // On focus, Deny Payment scrolls into view above the keyboard once the keyboard's own animation has started.
+  input.addEventListener('focus', () => {
+    setTimeout(() => { try { document.querySelector(`#${LS_ACTION_LAYER_ID} .lc-as-danger`)?.scrollIntoView?.({ block: 'nearest' }); } catch { /* courtesy */ } }, 300);
+  });
+}
+function obConfirmDeny() {
+  const p = _lsPrompt;
+  const input = document.getElementById('ob-deny-reason');
+  const reason = input ? String(input.value || '') : '';
+  lsHideActionSheet({ restoreFocus: false });
+  if (p && typeof p.onConfirm === 'function') p.onConfirm(reason);
 }
 
 /** v0.17.0 — 2K25 outstanding balances, visible to the whole league on the
@@ -18601,10 +22038,33 @@ function renderSeason2025RecordSection() {
     </div>`;
 }
 
+/** 0046 — Standings redrawn where the reader is: an obligation's confirmed Deny or a player's 2K25 save lands after the
+ *  tap's own render, and a redraw that jumped to the top would lose his place (the Standings delegate's T8 rule). */
+function keepScrollRenderLeaderboard() {
+  const y = Number(window.scrollY) || 0;
+  renderLeaderboard();
+  if (typeof window.scrollTo === 'function') window.scrollTo({ top: y, left: 0, behavior: 'instant' });
+}
+
 function bindSeason2025Sections(c) {
   c.querySelectorAll('.ob2025-action-btn').forEach(btn=>{
+    // N3 (review, 0046): a PLAYER's 2K25 move is a server round trip. Until it answers, that row's button reads "Saving…", disabled and
+    // busy, so it can neither be tapped twice nor look idle; the answer (or refusal) redraws the card. Applied here, at bind time, so the
+    // card's row template (xsstest's pinned site) is untouched.
+    const inFlight = _ob2025InFlight.get(btn.dataset.obId);
+    if (inFlight) {
+      // Every button on that row is disabled; only the one that was TAPPED says "Saving…" (the other keeps its label, quietly disabled).
+      btn.disabled = true;
+      btn.setAttribute('aria-disabled', 'true');
+      if (btn.dataset.obAction === inFlight) {
+        btn.setAttribute('aria-busy', 'true');
+        btn.textContent = 'Saving…';
+      }
+      return;
+    }
     btn.addEventListener('click',()=>{
-      handleOb2025Action(btn.dataset.obId, btn.dataset.obAction);
+      // 0046 — a player's 2K25 save is a server round trip (and a Deny a confirm sheet): it redraws when it lands.
+      handleOb2025Action(btn.dataset.obId, btn.dataset.obAction, { rerender: keepScrollRenderLeaderboard });
       renderLeaderboard();
     });
   });
@@ -18642,6 +22102,7 @@ export function renderObligationsAdmin() {
       <div>
         <div class="text-sm"><strong>${escHtml(payer?.displayName||'?')}</strong>${LS.ledgerDepartedLabel(payer?.active) ? ' <em class="text-muted">(left)</em>' : ''} owes <strong>${escHtml(recip?.displayName||'?')}</strong>${LS.ledgerDepartedLabel(recip?.active) ? ' <em class="text-muted">(left)</em>' : ''}${reviewFlag}</div>
         <div class="text-xs text-muted">${escHtml(ob.weekId ? formatWeekLabel(w) : (ob.weekLabel||'manual'))} · ${escHtml(ob.note||ob.amountOrPrize||settings.weeklyPrize)}</div>
+        ${obligationDeniedLineHTML(ob.status, ob)}
       </div>
       <div class="ob-actions">
         ${obligationActionsHTML(ob.status, ob, sess, {
@@ -19103,6 +22564,450 @@ function renderWeekStatusButtons(week) {
 }
 /** RG-251 test-only seam — same `_xForTest` convention (authtest [44k2] phase 5). */
 export const _renderWeekStatusButtonsForTest = renderWeekStatusButtons;
+
+// ══════════════════════════════════════════════════════════════════════════
+// PF-1 / UN-410, UN-411 / DI Amendment 1 (A1.1, 2026-10-01) — LATE ENTRY: "Re-open Picks" on a week whose lock instant has PASSED asks for a NEW LOCK TIME.
+//
+// Drew: "No we do not use it after lock time to let someone enter late, but theoretically the commissioner should have that power." The server now closes a week at its lock instant and
+// (switch on) re-locks a re-opened one within a minute, so a bare re-open after the instant would be a door that shuts at once. The commissioner picks a time (now + 30 min by default,
+// later than now, no later than the week's last kickoff); the sheet says what that does BEFORE it is confirmed; on confirm the app writes weeks.picks_lock_at WHILE THE WEEK IS STILL
+// LOCKED and only then re-opens through the existing transition (so there is no moment the week is open with the old instant for the job to re-lock). The guard and the job honour an
+// explicit picks_lock_at exactly. Cancel changes nothing. Before the instant, Re-open Picks behaves as it always did. The decisions are pure (js/week-wizard.js, weekwizardtest);
+// what is here is the sheet and the two-step write. Built on the shared sheet shell (mountSheetShell) with the wizard sheet's own drag-to-dismiss recipe.
+// PARITY-BY-DESIGN (DI-499 / A1.1): the sheet, the field and the copy are identical on both front ends; the swipe-down dismissal and the haptics are native-only, the ✕, the backdrop, Cancel and Esc work everywhere.
+// ══════════════════════════════════════════════════════════════════════════
+const LATE_ENTRY_WRAP_ID = 'late-entry-sheet-wrap';
+const LATE_ENTRY_SHEET_ID = 'late-entry-sheet';
+let _lateEntry = null;     // { weekId, onDone, lastMs, busy, unbind, onKey, closing }
+
+/** Called from the two places a status button re-opens a week (the Comm Week tab and the wizard's Manage screen). Returns TRUE when the sheet took over (the caller does nothing more) and
+ *  FALSE when the re-open should proceed exactly as it always has: not a LOCKED week, a demo week, or a lock instant that has not passed (or that does not exist).
+ *  ONLY A LOCKED WEEK (security functional note, reviewer BLOCK #1, 2026-10-01): a LIVE week has been REVEALED, and the server cannot re-open it — transition_week has no live -> open and
+ *  weeks_status_guard refuses any -> open once revealed_at is set — so offering the sheet there would write picks_lock_at, be refused on the re-open, and leave an orphaned picks_lock_at on a
+ *  revealed week. LIVE and FINAL never open the sheet and nothing is written (local mode keeps its own un-sheeted re-open, which has no server to disagree with). */
+function maybeOpenLateEntrySheet(week, { onDone = null } = {}) {
+  if (!week || week.status !== WEEK_STATUS.LOCKED || week.dataSourceMode === DATA_SOURCE_MODE.DEMO) return false;
+  let lockAtMs = null;
+  try { const d = computeEffectiveLockAt(week, getGames(week.weekId)); lockAtMs = d ? d.getTime() : null; } catch { lockAtMs = null; }
+  if (!lateEntryApplies({ lockAtMs })) return false;
+  openLateEntrySheet(week, { onDone });
+  return true;
+}
+export const _maybeOpenLateEntrySheetForTest = maybeOpenLateEntrySheet;
+
+function lateEntryTimeText(ms) {
+  try { return formatGameTime(new Date(ms).toISOString(), getTimezone()); } catch { return new Date(ms).toString(); }
+}
+/** What the sheet shows for a typed value: the validation verdict and the consequence line (or the inline error). Pure over its inputs. */
+export function lateEntryPreview({ value, nowMs = Date.now(), lastMs = null, firstMs = null }) {
+  const atMs = value ? new Date(value).getTime() : NaN;
+  const v = validateLateEntryAt({ atMs, now: nowMs, lastKickoffMs: lastMs });
+  // N3: `warning` is the extra clause when the chosen time is after the week's FIRST kickoff; the sheet renders it after the consequence in the same fixed-height region.
+  return { ok: v.ok, reason: v.reason, atMs, error: v.ok ? '' : lateEntryErrorCopy(v.reason), consequence: v.ok ? LATE_ENTRY_COPY.consequence(lateEntryTimeText(atMs)) : '', warning: v.ok ? lateEntryStartedWarning({ atMs, firstKickoffMs: firstMs }) : '' };
+}
+
+function openLateEntrySheet(week, { onDone = null } = {}) {
+  if (isContentWithheld()) return;           // the same guard every body-appended surface carries (SECURITY GATE FINDING 1)
+  closeLateEntrySheet({ immediate: true });
+  const nowMs = Date.now();
+  const lastMs = lateEntryLastKickoffMs(getGames(week.weekId));
+  const firstMs = lateEntryFirstKickoffMs(getGames(week.weekId));
+  const defMs = lateEntryDefaultMs({ now: nowMs, lastKickoffMs: lastMs });
+  const le = { weekId: week.weekId, onDone, lastMs, firstMs, busy: false, unbind: null, onKey: null, closing: false };
+  _lateEntry = le;
+  const { unbind } = mountSheetShell({
+    wrapId: LATE_ENTRY_WRAP_ID,
+    sheetId: LATE_ENTRY_SHEET_ID,
+    sheetAttrs: ' role="dialog" aria-modal="true" aria-labelledby="late-entry-title"',
+    headerInnerHTML: `<div class="chat-sheet-title" id="late-entry-title" tabindex="-1">${escHtml(LATE_ENTRY_COPY.TITLE)}</div>
+        <button type="button" class="chat-sheet-close" id="late-entry-close" aria-label="Close">${icon('close')}</button>`,
+    bodyId: 'late-entry-body',
+    closeId: 'late-entry-close',
+    onBackdrop: () => closeLateEntrySheet(),
+    renderBody: () => paintLateEntryBody(le, defMs),
+    drag: { getBlocked: isLateEntryDismissGestureBlocked, onProgress: lateEntryDragProgress, onSettle: settleLateEntryDrag },
+  });
+  le.unbind = unbind;
+  const wrap = document.getElementById(LATE_ENTRY_WRAP_ID);
+  const input = wrap?.querySelector('#late-entry-at');
+  const refresh = () => {
+    if (le.closing) return;
+    const p = lateEntryPreview({ value: input?.value || '', nowMs: Date.now(), lastMs, firstMs });
+    const cons = wrap?.querySelector('#late-entry-consequence');
+    const err = wrap?.querySelector('#late-entry-error');
+    const confirm = wrap?.querySelector('#late-entry-confirm');
+    if (cons) cons.textContent = p.warning ? `${p.consequence} ${p.warning}` : p.consequence;
+    if (err) { err.textContent = p.error; err.classList?.toggle?.('is-visible', !!p.error); }
+    if (confirm) confirm.disabled = !p.ok || le.busy;
+  };
+  input?.addEventListener('input', refresh);
+  input?.addEventListener('change', refresh);
+  wrap?.querySelector('#late-entry-cancel')?.addEventListener('click', () => { if (!le.busy) closeLateEntrySheet(); });
+  wrap?.querySelector('#late-entry-confirm')?.addEventListener('click', () => confirmLateEntry(le, input, refresh));
+  // Esc asks for the same thing the backdrop does (web; a phone has no Esc key). Self-cleaning if the node was swept out from under it.
+  le.onKey = (e) => {
+    if (e.key !== 'Escape') return;
+    if (!document.getElementById(LATE_ENTRY_WRAP_ID)) { closeLateEntrySheet({ immediate: true }); return; }
+    if (!le.busy) closeLateEntrySheet();
+  };
+  document.addEventListener('keydown', le.onKey);
+  refresh();
+  // Focus moves INTO the dialog on open (VoiceOver reads its title first). The title, not the field: a focused date field would raise the picker before anyone has read a word.
+  try { wrap?.querySelector('#late-entry-title')?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+}
+
+/** The body, painted once. The field is the player's-device local wall time (isoToLocalDateTimeInput: never toISOString().slice, RG-286); the consequence line and the inline error sit in
+ *  regions of FIXED height so typing never moves the buttons (Design Philosophy: no layout jump); the two buttons are a centred group with an 8 pt gap that wraps into a stack at 375 pt. */
+function paintLateEntryBody(le, defMs) {
+  const body = document.getElementById(LATE_ENTRY_WRAP_ID)?.querySelector('#late-entry-body');
+  if (!body) return;
+  const startValue = defMs === null ? '' : isoToLocalDateTimeInput(new Date(defMs).toISOString());
+  body.innerHTML = `
+    <div class="late-entry-form">
+      <div class="form-group">
+        <label class="form-label" for="late-entry-at">${escHtml(LATE_ENTRY_COPY.FIELD_LABEL)}</label>
+        <input class="form-input" type="datetime-local" id="late-entry-at" value="${escHtml(startValue)}" aria-describedby="late-entry-consequence late-entry-error" />
+      </div>
+      <p class="late-entry-consequence" id="late-entry-consequence" aria-live="polite"></p>
+      <div class="form-field-error" id="late-entry-error" role="alert"></div>
+      <div class="btn-row late-entry-actions">
+        <button type="button" class="btn btn-ghost" id="late-entry-cancel">${escHtml(LATE_ENTRY_COPY.CANCEL)}</button>
+        <button type="button" class="btn btn-primary" id="late-entry-confirm">${escHtml(LATE_ENTRY_COPY.CONFIRM)}</button>
+      </div>
+    </div>`;
+}
+
+/**
+ * Is the lock-time patch for this week STILL WAITING to be written? Asked of the adapter's own planner (planFlush(): the operations the next flush would send) AFTER the flush has settled.
+ * True when the adapter is not ACTIVE (it plans nothing then, and nothing is being sent), when a `picks_lock_at` patch for this week row is still planned, or when the weeks key is refused
+ * or dropped outright. A planner that cannot be asked answers TRUE: the safe direction is "not saved".
+ */
+function lateEntryLockWritePending(weekId) {
+  try {
+    const { plan, refusals, stale, heldBy } = sb.planFlush();
+    if (heldBy) return true;
+    if ((refusals || []).some((r) => r && r.key === 'cfbp_weeks') || (stale || []).some((x) => x && x.key === 'cfbp_weeks')) return true;
+    return (plan || []).some((op) => op && op.key === 'cfbp_weeks' && op.kind === 'rows' && op.rowId === weekId && op.changed && Object.prototype.hasOwnProperty.call(op.changed, 'picks_lock_at'));
+  } catch (e) { console.warn('[late-entry] could not ask the adapter whether the lock-time write is still pending', e); return true; }
+}
+
+/** Test seam (reviewer BLOCK #1 N1): the production probe, asked directly against the real adapter. */
+export const _lateEntryLockWritePendingForTest = lateEntryLockWritePending;
+
+/**
+ * The two-step write. (1) picksLockAt, WHILE THE WEEK IS STILL LOCKED, and — in supabase mode — flushed and awaited so a refusal (a paused league, a lost role) is known BEFORE anything
+ * re-opens; a refusal puts the old value back and stops. (2) the existing re-open transition through applyWeekStatusChange(), whose planner sends transition_week(open) from the server's
+ * confirmed `locked`. The mirror's own row is re-read first (RG-256): the sheet does not repaint on Realtime. Returns { ok, reason }.
+ *
+ * N1 (reviewer BLOCK #1, 2026-10-01): step (1) counts as DONE only when the write demonstrably reached the server — lateEntryLockWriteLanded(): none of the "not saved" shapes of flush()'s
+ * result (held, skipped, retrying, refusedStale, stillRefused, abandoned, refused, heldOffline, a throw) AND the patch no longer pending. Anything else restores the old value and stops with
+ * the existing failure copy, so the re-open can never be planned ahead of a lock time that never left the device. `writePending` is injectable for the harness; production passes neither it
+ * nor `flush`. Only a LOCKED week is re-opened here (`not_locked` otherwise, nothing written): see maybeOpenLateEntrySheet().
+ */
+export async function applyLateEntry({ weekId, atIso, flush = () => sb.flush(), supabase = isSupabaseDataMode(), writePending = lateEntryLockWritePending }) {
+  const cur = getWeek(weekId);
+  if (!cur) return { ok: false, reason: 'gone' };
+  if (cur.status !== WEEK_STATUS.LOCKED) return { ok: false, reason: 'not_locked' };
+  const before = cur.picksLockAt ?? null;
+  saveWeek({ ...cur, picksLockAt: atIso });
+  if (supabase) {
+    let res = null;
+    try { res = await flush(); } catch (e) { console.warn('[late-entry] the lock-time write failed', e); res = null; }
+    let pending = true;
+    try { pending = !!writePending(weekId); } catch { pending = true; }
+    if (!lateEntryLockWriteLanded(res, { pending })) {
+      const now = getWeek(weekId);
+      if (now) saveWeek({ ...now, picksLockAt: before });      // put the old value back: nothing was changed
+      return { ok: false, reason: 'save_failed' };
+    }
+  }
+  const upd = getWeek(weekId) || cur;
+  applyWeekStatusChange({ ...upd, picksLockAt: atIso }, WEEK_STATUS.OPEN);
+  return { ok: true, reason: null };
+}
+
+async function confirmLateEntry(le, input, refresh) {
+  if (le.busy || le.closing) return;
+  const p = lateEntryPreview({ value: input?.value || '', nowMs: Date.now(), lastMs: le.lastMs });
+  if (!p.ok) { refresh(); return; }
+  le.busy = true;
+  refresh();
+  haptic('medium');                                            // a primary action (Interaction Principles, Button Behavior); native only inside haptic()
+  const atIso = new Date(p.atMs).toISOString();
+  let result;
+  try { result = await applyLateEntry({ weekId: le.weekId, atIso }); }
+  catch (e) { console.warn('[late-entry] confirm failed', e); result = { ok: false, reason: 'save_failed' }; }
+  le.busy = false;
+  if (_lateEntry !== le) return;                                // closed (swept, replaced) while the write was in flight: nothing to paint
+  if (!result.ok) {
+    // refresh() FIRST: it repaints the field's own verdict into the same inline-error region (and re-enables Confirm now that `busy` is off), so painting the failure before it
+    // wiped the failure message the instant it appeared (found in the N1 pass: the failure copy N1 relies on was never actually visible).
+    refresh();
+    const err = document.getElementById(LATE_ENTRY_WRAP_ID)?.querySelector('#late-entry-error');
+    if (err) { err.textContent = result.reason === 'not_locked' ? LATE_ENTRY_COPY.NOT_LOCKED : LATE_ENTRY_COPY.SAVE_FAILED; err.classList?.add?.('is-visible'); }
+    return;
+  }
+  haptic('success');
+  showToast(LATE_ENTRY_COPY.OPENED(lateEntryTimeText(p.atMs)), 'success');
+  const done = le.onDone;
+  closeLateEntrySheet({ immediate: true });
+  refreshHeader();
+  if (typeof done === 'function') done();
+}
+
+/** Close: the sheet slides the rest of the way down on the same curve it came up on (no pop); immediate under Reduce Motion, when swept, and when replaced. Idempotent. */
+function closeLateEntrySheet({ immediate = false } = {}) {
+  const le = _lateEntry;
+  const wrap = document.getElementById(LATE_ENTRY_WRAP_ID);
+  if (le) {
+    if (le.closing && !immediate) return;
+    le.closing = true;
+    try { le.unbind?.(); } catch { /* the drag teardown is a courtesy */ }
+    le.unbind = null;
+    if (le.onKey) { try { document.removeEventListener('keydown', le.onKey); } catch { /* courtesy */ } le.onKey = null; }
+  }
+  const finish = () => { document.getElementById(LATE_ENTRY_WRAP_ID)?.remove(); if (_lateEntry === le) _lateEntry = null; };
+  if (!wrap || immediate) { finish(); return; }
+  const sheetEl = wrap.querySelector(`#${LATE_ENTRY_SHEET_ID}`);
+  let reduced = false; try { reduced = prefersReducedMotion(); } catch { reduced = false; }
+  finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--late-drag-y', '1'), reducedMotion: reduced, done: finish });
+}
+/** The sheet's own drag-to-dismiss (native only; bindSwipeToDismiss is a no-op on web): the same recipe as the wizard sheet, with its own custom property. */
+function isLateEntryDismissGestureBlocked() {
+  return _dismissBlockingSurfaceUp({ excludeLateEntry: true }) || !!_lateEntry?.busy;
+}
+function lateEntryDragProgress(wrap, sheetEl, progress) {
+  sheetEl.setAttribute('data-dragging', 'true');
+  wrap.setAttribute('data-dragging', 'true');
+  wrap.style.setProperty('--late-drag-y', String(progress));
+}
+function settleLateEntryDrag(wrap, sheetEl, { dismissed, reducedMotion } = {}) {
+  sheetEl.removeAttribute('data-dragging');
+  wrap.removeAttribute('data-dragging');
+  if (!dismissed) { wrap.style.setProperty('--late-drag-y', '0'); return; }            // cancelled: spring back (the CSS transition animates it)
+  finishSlideThenRemove({
+    listenEl: sheetEl,
+    apply: () => wrap.style.setProperty('--late-drag-y', '1'),
+    reducedMotion: !!reducedMotion,
+    done: () => closeLateEntrySheet({ immediate: true }),
+  });
+}
+/** Test seam — the sheet's page-lifetime state. */
+export function _lateEntryStateForTest() { return _lateEntry ? { weekId: _lateEntry.weekId, busy: _lateEntry.busy, closing: _lateEntry.closing, lastMs: _lateEntry.lastMs } : null; }
+export function _resetLateEntryForTest() { closeLateEntrySheet({ immediate: true }); _lateEntry = null; }
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// D1 (DI-532, 2026-10-07) - ADD A SPORT: enable the NFL (or restore an archived sport) in the EXISTING league
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// A bottom sheet on the shared sheet shell (mountSheetShell), one real choice - WHO PLAYS the sport: "Members who join" (recommended; each member chooses, nobody is counted missing) or "Everyone in
+// the league" - and an optional Locker Room announcement. The action is multisport-admin.js addSportAction(): the competition row has a DETERMINISTIC id, so a retry or a double tap writes the same
+// row and can never create a duplicate sport; nothing in weeks, picks, results, members or chat is touched. Reached from the League Page's card now and from the league overview sheet's Commissioner
+// group (DI-554, the client branch calls openAddSportSheet()). PARITY-BY-DESIGN (DI-532 / Interaction Principles, Sheets): the sheet, the radios and the copy are identical on both front ends; the
+// swipe-down dismissal and the success haptic are native-only, the visible Cancel, the backdrop, the close button and Esc are on both.
+const ADD_SPORT_WRAP_ID = 'add-sport-sheet-wrap';
+const ADD_SPORT_SHEET_ID = 'add-sport-sheet';
+let _addSport = null;      // { options, pick, enrollment, announce, busy, done, result, onDone, unbind, onKey, closing }
+
+/** Is there a sport the platform offers that this league does not run? (The League Page card's one question.) */
+/** What the Add a sport sheet would offer right now (the platform's offered sports this league does not run), or []. ONE read for the sheet, the League Page card and the overview row. */
+function addSportOptionsNow() {
+  try { return addSportOptions({ offeredSports: getCachedOfferedSports(), profiles: listProfiles(), competitions: getLeagueCompetitions() }); } catch { return []; }
+}
+function addSportAvailable() {
+  return addSportOptionsNow().length > 0;
+}
+export const _addSportAvailableForTest = addSportAvailable;
+
+export function openAddSportSheet({ onDone = null } = {}) {
+  if (isContentWithheld()) return;
+  if (!getSession()?.isAdmin) return;                     // commissioner only (the RLS policy is the boundary; this keeps the surface honest)
+  const options = addSportOptions({ offeredSports: getCachedOfferedSports(), profiles: listProfiles(), competitions: getLeagueCompetitions() });
+  if (!options.length) return;                            // nothing left to add: no sheet, never a dead one
+  closeAddSportSheet({ immediate: true });
+  const as = { options, pick: options[0].dbCode, enrollment: 'opt_in', announce: true, busy: false, done: false, result: null, onDone, unbind: null, onKey: null, closing: false };
+  _addSport = as;
+  const { unbind } = mountSheetShell({
+    wrapId: ADD_SPORT_WRAP_ID,
+    sheetId: ADD_SPORT_SHEET_ID,
+    sheetAttrs: ' role="dialog" aria-modal="true" aria-labelledby="add-sport-title"',
+    headerInnerHTML: `<div class="chat-sheet-title" id="add-sport-title" tabindex="-1">${escHtml(MS_COPY.addTitle)}</div>
+        <button type="button" class="chat-sheet-close as-close" id="add-sport-close" aria-label="Close">${icon('close')}</button>`,
+    bodyId: 'add-sport-body',
+    closeId: 'add-sport-close',
+    onBackdrop: () => closeAddSportSheet(),
+    renderBody: () => paintAddSportBody(as),
+    drag: { getBlocked: () => _dismissBlockingSurfaceUp() || !!_addSport?.busy, onProgress: addSportDragProgress, onSettle: settleAddSportDrag },
+  });
+  as.unbind = unbind;
+  as.onKey = (e) => {
+    if (e.key !== 'Escape') return;
+    if (!document.getElementById(ADD_SPORT_WRAP_ID)) { closeAddSportSheet({ immediate: true }); return; }
+    if (!as.busy) closeAddSportSheet();
+  };
+  document.addEventListener('keydown', as.onKey);
+}
+
+function closeAddSportSheet({ immediate = false } = {}) {
+  const as = _addSport;
+  const wrap = document.getElementById(ADD_SPORT_WRAP_ID);
+  if (as) {
+    if (as.closing && !immediate) return;
+    as.closing = true;
+    try { as.unbind?.(); } catch { /* the drag teardown is a courtesy */ }
+    as.unbind = null;
+    if (as.onKey) { try { document.removeEventListener('keydown', as.onKey); } catch { /* courtesy */ } as.onKey = null; }
+  }
+  const finish = () => { document.getElementById(ADD_SPORT_WRAP_ID)?.remove(); if (_addSport === as) _addSport = null; };
+  if (!wrap || immediate) { finish(); return; }
+  const sheetEl = wrap.querySelector(`#${ADD_SPORT_SHEET_ID}`);
+  let reduced = false; try { reduced = prefersReducedMotion(); } catch { reduced = false; }
+  finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--sport-drag-y', '1'), reducedMotion: reduced, done: finish });
+}
+function addSportDragProgress(wrap, sheetEl, progress) {
+  sheetEl.setAttribute('data-dragging', 'true');
+  wrap.setAttribute('data-dragging', 'true');
+  wrap.style.setProperty('--sport-drag-y', String(progress));
+}
+function settleAddSportDrag(wrap, sheetEl, { dismissed, reducedMotion } = {}) {
+  sheetEl.removeAttribute('data-dragging');
+  wrap.removeAttribute('data-dragging');
+  if (!dismissed) { wrap.style.setProperty('--sport-drag-y', '0'); return; }
+  finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--sport-drag-y', '1'), reducedMotion: !!reducedMotion, done: () => closeAddSportSheet({ immediate: true }) });
+}
+
+/**
+ * A settings-style SWITCH ROW (S8): a real `role="switch"` button with the label on the left and the shared `.cc-row-switch` track on the right - the one on/off control the control center, League Settings and
+ * News use - never a raw browser checkbox. 44 pt tall, the 97% press, the track slides over --motion-fast and drops its transition under Reduce Motion (all in the shared CSS).
+ */
+function switchRowHTML({ id, label, on }) {
+  return `<button type="button" class="control-center-row control-center-row--toggle" id="${escHtml(id)}" role="switch" aria-checked="${on ? 'true' : 'false'}">
+      <span class="cc-row-label">${escHtml(label)}</span>
+      <span class="cc-row-switch" data-on="${on ? 'true' : 'false'}" aria-hidden="true"></span>
+    </button>`;
+}
+/** Flip a switch row built by switchRowHTML() and answer its new state (the markup is the source of truth: `aria-checked`). */
+function toggleSwitchRow(btn) {
+  const on = btn.getAttribute('aria-checked') !== 'true';
+  btn.setAttribute('aria-checked', on ? 'true' : 'false');
+  const track = btn.querySelector('.cc-row-switch');
+  if (track) track.setAttribute('data-on', on ? 'true' : 'false');
+  haptic('selection');
+  return on;
+}
+export const _toggleSwitchRowForTest = toggleSwitchRow;
+function addSportRadioHTML({ id, group, value, checked, title, hint = '' }) {
+  return `<button type="button" role="radio" class="as-radio" id="${escHtml(id)}" ${group === 'sport' ? 'data-as-sport' : 'data-as-enroll'}="${escHtml(value)}" aria-checked="${checked ? 'true' : 'false'}" tabindex="${checked ? 0 : -1}">
+      <span class="as-radio-dot" aria-hidden="true"></span>
+      <span class="as-radio-text"><span class="as-radio-title">${escHtml(title)}</span>${hint ? `<span class="as-radio-hint text-muted text-xs">${escHtml(hint)}</span>` : ''}</span>
+    </button>`;
+}
+
+function paintAddSportBody(as) {
+  const body = document.getElementById('add-sport-body');
+  if (!body) return;
+  const opt = as.options.find((o) => o.dbCode === as.pick) || as.options[0];
+  if (as.done) {
+    body.innerHTML = `<p class="as-line" role="status">${escHtml(MS_COPY.added(opt.label))}</p>
+      <div class="as-actions">
+        <button type="button" class="btn btn-ghost" id="add-sport-notnow">${escHtml(MS_COPY.notNow)}</button>
+        <button type="button" class="btn btn-primary" id="add-sport-setup">${escHtml(MS_COPY.setUpFirstWeek(opt.label))}</button>
+      </div>`;
+    body.querySelector('#add-sport-notnow')?.addEventListener('click', () => { closeAddSportSheet(); });
+    body.querySelector('#add-sport-setup')?.addEventListener('click', () => {
+      const r = as.result; closeAddSportSheet({ immediate: true });
+      try { setLensSport(opt.dbCode); } catch { /* the wizard's Step 1 still lets the commissioner pick the sport */ }
+      state.commTab = 'week'; navigateTo('commissioner'); openWeekWizardSheet({ forceNew: true });
+      void r;
+    });
+    return;
+  }
+  const sportRows = as.options.map((o) => addSportRadioHTML({ id: `add-sport-pick-${o.dbCode}`, group: 'sport', value: o.dbCode, checked: o.dbCode === as.pick, title: o.listLabel, hint: o.state === 'new' ? 'Weekly against-the-spread picks, like college football.' : 'Its picks, results and standings come back.' })).join('');
+  body.innerHTML = `<div class="as-group" role="radiogroup" aria-label="${escHtml(MS_COPY.addIntro)}">
+      <div class="text-muted text-xs">${escHtml(MS_COPY.addIntro)}</div>${sportRows}
+    </div>
+    <div class="as-group" role="radiogroup" aria-labelledby="add-sport-who">
+      <div id="add-sport-who"><strong>${escHtml(MS_COPY.whoPlays(opt.label))}</strong></div>
+      ${addSportRadioHTML({ id: 'add-sport-enroll-optin', group: 'enroll', value: 'opt_in', checked: as.enrollment === 'opt_in', title: MS_COPY.optIn + ' ' + MS_COPY.optInTag, hint: MS_COPY.optInHint })}
+      ${addSportRadioHTML({ id: 'add-sport-enroll-all', group: 'enroll', value: 'all', checked: as.enrollment === 'all', title: MS_COPY.allMembers, hint: MS_COPY.allMembersHint(opt.label) })}
+    </div>
+    <p class="text-muted text-xs as-line">${escHtml(MS_COPY.reassure(opt.label))}</p>
+    ${switchRowHTML({ id: 'add-sport-announce', label: MS_COPY.announceLabel, on: !!as.announce })}
+    <p class="form-field-error" id="add-sport-error" role="alert"></p>
+    <div class="as-actions">
+      <button type="button" class="btn btn-ghost" id="add-sport-cancel">${escHtml(MS_COPY.cancel)}</button>
+      <button type="button" class="btn btn-primary" id="add-sport-confirm"${as.busy ? ' disabled' : ''}>${escHtml(MS_COPY.add(opt.label))}</button>
+    </div>`;
+  body.querySelectorAll('[data-as-sport]').forEach((b) => b.addEventListener('click', () => { if (as.busy) return; as.pick = b.dataset.asSport; haptic('selection'); paintAddSportBody(as); }));
+  body.querySelectorAll('[data-as-enroll]').forEach((b) => b.addEventListener('click', () => { if (as.busy) return; as.enrollment = b.dataset.asEnroll; haptic('selection'); paintAddSportBody(as); }));
+  body.querySelector('#add-sport-announce')?.addEventListener('click', (e) => { as.announce = toggleSwitchRow(e.currentTarget); });
+  body.querySelector('#add-sport-cancel')?.addEventListener('click', () => { if (!as.busy) closeAddSportSheet(); });
+  body.querySelector('#add-sport-confirm')?.addEventListener('click', () => confirmAddSport(as));
+}
+
+function confirmAddSport(as) {
+  if (as.busy || as.done) return;                         // a double tap is one add
+  const opt = as.options.find((o) => o.dbCode === as.pick); if (!opt) return;
+  as.busy = true;
+  const btn = document.getElementById('add-sport-confirm'); if (btn) btn.disabled = true;
+  const errEl = document.getElementById('add-sport-error'); if (errEl) { errEl.textContent = ''; errEl.classList?.remove?.('is-visible'); }
+  const existing = opt.competitionId ? getLeagueCompetitions().find((c) => c.id === opt.competitionId) || null : null;
+  const sess = getSession();
+  const res = addSportAction({
+    leagueId: getActiveLeagueId() || 'local', leagueName: getActiveLeagueName() || 'the league', option: opt, enrollment: as.enrollment,     // 'local': a device with no league id (the PIN-era local mode) still derives a stable id
+    seasonLabel: String(getSettings().season || ''), commissionerMemberId: sess?.playerId || null, announce: as.announce, existing,
+    deps: { saveCompetition: saveLeagueCompetition, addEntry: sportSeamAddEntry, announce: (text) => postCommissionerAnnouncement(text, sess?.playerId || null) },
+  });
+  as.busy = false;
+  if (!res.ok) {
+    if (btn) btn.disabled = false;
+    if (errEl) { errEl.textContent = res.error; errEl.classList?.add?.('is-visible'); }
+    return;
+  }
+  as.done = true; as.result = res;
+  haptic('success');
+  showToast(MS_COPY.added(opt.label), 'success');
+  try { as.onDone?.(res); } catch { /* the caller's repaint is a courtesy */ }
+  paintAddSportBody(as);
+  refreshHeader();
+}
+/** Test seam: choose in the open sheet and press Add (the DOM stub cannot click). Returns the sheet's state after. */
+export function _addSportActForTest({ pick = null, enrollment = null, announce = null } = {}) {
+  if (!_addSport) return null;
+  if (pick) _addSport.pick = pick;
+  if (enrollment) _addSport.enrollment = enrollment;
+  if (announce !== null) _addSport.announce = !!announce;
+  confirmAddSport(_addSport);
+  return _addSportStateForTest();
+}
+export function _addSportStateForTest() { return _addSport ? { pick: _addSport.pick, enrollment: _addSport.enrollment, done: _addSport.done, busy: _addSport.busy, closing: _addSport.closing } : null; }
+export function _resetAddSportForTest() { closeAddSportSheet({ immediate: true }); _addSport = null; }
+
+/** Archive the lens sport from Comm -> Week -> Sport options, behind a confirm sheet (the shared action-sheet). The league's main sport is not archivable here. */
+function confirmArchiveLensSport() {
+  const c = lensCompetition(); if (!c || c.isDefault) return;
+  const pr = commProfileFor(c); const label = pr ? (pr.code || pr.label) : c.sport;
+  const blocked = archiveBlocker({ weeks: getWeeksForCompetition(c.id), label });
+  if (blocked) { showToast(blocked, 'error'); return; }
+  // S7: the shared action sheet (never window.confirm). The archive runs from the sheet's destructive button, re-checking the sport and the blocker at that moment.
+  lsShowActionSheet('archive-sport', archiveSportSheetHTML({ label }, { escHtml }), { onConfirm: () => runArchiveLensSport(c.id) });
+}
+/** The archive itself, after the sheet's confirm: re-reads the sport and re-applies the rule (a week may have been opened while the sheet was up). */
+function runArchiveLensSport(competitionId) {
+  const c = liveLeagueCompetitions().find((x) => x.id === competitionId); if (!c || c.isDefault) return;
+  const pr = commProfileFor(c); const label = pr ? (pr.code || pr.label) : c.sport;
+  const res = archiveSportAction({ competition: c, weeks: getWeeksForCompetition(c.id), label, deps: { saveCompetition: saveLeagueCompetition } });
+  if (!res.ok) { showToast(res.error, 'error'); return; }
+  haptic('success'); showToast(MS_COPY.archived(label), 'success');
+  refreshHeader(); renderCommPage();   // (the lens is not reset here: getLensSport() forgets a local choice whose sport was archived, and the repaint reads it)
+}
+function lsConfirmArchiveSport() {
+  const p = _lsPrompt;
+  lsHideActionSheet({ restoreFocus: false });
+  if (p && typeof p.onConfirm === 'function') p.onConfirm();
+}
+export const _confirmArchiveLensSportForTest = confirmArchiveLensSport;
+/** Test seam: press a button of the action-sheet layer by its `data-ls-action` (the layer's click handler, driven without a DOM event). */
+export function _pressActionSheetForTest(action) { return lsOnLayerClick({ target: { closest: () => ({ getAttribute: () => action }) } }); }
 
 // ─── MODALS ───────────────────────────────────────────────────────────────────
 
@@ -19940,7 +23845,11 @@ function renderGameRequestFormHTML(meId, folded) {
  *  substitutes for the two failure states. */
 function renderGameRequestResultsHTML(meId, folded = null) {
   const g = state.gameRequest;
-  if (g.loading) return `<p class="text-secondary text-sm">Checking ESPN for that day…</p>`;
+  // W-66 review N1 (DI-175f amended by the coordinator, 2026-10-14; Interaction Principles, Loading: cached content first) — the line
+  // ALONE only on a first search. A re-search keeps the previous games under it, dimmed, inert and busy (see the end of this function):
+  // clearing them shrank the card by their height, and a drawer scrolled near its end jumped (158 px measured).
+  const loadingLine = `<p class="text-secondary text-sm gr-loading-line">Checking ESPN for that day…</p>`;
+  if (g.loading && !g.results.length) return loadingLine;
   if (g.error === 'network') return `<p class="text-secondary text-sm">Couldn't reach ESPN just now. Tap Find games to try again.</p>`;
   // F3 review finding (2026-09-12) — THIS STATE IS TWO STATES AND THE COPY MUST
   // SAY SO. data-provider.js's resilientFetch() RETURNS `{games:[], error}`
@@ -19961,7 +23870,7 @@ function renderGameRequestResultsHTML(meId, folded = null) {
   const slateIds = new Set(getGames().map(x => x?.espnEventId).filter(v => v != null).map(String));
   const atCap = countOpenGameRequests(meId, list) >= GAME_REQUEST_CAP;
 
-  return `
+  const block = `
     <label class="gr-check-row" for="gr-chat-toggle">
       <input type="checkbox" id="gr-chat-toggle"${g.postToChat ? ' checked' : ''} />
       <span class="gr-check-text">📣 Post to the Locker Room when I request
@@ -19970,6 +23879,7 @@ function renderGameRequestResultsHTML(meId, folded = null) {
     <input class="form-input gr-filter" id="gr-filter" type="search" placeholder="🔎 Filter by team" value="${escHtml(g.filter || '')}" />
     ${atCap ? `<p class="gr-cap-note text-xs">You have ${GAME_REQUEST_CAP} open requests. Withdraw one before adding another.</p>` : ''}
     <div class="gr-result-list">${rows.map(x => grResultRowHTML(x, { meId, folded: list, slateIds, atCap })).join('')}</div>`;
+  return g.loading ? `${loadingLine}<div class="gr-stale" inert>${block}</div>` : block;
 }
 
 function grResultRowHTML(game, { meId, folded, slateIds, atCap }) {
@@ -20051,6 +23961,16 @@ function renderGameRequestLeagueHTML(folded, meId) {
 
 // ── Rules-page card: behaviour ──────────────────────────────────────────────
 
+/** W-66 (Drew, 2026-10-14: "when I hit find games in request a game nothing happens") — the card's one repaint, for the
+ *  search, Request and Withdraw handlers below. Since DI-304 (2026-09-25) the card's only host is the control-center
+ *  drawer's "Request a game" row, which embeds it as an HTML string built in buildControlCenterCtx(); these handlers
+ *  kept calling renderRulesPage(), which stopped carrying the card at that move, so every tap changed state and nothing
+ *  on screen. The drawer's update() rebuilds that string, bindOnceIn() re-binds the freshly painted row, and the open
+ *  rows stay open without replaying their opening (see refreshControlCenterAndSettingsPage()). */
+function repaintGameRequestCard() {
+  refreshControlCenterAndSettingsPage();
+}
+
 /** Repaint just the results block — used by the filter input so the keystroke
  *  doesn't cost the player their focus (the #avail-search pattern). */
 function repaintGameRequestResults() {
@@ -20062,9 +23982,24 @@ function repaintGameRequestResults() {
   bindGameRequestRows();
 }
 
+// W-66 touched-screen audit (2026-10-14): the chat box and the filter live INSIDE #gr-results, which the filter repaints in place,
+// so they are bound here with the rows; bound once in bindGameRequestCard(), the first filter left both dead (typing stopped
+// filtering, and unticking "Post to the Locker Room" no longer changed the choice the Request button acts on).
+let grFilterTimer = null;
 function bindGameRequestRows() {
   document.querySelectorAll('.gr-request-btn').forEach(btn => {
     btn.addEventListener('click', () => handleGameRequestSubmit(btn.dataset.eventId));
+  });
+  document.getElementById('gr-chat-toggle')?.addEventListener('change', e => { state.gameRequest.postToChat = !!e.target.checked; });
+  document.getElementById('gr-filter')?.addEventListener('input', e => {
+    clearTimeout(grFilterTimer);
+    const val = e.target.value;
+    grFilterTimer = setTimeout(() => {
+      state.gameRequest.filter = val;
+      repaintGameRequestResults();
+      const again = document.getElementById('gr-filter');
+      if (again) { again.focus(); again.setSelectionRange?.(val.length, val.length); }
+    }, 200);
   });
 }
 
@@ -20079,19 +24014,6 @@ function bindGameRequestCard() {
     });
   });
   document.getElementById('gr-find')?.addEventListener('click', runGameRequestSearch);
-  document.getElementById('gr-chat-toggle')?.addEventListener('change', e => { state.gameRequest.postToChat = !!e.target.checked; });
-  let filterTimer = null;
-  const filterEl = document.getElementById('gr-filter');
-  filterEl?.addEventListener('input', e => {
-    clearTimeout(filterTimer);
-    const val = e.target.value;
-    filterTimer = setTimeout(() => {
-      state.gameRequest.filter = val;
-      repaintGameRequestResults();
-      const again = document.getElementById('gr-filter');
-      if (again) { again.focus(); again.setSelectionRange?.(val.length, val.length); }
-    }, 200);
-  });
   document.querySelectorAll('.gr-withdraw-btn').forEach(btn => {
     btn.addEventListener('click', () => handleGameRequestWithdraw(btn.dataset.requestId));
   });
@@ -20117,8 +24039,8 @@ async function runGameRequestSearch() {
   const g = state.gameRequest;
   const date = (document.getElementById('gr-date')?.value || g.date || '').trim();
   if (!date) { showToast('Pick a game day first', 'error'); return; }
-  g.date = date; g.loading = true; g.error = ''; g.results = []; g.filter = '';
-  renderRulesPage();
+  g.date = date; g.loading = true; g.error = '';   // N1: the previous games and their filter stay until the answer lands
+  repaintGameRequestCard();
   try {
     // F6 (2026-09-12) — `almaMaters:` is passed here for the same reason every
     // other fetchByDateRange() call site passes it: the ⭐ alma-mater flag is
@@ -20136,8 +24058,8 @@ async function runGameRequestSearch() {
     console.warn('[GameRequest] ESPN search failed:', e);
     g.results = []; g.error = 'network';
   }
-  g.loading = false;
-  renderRulesPage();
+  g.loading = false; g.filter = '';
+  repaintGameRequestCard();
 }
 
 function handleGameRequestSubmit(eventId) {
@@ -20164,7 +24086,7 @@ function handleGameRequestSubmit(eventId) {
       : res.reason === 'cap' ? `You have ${GAME_REQUEST_CAP} open requests. Withdraw one before adding another.`
       : 'Could not save that request.';
     showToast(msg, 'error');
-    renderRulesPage();
+    repaintGameRequestCard();
     return;
   }
   // The optional chat post. PLAYER-VOICED through the existing sendMessage()
@@ -20182,7 +24104,7 @@ function handleGameRequestSubmit(eventId) {
     } catch (e) { console.warn('[GameRequest] chat post failed (the request itself is saved):', e); }
   }
   showToast('🙋 Requested — the commissioner sees it when that week gets built.', 'success');
-  renderRulesPage();
+  repaintGameRequestCard();
 }
 
 function handleGameRequestWithdraw(requestId) {
@@ -20192,7 +24114,7 @@ function handleGameRequestWithdraw(requestId) {
   const res = withdrawGameRequest(requestId, meId);
   if (!res.ok) { showToast('Could not withdraw that request.', 'error'); return; }
   showToast('Request withdrawn.', 'success');
-  renderRulesPage();
+  repaintGameRequestCard();
 }
 
 // ── Commissioner surface (Comm → Games) ─────────────────────────────────────
@@ -20218,21 +24140,21 @@ export function renderGameRequestsAdminSectionHTML(week, availGames = [], slateG
   const readOnly = st === 'locked' || st === 'live' || st === 'final';
   const slateIds = new Set(slate.map(x => x?.espnEventId).filter(v => v != null).map(String));
 
-  const rowHTML = (grp) => {
+  const rowHTML = (grp, i) => {
     const eid = grp.espnEventId != null ? String(grp.espnEventId) : '';
     const onSlate = (eid && slateIds.has(eid)) || grp.requests.some(r => r.status === 'onSlate');
     const pooled = eid ? pool.find(x => x?.espnEventId != null && String(x.espnEventId) === eid) : null;
-    // The add path is the EXACT `.add-avail-game-btn` path, built from the
-    // POOLED game object — never from the request snapshot, which may be
-    // months old and carry a stale spread/kickoff.
+    // D1 (W-68 / W-69, 2026-10-14): the add goes through the SAME door as the Games list's Add (requestAddToSlate), built from the POOLED game object when it is TAPPED - never from the request
+    // snapshot, which may be months old and carry a stale spread/kickoff. The button carries only the event id (the old `data-game` held the whole game as JSON). The row is KEYED so an add
+    // patches this one row in place (patchGameRequestRows); `data-sig` is stamped on first paint by stampKeyedSigs().
     const action = onSlate
-      ? `<span class="badge badge-open">✅ On slate</span>`
+      ? `<span class="badge badge-open gr-onslate">${icon('check')} On slate</span>`
       : readOnly
         ? ''
         : pooled
-          ? `<button class="btn btn-primary btn-sm add-avail-game-btn gr-add-btn" data-game='${availAddPayloadJSON(pooled, week)}'>+ Add to slate</button>`
+          ? `<button type="button" class="btn btn-primary btn-sm games-row-btn gr-add-btn" data-action="gr-add" data-event-id="${escHtml(eid)}">+ Add to slate</button>`
           : `<span class="text-muted text-xs">Fetch ESPN for these dates to add</span>`;
-    return `<div class="gr-comm-row">
+    return `<div class="gr-comm-row" data-key="${escHtml(`gr:${eid || i}`)}">
       <div class="gr-row-main">
         <div class="gr-row-matchup">${escHtml(grMatchupLabel(grp.sample))}</div>
         <div class="text-muted text-xs">${escHtml(fmtTime(grp.sample.kickoff))} · requested by ${escHtml(grp.names.join(', '))}</div>
@@ -20268,17 +24190,46 @@ export function renderGameRequestsAdminSectionHTML(week, availGames = [], slateG
   </div>`);
 
   return `
-      <div class="admin-section" data-comm-tab="games">
+      <div class="admin-section" data-comm-tab="games" id="game-requests-section">
         <div class="admin-section-title">🙋 Player Requests (${thisWeek.length})</div>
         <div class="card">
           ${readOnly ? `<p class="text-secondary text-sm mb-sm">This week is locked — requests below are for the record.</p>` : ''}
-          ${thisWeek.length
+          <div id="gr-comm-rows">${thisWeek.length
             ? groupGameRequests(thisWeek).map(rowHTML).join('')
-            : `<p class="text-muted text-sm">No player requests for this week's dates.</p>`}
+            : `<p class="text-muted text-sm">No player requests for this week's dates.</p>`}</div>
           ${detailsBlock('Requests for later weeks', laterRows)}
           ${detailsBlock('Past requests', pastRows)}
         </div>
       </div>`;
+}
+
+/**
+ * Stamp every keyed child of `container` that has no `data-sig` with the hash of its own markup, so the NEXT patch (patchKeyedRows) finds an unchanged row unchanged instead of replacing it. The first paint
+ * of the Player Requests rows is a plain string (renderGameRequestsAdminSectionHTML, which a Node suite reads too); this runs once, after it lands.
+ */
+function stampKeyedSigs(container) {
+  if (!container) return;
+  for (const child of Array.from(container.children || [])) {
+    if (child.getAttribute('data-key') !== null && child.getAttribute('data-sig') === null) child.setAttribute('data-sig', hashSig(child.outerHTML));
+  }
+}
+
+/**
+ * Patch the Player Requests card's rows in place after a slate change: the card is re-rendered to a detached node with the SAME function that painted it (no second copy of the row logic), and this
+ * week's rows are reconciled by key into the live card - the open "later weeks" / "past" disclosures, the card's collapsed state and every untouched row survive. A card with no requests this week has
+ * no row container and is left alone.
+ */
+function patchGameRequestRows(model) {
+  const host = document.getElementById('gr-comm-rows');
+  if (!host || !model || !model.week) return;
+  const holder = document.createElement('div');
+  holder.innerHTML = renderGameRequestsAdminSectionHTML(model.week, model.pool, model.slate);
+  const fresh = holder.querySelector('#gr-comm-rows');
+  if (!fresh) return;
+  const rows = Array.from(fresh.children || []).filter((n) => n.getAttribute && n.getAttribute('data-key') !== null).map((n) => ({ key: n.getAttribute('data-key'), html: n.outerHTML, sig: hashSig(n.outerHTML) }));
+  if (!rows.length) return;
+  stampKeyedSigs(host);
+  patchKeyedRows(host, rows);
 }
 
 /**
@@ -20364,11 +24315,26 @@ export function renderWeeklyTiesRulesHTML() {
       </div>`;
 }
 
+/** D1 / DI-536 - the NFL card of the Rules page: a heading and the bullets js/sport-rules.js composes (every number read from the profile and settings), each escaped here. */
+export function renderNflRulesHTML({ weeklyPrize = '', collegeToo = false } = {}) {
+  return `<div class="rules-section"><h3>${escHtml(NFL_RULES_HEADING)}</h3>
+        <ul class="rules-list">${nflRulesItems({ weeklyPrize, collegeToo }).map(i => `<li>${escHtml(i)}</li>`).join('')}</ul>
+      </div>`;
+}
+
 export function renderRulesPage() {
   const c=document.getElementById('page-rules'); if(!c)return;
-  const rules=getSettings().customRules||DEFAULT_RULES;
+  // D1 / DI-512: a league whose commissioner saved a copy of the rules still holds the old "Games lock at kickoff." default; it reads corrected here, at render time only (stored text untouched).
+  const rules=applyRulesLegacyReplacements(getSettings().customRules||DEFAULT_RULES).rules;
+  // D1 / DI-536: the cards come from the league's sports. No NFL competition (every league today) = today's page, byte for byte. An NFL competition adds the NFL card (and, beside college football,
+  // the opening line); an NFL-only league drops the college-football cards. The commissioner's OWN saved rules are the league's text and always render.
+  const rs=rulesSports(liveLeagueCompetitions());
+  const showCollegeRules=rs.hasCfb||!!getSettings().customRules;
+  // D1 / DI-551: the side contest is NAMED by the league's sport. College football's is the Ischemic Extra Point; an NFL-only league's is the optional longest field goal (the NFL profile's own label), so its
+  // page does not teach a college game. With college football in the league (alone or beside the NFL) every word below is today's, byte for byte. (Each use is its own ternary of literals.)
+  const rulesSportNote=rs.both?`<p class="rules-sport-note text-secondary text-sm mb-md">${escHtml(RULES_COLLEGE_NOTE)}</p>`:'';
   c.innerHTML=`
-    <div class="section-header"><h2>How to Play</h2><div class="subtitle">Rules · FAQ · Permissions</div></div>
+    <div class="section-header"><h2>How to Play</h2><div class="subtitle">Rules · FAQ · Permissions</div></div>${rulesSportNote}
 
     <!-- v0.16.0 — What to do & when: the week lifecycle -->
     <div class="card mb-md">
@@ -20377,13 +24343,13 @@ export function renderRulesPage() {
           <div class="faq-stage"><span class="badge badge-draft">DRAFT</span>
             <div><strong>Commissioner is building the slate.</strong> Players can't see or pick anything yet. Sit tight.</div></div>
           <div class="faq-stage"><span class="badge badge-open">OPEN</span>
-            <div><strong>Picks are open.</strong> Log in on the Picks tab, pick all games against the spread, answer the tiebreaker, and (optionally) enter your Ischemic Extra Point guess. Submit. <em>You can come back and edit everything — picks, tiebreaker, Extra Point — as many times as you want until lock.</em> Picks are blind: nobody sees anyone else's picks until they've submitted their own.</div></div>
+            <div><strong>Picks are open.</strong> Log in on the Picks tab, pick all games against the spread, answer the tiebreaker, ${rs.hasCfb?'and (optionally) enter your Ischemic Extra Point guess. Submit. <em>You can come back and edit everything — picks, tiebreaker, Extra Point — as many times as you want until lock.</em>':'and, in a week where the commissioner turns it on, (optionally) enter your longest-field-goal guess. Submit. <em>You can come back and edit everything — picks, tiebreaker, longest field goal — as many times as you want until lock.</em>'} Picks are blind: nobody sees anyone else's picks until they've submitted their own.</div></div>
           <div class="faq-stage"><span class="badge badge-locked">LOCKED</span>
             <div><strong>The week has locked.</strong> No new picks, no edits — for anyone, including games that haven't kicked off yet. If you missed the deadline, that's a documented adverse event. The Commissioner can grant a per-game unlock in genuine emergencies (their call, on the record).</div></div>
           <div class="faq-stage"><span class="badge badge-live">LIVE</span>
             <div><strong>Games are being played.</strong> The Dashboard is public — everyone's picks are visible, scores stream in from ESPN, and each pick shows a soft "covering / trailing" state. Nothing is final until the game is final. This is prime chat time.</div></div>
           <div class="faq-stage"><span class="badge badge-final">FINAL</span>
-            <div><strong>The week is graded.</strong> ATS results are locked against the closing spread, the tiebreaker and Extra Point resolve, standings update, and drink debts post to the ledger. The week becomes browsable read-only from the Picks tab (‹ › arrows).</div></div>
+            <div><strong>The week is graded.</strong> ATS results are locked against the closing spread, ${rs.hasCfb?'the tiebreaker and Extra Point resolve':'the tiebreaker (and the longest field goal, in a week where it is on) resolve'}, standings update, and drink debts post to the ledger. The week becomes browsable read-only from the Picks tab (‹ › arrows).</div></div>
         </div>
       </div>
     </div>
@@ -20395,9 +24361,9 @@ export function renderRulesPage() {
           <tr><td>Make / edit own picks (while OPEN)</td><td>✅</td><td>✅</td></tr>
           <tr><td>Edit picks after LOCK</td><td>❌</td><td>⚠️ per-game unlock only, logged</td></tr>
           <tr><td>See others' picks before submitting</td><td>❌ never</td><td>✅ (admin view)</td></tr>
-          <tr><td>Change tiebreaker / Extra Point (while OPEN)</td><td>✅</td><td>✅</td></tr>
+          <tr><td>${rs.hasCfb?'Change tiebreaker / Extra Point (while OPEN)':'Change tiebreaker / longest-field-goal guess (while OPEN)'}</td><td>✅</td><td>✅</td></tr>
           <tr><td>Build the slate, set spreads, lock the week</td><td>❌</td><td>✅</td></tr>
-          <tr><td>Enter/override scores &amp; the Extra Point actual</td><td>❌</td><td>✅</td></tr>
+          <tr><td>${rs.hasCfb?'Enter/override scores &amp; the Extra Point actual':'Enter/override scores &amp; the longest-field-goal actual'}</td><td>❌</td><td>✅</td></tr>
           <tr><td>Finalize the week, reopen for corrections</td><td>❌</td><td>✅</td></tr>
           <tr><td>Chat, react, reply</td><td>✅</td><td>✅</td></tr>
           <tr><td>Edit own chat message</td><td>✅ within 5 min</td><td>✅ within 5 min</td></tr>
@@ -20408,7 +24374,7 @@ export function renderRulesPage() {
       </div>
     </div>
 
-    <!-- v0.16.0 — Extra Point -->
+${rs.hasCfb?`    <!-- v0.16.0 — Extra Point -->
     <div class="card mb-md">
       <div class="rules-section"><h3>🎯 The Ischemic Extra Point (blackjack rules)</h3>
         <ul class="rules-list">
@@ -20419,7 +24385,7 @@ export function renderRulesPage() {
           <li>Optional side bet — skipping it means you can't win it, and in a weekly tie that reaches the Extra Point (see Weekly Ties below) you come behind everyone who guessed. The actual is auto-detected from ESPN scoring plays and verified by the Commissioner.</li>
         </ul>
       </div>
-    </div>
+    </div>`:''}
 
     <!-- v0.17.0 — Chat rules -->
     <div class="card mb-md">
@@ -20427,7 +24393,7 @@ export function renderRulesPage() {
         <ul class="rules-list">
           <li><strong>One Locker Room.</strong> Everything happens in the main chat. Any message can be tagged to a game — tap 💬 on a game card and your post shows up both in that game's thread and in the Locker Room. Replies inherit the tag, so conversations stay findable. Untag with one tap if the talk drifts.</li>
           <li>React, reply, pin to the 🏛 Hall of Records, edit your own messages within 5 minutes, withdraw with a tombstone. The log is append-only.</li>
-          <li>At lock, the Locker Room gets <strong>the reveal</strong> — everyone's picks posted at once. Game finals, standings, and Extra Point results file in automatically. Nothing ever leaks a pick before lock.</li>
+          <li>At lock, the Locker Room gets <strong>the reveal</strong> — everyone's picks posted at once. ${rs.hasCfb?'Game finals, standings, and Extra Point results file in automatically.':'Game finals and standings file in automatically.'} Nothing ever leaks a pick before lock.</li>
           <li><strong>S.C.R.I.B.E. is the seventh member of this league.</strong> It keeps the receipts — lock times, bad beats, live-game swings, and who owes whom — and brings them up at the worst possible moment. It answers when you @ it. It is not summoned. It is on duty.</li>
           <li>House rule, inherited and non-negotiable: savage about football, never about real life.</li>
         </ul>
@@ -20435,10 +24401,10 @@ export function renderRulesPage() {
     </div>
 
     <div class="card mb-md">
-      ${rules.map(s=>`<div class="rules-section"><h3>${escHtml(s.section)}</h3>
+      ${showCollegeRules?rules.map(s=>`<div class="rules-section"><h3>${escHtml(s.section)}</h3>
         <ul class="rules-list">${s.items.map(i=>`<li>${escHtml(i)}</li>`).join('')}</ul>
-      </div><div class="divider"></div>`).join('')}
-      ${renderWeeklyTiesRulesHTML()}
+      </div><div class="divider"></div>`).join(''):''}
+      ${rs.hasCfb?renderWeeklyTiesRulesHTML():''}${rs.hasNfl&&rs.hasCfb?'\n      <div class="divider"></div>\n      ':''}${rs.hasNfl?renderNflRulesHTML({weeklyPrize:getSettings().weeklyPrize,collegeToo:rs.hasCfb}):''}
       <!-- SP-54 / DI-470 (UN-403b, 2026-10-01) — the BUILT-IN "Weekly Ties" section sits right above, after the league's own sections and before the standalone divider
            that separates Debts & Bylaws; it adds no divider of its own. -->
       <!-- DI-423 (UN-378, 2026-09-28) — the Alma Maters section RETIRED off
@@ -20756,19 +24722,161 @@ function openScribeReportModal(entry) {
  * than two, per the DI's "automatic on approve" — and fired ONLY for a
  * fact_candidate, because no other kind has anything to apply.
  *
- * Fire-and-forget by design: the status flip has already persisted through
- * the seam, so the sync's outcome is reported by its own toast rather than
- * holding the UI.
+ * FB-005 — "the status flip has already persisted through the seam" was true
+ * of the local seam only. Under the Supabase adapter the flip sits in an 800 ms
+ * debounce, so the sync used to reach `scribe_memory_apply` BEFORE the server
+ * had the approval, find nothing approved, and report "Nothing new to apply".
+ * The sync now waits for `saved` (below) and never runs for a save that failed.
+ *
+ * PF-467 (D-28) — `saved` resolves `{ state: 'saved' | 'failed', paced }` once
+ * the server has answered (at once on the local seam, which writes
+ * synchronously). Everything that ACTS on an approval waits for it: the fact
+ * sync here, and an approved experiment's one pacing nudge (`paced`, the
+ * `applyExperimentPacingNudge()` result). A failed save puts the row's previous
+ * status back on this device too, so nothing here treats a proposal the server
+ * never took as approved. The row's "Saving…" / "Couldn't save" display is
+ * `scribeReviewActionsHTML()`.
  */
 export function applyScribeLearningDecision(idx, approved) {
-  const all = getScribeLearnings();
+  // A COPY, never the mirror's own array: the adapter's `get()` hands back the live value, so an in-place edit would survive a
+  // write the seam then refuses, and this device would go on treating an unsaved decision as made (PF-467).
+  const all = [...getScribeLearnings()];
   if (!all[idx]) return { ok: false, error: 'no_such_row' };
   const row = all[idx];
-  all[idx] = { ...row, status: approved ? 'approved' : 'rejected' };
-  setScribeLearnings(all);
+  const next = approved ? 'approved' : 'rejected';
   const synced = !!(approved && row.kind === 'fact_candidate');
-  if (synced) syncApprovedScribeFacts();
-  return { ok: true, approved: !!approved, synced, kind: row.kind };
+  all[idx] = { ...row, status: next };
+  try { setScribeLearnings(all); }
+  catch (e) {
+    // The seam refused before anything was sent (the adapter not serving). Nothing changed; say so on the row.
+    console.warn('[scribe-review] the decision was refused before it was sent', e);
+    return scribeReviewRefusedUpFront('learnings', idx, approved, row, synced);
+  }
+  const confirmed = trackScribeReviewSave('learnings', idx, !!approved, row, scribeReviewEffectiveStatus('learnings', idx, row), next);
+  // The local seam wrote synchronously, so the sync fires now — the same tick as before (groupdtest [12]).
+  if (synced && getBackendMode() !== 'supabase') syncApprovedScribeFacts();
+  const saved = confirmed.then((state) => {
+    if (state !== 'saved') return { state, paced: null };
+    if (synced && getBackendMode() === 'supabase') syncApprovedScribeFacts();
+    const paced = approved && row.kind === 'experiment' ? applyExperimentPacingNudge(row) : null;
+    return { state, paced };
+  });
+  return { ok: true, approved: !!approved, synced, kind: row.kind, saved };
+}
+
+/** PF-467 — the canon half of the same review list: one status flip, the same three states. */
+export function applyScribeCanonDecision(idx, approved) {
+  const all = [...getScribeCanon()];   // a copy (see applyScribeLearningDecision)
+  if (!all[idx]) return { ok: false, error: 'no_such_row' };
+  const row = all[idx];
+  const next = approved ? 'approved' : 'rejected';
+  all[idx] = { ...row, approvalStatus: next };
+  try { setScribeCanon(all); }
+  catch (e) {
+    console.warn('[scribe-review] the decision was refused before it was sent', e);
+    return scribeReviewRefusedUpFront('canon', idx, approved, row, false);
+  }
+  const saved = trackScribeReviewSave('canon', idx, !!approved, row, scribeReviewEffectiveStatus('canon', idx, row), next)
+    .then((state) => ({ state, paced: null }));
+  return { ok: true, approved: !!approved, synced: false, kind: row.kind || 'canon', saved };
+}
+
+// ── PF-467 (D-28) — THE REVIEW ROW'S STATES: pending → saving → approved, or → failed ─────────────
+//
+// "Distinguish pending, saving, approved and failed states. A failed save must not make the runtime
+// treat an unapproved learning as approved." The status a row is IN lives in the store; whether a
+// decision on it is still IN FLIGHT, or came back refused, is a property of this control, so it lives
+// here, keyed by list and position and checked against the row's identity before it is shown (a list
+// that changed underneath can never wear another row's state). Lane C's profile pane reuses
+// `applyScribeLearningDecision()` / `scribeReviewActionsHTML()` rather than a second copy.
+const SCRIBE_REVIEW_KEYS = Object.freeze({ learnings: 'cfbp_scribe_learnings', canon: 'cfbp_scribe_canon' });
+// `${list}:${idx}` -> { phase: 'saving' | 'failed', approving, ident, action: 'review' | 'toggle', prev }
+//   action — WHICH control made the decision: an Approve/Reject on a pending row ('review') or the on/off switch on a live
+//            learning ('toggle'). The pending list shows only 'review' rows and the learned list only 'toggle' rows, so a row in
+//            flight is drawn once, where its control is.
+//   prev   — the status the row held BEFORE the decision, i.e. what the server still holds until it answers. The display reads
+//            this (scribeReviewEffectiveStatus), never the optimistic local write: nothing is shown as approved, or as switched
+//            on or off, until the server has said so.
+const _scribeReviewUi = new Map();
+// The text a row says, for the identity check. NOT status/approvalStatus (the control flips those) and NOT a server stamp
+// (memoryAppliedAt, approvedAt): the same proposal must read as the same proposal before and after the server touches it.
+const SCRIBE_REVIEW_IDENT_TEXT = ['instruction', 'experiment', 'reason', 'playerId', 'key', 'value', 'contextSummary', 'preferredResponse', 'line'];
+function scribeReviewIdent(row) {
+  const r = row || {};
+  return JSON.stringify([r.kind, r.runId, r.learningId || r.canonId || '', r.createdAt, SCRIBE_REVIEW_IDENT_TEXT.map((f) => String(r[f] ?? ''))]);
+}
+/** The in-flight / failed state of one review row, or null (an ordinary row). */
+export function scribeReviewState(list, idx, row) {
+  const s = _scribeReviewUi.get(`${list}:${idx}`);
+  return s && row && s.ident === scribeReviewIdent(row) ? s : null;
+}
+/** The status a row is SHOWN with: while a decision on it is in flight or failed, the status the server still holds (`prev`);
+ *  otherwise its own. The local write has already moved `row.status` — the display must not follow it until the server confirms. */
+export function scribeReviewEffectiveStatus(list, idx, row) {
+  const s = scribeReviewState(list, idx, row);
+  const field = list === 'canon' ? 'approvalStatus' : 'status';
+  return s ? s.prev : (row ? row[field] : undefined);
+}
+function scribeReviewRefusedUpFront(list, idx, approved, row, synced, action = 'review') {
+  const field = list === 'canon' ? 'approvalStatus' : 'status';
+  _scribeReviewUi.set(`${list}:${idx}`, { phase: 'failed', approving: !!approved, ident: scribeReviewIdent(row), action, prev: row[field] });
+  return { ok: false, error: 'not_saved', approved: !!approved, synced: false, kind: row.kind, saved: Promise.resolve({ state: 'failed', paced: null }) };
+}
+/**
+ * Waits for the server's answer on a decision already written to the seam. 'saved' clears the row's
+ * state. Anything else is 'failed': the row's previous status is put back (that write plans nothing —
+ * it equals what the server holds — so the key settles clean), and the row shows "Couldn't save" with
+ * the failed button offered again as Retry. The refusal's red banner is the adapter's and is untouched.
+ */
+function trackScribeReviewSave(list, idx, approving, row, prev, next, action = 'review') {
+  const k = `${list}:${idx}`;
+  const ident = scribeReviewIdent(row);
+  if (getBackendMode() !== 'supabase') { _scribeReviewUi.delete(k); return Promise.resolve('saved'); }
+  _scribeReviewUi.set(k, { phase: 'saving', approving, ident, action, prev });
+  return (async () => {
+    let state = 'pending';
+    try { state = await sb.flushAndConfirm(SCRIBE_REVIEW_KEYS[list]); } catch (e) { state = 'pending'; }
+    if (state === 'saved') { _scribeReviewUi.delete(k); return 'saved'; }
+    try {
+      const field = list === 'canon' ? 'approvalStatus' : 'status';
+      const all = [...(list === 'canon' ? getScribeCanon() : getScribeLearnings())];
+      if (all[idx] && scribeReviewIdent(all[idx]) === ident && all[idx][field] === next) {
+        all[idx] = { ...all[idx], [field]: prev };
+        if (list === 'canon') setScribeCanon(all); else setScribeLearnings(all);
+        await sb.flushAndConfirm(SCRIBE_REVIEW_KEYS[list]);
+      }
+    } catch (e) { console.warn('[scribe-review] could not put the previous status back on this device', e); }
+    _scribeReviewUi.set(k, { phase: 'failed', approving, ident, action, prev });
+    return 'failed';
+  })();
+}
+/**
+ * The Approve / Reject pair for one review row, in its current state:
+ *   pending → the two buttons as always;
+ *   saving  → both disabled, the tapped one reads "Saving…" and is aria-busy;
+ *   failed  → "Couldn't save" inline (role="alert"), and the tapped one reads "Retry" — the same button, the
+ *             same handler, so Retry is the decision made again.
+ * Everything printed is a literal or a number: no row text reaches this markup.
+ */
+export function scribeReviewActionsHTML(list, idx, row) {
+  const s0 = scribeReviewState(list, idx, row);
+  const s = s0 && s0.action === 'review' ? s0 : null;
+  const n = Number(idx);
+  const canon = list === 'canon';
+  const saving = !!(s && s.phase === 'saving');
+  const failed = !!(s && s.phase === 'failed');
+  const onApprove = !!(s && s.approving);
+  const onReject = !!(s && !s.approving);
+  let approveLabel = '✅ Approve';
+  if (failed && onApprove) approveLabel = 'Retry';
+  if (saving && onApprove) approveLabel = 'Saving…';
+  let rejectLabel = '✖ Reject';
+  if (failed && onReject) rejectLabel = 'Retry';
+  if (saving && onReject) rejectLabel = 'Saving…';
+  return `<div class="flex gap-sm" style="align-items:center">${failed ? `<span class="text-xs" role="alert" style="color:var(--danger)">Couldn't save</span>` : ''}
+          <button class="btn btn-secondary btn-sm ${canon ? 'scribe-canon-approve-btn' : 'scribe-approve-btn'}" ${canon ? 'data-canon-idx' : 'data-learning-idx'}="${n}"${saving ? ' disabled' : ''}${saving && onApprove ? ' aria-busy="true"' : ''}>${approveLabel}</button>
+          <button class="btn btn-ghost btn-sm ${canon ? 'scribe-canon-reject-btn' : 'scribe-reject-btn'}" ${canon ? 'data-canon-idx' : 'data-learning-idx'}="${n}"${saving ? ' disabled' : ''}${saving && onReject ? ' aria-busy="true"' : ''}>${rejectLabel}</button>
+        </div>`;
 }
 
 /**
@@ -21083,6 +25191,14 @@ function scribeChoiceOptions(choices, current, { suffix = '' } = {}) {
  * Script Property is the real switch and defaults OFF, so nothing here can
  * turn autonomy on by itself.
  */
+/** D1 Lane C (DI-656) — the commissioner's help text under the dial, verbatim from the design input. Shown only while `scribe-scan` is switched on for
+ *  this league (either sub-job), because it describes what the server does: with both switches off it would be a false sentence. */
+export const SCRIBE_SCAN_HELP_COPY = 'SCRIBE checks for post-worthy moments every few minutes while a week is live. It may also notice when a member hasn\'t picked or hasn\'t posted in days. It posts only when something real happened, and often stays quiet.';
+function scribeScanSwitchedOn() {
+  const bag = (getSettings().serverJobs) || {};
+  return bag.scribeScan === true || bag.scribeCallout === true;
+}
+
 export function renderScribeParticipationCardHTML() {
   const on = isScribeAutonomousEnabled();
   const current = String(getScribeFrequency() || FREQUENCY_DEFAULT).toLowerCase();
@@ -21110,6 +25226,7 @@ export function renderScribeParticipationCardHTML() {
           <input type="checkbox" id="scribe-autonomous-toggle" ${on ? 'checked' : ''} />
         </label>
         <div class="scribe-freq-dial${on ? '' : ' notif-prefs-row-dim'}" role="radiogroup" aria-label="SCRIBE participation level">${options}</div>
+        ${scribeScanSwitchedOn() ? `<p class="text-muted text-xs" id="scribe-scan-help">${escHtml(SCRIBE_SCAN_HELP_COPY)}</p>` : ''}
         <p class="text-muted text-xs">${on
           ? `Currently <strong>${escHtml((FREQUENCY_COPY.find(o => o.level === level) || {}).label || level)}</strong> — a candidate moment has to score ${FREQUENCY_LEVELS[level]} or better before SCRIBE writes anything. The ${numHtml(pacing.cooldownMinutes)}-minute cooldown applies at every level.`
           : 'Off. SCRIBE posts nothing unprompted — pick a level after turning it back on.'}</p>
@@ -21213,14 +25330,17 @@ export function renderScribeHeatCardHTML() {
  *  default and the cheaper one, so the card reads cheap-to-expensive the way
  *  the heat dial reads cool-to-hot. Labels are the short product names because
  *  the full ids are wire values, not English. */
-const SCRIBE_MODEL_LABELS = { 'claude-sonnet-5': 'Sonnet', 'claude-opus-5': 'Opus' };
+// D1 Lane C (DI-633) — DERIVED FROM THE CATALOG, never typed: a label is the catalog tier's own, so the card cannot name a model the server would not price.
+const SCRIBE_MODEL_LABELS = Object.fromEntries(SCRIBE_MODEL_CHOICES.map(id => [id, SCRIBE_MODEL_CATALOG[tierForModelId(id)].label]));
+/** "about 2×": Opus over Sonnet, computed from the catalog's prices (DI-633) — it used to be typed as 2.5. */
+const SCRIBE_OPUS_COST_RATIO = tierCostRatio('opus', 'sonnet');
 /** DI-282's approved descriptions — one clause each, the difference stated in
  *  the two terms Drew actually trades off (sharpness and cost). The 2.5x is not
  *  a slogan: it is `SCRIBE_MODEL_RATES_USD_PER_MTOK` divided out (Opus 5/25 vs
  *  Sonnet 2/10 per Mtok, input and output alike). */
 const SCRIBE_MODEL_DESCRIPTIONS = {
-  'claude-sonnet-5': 'Today\'s model. Fast, and the cheaper of the two.',
-  'claude-opus-5': 'Sharper writing, about 2.5× the cost per reply.',
+  [SCRIBE_MODEL_CATALOG.sonnet.id]: 'Today\'s model. Fast, and the cheaper of the two.',
+  [SCRIBE_MODEL_CATALOG.opus.id]: `Sharper writing, about ${SCRIBE_OPUS_COST_RATIO}× the cost per reply.`,
 };
 const SCRIBE_MODEL_OPTIONS = SCRIBE_MODEL_CHOICES.map(id => ({
   value: id,
@@ -21236,7 +25356,11 @@ const SCRIBE_MODEL_OPTIONS = SCRIBE_MODEL_CHOICES.map(id => ({
 export function getScribeModel() {
   const bag = getSettings().scribe;
   const raw = (bag && typeof bag === 'object') ? String(bag.model || '').trim() : '';
-  return SCRIBE_MODEL_CHOICES.includes(raw) ? raw : SCRIBE_MODEL_CHOICES[0];
+  // D1 Lane C (DI-633) — a STORED LEGACY ID (`claude-opus-5`, written before the catalog) reads as the tier that replaced it, so the card shows Opus selected and the
+  // server (which resolves it the same way) sends Opus. Anything else off the list reads as the default (CONVENTIONS #10).
+  if (SCRIBE_MODEL_CHOICES.includes(raw)) return raw;
+  const tier = tierForModelId(raw);
+  return tier && SCRIBE_MODEL_CHOICES.includes(SCRIBE_MODEL_CATALOG[tier].id) ? SCRIBE_MODEL_CATALOG[tier].id : SCRIBE_MODEL_CHOICES[0];
 }
 
 /**
@@ -21293,9 +25417,9 @@ export function renderScribeModelCardHTML() {
   const label = (SCRIBE_MODEL_OPTIONS.find(o => o.value === current) || {}).label || current;
   return `
       <div id="comm-scribe-model-card">
-        <p class="text-muted text-xs mb-sm">Which model writes SCRIBE's lines. Opus is sharper and costs about 2.5× as much per reply; it is used by @SCRIBE replies, unprompted posts and the Trainer alike.</p>
+        <p class="text-muted text-xs mb-sm">Which model writes SCRIBE's lines. Opus is sharper and costs about ${escHtml(String(SCRIBE_OPUS_COST_RATIO))}× as much per reply; it is used by @SCRIBE replies, unprompted posts and the Trainer alike.</p>
         <div class="scribe-freq-dial" role="radiogroup" aria-label="SCRIBE model">${options}</div>
-        <p class="text-muted text-xs">Currently <strong>${escHtml(label)}</strong>. Your $${scribeLeagueCapUsd()}/month budget still stops SCRIBE either way — on Opus it is reached about 2.5× sooner.</p>
+        <p class="text-muted text-xs">Currently <strong>${escHtml(label)}</strong>. Your $${scribeLeagueCapUsd()}/month budget still stops SCRIBE either way — on Opus it is reached about ${escHtml(String(SCRIBE_OPUS_COST_RATIO))}× sooner.</p>
       </div>`;
 }
 
@@ -21463,8 +25587,8 @@ export function scribeTrainingExplainer(rate) {
 // the reason clause; the live Learnings list carries the short label alone,
 // because a live row's context already explains itself. They share the label, so
 // "held for review" means one thing in this card rather than two.
-export const SCRIBE_HOLD_BADGE_LABEL = '⚠️ held for review';
-export const SCRIBE_HOLD_BADGE_REASON = 'touches safety, a hard line, or a player\'s real life';
+export const SCRIBE_HOLD_BADGE_LABEL = HOLD_BADGE_LABEL;          // N2: one producer — js/scribe-profile-rules.js, shared with the SCRIBE profile pane
+export const SCRIBE_HOLD_BADGE_REASON = HOLD_BADGE_REASON;
 /** The only place either badge's markup is written. `flagged` falsy ⇒ '' , so
  *  every caller is a one-liner and none of them re-states the wording. */
 export function scribeHoldBadgeHTML(flagged, { withReason = false } = {}) {
@@ -21474,6 +25598,10 @@ export function scribeHoldBadgeHTML(flagged, { withReason = false } = {}) {
 }
 
 export function renderScribeTrainerAdminSectionHTML() {
+  // D1 Lane C (DI-648, FB-006) — where the SCRIBE profile pane is offered (Supabase mode, the pilot league) it is THE review surface: this card keeps Run Trainer, the numbers,
+  // Export and Reset, and its pending and learned lists give way to ONE row into the pane, so there is one place to approve, not two. Anywhere else (a local-only device, a
+  // non-pilot league) the pane is not offered and the lists below stay exactly as batch O left them, so a PIN-mode device keeps its way to approve.
+  const paneOffered = scribeProfileAvailable();
   const reports = getScribeReports();
   const latest = reports.length ? reports[reports.length - 1] : null;
   const learnings = getScribeLearnings();
@@ -21491,8 +25619,10 @@ export function renderScribeTrainerAdminSectionHTML() {
     <p class="text-muted text-xs">as of ${escHtml(new Date(latest.metrics.asOf || latest.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</p>
   ` : `<p class="text-muted text-sm">No Trainer run yet — click "Run Trainer now" to produce the first snapshot.</p>`;
 
+  // PF-467 — a row whose decision is still SAVING stays in this list (its status has already moved on this
+  // device), reading "Saving…" until the server answers; "Approved" is shown only once it has.
   const pendingLearningRows = learnings.map((l, idx) => ({ l, idx }))
-    .filter(x => x.l.status === 'pending' && (x.l.kind === 'learning' || x.l.kind === 'experiment' || x.l.kind === 'fact_candidate'))
+    .filter(x => scribeReviewEffectiveStatus('learnings', x.idx, x.l) === 'pending' && (x.l.kind === 'learning' || x.l.kind === 'experiment' || x.l.kind === 'fact_candidate'))
     .map(({ l, idx }) => {
       let label;
       if (l.kind === 'learning') label = `<strong>[learning/${escHtml(l.category)}]</strong> ${escHtml(l.instruction)} <span class="text-muted text-xs">(confidence ${l.confidence})</span>`;
@@ -21509,20 +25639,14 @@ export function renderScribeTrainerAdminSectionHTML() {
       const hostileBadge = scribeHoldBadgeHTML(l.flaggedHostile, { withReason: true });
       return `<div class="flex-between" style="gap:8px;padding:8px 0;border-bottom:1px solid var(--border);align-items:center">
         <div class="text-sm" style="flex:1">${label}${hostileBadge}</div>
-        <div class="flex gap-sm">
-          <button class="btn btn-secondary btn-sm scribe-approve-btn" data-learning-idx="${idx}">✅ Approve</button>
-          <button class="btn btn-ghost btn-sm scribe-reject-btn" data-learning-idx="${idx}">✖ Reject</button>
-        </div>
+        ${scribeReviewActionsHTML('learnings', idx, l)}
       </div>`;
     }).join('');
 
-  const pendingCanonRows = canon.map((c, idx) => ({ c, idx })).filter(x => x.c.approvalStatus === 'pending')
+  const pendingCanonRows = canon.map((c, idx) => ({ c, idx })).filter(x => scribeReviewEffectiveStatus('canon', x.idx, x.c) === 'pending')
     .map(({ c, idx }) => `<div class="flex-between" style="gap:8px;padding:8px 0;border-bottom:1px solid var(--border);align-items:center">
       <div class="text-sm" style="flex:1"><strong>[canon]</strong> ${escHtml(c.contextSummary)} → "${escHtml(c.preferredResponse)}" <span class="text-muted text-xs">(confidence ${c.confidence})</span></div>
-      <div class="flex gap-sm">
-        <button class="btn btn-secondary btn-sm scribe-canon-approve-btn" data-canon-idx="${idx}">✅ Approve</button>
-        <button class="btn btn-ghost btn-sm scribe-canon-reject-btn" data-canon-idx="${idx}">✖ Reject</button>
-      </div>
+      ${scribeReviewActionsHTML('canon', idx, c)}
     </div>`).join('');
 
   const pendingHTML = (pendingLearningRows || pendingCanonRows)
@@ -21543,7 +25667,7 @@ export function renderScribeTrainerAdminSectionHTML() {
   //    them; both arrive here through a shared table (CONVENTIONS #12).
   const nowMs = Date.now();
   const liveRows = learnings.map((l, idx) => ({ l, idx }))
-    .filter(x => x.l.kind === 'learning' && (x.l.status === 'approved' || x.l.status === 'superseded'))
+    .filter(x => x.l.kind === 'learning' && ['approved', 'superseded'].includes(scribeReviewEffectiveStatus('learnings', x.idx, x.l)))
     .map(({ l, idx }) => {
       // DI-276's discriminator, EXACTLY as that input states it: `origin` alone answers
       // it for the instant path, and for the Trainer path the stamped `confidence`
@@ -21554,8 +25678,9 @@ export function renderScribeTrainerAdminSectionHTML() {
       const isAuto = l.origin === 'instant' || Number(l.confidence) >= 0.9;
       const ageMs = nowMs - Date.parse(l.createdAt || '');
       const undoable = isAuto && Number.isFinite(ageMs) && ageMs < 24 * 60 * 60 * 1000;
-      const on = l.status === 'approved';
-      const label = on ? (undoable ? '↩ Undo' : '⏻ Off') : '⏻ On';
+      // PF-467 — the status the SERVER holds. While a switch is in flight the local row has already moved; the row keeps its
+      // old look (and its old label, as "Saving…") until the server answers, so the list never shows an unconfirmed flip.
+      const on = scribeReviewEffectiveStatus('learnings', idx, l) === 'approved';
       const originBadge = l.origin === 'instant'
         ? '<span class="text-muted text-xs">🤖 auto (instant)</span>'
         : (isAuto ? '<span class="text-muted text-xs">🤖 auto (Trainer)</span>'
@@ -21579,7 +25704,7 @@ export function renderScribeTrainerAdminSectionHTML() {
           ${quote}
           <div>${originBadge}${hostileBadge}${provisional}</div>
         </div>
-        <button class="btn btn-ghost btn-sm scribe-learning-toggle-btn" data-learning-idx="${escHtml(String(idx))}">${escHtml(label)}</button>
+        <span class="scribe-learning-toggle">${scribeLearningToggleHTML(idx, l, { on, undoable })}</span>
       </div>`;
     }).join('');
   const learningsListHTML = `<div class="divider"></div>
@@ -21607,17 +25732,16 @@ export function renderScribeTrainerAdminSectionHTML() {
   return `
         <div class="flex-between mb-sm" style="align-items:flex-start;gap:8px">
           <p class="text-muted text-xs" style="margin:0">Periodic snapshot, not live — see the "as of" stamp below.</p>
-          <button class="btn btn-primary btn-sm" id="scribe-run-trainer-btn">▶ Run Trainer now</button>
+          <button class="btn btn-primary btn-sm" id="scribe-run-trainer-btn">${icon('play')} Run Trainer now</button>
         </div>
         <p class="text-muted text-xs mb-sm">${escHtml(scribeTrainingExplainer(getScribeLearningRate()))}</p>
         ${burnHTML}
         ${metricsBlock}
-        ${learningsListHTML}
-        ${pendingHTML}
+        ${paneOffered ? scribeProfileTrainerRowHTML() : learningsListHTML + pendingHTML}
         <div class="divider"></div>
-        <div class="flex gap-sm" style="flex-wrap:wrap">
-          <button class="btn btn-secondary btn-sm" id="scribe-export-learnings-btn">📤 Export for SCRIBE.md</button>
-          <button class="btn btn-ghost btn-sm" id="scribe-reset-learnings-btn">♻️ Reset everything SCRIBE has learned</button>
+        <div class="flex gap-sm" style="flex-wrap:wrap;justify-content:center">
+          <button class="btn btn-secondary btn-sm" id="scribe-export-learnings-btn">${icon('share')} Export for SCRIBE.md</button>
+          <button class="btn btn-ghost btn-sm" id="scribe-reset-learnings-btn">${icon('refresh')} Reset everything SCRIBE has learned</button>
         </div>
         <p class="text-muted text-xs">Reset shows you the export first, then switches every learning and Canon entry off. Nothing is deleted — the rows stay for the record.</p>`;
 }
@@ -21657,14 +25781,46 @@ export function clampScribeMonthlyBudgetUsd(raw, capUsd = SCRIBE_BUDGET_SERVER_M
  * function, not a look-alike bound inside a click handler (RG-27's shape).
  */
 export function toggleScribeLearningStatus(idx) {
-  const all = getScribeLearnings();
+  const all = [...getScribeLearnings()];   // a copy (see applyScribeLearningDecision)
   const row = all[idx];
   if (!row) return { ok: false, error: 'no_such_row' };
   if (row.kind !== 'learning') return { ok: false, error: 'not_a_learning' };
-  const next = row.status === 'approved' ? 'superseded' : 'approved';
+  // PF-467 (the on/off control shows the SERVER's result, never an optimistic flip) — the switch goes through the SAME
+  // three states the Approve/Reject rows do. A second tap while the first is in flight does nothing: it must not flip twice.
+  const live = scribeReviewState('learnings', idx, row);
+  if (live && live.phase === 'saving') return { ok: false, error: 'in_flight' };
+  const cur = scribeReviewEffectiveStatus('learnings', idx, row);
+  const next = cur === 'approved' ? 'superseded' : 'approved';
   all[idx] = { ...row, status: next };
-  setScribeLearnings(all);
-  return { ok: true, status: next, on: next === 'approved' };
+  try { setScribeLearnings(all); }
+  catch (e) {
+    console.warn('[scribe-review] the switch was refused before it was sent', e);
+    const refused = scribeReviewRefusedUpFront('learnings', idx, next === 'approved', row, false, 'toggle');
+    return { ok: true, status: cur, on: cur === 'approved', saved: refused.saved };
+  }
+  const confirmed = trackScribeReviewSave('learnings', idx, next === 'approved', row, cur, next, 'toggle');
+  const saved = confirmed.then((state) => ({ state }));
+  // `status`/`on` — the status the switch is GOING to; `saved` resolves with what the server actually did.
+  return { ok: true, status: next, on: next === 'approved', saved };
+}
+
+/**
+ * The on/off control of one live learning, in its current state (PF-467):
+ *   idle   → "↩ Undo" (a fresh auto-applied row) or "⏻ Off" / "⏻ On";
+ *   saving → disabled, reads "Saving…", aria-busy — and the row keeps the look it had;
+ *   failed → "Couldn't save" inline (role="alert") and the same control reads "Retry" (the same handler, the same decision).
+ * Everything printed is a literal: no row text reaches this markup.
+ */
+export function scribeLearningToggleHTML(idx, row, { on = true, undoable = false } = {}) {
+  const s0 = scribeReviewState('learnings', idx, row);
+  const s = s0 && s0.action === 'toggle' ? s0 : null;
+  const saving = !!(s && s.phase === 'saving');
+  const failed = !!(s && s.phase === 'failed');
+  // N7 (D-1): the switch's glyph is the app's icon family, not a character (it was U+21A9 / U+23FB); the label text is a constant.
+  const scribeToggleLabelHTML = saving ? 'Saving…' : failed ? 'Retry' : on ? (undoable ? `${icon('undo')} Undo` : `${icon('power')} Off`) : `${icon('power')} On`;
+  return `<div class="flex gap-sm" style="align-items:center">${failed ? `<span class="text-xs" role="alert" style="color:var(--danger)">Couldn't save</span>` : ''}
+          <button class="btn btn-ghost btn-sm scribe-learning-toggle-btn" data-learning-idx="${escHtml(String(Number(idx)))}"${saving ? ' disabled aria-busy="true"' : ''}>${scribeToggleLabelHTML}</button>
+        </div>`;
 }
 
 /**
@@ -21762,7 +25918,7 @@ export function showScribeLearningsExportModal({ resetAfter = false } = {}) {
     <textarea id="scribe-export-text" class="input" rows="14" readonly style="font-family:monospace;font-size:0.75rem">${escHtml(markdown)}</textarea>
     <div class="flex gap-sm mt-sm" style="flex-wrap:wrap">
       <button class="btn btn-primary btn-sm" id="scribe-export-copy">📋 Copy</button>
-      ${resetAfter ? '<button class="btn btn-danger btn-sm" id="scribe-export-do-reset">♻️ Switch everything off</button>' : ''}
+      ${resetAfter ? `<button class="btn btn-danger btn-sm" id="scribe-export-do-reset">${icon('refresh')} Switch everything off</button>` : ''}
     </div>
   </div>`;
   document.body.appendChild(ov);
@@ -21783,7 +25939,7 @@ export function showScribeLearningsExportModal({ resetAfter = false } = {}) {
     if (!confirm(`Switch off ${liveL} learning${liveL === 1 ? '' : 's'} and ${liveC} Canon entr${liveC === 1 ? 'y' : 'ies'}?\n\nSCRIBE goes back to its written persona alone. Nothing is deleted — the rows stay for the record — but every one of them stops applying.`)) return;
     const r = resetScribeLearnings();
     ov.remove();
-    showToast(`♻️ Reset — ${r.learnings} learning(s) and ${r.canon} Canon entr${r.canon === 1 ? 'y' : 'ies'} switched off`, 'success');
+    showToast(`Reset — ${r.learnings} learning(s) and ${r.canon} Canon entr${r.canon === 1 ? 'y' : 'ies'} switched off`, 'success');
     renderCommPage();
   });
   return ov;
@@ -21826,6 +25982,11 @@ const SERVER_JOB_LABELS = Object.freeze({
   scribeLearn: 'SCRIBE instant learning',
   // SCRIBE v3, Package D (DI-283) — the emoji reaction writer.
   scribeReact: 'SCRIBE reactions',
+  // D1 Lane C (DI-659) — the Home content builder.
+  feedBuild: 'Home cards (matchups, players, spotlights)',
+  // D1 Lane C (DI-656) — `scribe-scan`'s two sub-jobs.
+  scribeCallout: 'SCRIBE deadline call-outs',
+  scribeScan: 'SCRIBE moment scan',
 });
 /** The `job_runs.job` value each switch's function writes — snake/kebab,
  *  not the camelCase switch name (`_shared/runs.js`'s JOB_NAME constants). */
@@ -21835,6 +25996,10 @@ const SERVER_JOB_RUN_NAME = Object.freeze({
   scoresRefresh: 'scores-refresh', keepalive: 'keepalive',
   scribeLearn: 'scribe-learn',
   scribeReact: 'scribe-react',
+  feedBuild: 'feed-build',
+  // D1 Lane C — one function, two run names (each sub-job writes its own job_runs row).
+  scribeCallout: 'scribe-callout',
+  scribeScan: 'scribe-scan',
 });
 /** Which functions actually exist to deploy, as of this build. Everything
  *  else renders DISABLED with a stated reason (§0.3 item 2: deploying is not
@@ -21863,7 +26028,9 @@ const SERVER_JOB_RUN_NAME = Object.freeze({
 //  `scribeClassify` being on (it reads that job's cached verdict and makes no model
 //  call of its own), so flipping it alone is a switch with nothing behind it; the
 //  runbook says so in §S6F1-W3.
-const SERVER_JOB_BUILT = Object.freeze({ notifyFanout: true, keepalive: true, reminders: true, scribeAsk: true, trainer: true, scribeClassify: true, scribeAutonomous: true, scoresRefresh: true, scribeLearn: true, scribeReact: true });
+//  `scribeCallout` / `scribeScan` (D1 Lane C, DI-652 / DI-653) join at this build: `scribe-scan`, its twin and migration 0056 (the cron and
+//  `job_week_completion`) exist. Both stay OFF until Drew has pasted 0056 and deployed the function (docs/runbook/0056_SCRIBE_SCAN.md).
+const SERVER_JOB_BUILT = Object.freeze({ notifyFanout: true, keepalive: true, reminders: true, scribeAsk: true, trainer: true, scribeClassify: true, scribeAutonomous: true, scoresRefresh: true, scribeLearn: true, scribeReact: true, scribeCallout: true, scribeScan: true, feedBuild: true });
 /** Expected cadence in minutes, for the staleness line — only for jobs that
  *  fire AT LEAST DAILY. `notify-fanout` and `scribeAsk` are both EVENT-DRIVEN
  *  (a webhook / a `functions.invoke()` per `@scribe` mention): their "last
@@ -21891,7 +26058,9 @@ const SERVER_JOB_BUILT = Object.freeze({ notifyFanout: true, keepalive: true, re
  *  weekly job's "3x cadence" is three weeks, which is not a staleness rule,
  *  it is a way to notice a dead cron job around Thanksgiving having been
  *  broken since Week 1. */
-const SERVER_JOB_CADENCE_MIN = Object.freeze({ reminders: 5, keepalive: 360 });
+//  D1 Lane C — `scribeCallout` writes a row every 5-minute tick while it is on (most say "nothing to do"), and `scribeScan` every 10 minutes, so both are
+//  SCHEDULED and a silence is a staleness signal for them, exactly as for `reminders`.
+const SERVER_JOB_CADENCE_MIN = Object.freeze({ reminders: 5, keepalive: 360, scribeCallout: 5, scribeScan: 10 });
 /**
  * RG-253 (live, game day 2026-09-26) — JOBS WHOSE RUNS THIS CARD CANNOT SEE.
  *
@@ -21909,8 +26078,10 @@ const SERVER_JOB_CADENCE_MIN = Object.freeze({ reminders: 5, keepalive: 360 });
  * read is ever added and a keepalive row DOES arrive, every ordinary branch — including the
  * staleness escalation — applies to it unchanged (bgjobscardtest.mjs [2]).
  */
-const SERVER_JOB_PLATFORM_SCOPED = Object.freeze({ keepalive: true });
+// D1 Lane C (DI-659): feed-build is project-wide too (one public card builder for every league); its runs carry league_id null like keepalive's.
+const SERVER_JOB_PLATFORM_SCOPED = Object.freeze({ keepalive: true, feedBuild: true });
 const PLATFORM_SCOPED_COPY = "runs project-wide, so its heartbeat isn't logged under this league and can't be shown here. Check it in Supabase (job_runs, job = 'keepalive').";
+const PLATFORM_SCOPED_COPY_BY_JOB = Object.freeze({ feedBuild: "runs project-wide (one card builder for every league), so its runs aren't logged under this league and can't be shown here. Check it in Supabase (job_runs, job = 'feed-build')." });
 /**
  * ESPN-CLASS (DI note) (live, game day 2026-09-26) — WHICH ESPN FAILURE, in this file's own words.
  *
@@ -22201,7 +26372,7 @@ export function renderBackgroundJobsAdminSectionHTML({ now = Date.now(), pilot =
   const PILOT_ONLY_COPY = 'This feature is only available to the pilot league.';
 
   const rowsHtml = SERVER_JOB_NAMES.map((job) => {
-    const pilotLocked = job === 'trainer' && !pilot;
+    const pilotLocked = (job === 'trainer' || job === 'feedBuild') && !pilot;   // D1 Lane C (review N6): the Home cards builder serves the pilot only (0055 C-1), so it locks the same way
     const on = bag[job] === true;
     const built = !!SERVER_JOB_BUILT[job] && !pilotLocked;
     const label = SERVER_JOB_LABELS[job] || job;
@@ -22225,7 +26396,7 @@ export function renderBackgroundJobsAdminSectionHTML({ now = Date.now(), pilot =
       // RG-253 — no row is what this card ALWAYS gets for a platform-scoped job, so silence here
       // is not evidence of anything. Say so, keep the flip time, and never paint it as a failure.
       const flippedAtPs = flippedAtBag[job];
-      statusLine = `Switched on${flippedAtPs ? ` ${_bgJobTimeAgo(flippedAtPs, now)}` : ''} · ${PLATFORM_SCOPED_COPY}`;
+      statusLine = `Switched on${flippedAtPs ? ` ${_bgJobTimeAgo(flippedAtPs, now)}` : ''} · ${PLATFORM_SCOPED_COPY_BY_JOB[job] || PLATFORM_SCOPED_COPY}`;
     } else if (!last) {
       // REVIEWER R1 — a job that has NEVER run could otherwise say "has not run
       // yet" forever, which is exactly Phase 2's likeliest failure (cron/Vault
@@ -22643,6 +26814,11 @@ export function renderFeedbackAdminSectionHTML() {
  */
 export function renderCommExtraPointCardHTML(week) {
   if (!week) return '';
+  // D1 DI-551: college football's side contest is the Ischemic Extra Point (this card, as ever). A sport whose profile NAMES its own optional contest (the NFL's longest field goal, D-31) shows this card only for a
+  // week where the commissioner has turned the contest on (Step 3 of the wizard), under the profile's own label, so a league whose main sport is the NFL never prints the college game's name by default.
+  let ownContest = null;
+  try { const pr = profileForWeek(week); ownContest = pr && pr.key !== 'cfb' && pr.sideContest && pr.sideContest.label ? pr.sideContest : null; } catch { ownContest = null; }
+  if (ownContest && week.extraPointEnabled !== true) return '';
   // RG-40 — THE SAME LEAK AS RG-37, ONE SURFACE OVER. This block printed every
   // active player's Extra Point guess in plaintext, gated only on
   // `session.isAdmin`, with no blind check at all. Drew is BOTH commissioner
@@ -22672,9 +26848,9 @@ export function renderCommExtraPointCardHTML(week) {
   // results for a week nobody is allowed to see yet is the worst version of
   // this bug, not a lesser one.
   const graded = (canSeeOthers && week.extraPointActual != null)
-    ? gradeWeekExtraPoint(week, getPlayers().filter(p=>p.active))
+    ? gradeWeekExtraPoint(week, playersForWeek(week))   // D1 DI-531 (C4): the week's own sport's entrants
     : null;
-  const guesses = getPlayers().filter(p=>p.active).map(p => {
+  const guesses = playersForWeek(week).map(p => {
     if (!canSeeOthers && p.playerId !== myId) {
       return `<span class="ep-admin-guess ep-admin-guess-blind">${escHtml(p.displayName)}: <strong title="Hidden until the games kick off">•••</strong></span>`;
     }
@@ -22688,8 +26864,8 @@ export function renderCommExtraPointCardHTML(week) {
     <div class="admin-section" data-comm-tab="week">
     <div class="admin-section-title">Extra Games</div>
     <div class="card mb-md" id="comm-ep-card">
-      <h3 style="color:var(--maroon)">🎯 Ischemic Extra Point — ${escHtml(formatWeekLabel(week))}</h3>
-      <p class="text-muted text-xs">Longest made FG on the slate, blackjack rules. Detect pulls per-game scoring plays from ESPN; you can always override manually.</p>
+      <h3 style="color:var(--maroon)">🎯 ${ownContest ? escHtml(ownContest.label) : 'Ischemic Extra Point'} — ${escHtml(formatWeekLabel(week))}</h3>
+      <p class="text-muted text-xs">${ownContest ? 'Longest made field goal on the slate. Detect pulls per-game scoring plays from ESPN; you can always override manually.' : 'Longest made FG on the slate, blackjack rules. Detect pulls per-game scoring plays from ESPN; you can always override manually.'}</p>
       <div class="mb-sm"><label class="form-label" style="font-size:.7rem">Guesses on file</label><div class="ep-admin-guesses">${guesses || '<span class="text-muted">none yet</span>'}</div>${blindNote}</div>
       <div class="flex gap-sm flex-wrap mb-sm">
         <button class="btn btn-secondary btn-sm" id="ep-detect-btn">🛰 Detect Longest FG (ESPN)</button>
@@ -22748,6 +26924,8 @@ function renderCommExtrasV16(week, games) {
     // only save a wasted round trip when SCRIBE is known to be off here.
     const scribeInteractiveOn = isScribeInteractiveEnabled();
     const scribeWebSearchOn = isScribeWebSearchEnabled();
+    // D1 Lane C (DI-648) — the SCRIBE profile entry card is the FIRST card on this tab ('' where the pane is not offered). Its own wrapper carries data-comm-tab="scribe" (RG-10).
+    c.insertAdjacentHTML('beforeend', scribeProfileEntryCardHTML());
     // Build 2b, E4 (2026-09-10, UN-162) — the fast "something just made
     // SCRIBE noticeably worse, stop it NOW" emergency stop, separate from
     // the per-learning approve/reject granularity (Comm→Data). This is
@@ -22838,6 +27016,7 @@ function renderCommExtrasV16(week, games) {
   }
 
   // ── handlers ──
+  bindScribeProfileEntryPoints();
   document.getElementById('chat-enabled-toggle')?.addEventListener('change', e => {
     saveSetting('chatEnabled', e.target.checked);
     try { refreshChatEnabled(); } catch {}
@@ -23006,7 +27185,7 @@ function renderCommExtrasV16(week, games) {
   });
 
   document.getElementById('ep-post-btn')?.addEventListener('click', () => {
-    const g = gradeWeekExtraPoint(getWeek(week.weekId), getPlayers().filter(p=>p.active));
+    const g = gradeWeekExtraPoint(getWeek(week.weekId), playersForWeek(getWeek(week.weekId) || week));   // D1 (B2) + DI-531 (C4): the freshest week record's entrants
     if (g) { emitExtraPointEvent(week.weekId, g); showToast('📣 Posted to chat', 'success'); }
   });
 
@@ -23078,15 +27257,14 @@ function weekOutcomeChanged(before, after) {
  * share `correctPicks`). (2026-10-01, SP-54 / DI-469: until then this said the
  * tie would be assigned by row order; it is now settled by each tied player's
  * alma mater against the spread, then the Extra Point, then the week's draw —
- * `finalizeTieNotice()` below says which, and is what the three finalize sites
- * actually show; this function remains the legacy trigger it feeds.)
+ * `finalizeTieNotice()` below says which, and is what the guided Finalize
+ * flow's Step 4 shows; this function remains the legacy trigger it feeds.)
  * Deliberately narrow, per the design input's own
  * trigger condition. Read-only preview — scores against the CURRENT slate but
  * never persists anything (no `saveGame`/`saveWeek`/`saveAllWeeklyResults`
  * call anywhere in this function), so calling it during a render is free of
- * side effects. Shared by both of the only two paths that reach 'final'
- * (renderWeekStatusButtons, ~5810 — 'final' is reachable only from 'live')
- * so they can't disagree about when to warn.
+ * side effects. (FB-027 / DI-518, 2026-10-07: every Finalize now opens the
+ * guided flow, so Step 4 is the one place a week reaches 'final'.)
  *
  * EXPORTED (2026-09-27, DI-359) — the guided Finalize Week flow's Step 4
  * (`unresolvedTieWarning()`, js/week-wizard.js) needs this exact function as
@@ -23103,20 +27281,20 @@ export function weekHasUnresolvedTie(week, players, picks, games) {
 }
 
 /**
- * SP-54 / DI-469 — WHAT THE COMMISSIONER IS TOLD BEFORE FINALIZING A TIE, one function for every site (the manual Finalize button, the
- * wizard-sheet Finalize button and the guided Finalize Step 4 all call it; the three copies of the old false sentence are gone). It is a
- * READ-ONLY preview (no saveGame / saveWeek / saveAllWeeklyResults): it scores the CURRENT slate as if finalized now, with a context built
- * `forPreview` by the SAME builder finalize uses, then asks the pure composer (js/tie-context.js) what to say.
+ * SP-54 / DI-469 — WHAT THE COMMISSIONER IS TOLD BEFORE FINALIZING A TIE. Its one caller is the guided Finalize flow's Step 4 (injected into
+ * js/week-wizard.js's unresolvedTieWarning()); FB-027 / DI-518 (2026-10-07) retired the two confirm() dialogs that also called it (the manual
+ * Finalize buttons now open the guided flow), and with them the dialog wording. It is a READ-ONLY preview (no saveGame / saveWeek /
+ * saveAllWeeklyResults): it scores the CURRENT slate as if finalized now, with a context built `forPreview` by the SAME builder finalize uses,
+ * then asks the pure composer (js/tie-context.js) what to say.
  *
  *   returns { show, kind: 'tb-missing' | 'tb-missing-draw' | 'ep-missing' | null, text }
  *
  * BLIND RULE: a preview reads other players' picks AND guesses, so it answers only when `arePicksPublic(week)`; every call site is ALSO
- * behind that gate (loadtest [64]) and this is the belt to those braces. `variant` is 'confirm' (the browser dialog) or 'wizard'; `shared`
- * is a shared league, where re-finalizing a FINAL week is refused (N-1) and the suffix must not promise a recalculation.
+ * behind that gate (loadtest [64]) and this is the belt to those braces.
  * For a multi-part week it previews the part being finalized, as weekHasUnresolvedTie() always has; the pooled answer exists only once
  * every part is final (a recorded limit).
  */
-export function finalizeTieNotice(week, players, picks, games, variant = 'confirm') {
+export function finalizeTieNotice(week, players, picks, games) {
   const silent = { show: false, kind: null, text: '' };
   if (!week || !arePicksPublic(week)) return silent;
   const legacyTrigger = weekHasUnresolvedTie(week, players, picks, games);   // no tiebreaker value AND a tie on picks at either end
@@ -23125,7 +27303,7 @@ export function finalizeTieNotice(week, players, picks, games, variant = 'confir
   const stage = (r) => (r && validTieBreak(r.tieBreak) ? r.tieBreak.stage : null);
   return composeFinalizeTieNotice({
     legacyTrigger, winnerStage: stage(rows[0]), loserStage: stage(rows[rows.length - 1]),
-    epEnabled: week.extraPointEnabled !== false, epUsable: extraPointActualIsUsable(week), variant, shared: isSupabaseDataMode(),
+    epEnabled: week.extraPointEnabled !== false, epUsable: extraPointActualIsUsable(week),
   });
 }
 
@@ -23276,6 +27454,56 @@ export function isSpreadSignConsistentWithFavorite(game) {
 }
 
 /**
+ * PF-1 / DI-496 (UN-411, adjacent need A1, 2026-10-01) — THE LOUD-FAIL THAT USED TO RIDE A DEVICE.
+ *
+ * lock_week_core freezes each game's spread only when its sign agrees with its recorded favorite; a contradicting game keeps lockedSpread NULL and is reported back, and the commissioner's
+ * device turned that into the loud toast (applyWeekStatusChange's handler, the tick's auto-lock leg). A week the SERVER locks (the job, migration 0043) has no device to raise it, so without
+ * this the warning would silently vanish. The detection reads the SAME helper the client lock uses, so the two cannot disagree about "contradicts". Pure: a week that is locked or live and
+ * the games of that week with a spread set, no frozen spread, and a contradicting sign. A final week, an open one, or a game that froze is never listed.
+ */
+export function unfrozenSpreadGames(week, games) {
+  if (!week || (week.status !== 'locked' && week.status !== 'live')) return [];
+  return (games || []).filter((g) => g && g.spread !== null && g.spread !== undefined
+    && (g.lockedSpread === null || g.lockedSpread === undefined) && !isSpreadSignConsistentWithFavorite(g));
+}
+/** One toast per week per page lifetime (the `_scheduledOpenBlockedNoticeSent` pattern). */
+const _unfrozenSpreadNoticeSent = new Set();
+export function _resetUnfrozenSpreadNoticeForTest() { _unfrozenSpreadNoticeSent.clear(); }
+/** The toast text. Plain text: showToast() escapes exactly once at the sink, so team names (ESPN / commissioner data) are NOT pre-escaped here (they would double-escape) and `html` is never passed (SC-P9). */
+export function unfrozenSpreadToastText(bad) {
+  const names = bad.map((g) => `${g.awayTeam} @ ${g.homeTeam}`).join(', ');
+  return `⚠️ Spread NOT frozen for ${bad.length} game${bad.length > 1 ? 's' : ''} — sign contradicts recorded favorite: ${names}. The week locked on the server. Fix the spread and favorite in Commissioner → Games; until then those games grade on their live spread.`;
+}
+export function maybeNoticeUnfrozenSpreads({ supabase = isSupabaseDataMode(), session = null } = {}) {   // the two inputs are injectable for the harness (supabase data mode needs authMode 'supabase', whose session is the auth module's); production passes nothing
+  if (!supabase) return false;                                   // local mode has no server lock; the device's own lock paths already toast
+  let isAdmin = false;
+  try { isAdmin = (session || getSession())?.isAdmin === true; } catch { isAdmin = false; }
+  if (!isAdmin) return false;                                    // never for a player
+  for (const week of currentWeeksToSweep()) {                    // D1 / S3: every sport's current week; ONE toast per call
+    if (!week || _unfrozenSpreadNoticeSent.has(week.weekId)) continue;
+    const bad = unfrozenSpreadGames(week, getGames(week.weekId));
+    if (!bad.length) continue;
+    _unfrozenSpreadNoticeSent.add(week.weekId);
+    showToast(unfrozenSpreadToastText(bad), 'error');
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Item SS (runtime) - LOUD-FAIL for the games whose spread was refused rather than frozen at the lock (the sign contradicts the recorded favorite). A second, separate toast so it cannot be lost in
+ * the ordinary "locked" success toast. Marks the week as told so the server's echo of the same lock does not toast it again (PF-1 / DI-496). One wording, three call sites (Comm -> Week's status
+ * button, the wizard's Manage status button, the all-sports card's Lock).
+ */
+function notifySpreadLockRefusals(weekId, refusals) {
+  if (!refusals || !refusals.length) return false;
+  _unfrozenSpreadNoticeSent.add(weekId);
+  const names = refusals.map((g) => `${g.awayTeam} @ ${g.homeTeam}`).join(', ');
+  showToast(`⚠️ Spread NOT locked for ${refusals.length} game${refusals.length > 1 ? 's' : ''} — sign contradicts recorded favorite: ${names}. Fix the spread/favorite in Games, then lock again.`, 'error');
+  return true;
+}
+
+/**
  * The commissioner's Week-tab status buttons (draft/open/locked/live/final).
  *
  * Extracted from the `.week-status-btn` click handler so the ORDER OF
@@ -23420,21 +27648,22 @@ export function applyWeekStatusChange(week, to) {
 function reconcileWeeklyObligation(weekId, payerPlayerId, recipientPlayerId, prize) {
   const existing = getActiveObligations(weekId).filter(o => o.type === 'weekly');
   const matching = existing.find(o => o.payerPlayerId === payerPlayerId && o.recipientPlayerId === recipientPlayerId);
-  if (matching) return;                     // already correctly on record — nothing to do
+  if (matching) return null;                // already correctly on record — nothing to do
   if (!existing.length) {
     // Groups A/B (2026-09-10, DI-B4) — "created" only, the clean first-time
     // path. The conflict/needsReview branch below is deliberately NOT
     // notified — it's a commissioner-bookkeeping correction, the same
     // "changed" class DI-B4's own research triage scoped OUT (created +
     // settled only).
+    // PF-416 / FB-026 follow-up (W-46) — RETURNED, not posted: finalizeWeek() (the only caller) announces it with the week, once the server holds
+    // the week final. Posting it here told the league "X owes Y" for a finalize the server had not accepted.
     const ob = createObligation(weekId, payerPlayerId, recipientPlayerId, prize);
     saveObligation(ob);
-    try { postObligationCreatedNotice(ob); } catch (e) { console.warn('[lifecycle] obligation-created hook failed', e); }
-    return;
+    return ob;
   }
   const alreadyFlagged = existing.some(o =>
     o.needsReview && o.payerPlayerId === payerPlayerId && o.recipientPlayerId === recipientPlayerId);
-  if (alreadyFlagged) return;
+  if (alreadyFlagged) return null;
   const fresh = createObligation(weekId, payerPlayerId, recipientPlayerId, prize);
   fresh.needsReview = true;
   fresh.reviewNote = 'Computed outcome differs from an existing obligation for this week — resolve in Commissioner → Data → Obligation Corrections.';
@@ -23444,6 +27673,7 @@ function reconcileWeeklyObligation(weekId, payerPlayerId, recipientPlayerId, pri
       saveObligation({ ...o, needsReview: true, reviewNote: 'A newly computed outcome for this week disagrees with this record — resolve in Commissioner → Data → Obligation Corrections.' });
     }
   });
+  return null;                              // a correction is never announced (DI-B4, above)
 }
 
 // ── DI-D1 — THE DETECTOR CALL SITES (Build 3, Group D pass 2, 2026-09-11) ──
@@ -23543,6 +27773,31 @@ function effectiveWeekStatusForSignals(week) {
  * `seasonStandingsRows()` — the Standings page's own numbers (CONVENTIONS
  * #21), never a second recompute.
  */
+/** The id of the competition a week belongs to, or null (a one-sport league and a week the resolver cannot place answer null). seasonStandingsRows() ignores it in a one-sport league. */
+function weekCompetitionId(week) {
+  try { const c = week ? competitionForWeek(week) : null; return c ? c.id : null; } catch { return null; }
+}
+/**
+ * THE INPUTS SCRIBE'S WEEK SIGNALS READ (Part 2 item 2). A one-sport league: the season-wide games, picks and weeks, exactly as before. With several sports: the WEEK'S OWN sport's weeks, the games of those
+ * weeks, and the pick rows of the week's ENTRANTS in them (a non-entrant's row counts for nothing, A3) - so `streak` (which needs the whole season to know whether this week extended or broke a run) reads
+ * one sport's season and can never claim a streak that blends CFB and NFL. A week the resolver cannot place reads only itself (fail closed, never the whole league). `players` are the week's entrants (C4).
+ */
+function signalInputsForWeek(week) {
+  const players = playersForWeek(week);
+  // THE BLIND RULE, at the source of the read: these inputs carry every entrant's pick rows, so they carry NONE until the week's picks are public (arePicksPublic) - whoever the caller is. fireScribeWeekSignals
+  // returns before it for a blind week anyway; this keeps the helper safe on its own (and visible to loadtest [64]'s deny-by-default scan as a gated reader).
+  const open = !!week && arePicksPublic(week);
+  if (!isMultiSport()) return { games: getGames(), picks: open ? getPicks() : [], weeks: getWeeks(), players };
+  const cid = weekCompetitionId(week);
+  const weeks = cid ? getWeeksForCompetition(cid) : (week ? [week] : []);
+  const ids = new Set(weeks.map((w) => w.weekId));
+  return {
+    games: getGames().filter((g) => g && ids.has(g.weekId)),
+    picks: open ? picksOfRoster(getPicks().filter((p) => p && ids.has(p.weekId)), players) : [],
+    weeks, players,
+  };
+}
+export const _signalInputsForWeekForTest = signalInputsForWeek;
 export function fireScribeWeekSignals(week, { phase = 'lock', standingsBefore = null, standingsAfter = null } = {}) {
   if (!week || !week.weekId) return { fired: false, skipped: 'no_week', detected: [], outcomes: [] };
   if (week.dataSourceMode === 'demo') return { fired: false, skipped: 'demo', detected: [], outcomes: [] };
@@ -23598,13 +27853,11 @@ export function fireScribeWeekSignals(week, { phase = 'lock', standingsBefore = 
     // server's `scribeOrderedGradedPicks_` rather than merely similar.
     // Nothing here can leak an OPEN week's picks: only GRADED picks enter a
     // streak, and an open week has no final games.
+    // D1 (Part 2 item 2): "season-wide" means the WEEK'S OWN sport's season - signalInputsForWeek() - so a streak never blends a college run into an NFL one. A one-sport league's inputs are exactly the above.
     result = considerWeekSignals({
       weekId: week.weekId,
       weekStatus: effectiveWeekStatusForSignals(week),
-      games: getGames(),
-      picks: getPicks(),
-      weeks: getWeeks(),
-      players: getPlayers().filter(p => p.active),
+      ...signalInputsForWeek(week),
       standingsBefore, standingsAfter,
     }) || { detected: [], outcomes: [] };
   } catch (e) {
@@ -23620,19 +27873,63 @@ export function fireScribeWeekSignals(week, { phase = 'lock', standingsBefore = 
   return { fired: true, ...result };
 }
 
+// ── PF-416 / FB-026 follow-up (W-46, thread 100726-D1, 2026-10-07) — THE WEEK-FINAL ANNOUNCEMENTS WAIT FOR THE SERVER ────────────────────────────
+// finalizeWeek() used to send the week-final chat post, the game-final posts, the Extra Point post, the results notice, the SCRIBE week signals and
+// the obligation notice the moment it computed the results. In a shared league that is before finalize_week has answered, so on a pending or REFUSED
+// save the league had already been told the week was final: DI-519's "half-finalized" failure (reproduced in wizardfinalizetest [5]). The server's
+// chat guard does not catch it: chat_append_system admits sys_weekfinal_<week> for a LIVE week. So finalizeWeek() computes and saves, then hands its
+// announcements here, where they are:
+//   • SENT once the SERVER holds the week final: the adapter's base row, which only a finalize_week that succeeded, a hydrate or a Realtime event
+//     advances (finalizeServerHoldsFinal()). In local mode there is no server, and the device's own record is the league's;
+//   • checked again on every adapter status emit (the flush that landed it, a hydrate), on every Realtime event, and after every guided-flow press;
+//   • sent EXACTLY ONCE per finalize: the entry is removed before it is sent, so a later re-ask, hydrate or Realtime event finds nothing to send;
+//   • DROPPED unsent once this device no longer shows the week final either (the server's status corrected it, the week was reopened, the league
+//     was left, or the finalize was a recompute on a week that is not final): the finalize it describes is gone;
+//   • never sent for a refused finalize, which the server does not hold. In memory on purpose: an entry lives exactly as long as the queued write it
+//     describes (the adapter's queue is in memory, and its device snapshot is never written while anything is queued), so a reload ends both.
+// A newer finalize of the same week replaces an entry still waiting (its numbers supersede). Deterministic ids still collapse another device's copy
+// server-side (AD-11); this decides WHEN this device speaks, not how many devices may.
+const _weekFinalAnnouncements = new Map();   // weekId -> () => void
+function weekHeldFinal(week) {
+  if (typeof _finalizeServerFinalOverride === 'function' || getBackendMode() === 'supabase') return finalizeServerHoldsFinal(week);
+  return !!week && (getWeek(week.weekId) || week).status === WEEK_STATUS.FINAL;
+}
+function queueWeekFinalAnnouncements(week, send) {
+  if (!week || !week.weekId || typeof send !== 'function') return;
+  _weekFinalAnnouncements.set(week.weekId, send);
+  releaseWeekFinalAnnouncements();
+}
+function releaseWeekFinalAnnouncements() {
+  for (const [weekId, send] of [..._weekFinalAnnouncements]) {
+    let shown = null, held = false;
+    try { shown = getWeek(weekId); held = weekHeldFinal(shown || { weekId }); }
+    catch (e) { console.warn('[finalizeWeek] could not read whether the server holds the week final', e); continue; }
+    if (held) {
+      _weekFinalAnnouncements.delete(weekId);
+      try { send(); } catch (e) { console.warn('[finalizeWeek] week-final announcements failed', e); }
+    } else if (!shown || shown.status !== WEEK_STATUS.FINAL) {
+      _weekFinalAnnouncements.delete(weekId);
+    }
+  }
+}
+/** Test seam (`_xForTest` convention): what wireSupabaseAdapter()'s onRealtimeEvent runs after a fold, for a harness that wires its own adapter deps
+ *  (wizardfinalizetest [5c]; the wiring line itself is pinned there). */
+export const _releaseWeekFinalAnnouncementsForTest = releaseWeekFinalAnnouncements;
+
 /* Exported for loadtest.mjs — driven directly (via applyWeekStatusChange) to
    verify the UN-118/UN-125 obligation gate end-to-end, the same rationale
    RG-30's own [39] suite already exports/drives this function through. */
 export function finalizeWeek(week, { settling = false } = {}) {
-  const players=getPlayers().filter(p=>p.active);
-  const picks=getPicks(week.weekId);
+  const players=playersForWeek(week);   // D1 (B2) + DI-531 (C4, A3): results, ranks and obligations among the week's own sport's ENTRANTS - a member who never joined is neither a winner, a loser nor "missing"
+  const picks=picksOfRoster(getPicks(week.weekId), players);
   const games=getGames(week.weekId);
   // DI-D1 — the standings as they stood BEFORE this week's results are
   // saved. Captured here, at the top, because saveAllWeeklyResults() below
   // is what changes them; `chartLeadChange` and `milestone` are both
   // before/after comparisons and there is no second chance to read "before."
   // Same function the Standings page renders from (seasonStandingsRows).
-  const scribeStandingsBefore=seasonStandingsRows();
+  const scribeCid=weekCompetitionId(week);   // D1 (Part 2 item 2): SCRIBE's before/after standings are the WEEK'S sport's, not whichever sport this device's pointer is on
+  const scribeStandingsBefore=seasonStandingsRows({ competitionId: scribeCid });
   games.forEach(g=>{
     if(g.status===GAME_STATUS.FINAL&&g.lockedSpread!==null)
       saveGame({...g,atsWinner:calculateAtsWinner(g)});
@@ -23649,53 +27946,64 @@ export function finalizeWeek(week, { settling = false } = {}) {
     // The builder never throws out of a finalize (SC-K1): a half it could not read was SKIPPED and the week was still decided. Say so, once.
     try{ showToast(tie.degraded.map(d=>d==='alma'?TIE_COPY.degradedAlma:TIE_COPY.degradedEp).join(' '),'warning'); }catch(e){ console.warn('[tie] degraded toast failed',e); }
   }
-  // v0.16.0 — chat system events + Extra Point grading (deterministic ids ⇒
-  // exactly-once even if several devices finalize/re-finalize).
-  try {
-    const ranked=[...results].sort((a,b)=>(a.rank??99)-(b.rank??99));
-    emitWeekFinalEvent(week, ranked);
-    freshGames.forEach(g=>{
-      const ats=g.atsWinner; if(!ats) return;
-      const gp=picks.filter(p=>p.gameId===g.gameId);
-      emitGameFinalEvent(g, ats,
-        gp.filter(p=>p.selectedTeam===ats).map(p=>p.playerId),
-        gp.filter(p=>p.selectedTeam!==ats&&ats!=='no_decision').map(p=>p.playerId));
-    });
-    if (week.extraPointActual!=null) {
-      const graded=gradeWeekExtraPoint(week, players);
-      if (graded) emitExtraPointEvent(week.weekId, graded);
+  // PF-416 / FB-026 follow-up (W-46) — every announcement of this finalize is SENT by queueWeekFinalAnnouncements() once the server holds the week
+  // final (its header, above), never here. The obligation notices join them: reconcileWeeklyObligation() below saves the obligation and returns it,
+  // and it is announced with the week.
+  const obligationsCreated = [];
+  const announce = () => {
+    // v0.16.0 — chat system events + Extra Point grading (deterministic ids ⇒
+    // exactly-once even if several devices finalize/re-finalize).
+    try {
+      const ranked=[...results].sort((a,b)=>(a.rank??99)-(b.rank??99));
+      emitWeekFinalEvent(week, ranked);
+      freshGames.forEach(g=>{
+        const ats=g.atsWinner; if(!ats) return;
+        const gp=picks.filter(p=>p.gameId===g.gameId);
+        emitGameFinalEvent(g, ats,
+          gp.filter(p=>p.selectedTeam===ats).map(p=>p.playerId),
+          gp.filter(p=>p.selectedTeam!==ats&&ats!=='no_decision').map(p=>p.playerId));
+      });
+      if (week.extraPointActual!=null) {
+        const graded=gradeWeekExtraPoint(week, players);
+        if (graded) emitExtraPointEvent(week.weekId, graded);
+      }
+    } catch(e){ console.warn('[finalizeWeek] chat events', e); }
+    // Groups A/B (2026-09-10, DI-B3) — once per week, at FINAL. weekWinnerName/
+    // weekLoserName come DIRECTLY from `results` (this function's own
+    // calculateWeeklyResults() return value) — never independently
+    // re-derived (SCRIBE.md §9.1 boundary). Demo weeks never notify. Per-part
+    // finalization of a grouped week fires its OWN notification here, exactly
+    // like emitWeekFinalEvent() above it — same "a part finalizing alone still
+    // fires its own events" behavior this function already documents.
+    if (week.dataSourceMode !== 'demo') {
+      try {
+        const winner = results.find(r=>r.isWinner);
+        const loser = results.find(r=>r.isLoser);
+        // N1 / DI-N1 — REPLACES notifyResultsFinalized(). ONE league-wide post
+        // naming both, under a deterministic id so a re-finalize (which this
+        // codebase explicitly supports for corrections, RG-30 territory) can never
+        // mint a second announcement of the same week.
+        postResultsFinalizedNotice(week, winner?.displayName || undefined, loser?.displayName || undefined);
+      } catch (e) { console.warn('[lifecycle] results-finalized hook failed', e); }
+      // DI-D1's ONE call site (see fireScribeWeekSignals for why the DI's
+      // second, lock-phase one was removed) — the `notifyResultsFinalized`
+      // seam the DI names, with its own try/catch so a SCRIBE failure can
+      // never take the notification with it. `after` is read here, when this
+      // is sent: saveAllWeeklyResults() above has landed (and, since PF-416's
+      // follow-up, the server holds the week final), so before/after are two
+      // genuine snapshots of the same function rather than one snapshot and a
+      // guess. Fires at most once per week per device (see the ledger), and
+      // never for a week that finalized more than a day ago — which is what
+      // keeps Comm→Data's "recalculate every finalized week" silent.
+      try {
+        fireScribeWeekSignals(week, { phase: 'final', standingsBefore: scribeStandingsBefore, standingsAfter: seasonStandingsRows({ competitionId: scribeCid }) });
+      } catch (e) { console.warn('[scribe] week-final signals failed', e); }
     }
-  } catch(e){ console.warn('[finalizeWeek] chat events', e); }
-  // Groups A/B (2026-09-10, DI-B3) — once per week, at FINAL. weekWinnerName/
-  // weekLoserName come DIRECTLY from `results` (this function's own
-  // calculateWeeklyResults() return value, two lines up) — never independently
-  // re-derived (SCRIBE.md §9.1 boundary). Demo weeks never notify. Per-part
-  // finalization of a grouped week fires its OWN notification here, exactly
-  // like emitWeekFinalEvent() above it — same "a part finalizing alone still
-  // fires its own events" behavior this function already documents.
-  if (week.dataSourceMode !== 'demo') {
-    try {
-      const winner = results.find(r=>r.isWinner);
-      const loser = results.find(r=>r.isLoser);
-      // N1 / DI-N1 — REPLACES notifyResultsFinalized(). ONE league-wide post
-      // naming both, under a deterministic id so a re-finalize (which this
-      // codebase explicitly supports for corrections, RG-30 territory) can never
-      // mint a second announcement of the same week.
-      postResultsFinalizedNotice(week, winner?.displayName || undefined, loser?.displayName || undefined);
-    } catch (e) { console.warn('[lifecycle] results-finalized hook failed', e); }
-    // DI-D1's ONE call site (see fireScribeWeekSignals for why the DI's
-    // second, lock-phase one was removed) — the `notifyResultsFinalized`
-    // seam the DI names, with its own try/catch so a SCRIBE failure can
-    // never take the notification with it. `after` is read now,
-    // once saveAllWeeklyResults() above has landed, so before/after are two
-    // genuine snapshots of the same function rather than one snapshot and a
-    // guess. Fires at most once per week per device (see the ledger), and
-    // never for a week that finalized more than a day ago — which is what
-    // keeps Comm→Data's "recalculate every finalized week" silent.
-    try {
-      fireScribeWeekSignals(week, { phase: 'final', standingsBefore: scribeStandingsBefore, standingsAfter: seasonStandingsRows() });
-    } catch (e) { console.warn('[scribe] week-final signals failed', e); }
-  }
+    // Groups A/B (DI-B4) — "created" only; announced with the week it was created for.
+    obligationsCreated.forEach((ob) => {
+      try { postObligationCreatedNotice(ob); } catch (e) { console.warn('[lifecycle] obligation-created hook failed', e); }
+    });
+  };
   const settings=getSettings();
 
   // ── UN-118/UN-125 — multi-part week grouping (DI-126d) ────────────────────
@@ -23715,11 +28023,12 @@ export function finalizeWeek(week, { settling = false } = {}) {
     const loser=results.find(r=>r.isLoser);
     // v0.17.0 — demo weeks NEVER generate real obligations
     if(winner&&loser&&week.dataSourceMode !== 'demo'){
-      reconcileWeeklyObligation(week.weekId, loser.playerId, winner.playerId, settings.weeklyPrize);
+      const created=reconcileWeeklyObligation(week.weekId, loser.playerId, winner.playerId, settings.weeklyPrize);
+      if(created)obligationsCreated.push(created);
     }
   } else if (groupWeeks.every(w => w.status === 'final')) {
     const gid = getEffectiveGroupId(week);
-    const groupPicks = groupWeeks.flatMap(w => getPicks(w.weekId));
+    const groupPicks = picksOfRoster(groupWeeks.flatMap(w => getPicks(w.weekId)), players);
     const groupGames = groupWeeks.flatMap(w => getGames(w.weekId));
     // SP-54 / DI-467 — the POOLED answer uses a context built from EVERY member week (each part's own snapshot, its own lock), the same builder
     // Weekly History's group recompute and the season's pooled branch use, so display and money cannot disagree (the UN-126 class).
@@ -23728,12 +28037,15 @@ export function finalizeWeek(week, { settling = false } = {}) {
     const gWinner = groupResults.find(r=>r.isWinner);
     const gLoser  = groupResults.find(r=>r.isLoser);
     if (gWinner && gLoser && week.dataSourceMode !== 'demo') {
-      reconcileWeeklyObligation(gid, gLoser.playerId, gWinner.playerId, settings.weeklyPrize);
+      const created = reconcileWeeklyObligation(gid, gLoser.playerId, gWinner.playerId, settings.weeklyPrize);
+      if (created) obligationsCreated.push(created);
     }
   }
   // groupWeeks.length>1 && not every member final yet ⇒ no obligation. The
   // NEXT member to finalize re-runs this same check and creates the one
   // obligation once the group is complete.
+  // PF-416 / FB-026 follow-up — everything above is computed and saved; the announcements go out once the server holds the week final.
+  queueWeekFinalAnnouncements(week, announce);
 }
 
 // ─── AUTO REFRESH ─────────────────────────────────────────────────────────────
@@ -23850,13 +28162,26 @@ export async function runAutoRefreshTick() {
   // shared backend and everyone else picks it up on next hydrate. (Reviewer re-gate on 6178906: in a
   // round that started a re-hydrate the tick runs off that hydrate instead — see above.)
   if (!statusTickRidesHydrate) tickAutoTransition();
+  // UN-412 / DI-502e — "Who's in" rides the tick WHILE a strip is on screen and the answer is a minute old (a hydrate this round already re-asked
+  // the same RPC, so it is skipped then). Placed ABOVE the week-mode returns below on purpose: a demo or manual week still shows a strip to the
+  // commissioner. Fire-and-forget: it never holds the scores round, and it never throws.
+  if (!statusTickRidesHydrate) tickPickStatus();
 
-  const week=getCurrentWeek();
-  if(!week) return;
+  // ══ D1 (DI-535 #1, 2026-10-07) — THE SCORES ROUND RUNS FOR EVERY SPORT'S CURRENT WEEK ══
+  // One week per live competition (`tickWeeks()`: exactly `[getCurrentWeek()]` for a one-sport league, so that league runs the body below once, on the same week, as before). Each week
+  // takes its refresh in its OWN try/catch, so one sport's failure never stops the other's scores; the re-render is once, after the loop. `reconcileGameEvents(w)` runs per week BEFORE
+  // the demo/manual skip when the server job owns the scores (it ignores a demo week itself), so a kickoff or final the server wrote for either sport is announced.
+  const roundWeeks = tickWeeks();
+  if (!roundWeeks.length) return;
+  const serverScores = isServerJobEnabled('scoresRefresh');
+  const refreshedWeeks = [];
+  for (const week of roundWeeks) {
+  try {
+  if (serverScores) reconcileGameEvents(week);
   // Skip auto-refresh entirely for demo or fully-manual weeks. Otherwise the
   // simulated scores get walked over by whatever ESPN currently returns —
   // which is what was causing "demo resets after a few seconds."
-  if (week.dataSourceMode === 'demo' || week.dataSourceMode === 'manual') return;
+  if (week.dataSourceMode === 'demo' || week.dataSourceMode === 'manual') continue;
   // ══ DI-T6.6's CLIENT GATE (Phase III Step 6, Phase 6) ══════════════════════
   //
   // While `settings.serverJobs.scoresRefresh` is true, the `scores-refresh`
@@ -23892,7 +28217,7 @@ export async function runAutoRefreshTick() {
   // the same CONVENTIONS #10 inversion (absent -> false -> the client keeps
   // fetching, exactly as it does today). refreshtest.mjs [4] is the mutation
   // canary — notifytest.mjs [28g] is the precedent this follows.
-  if (isServerJobEnabled('scoresRefresh')) {
+  if (serverScores) {
     // R1 — A DISPLAY-ONLY PASS, NOT A SKIPPED ONE. The ESPN fetch still happens
     // (quarter/clock/red-zone have no columns and no server path — see
     // doRefreshScores()'s `displayOnly` header); what stands down is every
@@ -23900,22 +28225,29 @@ export async function runAutoRefreshTick() {
     // own write left un-announced. Both are idempotent.
     await doRefreshScores(week,getGames(week.weekId),{ displayOnly: true });
     reconcileGameEvents(week);
-    if (state.currentTab==='dashboard') renderDashboard();
-    else if (state.currentTab==='home') renderHomePage();   // Home wiring (checklist item 18): the Now card's live score/countdown
-    else if (state.currentTab==='picks') updatePicksLiveStatusInPlace(getGames(week.weekId));
-    return;
+    refreshedWeeks.push(week);
+    continue;
   }
   // Keep score DATA fresh no matter which tab is showing.
   await doRefreshScores(week,getGames(week.weekId));
+  refreshedWeeks.push(week);
+  } catch (err) {
+    // D1 (DI-535 #1): ONE SPORT'S REFRESH FAILING NEVER STOPS THE OTHER'S. Named, not swallowed.
+    console.warn(`[autoRefresh] ${week && week.weekId} failed — the other sport's round continues:`, err);
+  }
+  }
+  if (!refreshedWeeks.length) return;
   // Re-render only the surface that's safe to rebuild wholesale. Dashboard's
   // own re-render already covers its live-status text (it goes through
   // renderDashboardTable/renderDashboardCompact fresh every time). The
   // Picks tab is NOT rebuilt wholesale — renderPicksPage() would wipe an
   // in-progress draft pick — so its game cards get a surgical DI-2 patch
-  // instead, touching only the score/status region.
+  // instead, touching only the score/status region (once per refreshed week: a card that
+  // is not on screen is simply not found).
   if(state.currentTab==='dashboard') renderDashboard();
-  else if(state.currentTab==='home') renderHomePage();   // Home wiring (checklist item 18)
-  else if(state.currentTab==='picks') updatePicksLiveStatusInPlace(getGames(week.weekId));
+  else if(state.currentTab==='home') renderHomePage();   // Home wiring (checklist item 18): the Now card's live score/countdown
+  else if(state.currentTab==='picks') { for (const w of refreshedWeeks) updatePicksLiveStatusInPlace(getGames(w.weekId)); }
+  else if(state.currentTab==='commissioner') refreshCommTiebreakerCard();   // D1 / DI-516: the tiebreaker card's value follows the scores, in place (never over a field being typed in)
   } finally { _autoRefreshInFlight = false; }
 }
 
@@ -23969,11 +28301,10 @@ export function tickAutoTransition() {
     // so a commissioner in the verify window is also gated — correctly: the
     // server would refuse that write too.
     //
-    // THE RESIDUAL, named rather than discovered (§7.2): with the
-    // commissioner's device closed at lock time, `weeks.status` LAGS. The RULE
-    // does not — `pick_window_open()` refuses a late pick server-side off
-    // `picks_lock_at`, and getEffectiveWeekStatus() already renders 'locked'
-    // from the same timestamp on every device. Step 5/6's pg_cron closes it.
+    // THE RESIDUAL (§7.2): with the commissioner's device closed, `weeks.status` LAGS.
+    // CORRECTED 2026-10-01 (PF-1, migration 0043): the old claim that pick_window_open()
+    // refused a late pick off `picks_lock_at` was never true (NULL on every ordinary week).
+    // 0043's guard closes the week at its effective instant and auto_lock_weeks() locks it.
     if (isSupabaseDataMode()) {
       let isAdmin = false;
       try { isAdmin = getSession()?.isAdmin === true; } catch { isAdmin = false; }
@@ -24072,7 +28403,32 @@ export function tickAutoTransition() {
       }
     }
 
-    const week = getCurrentWeek();
+    // ══ D1 (DI-535 #1, 2026-10-07) — EVERY SPORT'S CURRENT WEEK TAKES ITS OWN LEGS, EACH IN ITS OWN try/catch ══
+    // Until the NFL exists nothing here can be a second week: `getAllCurrentWeeks()` is exactly `[getCurrentWeek()]` for a league with one sport (and for no competition rows at
+    // all), so a one-sport league runs these legs once, on the same week, exactly as before. With two sports it is one week per live competition (the default always, another
+    // only while it is live), and ONE SPORT'S REFUSAL NEVER STOPS THE OTHER: a server refusal, a missing spread or a throw in the NFL's lock leg is caught around that week alone
+    // and the college week still takes its leg on the same tick. RG-251's one-leg-per-tick rule is PER WEEK (it is about one week's state machine racing itself), and the draft
+    // scan above stays the one whole-tick leg. With PF-1 live (0043) the SERVER locks both weeks; these legs are the fallback and the local-mode implementation.
+    for (const week of tickWeeks()) {
+      try { tickWeekLegs(week, openedThisTick); }
+      catch (err) { console.warn(`[tickAutoTransition] ${week && week.weekId}:`, err); }
+    }
+  } catch (err) {
+    console.warn('[tickAutoTransition] error:', err);
+  }
+}
+
+/** The weeks that take status legs on a tick: one per live competition (D1), never empty when getCurrentWeek() resolves. */
+function tickWeeks() {
+  let weeks = [];
+  try { weeks = getAllCurrentWeeks().filter(Boolean); } catch { weeks = []; }
+  if (!weeks.length) { const w = getCurrentWeek(); weeks = w ? [w] : []; }
+  return weeks;
+}
+export const _tickWeeksForTest = tickWeeks;
+
+/** ONE week's OPEN->LOCKED, LOCKED->LIVE and pending-finalization legs (the body tickAutoTransition ran for getCurrentWeek() until D1). A `return` here ends THIS week's legs only. */
+function tickWeekLegs(week, openedThisTick) {
     if (!week) return;
     // RG-251 / Finding 2 — the scan loop above now `return`s the WHOLE
     // function the instant it opens any week, so control only ever reaches
@@ -24159,6 +28515,7 @@ export function tickAutoTransition() {
         // surface the warning itself rather than defer to a DOM-facing
         // caller. Same showToast() the rest of this module already uses.
         if (autoSpreadLockRefusals.length) {
+          _unfrozenSpreadNoticeSent.add(week.weekId); // PF-1 / DI-496: already toasted here; the server's echo of this lock must not toast it again
           const names = autoSpreadLockRefusals.map(g => `${g.awayTeam} @ ${g.homeTeam}`).join(', ');
           showToast(`⚠️ Auto-lock: spread NOT frozen for ${autoSpreadLockRefusals.length} game${autoSpreadLockRefusals.length > 1 ? 's' : ''} — sign contradicts recorded favorite: ${names}. Fix in Commissioner → Games, then lock manually.`, 'error');
         }
@@ -24204,9 +28561,6 @@ export function tickAutoTransition() {
       else if (state.currentTab === 'home') renderHomePage();   // Home wiring (checklist item 18): the Now card follows the week's status
       else if (state.currentTab === 'commissioner') renderCommPage();
     }
-  } catch (err) {
-    console.warn('[tickAutoTransition] error:', err);
-  }
 }
 
 // Item 2 (in-game quarter+clock), Pass A — MODULE-LEVEL, IN-MEMORY ONLY.
@@ -24223,6 +28577,12 @@ export function tickAutoTransition() {
 // renderDashboardCompact via liveStatusDisplay()/liveStatusDisplayShort()
 // below. Exported for testability (livestatustest.mjs) and for Pass B.
 export const liveStatusById = new Map();
+
+// D1 (DI-557 / DI-535 #4): THIS DEVICE'S observation of each competition's score feed, { failures, lastFailureAt, lastSuccessAt } keyed by competition id. In memory only, the same non-persisted
+// precedent as `liveStatusById` above: never through save()/load(), no cfbp_* key, no adapter, no mirror, no Realtime. Written in doRefreshScores() where a poll's outcome is known; cleared with
+// the rest of the sport session state when the account or league changes (onContextSwitch).
+const _sportPollHealth = createPollHealth();
+export const _sportPollHealthForTest = _sportPollHealth;
 
 // Item 2 Pass A — pure, DOM-free. `entry` is a liveStatusById value (or
 // undefined/null — callers get null back so "no entry" renders nothing,
@@ -24276,6 +28636,342 @@ export function liveStatusDisplayShort(entry, nowMs = Date.now()) {
     ? source
     : source.slice(0, Math.max(0, LIVE_STATUS_SHORT_BUDGET - 1)) + '…';
   return { text, pulse };
+}
+
+// ─── D1 Lane B / DI-570 + DI-579 (2026-10-07) — the game-state model and the viewer's game order, adopted by the Dashboard ─────────────────────────────────────────
+// gameStateOf() (js/game-state.js) is the ONE answer to "what state is this game in". In the fresh live and final phases the chips below are byte-for-byte what the
+// Dashboard always printed; the model adds a chip only where the screen used to be wrong or silent: a live game whose score may be behind, a game past kickoff with no
+// score yet, a live/final game with no score on the record.
+function gamePhaseOf(game) {
+  return gameStateOf(game, { liveEntry: liveStatusById.get(game && game.gameId) }).phase;
+}
+/** The honest extra chip for a game in a phase that used to say nothing (or the wrong thing). '' for upcoming / live / final — those keep today's markup. `cls` is the surface's own pill class. */
+function gameStateChipHTML(game, cls) {
+  const st = gameStateOf(game, { liveEntry: liveStatusById.get(game && game.gameId) });
+  if (st.phase !== 'live-stale' && st.phase !== 'awaiting' && st.phase !== 'no-score') return '';
+  return `<span class="${escHtml(cls)} gs-chip gs-chip--${escHtml(st.phase)}">${escHtml(st.label)}</span>`;
+}
+/** The viewer's game order for one week (DI-579): Kickoff (the default — every record in the database), Live first, or My order. NOT for the Picks page (UN-72). */
+function orderedWeekGames(games, weekId) {
+  // D1 Lane B / DI-607 (Lane A seam): in All sports a saved Custom READS as Kickoff time without being overwritten (effectiveMode); today every league is a single sport, so this is the saved mode.
+  const mode = effectiveMode(getGameOrderMode(), { allSports: dashAllSports() });
+  // DI-580's movement rule, carried by DI-607: while the Sort sheet is open the list behind it does not re-sort on a score tick (Live first). The ids frozen at open are applied as a manual list
+  // (status ignored) for the sheet's life; choosing a mode, or closing the sheet, releases them and the move plays once.
+  const fz = _sortSheet && _sortSheet.frozen && _sortSheet.weekId === weekId && mode === 'live-first' ? _sortSheet.frozen : null;
+  if (fz) return orderGames(games, { mode: 'manual', manualIds: fz, phaseOf: gamePhaseOf });
+  return orderGames(games, { mode, manualIds: getManualGameOrder(weekId), phaseOf: gamePhaseOf });
+}
+
+// ─── D1 Lane B / DI-607 + DI-581 (2026-10-08, Drew D-59: "Sorting is a secondary control ... a Sort / Filter button near the top of the game list") ─────────────────────────────────────────
+// The Dashboard's Sort button (a list-control row under the "All Picks by Game" header), the compact Sort sheet (Kickoff time · Live first · Custom, Arrange games, Reset to kickoff time) and the Custom
+// arrangement itself (a grip and Move up / Move down on each row, plus the section drag's hold-and-drag engine pointed at game rows: js/game-arrange.js). The WORDS and the markup are js/game-sort.js's
+// (and no Sort or Arrange string contains the word "order": gamesorttest scans them); the ORDERING is js/game-order.js's; the preference's seam is storage.js (the player record, never the league-shared
+// settings); this block is only the wiring. Every effect is one write to the seam, one repaint, one polite announcement.
+// PARITY-BY-DESIGN: the row, the sheet, the arrows and the words are identical on both front ends; the haptics and the swipe-down dismissal are native only (haptic() and bindSwipeToDismiss() are no-ops on web),
+// the close button, the backdrop and Esc work everywhere, and the Standard web matrix (which has no handle column) shows "Switch to Compact to rearrange." where Arrange would be (PBD-B6).
+const SORT_WRAP_ID = 'sort-sheet-wrap';
+const SORT_SHEET_ID = 'sort-sheet';
+let _sortSheet = null;        // { weekId, frozen: string[]|null, unbind, onKey, closing }
+let _dashSortCtx = null;      // what the last Dashboard paint knew: { weekId, layout, count } (the handlers run outside renderDashboardInner)
+let _dashSortHost = null;     // the page host the delegated handlers and the drag controller are bound to (bound once; a repaint of its content needs no rebinding)
+let _gameArrangeCtl = null;
+let _arrangeFocus = null;     // the one-shot { id, dir } an arrow move hands across the repaint it causes
+let _dashPhaseSnap = null;    // { weekId, phases: Map } the last paint's phases, for the Live first "is final and moved to the end" announcement
+
+/** Lane A seam (DI-525 rev 3), wired at the merge of int (2026-10-08): TRUE when the Dashboard shows the combined slate of every sport the member plays — the scope getDashboardScope() honours. */
+function dashAllSports() { try { return isMultiSport() && getDashboardScope() === DASHBOARD_ALL; } catch { return false; } }
+
+/** The game list's caption: "{L} live", "None live" or "First kickoff {Sat 12:00 PM}" — facts from the schedule and the game states, nothing from any pick. */
+function dashSortCaption(week, games) {
+  let live = 0, first = null;
+  for (const g of games) {
+    const ph = gamePhaseOf(g);
+    if (ph === 'live' || ph === 'live-stale') live += 1;
+    const ms = g && g.kickoff ? Date.parse(g.kickoff) : NaN;
+    if (Number.isFinite(ms) && (first === null || ms < first)) first = ms;
+  }
+  if (live > 0) return `${live} live`;
+  if (week.status !== WEEK_STATUS.LIVE && week.status !== WEEK_STATUS.FINAL && first !== null) {   // an Open or Locked week (drafts never reach here): nothing has started, so say when the first game does
+    const when = shortWhen(first, getTimezone());
+    return when ? `First kickoff ${when}` : '';
+  }
+  return 'None live';
+}
+
+/** What the Dashboard's "All Picks by Game" card needs from the sort feature: whether the row shows (signed in, two or more games, not a draft), its markup, and whether the member is arranging. */
+export function dashboardSortContext({ week, games, layout, session }) {
+  const none = { visible: false, arranging: false, listHTML: '' };
+  if (!week || !session || !session.playerId || week.status === WEEK_STATUS.DRAFT || !Array.isArray(games) || games.length < 2) return none;
+  const allSports = dashAllSports();
+  const mode = effectiveMode(getGameOrderMode(), { allSports });
+  const arranging = state.arrangeWeekId === week.weekId && layout === 'compact' && mode === 'manual' && !allSports && state.layoutEditing !== 'dashboard';
+  const listHTML = listControlHTML({
+    n: games.length, caption: dashSortCaption(week, games), mode, arranging,
+    weekN: week.weekNumber !== undefined && week.weekNumber !== null ? week.weekNumber : '', escHtml, numHtml,
+  });
+  return { visible: true, arranging, listHTML, mode };
+}
+
+/** The ids of the Dashboard's game rows in the order they are on screen right now (the compact rows; the arrange rows are the same rows). */
+function dashRowIds(root = document) {
+  const out = [];
+  try { root.querySelectorAll('#page-dashboard .dashboard-compact .dc-game[data-game-id]').forEach(el => { const id = el.getAttribute('data-game-id'); if (id) out.push(id); }); } catch { /* a stubbed DOM */ }
+  return out;
+}
+function gameLabelFor(weekId, gameId) {
+  const g = getGames(weekId).find(x => x.gameId === gameId);
+  return g ? `${g.awayTeam} at ${g.homeTeam}` : 'This game';
+}
+
+/** Row movement (DI-607's `--motion-large` FLIP; the same recipe as the rank movement above): before a repaint every game row's top and the row at the top of the viewport are read; after it any row that moved
+ *  is played from where it was to where it is, and the page is nudged so the row the reader was looking at stays put (so nothing they are reading jumps). Reduce Motion: no animation (the anchor still holds). */
+function captureGameRows(root = (typeof document !== 'undefined' ? document : null)) {
+  const out = new Map();
+  out.anchor = null; out.ids = [];
+  try {
+    const hb = (() => { const h = root?.querySelector?.('.app-header'); return h ? visibleHeaderBottom(h.getBoundingClientRect().bottom, safeTopOf(h, window)) : 0; })();
+    root?.querySelectorAll?.('#page-dashboard .dashboard-compact .dc-game[data-game-id]')?.forEach?.((el) => {
+      const id = el.getAttribute('data-game-id');
+      if (!id) return;
+      const r = el.getBoundingClientRect();
+      out.set(id, r.top); out.ids.push(id);
+      if (!out.anchor && r.bottom > hb + 1) out.anchor = { id, top: r.top };
+    });
+  } catch { /* a detached or stubbed DOM: no motion, no harm */ }
+  return out;
+}
+function playGameMovement(before, root = (typeof document !== 'undefined' ? document : null)) {
+  if (!before || !before.size) return 0;
+  let moved = 0;
+  try {
+    const rows = [...(root?.querySelectorAll?.('#page-dashboard .dashboard-compact .dc-game[data-game-id]') || [])];
+    const now = rows.map(el => el.getAttribute('data-game-id'));
+    const reordered = now.length === before.size && now.every(id => before.has(id)) && now.join('|') !== (before.ids || []).join('|');
+    if (before.anchor && !_sortSheet) {                      // hold the reader's place: only when the ORDER changed (never for other height changes), and never under an open sheet
+      const a = rows.find(el => el.getAttribute('data-game-id') === before.anchor.id);
+      if (a && reordered) {
+        const d = a.getBoundingClientRect().top - before.anchor.top;
+        if (Number.isFinite(d) && Math.abs(d) >= 1) scrollWindow(window, { left: 0, top: d, behavior: 'instant' });
+      }
+    }
+    let reduced = false; try { reduced = prefersReducedMotion(); } catch { reduced = false; }
+    if (reduced) return 0;
+    rows.forEach((el) => {
+      const id = el.getAttribute('data-game-id');
+      if (!id || !before.has(id) || typeof el.animate !== 'function') return;
+      const delta = before.get(id) - el.getBoundingClientRect().top;
+      if (!Number.isFinite(delta) || Math.abs(delta) < 1) return;
+      moved += 1;
+      el.animate([{ transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' }], { duration: motionMs('--motion-large', 350), easing: cssToken('--ease-native', 'cubic-bezier(.32,.72,0,1)') });
+    });
+  } catch { /* never let a decorative animation break a repaint */ }
+  return moved;
+}
+
+/** Live first: a game that just went final moves to the end — say so once, politely (DI-580's rule (d)). Compared against the phases of the PREVIOUS paint of the same week; never on the first paint. */
+function noteLiveFirstMoves(week, games) {
+  if (_sortSheet && _sortSheet.frozen) return;                 // the move is parked under an open sheet: nothing moved, so nothing is said, and the snapshot is kept so the move is named when it plays
+  const now = new Map(games.map(g => [g.gameId, gamePhaseOf(g)]));
+  const snap = _dashPhaseSnap;
+  _dashPhaseSnap = { weekId: week.weekId, phases: now };
+  if (!snap || snap.weekId !== week.weekId || state.currentTab !== 'dashboard') return;
+  if (effectiveMode(getGameOrderMode(), { allSports: dashAllSports() }) !== 'live-first') return;
+  const done = games.filter(g => now.get(g.gameId) === 'final' && snap.phases.has(g.gameId) && snap.phases.get(g.gameId) !== 'final');
+  if (!done.length) return;
+  try { announceLayout(done.length === 1 ? finalMovedAnnouncement(`${done[0].awayTeam} at ${done[0].homeTeam}`) : finalMovedManyAnnouncement(done.length)); } catch { /* announcing is best effort */ }
+}
+
+export const _captureGameRowsForTest = captureGameRows;
+export const _playGameMovementForTest = playGameMovement;
+export const _dashSortStateForTest = () => ({ sheet: !!_sortSheet, frozen: _sortSheet && _sortSheet.frozen ? _sortSheet.frozen.slice() : null, ctx: _dashSortCtx ? { ..._dashSortCtx } : null, arrangeWeekId: state.arrangeWeekId, arrangeMoves: state.arrangeMoves });
+function clearArrangeState() { state.arrangeWeekId = null; state.arrangeMoves = 0; _arrangeFocus = null; }
+
+/** The one entry the Dashboard paint calls after it has written its markup: binds the delegated handlers once, keeps the context the handlers read, and consumes the arrow-focus one-shot. */
+function afterDashboardSortPaint(c, { week, games, layout, ctx }) {
+  if (weekSwipePreviewRendering) return;                       // a borrowed preview render must leave the live page's machinery alone (the section-drag precedent, C1)
+  _dashSortCtx = { weekId: week.weekId, layout, count: games.length };
+  if (state.arrangeWeekId && !ctx.arranging) clearArrangeState();
+  noteLiveFirstMoves(week, games);
+  if (_dashSortHost !== c) {
+    try { _gameArrangeCtl?.detach?.(); } catch { /* a stale controller */ }
+    _dashSortHost = c;
+    c.addEventListener('click', onDashSortClick);
+    _gameArrangeCtl = attachGameArrange(c, {
+      getIds: () => dashRowIds(),
+      onMove: (newIds, info) => commitArrange(newIds, { id: info.id, dir: null }),
+      edges: () => {
+        const h = document.querySelector('.app-header'), nav = document.querySelector('.bottom-nav');
+        return autoScrollEdges({ headerBottom: 0, barBottom: h ? visibleHeaderBottom(h.getBoundingClientRect().bottom, safeTopOf(h, window)) : 0, navTop: nav ? nav.getBoundingClientRect().top : null, viewportH: window.innerHeight || 0 });
+      },
+    });
+  }
+  try { _gameArrangeCtl?.bind?.(); } catch { /* the rows' touch blockers: best effort (the arrows are the assistive path) */ }   // the paint replaced the rows: give the new ones their (permanent, claim-gated) touchmove blocker
+  if (_arrangeFocus) {
+    const f = _arrangeFocus; _arrangeFocus = null;
+    try {
+      const ids = dashRowIds();
+      const dir = chooseFocusDirection(f.dir, moveButtonStates(ids.indexOf(f.id), ids.length));
+      const row = [...c.querySelectorAll('[data-arrange-row]')].find(el => el.getAttribute('data-game-id') === f.id);
+      const b = dir && row ? row.querySelector(`[data-dc-action="move"][data-dir="${dir}"]`) : null;
+      if (b) b.focus({ preventScroll: true });
+    } catch { /* focus is best effort */ }
+  }
+}
+
+function onDashSortClick(e) {
+  const btn = e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-dc-action]') : null;
+  if (!btn || btn.disabled) return;
+  const action = btn.getAttribute('data-dc-action');
+  if (action === 'sort') { haptic('light'); openSortSheet(); }
+  else if (action === 'arrange-done') endArrange();
+  else if (action === 'move') {
+    const row = btn.closest('[data-arrange-row]');
+    const id = row ? row.getAttribute('data-game-id') : '';
+    const dir = btn.getAttribute('data-dir') === 'up' ? 'up' : 'down';
+    const ids = dashRowIds();
+    const next = moveId(ids, id, dir === 'up' ? -1 : 1);
+    if (!id || next.join('|') === ids.join('|')) return;
+    haptic('selection');
+    commitArrange(next, { id, dir });
+  }
+}
+
+/** A move (an arrow tap, or a drop): ONE write to the seam, one repaint (the rows glide to their places), one polite announcement. Nothing here reads a pick. */
+function commitArrange(newIds, { id, dir }) {
+  const weekId = state.arrangeWeekId;
+  if (!weekId || !Array.isArray(newIds) || !newIds.length) return;
+  setManualGameOrder(weekId, newIds);
+  state.arrangeMoves += 1;
+  _arrangeFocus = dir ? { id, dir } : null;
+  if (state.currentTab === 'dashboard') renderDashboard();
+  try { announceLayout(arrangeAnnouncement({ label: gameLabelFor(weekId, id), n: newIds.indexOf(id) + 1, m: newIds.length })); } catch { /* announcing is best effort */ }
+}
+
+function beginArrange() {
+  const ctx = _dashSortCtx;
+  if (!ctx || ctx.layout !== 'compact' || dashAllSports() || effectiveMode(getGameOrderMode(), { allSports: false }) !== 'manual' || ctx.count < 2) return false;
+  if (state.layoutEditing) endLayoutEditing();                  // the two arranging modes never overlap
+  state.arrangeWeekId = ctx.weekId; state.arrangeMoves = 0; _arrangeFocus = null;
+  if (state.currentTab === 'dashboard') renderDashboard();
+  return true;
+}
+function endArrange() {
+  const moved = state.arrangeMoves > 0;
+  try { _gameArrangeCtl?.cancel?.(); } catch { /* best effort */ }
+  clearArrangeState();
+  if (state.currentTab === 'dashboard') renderDashboard();
+  if (moved) { haptic('success'); showToast(SORT_COPY.saved, 'success'); }
+  try { document.querySelector('#page-dashboard [data-dc-action="sort"]')?.focus?.({ preventScroll: true }); } catch { /* focus is best effort */ }
+}
+
+// ── the Sort sheet ───────────────────────────────────────────────────────────────────────────────────────────────────
+function openSortSheet() {
+  if (isContentWithheld()) return;                              // the same guard every body-appended surface carries (SECURITY GATE FINDING 1)
+  const ctx = _dashSortCtx;
+  if (!ctx) return;
+  closeSortSheet({ immediate: true });
+  const ss = { weekId: ctx.weekId, frozen: null, unbind: null, onKey: null, closing: false };
+  if (effectiveMode(getGameOrderMode(), { allSports: dashAllSports() }) === 'live-first') ss.frozen = dashRowIds();
+  _sortSheet = ss;
+  const { wrap, unbind } = mountSheetShell({
+    wrapId: SORT_WRAP_ID,
+    sheetId: SORT_SHEET_ID,
+    sheetAttrs: ' role="dialog" aria-modal="true" aria-labelledby="sort-sheet-title"',
+    headerInnerHTML: `${sortSheetHeaderHTML({ escHtml })}<button type="button" class="chat-sheet-close" id="sort-sheet-close" aria-label="${escHtml(SORT_COPY.close)}">${icon('close')}</button>`,
+    bodyId: 'sort-sheet-body',
+    closeId: 'sort-sheet-close',
+    onBackdrop: () => closeSortSheet(),
+    renderBody: () => paintSortSheetBody(),
+    drag: { getBlocked: isSortDismissGestureBlocked, onProgress: sortSheetDragProgress, onSettle: settleSortSheetDrag },
+  });
+  ss.unbind = unbind;
+  wrap.addEventListener('click', onSortSheetClick);
+  ss.onKey = (e) => {
+    if (e.key !== 'Escape') return;
+    if (!document.getElementById(SORT_WRAP_ID)) { closeSortSheet({ immediate: true }); return; }
+    closeSortSheet();
+  };
+  document.addEventListener('keydown', ss.onKey);
+  // Focus moves INTO the dialog on open (VoiceOver reads its title first).
+  try { wrap.querySelector('#sort-sheet-title')?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+}
+function paintSortSheetBody(focusSel = null) {
+  const body = document.getElementById('sort-sheet-body');
+  if (!body || !_sortSheet) return;
+  const ctx = _dashSortCtx || {};
+  body.innerHTML = sortSheetBodyHTML({
+    mode: getGameOrderMode(), allSports: dashAllSports(), canArrange: ctx.layout === 'compact',
+    hasSaved: getManualGameOrder(_sortSheet.weekId).length > 0, escHtml,
+  });
+  if (focusSel) { try { body.querySelector(focusSel)?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ } }
+}
+function onSortSheetClick(e) {
+  const btn = e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-dc-action]') : null;
+  const ss = _sortSheet;
+  if (!btn || !ss || ss.closing || btn.disabled) return;
+  const action = btn.getAttribute('data-dc-action');
+  if (action === 'set-mode') {
+    const mode = btn.getAttribute('data-mode');
+    if (!SORT_MODES.some(m => m.key === mode) || mode === effectiveMode(getGameOrderMode(), { allSports: dashAllSports() })) return;
+    haptic('selection');
+    setGameOrderMode(mode);                                      // ONE write; the saved mode is the member's, per player
+    ss.frozen = null;                                            // choosing a mode applies at once and releases any parked movement
+    if (mode !== 'manual') clearArrangeState();
+    if (state.currentTab === 'dashboard') renderDashboard();
+    paintSortSheetBody('[data-mode="' + mode + '"]');
+  } else if (action === 'arrange') {
+    haptic('light');
+    closeSortSheet({ then: () => { try { document.querySelector('#page-dashboard [data-dc-action="arrange-done"]')?.focus?.({ preventScroll: true }); } catch { /* courtesy */ } } });
+    beginArrange();
+  } else if (action === 'reset') {
+    haptic('light');
+    clearManualGameOrder(ss.weekId);                             // the week's saved arrangement goes ...
+    setGameOrderMode('kickoff');                                 // ... and the mode returns to Kickoff time (the label says so)
+    ss.frozen = null; clearArrangeState();
+    if (state.currentTab === 'dashboard') renderDashboard();
+    paintSortSheetBody('[data-mode="kickoff"]');
+    showToast(SORT_COPY.resetToast, 'success');
+  } else if (action === 'sort-done') {
+    closeSortSheet();
+  }
+}
+/** Close: the sheet slides the rest of the way down on the curve it came up on (no pop); immediate under Reduce Motion, when swept and when replaced. Idempotent. A parked Live first move plays once on close. */
+function closeSortSheet({ immediate = false, then = null } = {}) {
+  const ss = _sortSheet;
+  const wrap = document.getElementById(SORT_WRAP_ID);
+  if (ss) {
+    if (ss.closing && !immediate) return;
+    ss.closing = true;
+    try { ss.unbind?.(); } catch { /* the drag teardown is a courtesy */ }
+    ss.unbind = null;
+    if (ss.onKey) { try { document.removeEventListener('keydown', ss.onKey); } catch { /* courtesy */ } ss.onKey = null; }
+  }
+  const finish = () => {
+    document.getElementById(SORT_WRAP_ID)?.remove();
+    const parked = !!(ss && ss.frozen);
+    if (_sortSheet === ss) _sortSheet = null;
+    if (parked && state.currentTab === 'dashboard') renderDashboard();          // the Live first move that waited for the sheet plays now, once
+    if (typeof then === 'function') { try { then(); } catch { /* a courtesy */ } }
+  };
+  if (!wrap || immediate) { finish(); return; }
+  const sheetEl = wrap.querySelector(`#${SORT_SHEET_ID}`);
+  let reduced = false; try { reduced = prefersReducedMotion(); } catch { reduced = false; }
+  finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--sort-drag-y', '1'), reducedMotion: reduced, done: finish });
+}
+export const _closeSortSheetForTest = closeSortSheet;
+export const _openSortSheetForTest = openSortSheet;
+/** The sheet's own drag-to-dismiss (native only; bindSwipeToDismiss is a no-op on web): the wizard sheet's recipe with its own custom property. */
+function isSortDismissGestureBlocked() { return _dismissBlockingSurfaceUp({ excludeSort: true }); }
+function sortSheetDragProgress(wrap, sheetEl, progress) {
+  sheetEl.setAttribute('data-dragging', 'true');
+  wrap.setAttribute('data-dragging', 'true');
+  wrap.style.setProperty('--sort-drag-y', String(progress));
+}
+function settleSortSheetDrag(wrap, sheetEl, { dismissed, reducedMotion } = {}) {
+  sheetEl.removeAttribute('data-dragging');
+  wrap.removeAttribute('data-dragging');
+  if (!dismissed) { wrap.style.setProperty('--sort-drag-y', '0'); return; }
+  finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--sort-drag-y', '1'), reducedMotion: !!reducedMotion, done: () => closeSortSheet({ immediate: true }) });
 }
 
 // ─── RED ZONE (FEAT-7 / UN-174, 2026-09-12) ──────────────────────────────────
@@ -24455,9 +29151,13 @@ export async function doRefreshScores(week,games,{ displayOnly = false } = {}) {
   // this per-game filter is the second line of defense for mixed slates.
   const refreshable = games.filter(isEspnRefreshableGame);
   if (!refreshable.length) return;
-  const{updated,errors,liveStatusByEventId}=await refreshScoresByEventIds(
+  const{updated,errors,liveStatusByEventId,bucketOutcomes}=await refreshScoresByEventIds(
     refreshable.map(g=>g.espnEventId).filter(Boolean), refreshable
   );
+  // D1 (DI-557 / DI-535 #4) - THIS DEVICE'S observation of the sport's feed: the polled week's competition, scored from what the fetch reached. The one path every poll takes (the 60 s tick, the
+  // display-only pass, the manual Refresh Scores button), so they feed the same in-memory record. Recorded BEFORE the merge loop below so a throw in it cannot lose the observation, and the
+  // page on screen is repainted in place only when the failure count changed (Picks, Standings and Comm are never rebuilt by a poll).
+  try { if (recordSportPoll(week, bucketOutcomes)) repaintSportStallBannerInPlace(); } catch (e) { console.warn('[sport-stall] the poll could not be recorded', e); }
   for(const upd of updated){
     const stored=getGame(upd.gameId);
     if(!stored) continue;
@@ -24747,13 +29447,21 @@ function weekSlug(week) {
   if (!week) return 'no-week';
   const lbl = (week.roundLabel ? `wk${week.roundLabel}` : `wk${week.weekNumber}`).replace(/[^A-Za-z0-9._-]/g, '_');
   const range = [week.startDate, week.endDate].filter(Boolean).join('_to_');
-  return range ? `${lbl}_${range}` : lbl;
+  const slug = range ? `${lbl}_${range}` : lbl;
+  // D1 DI-526: in a several-sport league a week's file names its sport ("nfl_wk6_..."), so two sports' weeks never share a name. A one-sport league's names are unchanged.
+  if (isMultiSport()) { try { const sc = String(profileForWeek(week).code || '').toLowerCase().replace(/[^a-z0-9]/g, ''); if (sc) return `${sc}_${slug}`; } catch { /* an unregistered sport: the plain name */ } }
+  return slug;
+}
+/** D1 DI-526 - the sport a league-wide CSV is about: the context sport's `{ dbCode, code }` in a league with several sports, null (no column, today's file name) otherwise. */
+function csvSportEntry() {
+  if (!isMultiSport()) return null;
+  try { const k = getActiveSportKey(); const e = leagueSports().find((x) => x.dbCode === k); return e ? { dbCode: e.dbCode, code: e.code } : null; } catch { return null; }
 }
 
 /** Per-week — every pick + scoring outcome */
 function exportWeekPicksCSV(week) {
   if (!week) { showToast('No week selected','error'); return; }
-  const players=getPlayers().filter(p=>p.active);
+  const players=playersForWeek(week);   // D1 DI-531 (C4)
   const games=getGames(week.weekId); const picks=getPicks(week.weekId);
   const rows=[['Week','Player','Initials','Alma Mater','Tiebreaker Guess','Game (Home)','Game (Away)','Kickoff','Locked Spread','Favorite','Multiplier','League Label','Picked','Result','ATS Winner','Home Score','Away Score']];
   for(const player of players){
@@ -24839,10 +29547,10 @@ export function buildWeekResultsCsvRows(results, actualTB) {
 /** Per-week — final weekly results / standings */
 function exportWeekResultsCSV(week) {
   if (!week) { showToast('No week selected','error'); return; }
-  const players=getPlayers().filter(p=>p.active);
+  const players=playersForWeek(week);   // D1 DI-531 (C4)
   const games=getGames(week.weekId);
   const allPicks=getPicks(week.weekId);
-  const actualTB=week.actualTiebreakerValue;
+  const actualTB=effectiveTiebreakerActualForWeek(week,games).value;   // D1 / DI-517: one tiebreaker value across the Dashboard, the recap text and this export (a final week's is its stored value, unchanged)
   const results=weeklyResultsWithTie(week,players,allPicks,games,actualTB);   // SP-54 / DI-468: carries the descriptor for the two appended columns
   const rows=buildWeekResultsCsvRows(results, actualTB);
   downloadFile(toCsv(rows), `results_${weekSlug(week)}.csv`);
@@ -24852,7 +29560,7 @@ function exportWeekResultsCSV(week) {
 /** Per-week — dashboard matrix (rows=games, cols=players) */
 function exportWeekDashboardCSV(week) {
   if (!week) { showToast('No week selected','error'); return; }
-  const players=getPlayers().filter(p=>p.active);
+  const players=playersForWeek(week);   // D1 DI-531 (C4)
   const games=getGames(week.weekId).sort((a,b)=>new Date(a.kickoff)-new Date(b.kickoff));
   const picks=getPicks(week.weekId);
   const submitted=players.filter(p=>picks.some(pk=>pk.playerId===p.playerId));
@@ -24906,11 +29614,13 @@ function exportStandingsCSV() {
   // of recomputing them: the recompute's filter had kept only the history
   // clause, and a demo week's results reached this file and no screen.
   const standings=seasonStandingsRows();
+  const sp=csvSportEntry();   // D1 DI-526: several sports -> THIS sport's standings only, a Sport column, and the sport in the file name; one sport -> today's file exactly
   const rows=[['Rank','Player','Total Correct','Total Incorrect','Total No Decision','Weekly Wins','Weekly Losses','Win %']];
   for(const s of standings){
     rows.push([s.currentRank,s.displayName,s.totalCorrect,s.totalIncorrect,s.totalND,s.weeklyWins,s.weeklyLosses,s.winPct]);
   }
-  downloadFile(toCsv(rows), `standings_season.csv`);
+  if(sp){ rows[0].push('Sport'); for(let i=1;i<rows.length;i++) rows[i].push(sp.code); }   // the Sport column is appended; the one-sport header and rows are untouched (AD-33, tiebreaktest T24)
+  downloadFile(toCsv(rows), sp?`standings_season_${sp.dbCode}.csv`:`standings_season.csv`);
   showToast('📥 Standings CSV exported','success');
 }
 
@@ -24963,15 +29673,17 @@ export function buildExtraPointCsvRows(weeks, players) {
 }
 
 function exportExtraPointCSV() {
-  const players=getPlayers().filter(p=>p.active);
-  const rows=buildExtraPointCsvRows(getWeeks(), players);
-  downloadFile(toCsv(rows), `extra_point_season.csv`);
+  // D1 DI-526/531: the context sport's weeks and entrants (the Extra Point is a college contest; one sport -> every week and every active player, as before).
+  const sp=csvSportEntry();
+  const players=sp?playersForCompetition(getContextCompetition()?.id||null):getPlayers().filter(p=>p.active);
+  const rows=buildExtraPointCsvRows(sp?getContextWeeks():getWeeks(), players);
+  downloadFile(toCsv(rows), sp?`extra_point_season_${sp.dbCode}.csv`:`extra_point_season.csv`);
   showToast(rows.length>1?'📥 Extra Point season CSV exported':'📥 Extra Point CSV exported — no counted weeks yet','success');
 }
 
 /** League-wide — all weekly results across every visible week */
 /* Exported for tiebreaktest.mjs (SP-54 / DI-468): reads the STORED rows (no compute), so a pre-date week simply has no descriptor and two empty cells. */
-export function buildAllWeeklyResultsCsvRows(allResults, weeksById) {
+export function buildAllWeeklyResultsCsvRows(allResults, weeksById, sportCode = null) {
   const nameByWeekPlayer = new Map((allResults||[]).map(r=>[`${r.weekId}|${r.playerId}`, r.displayName]));
   // UN-118/UN-125 (DI-126e) — this export is the audit trail, so it keeps
   // ONE ROW PER MEMBER (per-part granularity is preserved, never collapsed
@@ -24979,7 +29691,7 @@ export function buildAllWeeklyResultsCsvRows(allResults, weeksById) {
   // auditor can see which rows belong to the same competitive week by
   // matching that column — the same "raw id alongside the label" pattern
   // DI-125's Week column already established.
-  const rows=[['Week','Group','Show in History','Player','Rank','Correct (weighted)','Incorrect (weighted)','Correct (raw)','Incorrect (raw)','No Decisions','Tiebreaker Guess','Tiebreaker Delta','Winner','Loser','Won by Tiebreaker','Tie-break stage','Tie-break reason']];
+  const rows=[['Week','Group','Show in History','Player','Rank','Correct (weighted)','Incorrect (weighted)','Correct (raw)','Incorrect (raw)','No Decisions','Tiebreaker Guess','Tiebreaker Delta','Winner','Loser','Won by Tiebreaker','Tie-break stage','Tie-break reason',...(sportCode?['Sport']:[])]];   // D1 DI-526: the Sport column exists only when the caller names a sport
   for(const r of (allResults||[])){
     const w=(weeksById||{})[r.weekId];
     rows.push([
@@ -24993,15 +29705,20 @@ export function buildAllWeeklyResultsCsvRows(allResults, weeksById) {
       r.tiebreakerGuess??'', r.tiebreakerDelta??'',
       r.isWinner?'yes':'', r.isLoser?'yes':'', r.wonByTiebreaker?'yes':'',
       ...tieCsvCells(r, pid=>nameByWeekPlayer.get(`${r.weekId}|${pid}`)||''),
+      ...(sportCode?[sportCode]:[]),
     ]);
   }
   return rows;
 }
 function exportAllWeeklyResultsCSV() {
-  const allResults=getWeeklyResults();
-  const weeksById=Object.fromEntries(getWeeks().map(w=>[w.weekId,w]));
-  const rows=buildAllWeeklyResultsCsvRows(allResults, weeksById);
-  downloadFile(toCsv(rows), `weekly_results_all.csv`);
+  // D1 DI-526: with several sports the export is ONE sport's (its weeks only - a CSV never mixes sports), named for it and carrying a Sport column; one sport -> today's file exactly.
+  const sp=csvSportEntry();
+  const weekList=sp?getContextWeeks():getWeeks();
+  const weekIds=new Set(weekList.map(w=>w.weekId));
+  const allResults=sp?getWeeklyResults().filter(r=>weekIds.has(r.weekId)):getWeeklyResults();
+  const weeksById=Object.fromEntries(weekList.map(w=>[w.weekId,w]));
+  const rows=buildAllWeeklyResultsCsvRows(allResults, weeksById, sp?sp.code:null);
+  downloadFile(toCsv(rows), sp?`weekly_results_all_${sp.dbCode}.csv`:`weekly_results_all.csv`);
   showToast('📥 All weekly results CSV exported','success');
 }
 
@@ -25019,15 +29736,16 @@ function exportAllWeeklyResultsCSV() {
  * predate this ship with none of the five fields — every accessor below
  * defaults to '' rather than 'undefined' or throwing (CONVENTIONS #10).
  */
-export function buildObligationsCsvRows(obs, playersById, weeksById) {
-  const rows=[['Obligation ID','Type','Week','Payer','Recipient','Amount/Prize','Status','Created','Paid At','Needs Review','Voided','Void Reason','Merged Into','Merged From']];
+export function buildObligationsCsvRows(obs, playersById, weeksById, sportOfWeek = null) {
+  const rows=[['Obligation ID','Type','Week','Payer','Recipient','Amount/Prize','Status','Created','Paid At','Needs Review','Voided','Void Reason','Merged Into','Merged From',...(sportOfWeek?['Sport']:[])]];   // D1 DI-526: an obligation carries its week, hence its sport; the column exists only in a several-sport league
   for(const o of obs){
     const w=weeksById[o.weekId];
     rows.push([o.obligationId,o.type,w?formatWeekLabel(w):o.weekId,
       playersById[o.payerPlayerId]||o.payerPlayerId, playersById[o.recipientPlayerId]||o.recipientPlayerId,
       o.amountOrPrize||'', o.status, o.createdAt||'', o.paidAt||'',
       o.needsReview?'yes':'', o.voided?'yes':'', o.voidReason||'',
-      o.mergedInto||'', (o.mergedFrom&&o.mergedFrom.length)?o.mergedFrom.join('; '):'']);
+      o.mergedInto||'', (o.mergedFrom&&o.mergedFrom.length)?o.mergedFrom.join('; '):'',
+      ...(sportOfWeek?[sportOfWeek(o.weekId)||'']:[])]);
   }
   return rows;
 }
@@ -25036,7 +29754,8 @@ function exportObligationsCSV() {
   const obs=getObligations();
   const players=Object.fromEntries(getPlayers().map(p=>[p.playerId,p.displayName]));
   const weeks=Object.fromEntries(getWeeks().map(w=>[w.weekId,w]));
-  const rows = buildObligationsCsvRows(obs, players, weeks);
+  const sportOf = isMultiSport() ? ((weekId) => { try { return weeks[weekId] ? (profileForWeek(weeks[weekId]).code || '') : ''; } catch { return ''; } }) : null;
+  const rows = buildObligationsCsvRows(obs, players, weeks, sportOf);
   downloadFile(toCsv(rows), `obligations.csv`);
   showToast('📥 Obligations CSV exported','success');
 }
@@ -25139,8 +29858,15 @@ function exportFullCsvBundle() {
 
 function getRulesEditorText(useDefault=false) {
   const{customRules}=getSettings();
-  const rules=(!useDefault&&customRules)?customRules:DEFAULT_RULES;
+  // D1 / DI-551: the DEFAULT text is the league's sports' (the Rules page draws the NFL card itself, so an NFL-only league's editor starts empty: its own sections are added here, the NFL card is built in)
+  const seed=rulesSports(liveLeagueCompetitions()).hasCfb?DEFAULT_RULES:[];
+  const rules=applyRulesLegacyReplacements((!useDefault&&customRules)?customRules:seed).rules;   // D1 / DI-512: what the editor shows is what players read (the legacy lock sentence corrected)
   return rules.map(s=>`## ${s.section}\n${s.items.map(i=>`- ${i}`).join('\n')}`).join('\n\n');
+}
+/** D1 / DI-512 — true when the stored custom rules still hold a legacy sentence this render corrected (the Comm editor says so, once). */
+function rulesEditorHasLegacyReplacement() {
+  const{customRules}=getSettings();
+  return !!customRules && applyRulesLegacyReplacements(customRules).replaced > 0;
 }
 
 /**
@@ -25156,7 +29882,8 @@ function rulesEditorHTML() {
   // markup, in the commissioner's own session. escHtml() here is also
   // round-trip-safe, because the browser DECODES entities when it builds
   // `.value`, which is what "Save Rules" reads back through parseRulesText().
-  return `<textarea class="form-textarea" id="rules-editor" style="min-height:180px;font-size:.8rem;font-family:monospace">${escHtml(getRulesEditorText())}</textarea>`;
+  return `<textarea class="form-textarea" id="rules-editor" style="min-height:180px;font-size:.8rem;font-family:monospace">${escHtml(getRulesEditorText())}</textarea>${
+    rulesEditorHasLegacyReplacement() ? '<p class="text-muted text-xs mt-sm rules-legacy-note">One sentence was updated to match how locking works.</p>' : ''}`;
 }
 export const _rulesEditorHTMLForTest = rulesEditorHTML;
 
@@ -25379,28 +30106,55 @@ function emptyState(icon,title,msg){
  */
 function zeroWeekEmptyStateHTML() {
   const isComm = !!getSession()?.isAdmin;
+  const code = contextSportCode();   // Part 2 item 10: in a several-sport league the sport that has no week is NAMED (the other sport may have one); '' in a one-sport league
   return `<div class="empty-state" data-league-empty="${isComm ? 'commissioner' : 'player'}">
       <div class="empty-state-icon">${icon('calendarWeek')}</div>
-      <h3>No picks to make yet</h3>
-      <p class="text-secondary text-sm mt-sm">${escHtml(zeroWeekMessage(isComm))}</p>
+      <h3>${escHtml(zeroWeekTitle(code))}</h3>
+      <p class="text-secondary text-sm mt-sm">${escHtml(zeroWeekMessage(isComm, code))}</p>
       ${isComm ? zeroWeekSetupButtonHTML() : ''}
     </div>`;
 }
-/** The one sentence per role — the same words League Page's empty state (frame 6) uses. */
-function zeroWeekMessage(isComm) {
+/** The one sentence per role — the same words League Page's empty state (frame 6) uses. With a sport `code` (a several-sport league) the sentence names it. */
+function zeroWeekMessage(isComm, code = '') {
+  if (code) return isComm ? `Set up your first ${code} week to open ${code} picks for your league.` : `Your commissioner hasn't opened a week in ${code} yet.`;
   return isComm ? 'Set up your first week to open picks for your league.' : "Your commissioner hasn't opened a week yet.";
 }
+const zeroWeekTitle = (code = '') => (code ? `No ${code} picks to make yet` : 'No picks to make yet');
+/** The first-week button. In a several-sport league it names the sport with no week and carries it (data-sport); a one-sport league's button is the unmodified one. Reads the context sport itself, so it stays a no-argument fragment. */
 function zeroWeekSetupButtonHTML() {
-  return '<button type="button" class="btn btn-primary mt-md" data-action="zero-week-setup">Set up first week</button>';
+  const e = contextSportEntry();
+  return '<button type="button" class="btn btn-primary mt-md" data-action="zero-week-setup"'
+    + (e ? ' data-sport="' + escHtml(e.dbCode) + '"' : '') + '>'
+    + escHtml(e ? 'Set up first ' + e.code + ' week' : 'Set up first week') + '</button>';
 }
+/** The first-week button: in a several-sport league it builds a week for the sport the button NAMES - the lens moves there first (the wizard builds the lens sport's week), then the wizard opens cold. */
+function openZeroWeekSetup(sport) {
+  if (typeof sport === 'string' && sport && isMultiSportLeague()) { try { setLensSport(sport); } catch (e) { console.warn('[sport] the lens could not move to the sport with no week', e); } }
+  openWeekWizardSheet({ forceNew: true });
+}
+export const _zeroWeekSetupForTest = openZeroWeekSetup;
 function bindZeroWeekEmptyState(container) {
-  container?.querySelector?.('[data-action="zero-week-setup"]')?.addEventListener('click', () => { haptic('medium'); openWeekWizardSheet({ forceNew: true }); });
+  const btn = container?.querySelector?.('[data-action="zero-week-setup"]');
+  btn?.addEventListener('click', () => { haptic('medium'); openZeroWeekSetup(btn.getAttribute?.('data-sport') || ''); });
 }
 export const _zeroWeekEmptyStateHTMLForTest = zeroWeekEmptyStateHTML;
 
 function escHtml(s){
   if(!s)return'';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/**
+ * W-20 / DI-541 / DI-548 #1 (Deployment 1, 2026-10-08) — the SELECTOR escape. An id that was typed, imported or built from a third party's event id (a game id, a week id, a
+ * World Juniors `wjc:<eventId>`) goes into a `[data-x="..."]` selector through THIS, so no selector depends on the SHAPE of an id: a quote, a bracket, a backslash or a
+ * newline in one cannot end the attribute value, and cannot make querySelector(All) throw. `CSS.escape` is the platform's own and is used when it exists; the fallback
+ * (Node, the unit tests) escapes the characters that can end a quoted attribute value. `js/chat-ui.js` carries a byte-identical twin (it cannot import from this file);
+ * xsstest pins the pair. Output is for a DOUBLE-QUOTED attribute selector only, the only place it is used.
+ */
+export function cssId(v) {
+  const s = String(v ?? '');
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(s);
+  return s.replace(/[\u0000-\u001f\u007f"\\]/g, c => (c === '"' || c === '\\') ? '\\' + c : '\\' + c.charCodeAt(0).toString(16) + ' ');
 }
 
 /**
@@ -26051,6 +30805,8 @@ function tearDownRenderedContentForHold() {
   // more specific ids, which is exactly the kind of list a fourth future
   // overlay would silently fail to join): every body-appended overlay this
   // app opens now carries `data-hold-teardown` and is swept here, generically.
+  // D1 Lane B / DI-571: a pushed screen (a Home card detail) is closed through its own door FIRST — its stack, its Esc listener and its inert page are module state a bare DOM sweep would orphan.
+  try { closeAllScreens('hold'); } catch {}
   try { document.querySelectorAll('[data-hold-teardown]').forEach(el => el.remove()); } catch {}
   // S2-3 (full-app review, 2026-09-26) — the control-center drawer is a
   // persistent mount (#control-center-root), so it cannot be removed like the
@@ -28369,10 +33125,10 @@ export const _DELETE_SHEET_EXIT_MS_FOR_TEST = { slide: AX_EXIT_SLIDE_MS + 80, fa
  * the whole wrap (`data-closing="fade"`) — and only THEN is its node removed (that node and no other: a sheet re-opened during the exit is a different node and must survive).
  * `done` runs once, on the transition's end or on a bounded fallback (a backgrounded tab, an interrupted transition). While closing the wrap takes no touches.
  */
-function playDeleteSheetExit(wrap, done) {
+function playDeleteSheetExit(wrap, done, { sheetId = AX_SHEET_ID, dragVar = '--ax-drag-y' } = {}) {
   let reduced = false; try { reduced = prefersReducedMotion(); } catch { reduced = false; }
   let finished = false; let timer = null;
-  const sheetEl = wrap.querySelector?.(`#${AX_SHEET_ID}`);
+  const sheetEl = wrap.querySelector?.(`#${sheetId}`);
   const target = reduced ? wrap : sheetEl;
   const onEnd = (e) => { if (!e || !e.target || e.target === target) finish(); };
   function finish() {
@@ -28385,7 +33141,7 @@ function playDeleteSheetExit(wrap, done) {
   try { wrap.setAttribute('data-closing', reduced ? 'fade' : 'slide'); } catch { /* decoration */ }
   target?.addEventListener?.('transitionend', onEnd);
   if (typeof setTimeout === 'function') timer = setTimeout(finish, (reduced ? AX_EXIT_FADE_MS : AX_EXIT_SLIDE_MS) + 80);
-  if (!reduced) { try { wrap.style.setProperty('--ax-drag-y', '1'); } catch { /* decoration */ } }
+  if (!reduced) { try { wrap.style.setProperty(dragVar, '1'); } catch { /* decoration */ } }
 }
 
 // ── swipe-down (native; `bindSwipeToDismiss()` is a no-op on web) ─────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -28653,6 +33409,7 @@ function _reconcileSuspendedSlate({ prevKey, key, expiry, discard, captured }) {
       draftPicks: captured.draftPicks,
       draftTiebreaker: captured.draftTiebreaker,
       draftExtraPoint: captured.draftExtraPoint,
+      draftBuckets: captured.draftBuckets,      // D1 DI-527: EVERY week's draft (a half-filled CFB slate AND a half-filled NFL slate), not just the one on screen
       layoutEditing: captured.layoutEditing,
     };
     console.info('[auth] session expired — the unsubmitted slate is SUSPENDED (unreachable until the same account signs back in)');
@@ -28670,9 +33427,12 @@ function _reconcileSuspendedSlate({ prevKey, key, expiry, discard, captured }) {
   // back to the identical string, so the narrower gate costs the real case
   // nothing and closes a case the wider one leaves open.
   if (key === _suspendedSlate.key) {
-    state.draftPicks = _suspendedSlate.draftPicks;
-    state.draftTiebreaker = _suspendedSlate.draftTiebreaker;
-    state.draftExtraPoint = _suspendedSlate.draftExtraPoint;
+    if (_suspendedSlate.draftBuckets) _restoreDraftBuckets(_suspendedSlate.draftBuckets);   // every week's draft comes back to the week it belongs to
+    else {
+      state.draftPicks = _suspendedSlate.draftPicks;
+      state.draftTiebreaker = _suspendedSlate.draftTiebreaker;
+      state.draftExtraPoint = _suspendedSlate.draftExtraPoint;
+    }
     state.layoutEditing = _suspendedSlate.layoutEditing;
     _suspendedSlate = null;
     console.info('[auth] the same account signed back in — the suspended slate is restored exactly where it was left');
@@ -28735,11 +33495,12 @@ function applyIdentityDeltaIfChanged(reason, { expiry = false, discard = false }
   // one chokepoint every identity change passes through — the SAME
   // discipline `refreshPlatformAdminFlags()`/`refreshMaintenanceBannerCache()`
   // immediately below already follow for the flags/banner themselves.
-  _platformKvCache = { maintenanceBanner: '', signupsOpen: true, leagueCreationOpen: false, pushAliasModeLive: false, loading: false, loaded: false, error: null, attempted: false };
+  _platformKvCache = { maintenanceBanner: '', signupsOpen: true, leagueCreationOpen: false, pushAliasModeLive: false, pushNonpilotAliasOnly: false, loading: false, loaded: false, error: null, attempted: false };
   _allLeaguesCache = { rows: null, loading: false, error: null, attempted: false };
   _usersAcrossLeaguesCache = { rows: null, loading: false, error: null, attempted: false };
   _joinCodeCache = { leagueId: null, code: '', loading: false, error: null };
   _lsAccept = { leagueId: null, value: null, loading: false, error: false };   // SP-53 — leagues.accepting_members is keyed by league; an identity change forgets it like the join code
+  _lastNotifSettingsHTML = null; _lastNotifSettingsResolved = null; _lastNotifSettingsKey = null;   // W-33 — the Notifications row's saved copy was the identity that just left (also keyed: savedNotifSettingsHTML())
   // Home wiring (checklist item 16, security C1's wiring half): the news slot and the card memo were RANKED FOR ONE VIEWER (alma mater, followed teams, the slate's label). Forget both at the
   // one chokepoint every identity change passes through; home.js's own identity tie (the module half) refuses a stale commit even when this call is missed. Never constructs the wiring
   // (nothing to reset before Home has ever painted).
@@ -28781,9 +33542,11 @@ function applyIdentityDeltaIfChanged(reason, { expiry = false, discard = false }
     // Page, now closed here too.
     const hadLeaguesHome = !!document.getElementById('leagues-home-overlay');
     const hadChatSheet = !!document.getElementById('chat-sheet-wrap');
+    closeAllScreens('identity');   // D1 Lane B / DI-571: a card detail was built from the departed identity's data — closed through its own door (stack, Esc listener, page inert), before the DOM sweep
     // N1 (DI-430) — every surface but the New League sheet while the SAME account is mid-create or has just created (see leagueCreateSheetSurvivesIdentityChange()).
     document.querySelectorAll('[data-hold-teardown]').forEach(el => { if (!leagueCreateSheetSurvivesIdentityChange(el)) el.remove(); });
     lcAbandonIfSwept();
+    loAbandonIfSwept();   // D1 DI-538: the league overview sheet carries data-hold-teardown, so the sweep above removed its node; drop its state, timer and listener too
     if (hadLeaguePage) hideLeaguePageOverlay();
     if (hadLeaguesHome) hideLeaguesHomeOverlay();
     if (hadChatSheet) resetGameChatSheetForTeardown();
@@ -28799,9 +33562,12 @@ function applyIdentityDeltaIfChanged(reason, { expiry = false, discard = false }
     draftPicks: state.draftPicks,
     draftTiebreaker: state.draftTiebreaker,
     draftExtraPoint: state.draftExtraPoint,
+    draftBuckets: _snapshotDraftBuckets(),
     layoutEditing: state.layoutEditing,
   };
   clearPickDraft();
+  // D1 DI-538 — the sport context forgets everything keyed by who or where you were: the viewed weeks, the scroll memory, an open overview, and every OTHER account's stored pointer.
+  try { onContextSwitch({ keepAccountId: getAccountUserId() || null }); } catch (e) { console.warn('[sport] the context-switch hook failed', e); }
   // ══ RG-245 (reviewer BLOCK, 2026-09-25) — THE UNDELIVERED TAP ═════════════
   //
   // A notification banked while the page was withheld belongs to the account
@@ -28942,7 +33708,11 @@ function applyIdentityDeltaIfChanged(reason, { expiry = false, discard = false }
   // read on an identity that has not been proven yet.
   if (!isRecoverySession()) {
     refreshPlatformAdminFlags()
-      .then(() => refreshControlCenterAndSettingsPage())
+      .then(() => {
+        refreshControlCenterAndSettingsPage();
+        // DI-550 - the zero-league screen draws the New League card for the SUPER admin only (while the scope is "admins"); the flag lands after first paint, so repaint that one screen once it says yes.
+        if (getIsSuperAdmin() === true && leagueCreationAvailable() && needsLeagueFlowScreen()) _repaintMaintenanceBannerSurface();
+      })
       .catch((e) => console.warn('[auth] platform-admin flag refresh failed on an identity change', e));
   }
   // NOTE 6 / BLOCK 4 (2026-09-25) — the maintenance-banner cache's "on
@@ -28989,8 +33759,11 @@ function _repaintMaintenanceBannerSurface() {
   // bug the gate exists to prevent, just via a new door. Checked first,
   // same as every other render chokepoint in this file guards on it.
   if (isContentWithheld()) return;
-  if (linkFlowScreen()) return;   // DI-183b's confirmation card carries no banner slot
+  const flow = linkFlowScreen();
+  if (flow === 'confirm') return;   // DI-183b's confirmation card carries no banner slot (and is a one-time card: never repainted from here)
   const tab = state.currentTab === 'chat' ? 'dashboard' : (state.currentTab || 'dashboard');
+  // Review follow-up (2026-10-08): the claim screen IS repainted when the release gate (or the super-admin flag) lands after its first paint, so the invite option / invite card / Create choice appear without a reload.
+  if (flow === 'claim') { repaintClaimScreen(tab); return; }
   if (needsLeagueFlowScreen()) { renderLeagueFlowScreen(tab); return; }
   ({ picks: renderPicksPage, dashboard: renderDashboard, leaderboard: renderLeaderboard,
      commissioner: renderCommPage, admin: renderAdminPage, rules: renderRulesPage,
@@ -29000,6 +33773,8 @@ function _repaintMaintenanceBannerSurface() {
  *  than re-deriving it. Production never calls this. */
 export function _currentIdentityKeyForTest() { return currentIdentityKey(); }
 export function _lastIdentityKeyForTest() { return _lastIdentityKey; }
+/** Test seam (D1 / DI-538): run the identity chokepoint as the auth listener would. Production never calls this. */
+export function _applyIdentityDeltaForTest(reason = 'test') { return applyIdentityDeltaIfChanged(reason); }
 
 /**
  * The one auth/membership lifecycle handler (see wireAuthUIEvents()).
@@ -29590,7 +34365,7 @@ function leagueFlowLandingHTML() {
       <div class="card">
         <h3>Create a League</h3>
         ${closedNotice}
-        ${LC.landingCreateCardHTML({ open: getCachedLeagueCreationOpen(), signupsOpen, escHtml })}
+        ${LC.landingCreateCardHTML({ open: leagueCreationAvailable(), signupsOpen, escHtml })}
       </div>
     </div>`;
 }
@@ -29634,7 +34409,7 @@ function leagueSelectorHTML() {
     escHtml, icon,
     roleBadgeHTML: leagueRoleBadgeHTML,
     // N1 (DI-430/433) — the release gate (default CLOSED) and frame 13's "created, but this device couldn't load it" notice.
-    createOpen: getCachedLeagueCreationOpen(),
+    createOpen: leagueCreationAvailable(),
     notice: leaguesHomeNoticeHTML(),
   });
 }
@@ -29688,6 +34463,15 @@ function bindLeagueSelectorRows(container, afterPick) {
  * message; matched against a fixed table so an unrecognised server string can
  * never fall through to a reassuring line.
  */
+/**
+ * DI-550 (RP-1, D-44; 2026-10-08) - THE DOOR, as the client draws it: the release gate is OPEN and creation is open to everyone OR the viewer is the super admin. Anything else (the gate closed, the scope
+ * 'admins' - also what an unread cache says - and a viewer who is not the super admin, also what an unread flag says) and the New League card is ABSENT, byte-identical to the closed state. This is chrome only:
+ * `create_league` refuses a non-super-admin itself (`creation_admins_only`), so a stale or hand-built call still fails. The super-admin signal is the one the Super Admin panel already uses (getIsSuperAdmin()).
+ */
+function leagueCreationAvailable() {
+  if (!getCachedLeagueCreationOpen()) return false;
+  return getCachedLeagueCreationScope() === 'everyone' || getIsSuperAdmin() === true;
+}
 const LEAGUE_RPC_ERROR_COPY = [
   ['invalid_code',      "That code doesn't match an open league. Double-check it with whoever invited you."],
   ['already_member',    "You're already in that league — switch to it from your account instead."],
@@ -29712,6 +34496,10 @@ const LEAGUE_RPC_ERROR_COPY = [
   ['league_limit',      LC.LC_COPY.limit],
   ['creation_rate',     LC.LC_COPY.limit],
   ['creation_paused',   LC.LC_COPY.limit],
+  // D1 Lane A (2026-10-08) - 0050's scope refusal (DI-550) says so plainly; 0049's push-readiness refusal is a release gate that reads as the gate does; 0048's re-entry bound (DI-548 #10) names no number.
+  ['creation_admins_only', LC.LC_COPY.adminsOnly],
+  ['push_not_ready',    SIGNUPS_CLOSED_COPY],
+  ['rejoin_limit',      LC.LC_COPY.rejoinLimit],
 ];
 const LEAGUE_CONNECTIVITY_COPY = "Couldn't reach the server — check your connection and try again.";
 const LEAGUE_UNKNOWN_COPY      = "That didn't go through. Try again, and tell your commissioner what you typed if it keeps failing.";
@@ -30105,6 +34893,8 @@ const CLAIM_CODE_ERROR_COPY = [
   // raises, precisely so the response is not an oracle, and copy that undid that
   // on the client would hand back exactly what the SQL withheld.
   ['not_found',         "We couldn't find that. Double-check it with your commissioner — they can reissue if it's gone stale."],
+  // D1 Lane A (2026-10-08, DI-548 #10) - link_member counts toward the same re-entry bound as join_league; the same line, no number.
+  ['rejoin_limit',      LC.LC_COPY.rejoinLimit],
 ];
 const CLAIM_CODE_CONNECTIVITY_COPY = "Couldn't reach the server — check your connection and try again.";
 const CLAIM_CODE_UNKNOWN_COPY = "That didn't go through. Try again, and tell your commissioner what you typed if it keeps failing.";
@@ -30333,7 +35123,45 @@ function _markLinkFlowUnmatchedAfterDispute() {
  */
 let _claimScreenMode = 'claim';       // 'claim' | 'invite'
 let _claimScreenTouched = false;
-export function _resetClaimScreenModeForTest() { _claimScreenMode = 'claim'; _claimScreenTouched = false; }
+export function _resetClaimScreenModeForTest() { _claimScreenMode = 'claim'; _claimScreenTouched = false; _claimPaintedHTML = ''; }
+/** The markup the claim screen was last painted with. A late repaint (the gate or the super-admin flag landing) compares against it, so an ordinary banner refresh that changes nothing rewrites NOTHING (no lost caret, no churn). */
+let _claimPaintedHTML = '';
+const CLAIM_SCREEN_FIELDS = ['link-claim-code', 'league-join-code'];
+/**
+ * REPAINT THE CLAIM SCREEN WHEN WHAT IT SHOWS CHANGED UNDER IT (review follow-up, 2026-10-08). The invite option, the invite card and the pre-fill depend on the release gate; the Create choice on the super-admin flag;
+ * both can land AFTER the first paint (the gate read and the flag read are network round trips). Without this the screen stayed as first drawn until a reload.
+ *  - Nothing changed -> nothing is rewritten.
+ *  - A typed code and the focus are CARRIED, the way navigateTo() carries them (field-preserve.js: dirty fields only, identity-guarded, never a secret) plus the focus of an empty field it was in (restored, never granted).
+ *  - A player part-way through typing a CLAIM code is not moved onto the invite card by a late-landing gate: the invite option simply appears as a segment they can choose. A player who has typed nothing is moved to a waiting invite exactly as a first paint would.
+ */
+function repaintClaimScreen(tab) {
+  const c = document.getElementById(`page-${tab}`);
+  if (!c) return;
+  let fresh = claimScreenHTML();
+  if (fresh === _claimPaintedHTML) return;
+  const owner = currentIdentityKey();
+  const snap = captureDirtyFields(c, owner);
+  const active = document.activeElement;
+  let focusId = '';
+  try { if (active && active.id && CLAIM_SCREEN_FIELDS.includes(active.id) && (typeof c.contains !== 'function' || c.contains(active))) focusId = active.id; } catch { focusId = ''; }
+  const sel = focusId ? { start: active.selectionStart, end: active.selectionEnd } : null;
+  const typingClaim = focusId === 'link-claim-code' || !!(snap && snap.fields.some((f) => f.id === 'link-claim-code'));
+  if (typingClaim && !_claimScreenTouched) {
+    _claimScreenMode = 'claim'; _claimScreenTouched = true;     // keep the card they are on
+    fresh = claimScreenHTML();
+  }
+  c.innerHTML = fresh;
+  _claimPaintedHTML = fresh;
+  bindLinkFlowScreen(c);
+  restoreDirtyFields(snap, c, currentIdentityKey());
+  if (focusId) {
+    const f = c.querySelector(focusId === 'link-claim-code' ? '#link-claim-code' : '#league-join-code');   // two literals, never an interpolated id
+    if (f && !f.disabled && document.activeElement !== f) { try { f.focus({ preventScroll: true }); } catch { /* focus is a courtesy */ } }
+    if (f && sel && typeof f.setSelectionRange === 'function' && typeof sel.start === 'number') { try { f.setSelectionRange(sel.start, sel.end); } catch { /* a field type that refuses a range */ } }
+  }
+  // No stampFieldOwner() here: navigateTo() is the ONE stamper (drafttest pins that), it stamped this page root when the claim screen was first painted, and this repaint writes into the SAME root for the same identity.
+}
+export const _repaintMaintenanceBannerSurfaceForTest = () => _repaintMaintenanceBannerSurface();
 function claimInviteCardHTML(inv) {
   return `
     <div class="card" id="link-invite-card">
@@ -30347,6 +35175,8 @@ function claimScreenHTML() {
   // R-F1 / S-9 (coordinator ruling 2026-09-30): the WHOLE invite-code surface — the two-segment control, the invite card, the loud expired-link notice — sits behind the release
   // gate, exactly like the "Create a league" choice below. With the door CLOSED (the default) the claim-code screen is BYTE-IDENTICAL to today's (DI-183 §3d: an unmatched
   // account is offered the claim card and nothing else). A stored `?join=` invite is left alone (it expires by itself); nothing here reads or consumes it.
+  // F-1 (reviewer, 2026-10-08; DI-550 says JOINING IS UNTOUCHED by who may create): the invite surface is behind the RELEASE GATE only - `getCachedLeagueCreationOpen()`, the ONE named exception to "ask leagueCreationAvailable()" -
+  // never behind who may CREATE. A non-super-admin under scope "admins" with the gate open still gets the invite option, the code field and the `?join=` pre-fill; only the Create choice below asks the door.
   if (!getCachedLeagueCreationOpen()) return claimCodeScreenHTML();
   const inv = resolvePendingInviteView();
   const mode = (!_claimScreenTouched && inv.code) ? 'invite' : _claimScreenMode;
@@ -30355,7 +35185,7 @@ function claimScreenHTML() {
   // disabled, and this screen is byte-identical to today's. It is reached only after the auto-link attempt found nothing (this screen IS the "auto-link found nothing" state).
   // R-F8: only after a CLEAN "found nothing" — an auto-link that ERRORED (the server could not be asked) keeps its loud-fail treatment ("we couldn't check your email
   // automatically") and never offers to create a league on top of an unanswered question.
-  const createChoice = _linkFlow.state === 'unmatched' ? LC.claimCreateEntryHTML({ escHtml }) : '';
+  const createChoice = (_linkFlow.state === 'unmatched' && leagueCreationAvailable()) ? LC.claimCreateEntryHTML({ escHtml }) : '';   // DI-550: ONLY this choice asks who may create
   return `${notice}${LC.landingSegmentsHTML({ mode, escHtml })}${mode === 'invite' ? claimInviteCardHTML(inv) : claimCodeScreenHTML()}${createChoice}`;
 }
 
@@ -30367,7 +35197,9 @@ function bindLinkFlowScreen(container) {
       _claimScreenTouched = true;
       _pendingInvite = { code: _pendingInvite.code, notice: '' };   // the loud message was seen; a chosen card clears it (the stored invite, if valid, stays)
       // Repaint the container this screen is IN — not "whatever tab is current" — so the switch can never land on a different page than the one that was tapped.
-      container.innerHTML = claimScreenHTML();
+      const segHTML = claimScreenHTML();
+      _claimPaintedHTML = segHTML;
+      container.innerHTML = segHTML;
       bindLinkFlowScreen(container);
       const f = container.querySelector(_claimScreenMode === 'invite' ? '#league-join-code' : '#link-claim-code');
       if (f && !f.disabled) { try { f.focus({ preventScroll: true }); } catch { /* focus is a courtesy */ } }
@@ -30452,7 +35284,9 @@ export function renderLinkFlowScreen(tab) {
   if (!which) return;
   const c = document.getElementById(`page-${tab}`);
   if (!c) return;
-  c.innerHTML = which === 'confirm' ? linkConfirmCardHTML() : claimScreenHTML();
+  const html = which === 'confirm' ? linkConfirmCardHTML() : claimScreenHTML();
+  _claimPaintedHTML = which === 'claim' ? html : '';
+  c.innerHTML = html;
   bindLinkFlowScreen(c);
 }
 
@@ -30937,7 +35771,7 @@ function showLeagueSelectorSheet() {
   ov.innerHTML = `<div class="modal">
     <div class="modal-header"><h3>Choose a League</h3><button class="modal-close" id="league-selector-sheet-close">✕</button></div>
     ${leagueSelectorListHTML()}
-    ${renderCreateLeagueStubCard({ escHtml, icon, open: getCachedLeagueCreationOpen() })}
+    ${renderCreateLeagueStubCard({ escHtml, icon, open: leagueCreationAvailable() })}
     <button type="button" class="btn btn-ghost btn-block mt-sm" id="league-selector-join-btn">Join a League</button>
   </div>`;
   document.body.appendChild(ov);
@@ -31190,7 +36024,7 @@ function openLeagueCreateSheet({ invite = null } = {}) {
   if (invite) {
     st = LC.createInviteState(invite);
   } else {
-    if (!getCachedLeagueCreationOpen()) { showComingSoonToast(LC.LC_COPY.landingClosed); return; }
+    if (!leagueCreationAvailable()) { showComingSoonToast(LC.LC_COPY.landingClosed); return; }
     st = LC.createInitialState({ signupsOpen: getCachedSignupsOpen(), groups });
   }
   _lc = { state: st, groups, unbindDrag: null, onKey: null, slowTimer: null, landOnClose: !invite, accountId: getAccountUserId() };
@@ -31479,7 +36313,7 @@ async function submitLeagueCreate() {
     haptic('error');
     return;
   }
-  if (failure.kind === 'paused') { lcDispatch({ type: 'paused' }); return; }
+  if (failure.kind === 'paused' || failure.kind === 'admins_only') { lcDispatch({ type: 'paused', reason: failure.kind === 'admins_only' ? 'admins_only' : null }); return; }
   if (failure.kind === 'limit') { lcDispatch({ type: 'limit' }); return; }
   lcDispatch({ type: 'failed' });
   haptic('error');
@@ -31570,6 +36404,733 @@ export function _resetLeagueCreateForTest() {
   if (_lc) { clearTimeout(_lc.slowTimer); try { document.removeEventListener('keydown', _lc.onKey); } catch { /* same */ } }
   _lc = null; _leaguesHomeNotice = null; _pendingInvite = { code: '', notice: '' }; _pendingInvitePrompted = false;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// D1 (v0.30.0, thread 100726-D1, Lane A) — THE MULTISPORT CLIENT: the sport context's DOM and network wiring
+// DI-520 (the context), 521 rev 3 (the switcher), 522 + 554 + 556 (the league overview: sheet, pill, League Page cards), 523 (entering a sport), 524/525/526 (Picks, Dashboard and
+// Standings per sport; All sports), 527 (state isolation), 538 (nothing survives a switch), 555 (only the sports the member plays), 531's client half (the Join).
+// ═══════════════════════════════════════════════════════════════════════════
+// The model lives in js/competition.js (who plays what, the pointer), the four pure leaves (js/sport-status.js, js/league-overview.js, js/sport-switcher.js, js/all-sports.js) hold the
+// copy and the rules, and THIS section reads the mirror, paints, binds and routes. Drew's model (D-54): League-wide surfaces are Home, Chat and the league-name overview; sport-aware
+// surfaces are Picks, Dashboard and Standings. The switcher shows only sports the member PLAYS and only for two or more; joining happens in the overview and nowhere else.
+//
+// SINGLE-SPORT LEAGUES ARE v0.29.0: every function below returns before touching a sport when `isMultiSport()` is false, and the golden suites (sportsurfacetest, dashisolationtest) prove
+// the Picks, Dashboard and Standings markup of a one-sport league byte-identical to the unmodified renderers.
+//
+// SEAMS (a row appears ONLY when its opener is registered; nothing here is ever a dead stub). The commissioner's sport operations (DI-532/534: Add a sport, Manage {sport}, Sport entries, Set up
+// a week for a sport), Lane B's Game Day (DI-606 `openGameDay`) and W-18's "{k} of {n} in" count plug in through `registerSportOps()`.
+let _sportOps = { addSport: null, manageSport: null, sportEntries: null, setupWeek: null, openGameDay: null, weekInCount: null };
+export function registerSportOps(ops = {}) {
+  for (const k of Object.keys(_sportOps)) if (typeof ops[k] === 'function') _sportOps[k] = ops[k];
+  return { ..._sportOps };
+}
+export function _resetSportOpsForTest() { _sportOps = { addSport: null, manageSport: null, sportEntries: null, setupWeek: null, openGameDay: null, weekInCount: null }; }
+
+// ── the sport operations, WIRED (coordinator notes 2026-10-08) ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// Two branches meet here. THIS one owns the overview and `registerSportOps()`; the server branch (`feat/d1-sports-server`) owns the commissioner's pieces: the Add a sport sheet (`openAddSportSheet`,
+// DI-532), the commissioner's sport LENS (`setLensSport`, js/sport-seam.js: it moves the player's own sport pointer whenever the pointer accepts the sport, and is the commissioner's local choice only while the pointer refuses it) and the Comm panel that reads it. Neither can import the other
+// before the merge, so the glue is written once, here, and binds to those names at call time: an identifier the other branch has not put in this file yet is `undefined` (typeof is safe on an
+// undeclared name), the commissioner rows are then simply not registered ("a row appears only when its opener exists; never a dead stub"), and the day the branches merge the same line registers them.
+//   - addSport      opens the server branch's sheet ABOVE the overview (it is a child sheet: see OVERVIEW_CHILD_SHEET_IDS) and repaints the overview, the pill and the sport tab when it is done;
+//   - manageSport   moves the commissioner's LENS to that sport and opens Comm -> Week;
+//   - sportEntries  moves the lens to the first sport members opt in to and opens Comm -> Players (the Sport entries card);
+//   - setupWeek     moves the lens to that sport and opens the week wizard in create mode;
+//   - weekInCount   (always, this branch's) "{k} of {n} in": the week's ENTRANTS whose slate is complete, from the same submissionStateFor() the Who's-in strip uses; COUNTS ONLY, and nothing at all
+//                   when any entrant's state is unknown (a wrong number is worse than none).
+// Add a sport, Manage, Sport entries and Set up week are registered together or not at all: they share the lens, and a half-wired Manage row would open a tab that is not about that sport.
+const OVERVIEW_CHILD_SHEET_IDS = Object.freeze(['add-sport-sheet-wrap']);
+function overviewChildSheetUp() { return OVERVIEW_CHILD_SHEET_IDS.some((id) => !!document.getElementById(id)); }
+
+/** "{k} of {n} in" for one sport's week, or '' (no entrants, or any state unknown). Counts only: it names nobody and reads no pick. */
+export function sportWeekInCountText(week) {
+  try {
+    if (!week || !week.weekId || !getWeek(week.weekId)) return '';   // a week this device does not hold has no count
+    return inCountText(inCountOf(playersForWeek(week), (pid) => { const st = submissionStateFor(week.weekId, pid); return st === 'yes' ? true : st === 'no' ? false : null; }));   // the ONE count rule (multisport-admin.js)
+  } catch { return ''; }
+}
+/** What follows a sport being added: the overview's cards, the pill and the sport tab on screen all learn of it. Decoration around a write that has already happened; it can never throw. */
+function afterSportAdded() {
+  try { if (_lo) paintLeagueOverview(); } catch (e) { console.warn('[overview] repaint after Add a sport failed', e); }
+  try { renderLeaguePill(); } catch (e) { console.warn('[sport] the pill could not refresh after Add a sport', e); }
+  try { if (SPORT_TABS.includes(state.currentTab)) repaintSportTab(state.currentTab); } catch (e) { console.warn('[sport] the tab could not repaint after Add a sport', e); }
+}
+/** The ops this tree can register, given the server branch's openers (injected so a suite can drive both halves). */
+export function buildSportOps({ openAddSportSheet: openAdd = null, setLensSport: setLens = null } = {}) {
+  // Lane B's Game Day (DI-606 entry point (2), wired at the merge of int, 2026-10-08): the overview's "{n} live now" chip opens Home with the Game Day card open in place.
+  const ops = { weekInCount: sportWeekInCountText, openGameDay: () => openGameDay({ source: 'overview' }) };
+  if (typeof openAdd !== 'function' || typeof setLens !== 'function') return ops;
+  const toLens = (dbCode) => { try { return setLens(dbCode) !== false; } catch (e) { console.warn('[sport] the commissioner lens could not move', e); return false; } };
+  ops.addSport = () => openAdd({ onDone: afterSportAdded });
+  ops.manageSport = (dbCode) => { if (toLens(dbCode)) { state.commTab = 'week'; navigateTo('commissioner'); } };
+  ops.sportEntries = () => {
+    const optIn = getLeagueCompetitions().find((c) => c && !c.archivedAt && c.enrollment === 'opt_in');
+    if (optIn && !toLens(optIn.sport)) return;   // the lens could not move: Players would show another sport's entries
+    state.commTab = 'players';
+    navigateTo('commissioner');
+  };
+  ops.setupWeek = (dbCode) => { if (toLens(dbCode)) openWeekWizardSheet({ forceNew: true }); };
+  return ops;
+}
+function sportOpsDeps() {
+  return {
+    openAddSportSheet: typeof openAddSportSheet === 'function' ? openAddSportSheet : null,
+    setLensSport: typeof setLensSport === 'function' ? setLensSport : null,
+  };
+}
+registerSportOps(buildSportOps(sportOpsDeps()));
+export const _registerBuiltInSportOpsForTest = () => registerSportOps(buildSportOps(sportOpsDeps()));
+
+/** The viewer's zone (key + IANA name) for the Games window and lock times. */
+function sportViewerZone() {
+  const key = getTimezone();
+  const z = TIME_ZONES.find((x) => x.key === key) || TIME_ZONES[0];
+  return { key: z.key, iana: z.iana };
+}
+
+/** A week the viewer may see as THE current week of a sport: a draft is shown (as Upcoming) but its slate is private; a demo week is the commissioner's alone (UN-71). */
+function sportWeekVisible(week, isCommissioner) {
+  return !!week && (isCommissioner || week.dataSourceMode !== 'demo');
+}
+
+/**
+ * ONE sport's card, derived from the mirror (DI-522). The viewer's OWN submitted boolean and counts of games only: no other member's data is read here (the blind rule, and
+ * js/sport-status.js could not take it if it were). Never throws — a failed read is the "Status unavailable" state, not a guess.
+ */
+function computeSportCard(entry, { entered, viewer, isCommissioner, now, zone }) {
+  let week = null;
+  let inputs = { failed: true };
+  let lockAtMs = null;
+  try {
+    week = getCurrentWeekFor(entry.competitionId);
+    if (!sportWeekVisible(week, isCommissioner)) week = null;
+    if (!week) inputs = { hasWeek: false };
+    else {
+      const games = getGames(week.weekId);
+      const st = weekLockState({ week, games, now, confirmedStatus: serverConfirmedWeekStatus(week) });
+      lockAtMs = st.lockAtMs;
+      const kicks = games.map((g) => Date.parse(g && g.kickoff)).filter(Number.isFinite);
+      const submitted = !!viewer && hasPlayerSubmitted(week.weekId, viewer);
+      const canSubmit = !!viewer && entered && canPlayerSubmitPicks(week, viewer).allowed;
+      inputs = {
+        hasWeek: true, phase: st.phase, isCommissioner,
+        totalGames: games.length,
+        liveGames: games.filter((g) => g.status === GAME_STATUS.LIVE).length,
+        finalGames: games.filter((g) => g.status === GAME_STATUS.FINAL).length,
+        lockAtMs: st.lockAtMs,
+        firstKickoffMs: kicks.length ? Math.min(...kicks) : null,
+        lastKickoffMs: kicks.length ? Math.max(...kicks) : null,
+        submitted, canSubmit, reopened: st.reopened,
+        nextWeekPublished: st.phase === 'final'
+          ? getWeeksForCompetition(entry.competitionId).some((w) => Number(w.weekNumber) > Number(week.weekNumber) && w.status !== WEEK_STATUS.DRAFT)
+          : null,
+      };
+    }
+  } catch (e) {
+    console.warn('[sport] a sport card could not be derived', e);
+    inputs = { failed: true };
+  }
+  // A sport the viewer has NOT joined owes nothing: no submit pill, no due, no gold (DI-555, PF-423 acceptance 3).
+  const statusInputs = entered ? inputs : { ...inputs, submitted: true, canSubmit: false };
+  const status = deriveSportCardStatus(statusInputs);
+  const weekNums = getWeeksForCompetition(entry.competitionId).map((w) => Number(w.weekNumber)).filter(Number.isFinite);
+  // Part 2 item 3 (2026-10-08): when the sport's CURRENT week is a DRAFT, the week to publish is that draft - its own number - not the number after it ("publishes Week 3" over a card named "Week 2").
+  const draftN = week && week.status === WEEK_STATUS.DRAFT ? Number(week.weekNumber) : NaN;
+  const nextWeekN = Number.isFinite(draftN) && draftN > 0 ? draftN : (weekNums.length ? Math.max(...weekNums) : 0) + 1;
+  const iso = (ms) => new Date(ms).toISOString();
+  let inCountText = '';
+  try { if (entered && week && typeof _sportOps.weekInCount === 'function') inCountText = String(_sportOps.weekInCount(week) || ''); } catch { inCountText = ''; }
+  const canSetupWeek = !!isCommissioner && entered && (entry.competition?.isDefault === true || typeof _sportOps.setupWeek === 'function');
+  const text = {
+    sportName: entry.label, code: entry.code, weekLabel: week ? formatWeekLabelParts(week).name : '',
+    windowText: formatGameWindow(status.firstKickoffMs, status.lastKickoffMs, zone.iana),
+    leftText: Number.isFinite(lockAtMs) ? formatTimeLeft(lockAtMs - now) : '',
+    lockWhenText: Number.isFinite(lockAtMs) ? formatGameTime(iso(lockAtMs), zone.key) : '',
+    kickoffWhenText: Number.isFinite(status.firstKickoffMs) && status.firstKickoffMs > now ? formatGameTime(iso(status.firstKickoffMs), zone.key) : '',
+    inCountText, isCommissioner: !!isCommissioner, canSetupWeek, nextWeekN,
+  };
+  const view = entered ? sportCardView(status, text) : joinCardView(status, text);
+  return { entry, entered, week, status, view, text, lockAtMs };
+}
+
+/** Every non-archived sport of the league as a card, played or not (one derivation for the overview, the League Page, the pill's dot and the switcher's dots). */
+function computeSportCards({ now = Date.now() } = {}) {
+  const multi = isMultiSport();
+  const playedCodes = new Set(playedSports().map((s) => s.dbCode));
+  const viewer = viewerMemberId();
+  const isCommissioner = !!getSession()?.isAdmin;
+  const zone = sportViewerZone();
+  return leagueSports().map((entry) => computeSportCard(entry, { entered: !multi || playedCodes.has(entry.dbCode), viewer, isCommissioner, now, zone }));
+}
+
+/**
+ * The played sports with picks due and a lock ahead, earliest first: the ONE list the pill's dot, the switcher's dots and the At-a-glance chips all read. Part 2 item 7 (2026-10-08): it answers in a
+ * ONE-sport league too (the overview's At a glance names the sport whose picks are due, D-60 mockup); the pill's dot and the switcher are several-sport features and gate themselves at their call sites.
+ */
+function sportDueItems({ now = Date.now(), cards = null } = {}) {
+  try {
+    return sportsNeedingPicks((Array.isArray(cards) ? cards : computeSportCards({ now })).filter((c) => c.entered).map((c) => ({ dbCode: c.entry.dbCode, code: c.entry.code, status: c.status })), now);
+  } catch (e) { console.warn('[sport] the due list could not be derived', e); return []; }
+}
+
+/** Live games across the league's PUBLISHED current weeks (a draft for a member and a demo week for a non-commissioner excluded): a number, never a pick (security C3). */
+function leagueLiveGameCount() {
+  try {
+    const isCommissioner = !!getSession()?.isAdmin;
+    let n = 0;
+    for (const e of leagueSports()) {
+      const w = getCurrentWeekFor(e.competitionId);
+      if (!sportWeekVisible(w, isCommissioner) || (w.status === WEEK_STATUS.DRAFT && !isCommissioner)) continue;
+      n += getGames(w.weekId).filter((g) => g.status === GAME_STATUS.LIVE).length;
+    }
+    return n;
+  } catch { return 0; }
+}
+
+/** The league overview's model (DI-554): groups of cards, the At-a-glance chips, the commissioner rows that have a real destination, and the counts the header names. */
+function buildLeagueOverviewModel({ focusSport = null, busy = _joinState.joining, failed = _joinState.failed } = {}) {
+  const now = Date.now();
+  const cards = computeSportCards({ now });
+  const isCommissioner = !!getSession()?.isAdmin;
+  const played = cards.filter((c) => c.entered);
+  const other = cards.filter((c) => !c.entered);
+  const due = sportDueItems({ now, cards });   // the SAME function the pill's dot and the switcher's dots call (headermetatest pins it)
+  const memberships = getCachedMemberships();
+  const commissioner = [];
+  if (isCommissioner) {
+    // Part 2 item 4 (DI-554): the row exists only while the sheet it opens has something to offer ("never a dead stub"), and its words name what is offered.
+    if (typeof _sportOps.addSport === 'function') {
+      const offered = addSportOptionsNow();
+      if (offered.length) commissioner.push({ action: 'comm-add-sport', title: 'Add a sport', subtitle: addSportRowSubtitle(offered) });
+    }
+    if (typeof _sportOps.manageSport === 'function') {
+      for (const c of cards) commissioner.push({ action: 'comm-manage', dbCode: c.entry.dbCode, title: `Manage ${c.entry.code}`, subtitle: `Set up Week ${c.text.nextWeekN} · publish · lock`, right: c.text.weekLabel });
+    }
+    if (typeof _sportOps.sportEntries === 'function' && other.length + played.length > 1) commissioner.push({ action: 'comm-entries', title: 'Sport entries', subtitle: 'Who plays each sport' });
+  }
+  return {
+    leagueName: getActiveLeagueName() || '',
+    memberCount: getPlayers().filter((p) => p && p.active).length,
+    sportsLine: cards.map((c) => c.entry.label).join(' · '),
+    isCommissioner, focusSport,
+    glance: glanceChips({ due, liveCount: leagueLiveGameCount() }),
+    played: played.map((c) => ({ dbCode: c.entry.dbCode, sportName: c.entry.label, glyphKey: c.entry.glyphKey, weekLabel: c.text.weekLabel, view: c.view })),
+    other: other.map((c) => ({ dbCode: c.entry.dbCode, code: c.entry.code, sportName: c.entry.label, glyphKey: c.entry.glyphKey, weekLabel: c.text.weekLabel, view: c.view, busy: busy.has(c.entry.dbCode), error: failed.has(c.entry.dbCode) })),
+    commissioner, leagueCount: memberships.length,
+    showZoneNote: cards.length > 1,
+  };
+}
+const overviewDeps = () => ({ escHtml, numHtml, icon });
+
+/**
+ * DESIGN_D1_E (DI-E1.1): what Home may offer a member who has not joined every sport - EXACTLY the cards of the league overview's "Also in this league" group (buildLeagueOverviewModel().other), so Home's
+ * "Want in?" nudge and the sheet's Join card can never disagree about which sports are offered or whether joining is open (`joinable` = the card's own `view.joinEnabled`: true for an Open week and for no / upcoming /
+ * draft week, false for Locked / Live / Final). It answers [] with no verified member and while content is withheld; in a one-sport league `other` is empty by construction (every sport is "played"). Each offer is { dbCode, code, joinable } - no pick, no member, no name.
+ * A late joiner PLAYS the sport (he is in `played`, not `other`), so he is never offered it: "plays the sport" is the nudge's question, "is in this week" is the first-person lines' (home.js nowSportFacts).
+ */
+function joinOffers() {
+  try {
+    if (isContentWithheld() || !viewerMemberId()) return [];
+    return buildLeagueOverviewModel().other.map((c) => ({ dbCode: c.dbCode, code: c.code, joinable: c.view.joinEnabled === true }));
+  } catch (e) { console.warn('[home] the join offers could not be derived', e); return []; }
+}
+export const _joinOffersForTest = joinOffers;
+
+// ── the sheet (DI-554 / DI-556) ─────────────────────────────────────────────────────────────────────────────
+const LO_WRAP_ID = 'league-overview-sheet-wrap';
+const LO_EXIT_SLIDE_MS = 300;   // --motion-modal
+const LO_EXIT_FADE_MS = 150;    // --motion-fast
+const LO_REPAINT_MS = 60000;
+// { focusSport, timer, lastBody, lastHead, onKey, unbindDrag } while the sheet is up, else null. In-memory only (DI-538: no device-stored state; cleared on any context switch).
+let _lo = null;
+// A Join in flight / a Join that failed, by sport. Module-level (not the sheet's) because the League Page renders the same cards and the same Join; cleared by onContextSwitch.
+const _joinState = { joining: new Set(), failed: new Set() };
+
+/** The sheet was swept by the identity chokepoint (it carries data-hold-teardown): drop its state, its timer and its listener. */
+function loAbandonIfSwept() {
+  const lo = _lo;
+  if (!lo || document.getElementById(LO_WRAP_ID)) return;
+  try { clearInterval(lo.timer); } catch { /* hygiene */ }
+  try { document.removeEventListener('keydown', lo.onKey); } catch { /* hygiene */ }
+  _lo = null;
+}
+
+function paintLeagueOverview({ initial = false } = {}) {
+  const lo = _lo;
+  const wrap = document.getElementById(LO_WRAP_ID);
+  if (!lo || !wrap) return false;
+  const body = wrap.querySelector('#league-overview-body');
+  const headEl = wrap.querySelector('#league-overview-head');
+  if (!body) return false;
+  const model = buildLeagueOverviewModel({ focusSport: lo.focusSport });
+  const html = leagueOverviewBodyHTML(model, overviewDeps());
+  const head = leagueOverviewHeaderHTML(model, overviewDeps());
+  if (headEl && lo.lastHead !== head) { headEl.innerHTML = head; lo.lastHead = head; }
+  // A repaint changes the DOM only when the string changed (Lists: maintain context); the scroll position is kept either way.
+  if (html === lo.lastBody && !initial) return false;
+  const top = body.scrollTop || 0;
+  body.innerHTML = html;
+  lo.lastBody = html;
+  if (!initial) body.scrollTop = top;
+  return true;
+}
+
+function openLeagueOverview({ focusSport = null } = {}) {
+  // The same guard every body-appended surface carries: never open one while content is withheld (Std-12).
+  if (isContentWithheld()) return false;
+  loAbandonIfSwept();
+  if (_lo) { _lo.focusSport = focusSport || _lo.focusSport; paintLeagueOverview(); return true; }
+  _lo = { focusSport: focusSport || null, timer: null, lastBody: '', lastHead: '', onKey: null, unbindDrag: null };
+  const lo = _lo;
+  const initialModel = buildLeagueOverviewModel({ focusSport: lo.focusSport });
+  const { unbind } = mountSheetShell({
+    wrapId: LO_WRAP_ID,
+    sheetId: 'league-overview-sheet',
+    sheetAttrs: ' role="dialog" aria-modal="true" aria-labelledby="league-overview-title"',
+    headerInnerHTML: `<div id="league-overview-head">${leagueOverviewHeaderHTML(initialModel, overviewDeps())}</div>`,
+    bodyId: 'league-overview-body',
+    closeId: 'league-overview-close',
+    onClose: () => closeLeagueOverview(),
+    onBackdrop: () => closeLeagueOverview(),
+    renderBody: () => paintLeagueOverview({ initial: true }),
+    drag: { getBlocked: isLeagueOverviewDismissGestureBlocked, onProgress: leagueOverviewDragProgress, onSettle: settleLeagueOverviewDrag },
+  });
+  lo.unbindDrag = unbind;
+  lo.lastHead = leagueOverviewHeaderHTML(initialModel, overviewDeps());
+  const wrap = document.getElementById(LO_WRAP_ID);
+  wrap?.addEventListener('click', onLeagueOverviewClick);
+  lo.onKey = (e) => { if (e.key === 'Escape' && !overviewChildSheetUp()) closeLeagueOverview(); };   // Esc belongs to the sheet on top (Add a sport) first
+  document.addEventListener('keydown', lo.onKey);
+  // The sheet repaints once a minute ONLY if its text changed ("Picks due in 4h 12m" would otherwise sit stale), never while the app is hidden.
+  lo.timer = setInterval(() => { if (typeof document !== 'undefined' && document.hidden) return; try { paintLeagueOverview(); } catch (e) { console.warn('[overview] repaint failed', e); } }, LO_REPAINT_MS);
+  if (typeof lo.timer?.unref === 'function') lo.timer.unref();
+  // No haptic on open (Principles: haptics for selection, success and matchups). Focus moves to the title so VoiceOver reads the sheet first; a focused sport scrolls into view.
+  try { wrap?.querySelector('#league-overview-title')?.focus?.({ preventScroll: true }); } catch { /* courtesy */ }
+  if (lo.focusSport) {
+    try { wrap?.querySelector(`.lo-card--focus`)?.scrollIntoView?.({ block: 'nearest' }); } catch { /* courtesy */ }
+  }
+  return true;
+}
+
+/** Close: the sheet leaves the way it arrived (300 ms on --ease-native, a Reduce Motion crossfade), then its node is removed. `immediate` skips the exit (a navigation under it). */
+function closeLeagueOverview({ immediate = false, restoreFocus = true } = {}) {
+  const lo = _lo;
+  if (!lo) return;
+  try { clearInterval(lo.timer); } catch { /* hygiene */ }
+  try { lo.unbindDrag?.(); } catch { /* hygiene */ }
+  try { document.removeEventListener('keydown', lo.onKey); } catch { /* hygiene */ }
+  _lo = null;
+  const wrap = document.getElementById(LO_WRAP_ID);
+  const done = () => { try { if (wrap && document.getElementById(LO_WRAP_ID) === wrap) wrap.remove(); } catch { /* already gone */ } };
+  if (wrap) {
+    if (immediate) done();
+    else playLeagueOverviewExit(wrap, done);
+  }
+  if (restoreFocus) { try { document.getElementById('league-pill')?.focus?.({ preventScroll: true }); } catch { /* courtesy */ } }
+}
+
+function playLeagueOverviewExit(wrap, done) {
+  const reduced = (() => { try { return prefersReducedMotion(); } catch { return false; } })();
+  let finished = false; let timer = null;
+  const sheetEl = wrap.querySelector?.('#league-overview-sheet');
+  const target = reduced ? wrap : sheetEl;
+  const onEnd = (e) => { if (!e || !e.target || e.target === target) finish(); };
+  function finish() {
+    if (finished) return;
+    finished = true;
+    try { target?.removeEventListener?.('transitionend', onEnd); } catch { /* hygiene */ }
+    if (timer !== null) { try { clearTimeout(timer); } catch { /* hygiene */ } }
+    done();
+  }
+  try { wrap.setAttribute('data-closing', reduced ? 'fade' : 'slide'); } catch { /* decoration */ }
+  target?.addEventListener?.('transitionend', onEnd);
+  if (typeof setTimeout === 'function') timer = setTimeout(finish, (reduced ? LO_EXIT_FADE_MS : LO_EXIT_SLIDE_MS) + 80);
+  if (!reduced) { try { wrap.style.setProperty('--lo-drag-y', '1'); } catch { /* decoration */ } }
+}
+export const _LO_EXIT_MS_FOR_TEST = { slide: LO_EXIT_SLIDE_MS + 80, fade: LO_EXIT_FADE_MS + 80 };
+
+let _loOwnSwipe = false;   // true only while the overview asks whether ITS OWN swipe-down may arm (the overview must not block itself)
+function isLeagueOverviewDismissGestureBlocked() { _loOwnSwipe = true; try { return _dismissBlockingSurfaceUp(); } finally { _loOwnSwipe = false; } }
+export const _isLeagueOverviewDismissGestureBlockedForTest = () => isLeagueOverviewDismissGestureBlocked();
+function leagueOverviewDragProgress(wrap, sheetEl, progress) {
+  sheetEl.setAttribute('data-dragging', 'true');
+  wrap.setAttribute('data-dragging', 'true');
+  wrap.style.setProperty('--lo-drag-y', String(progress));
+}
+function settleLeagueOverviewDrag(wrap, sheetEl, { dismissed, reducedMotion } = {}) {
+  sheetEl.removeAttribute('data-dragging');
+  wrap.removeAttribute('data-dragging');
+  if (!dismissed || !_lo) { wrap.style.setProperty('--lo-drag-y', '0'); return; }
+  finishSlideThenRemove({
+    listenEl: sheetEl,
+    apply: () => wrap.style.setProperty('--lo-drag-y', '1'),
+    reducedMotion: !!reducedMotion,
+    done: () => closeLeagueOverview({ immediate: true }),
+  });
+}
+
+/** FLIP the cards when a Join moves one from "Also in this league" to "Your sports" (--motion-large, --ease-native; none under Reduce Motion). Decoration: it can never stop the repaint. */
+function captureOverviewCardTops(wrap) {
+  const out = new Map();
+  try { wrap?.querySelectorAll?.('.lo-card[data-sport]')?.forEach?.((el) => out.set(el.getAttribute('data-sport'), el.getBoundingClientRect().top)); } catch { /* no layout here */ }
+  return out;
+}
+function playOverviewCardMovement(wrap, before) {
+  if (!before || !before.size) return 0;
+  try { if (prefersReducedMotion()) return 0; } catch { return 0; }
+  let moved = 0;
+  try {
+    wrap?.querySelectorAll?.('.lo-card[data-sport]')?.forEach?.((el) => {
+      const id = el.getAttribute('data-sport');
+      if (!before.has(id) || typeof el.animate !== 'function') return;
+      const delta = before.get(id) - el.getBoundingClientRect().top;
+      if (!Number.isFinite(delta) || Math.abs(delta) < 1) return;
+      moved += 1;
+      el.animate([{ transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' }], { duration: motionMs('--motion-large', 350), easing: cssToken('--ease-native', 'cubic-bezier(.32,.72,0,1)') });
+    });
+  } catch { /* never let a decorative animation break a repaint */ }
+  return moved;
+}
+
+/**
+ * JOIN (DI-531's client half, security C1). The ONE place a member joins a sport. The deadline is re-checked AT TAP TIME over the server-CONFIRMED status (`serverConfirmedWeekStatus`),
+ * not the state the sheet rendered with: a week that locked while the sheet was open fails closed (the card re-renders disabled with its stated caption, NOTHING is sent). The insert is
+ * the member's own `competition_members` row; the server stamps `joined_at` (0033's default, forced from 0044) and a late join counts from the NEXT week (playersForCompetition).
+ * A failure says what happened and offers a Retry; the loud sync banner is untouched and there is never a silent local fallback (AD-06).
+ */
+async function joinSportFromOverview(dbCode, { confirmedStatusOf = serverConfirmedWeekStatus, confirmWrite = confirmCompetitionMembersWrite } = {}) {
+  if (_joinState.joining.has(dbCode)) return false;
+  const entry = leagueSports().find((s) => s.dbCode === dbCode);
+  const me = viewerMemberId();
+  if (!entry || !me || isContentWithheld()) return false;
+  // C1a — the tap-time re-check
+  let closed = false;
+  try {
+    const week = getCurrentWeekFor(entry.competitionId);
+    closed = !!week && weekLockState({ week, games: getGames(week.weekId), confirmedStatus: confirmedStatusOf(week) }).closed;
+  } catch { closed = true; }   // an unreadable week fails CLOSED
+  if (closed) { _joinState.failed.delete(dbCode); repaintSportCardSurfaces(); return false; }
+  const wrap = document.getElementById(LO_WRAP_ID) || document.getElementById('league-page-overlay');
+  const before = captureOverviewCardTops(wrap);
+  _joinState.joining.add(dbCode); _joinState.failed.delete(dbCode);
+  repaintSportCardSurfaces();
+  let ok = false;
+  try {
+    addCompetitionMember({ competitionId: entry.competitionId, memberId: me, enrolledBy: 'self' });   // false = already in: still a success
+    ok = true;
+  } catch (e) { console.warn('[sport] the join was refused', e); ok = false; }
+  if (ok) {
+    // F2 / reviewer 10b (2026-10-08) — THE WRITE IS LOCAL UNTIL THE SERVER SAYS OTHERWISE. "You're in NFL picks" is a claim about the league, so it waits for the server's answer ('saved'). A refusal (the week
+    // locked at the server's clock, RLS) or no answer ('pending': offline, a retry held) puts the row back - the key then equals what the server holds and settles clean, the same put-back the SCRIBE review
+    // rows use - and the card shows its inline "Couldn't join" with a Retry. Never a success toast followed by the red banner.
+    let state = 'pending';
+    try { state = await confirmWrite(); } catch { state = 'pending'; }
+    if (state !== 'saved') {
+      try { removeCompetitionMember({ competitionId: entry.competitionId, memberId: me }); await confirmWrite(); }
+      catch (e) { console.warn('[sport] could not put the unconfirmed join back on this device', e); }
+      ok = false;
+    }
+  }
+  _joinState.joining.delete(dbCode);
+  if (!ok) { _joinState.failed.add(dbCode); haptic('error'); repaintSportCardSurfaces(); return false; }
+  haptic('success');
+  showToast(`You're in ${entry.code} picks.`, 'success');
+  repaintSportCardSurfaces();
+  playOverviewCardMovement(document.getElementById(LO_WRAP_ID) || document.getElementById('league-page-overlay'), before);
+  afterSportMembershipChanged();
+  return true;
+}
+/** Has the SERVER acknowledged this member's competition_members write? 'saved' | 'refused' | 'pending' (sb.flushAndConfirm, PF-467). Local mode has no server: the local write is the write. */
+async function confirmCompetitionMembersWrite() {
+  if (!isSupabaseDataMode()) return 'saved';
+  try { return await sb.flushAndConfirm('cfbp_competition_members'); } catch { return 'pending'; }
+}
+/** The Join tap: runs the join and handles its promise, so nothing is left floating - an unexpected throw is caught and shown as the same inline failure a refusal shows. */
+function runJoinTap(dbCode) {
+  (async () => {
+    try { await joinSportFromOverview(dbCode); }
+    catch (e) {
+      console.warn('[sport] the join failed unexpectedly', e);
+      _joinState.joining.delete(dbCode); _joinState.failed.add(dbCode);
+      try { repaintSportCardSurfaces(); } catch { /* the failure state is set; the next paint shows it */ }
+    }
+  })();
+}
+
+/** Every surface that renders the sport cards repaints from the one model: the overview sheet (if up) and the League Page's Sports region (if mounted). Changed-string only. */
+function repaintSportCardSurfaces() {
+  try { paintLeagueOverview(); } catch (e) { console.warn('[overview] repaint failed', e); }
+  try { repaintLeaguePageSports(); } catch (e) { console.warn('[league page] sports repaint failed', e); }
+}
+
+/** The League Page's Sports region (multi-sport): bind its card, chip and Join taps once per overlay element, and keep it fresh once a minute while the League view is up. */
+function bindLeaguePageSportCards(ov) {
+  if (!ov || ov._loBound) return;
+  ov._loBound = true;
+  ov.addEventListener('click', onLeagueOverviewClick);
+  ov._loSportsHTML = ov.querySelector?.('.lo-body--page') ? leaguePageSportsHTML(buildLeagueOverviewModel(), overviewDeps()) : '';
+  if (!_lpSportsTimer) {
+    _lpSportsTimer = setInterval(() => { if (typeof document !== 'undefined' && document.hidden) return; repaintSportCardSurfaces(); }, LO_REPAINT_MS);
+    if (typeof _lpSportsTimer?.unref === 'function') _lpSportsTimer.unref();
+  }
+}
+let _lpSportsTimer = null;
+function repaintLeaguePageSports() {
+  const ov = document.getElementById('league-page-overlay');
+  if (!ov) { if (_lpSportsTimer) { clearInterval(_lpSportsTimer); _lpSportsTimer = null; } return false; }
+  if (_leaguePageOverlayView !== 'league' || !isMultiSport()) return false;
+  const region = ov.querySelector('.lo-body--page');
+  if (!region) return false;
+  const html = leaguePageSportsHTML(buildLeagueOverviewModel(), overviewDeps());
+  if (html === ov._loSportsHTML) return false;
+  ov._loSportsHTML = html;
+  const top = ov.scrollTop || 0;
+  region.outerHTML = html;
+  ov.scrollTop = top;
+  return true;
+}
+
+/** The member now plays a different set of sports: the pill's dot and label, and the page underneath (the switcher appears at once) follow. */
+function afterSportMembershipChanged() {
+  try { renderLeaguePill(); } catch (e) { console.warn('[sport] the pill could not refresh', e); }
+  try { if (SPORT_TABS.includes(state.currentTab)) repaintSportTab(state.currentTab); } catch (e) { console.warn('[sport] the page could not refresh', e); }
+  // DESIGN_D1_E (DI-E1.4): Home is under the sheet the member just joined from - its "Want in?" nudge and the red card's Join button end at the next paint, with no reload.
+  try { if (state.currentTab === 'home') { renderHomePage(); } } catch (e) { console.warn('[sport] Home could not refresh', e); }
+}
+
+function onLeagueOverviewClick(e) {
+  // D1 third pass (found by a REAL tap, sportgeometrytest [8-7]): the ✕ was dead in a browser. mountSheetShell() binds #league-overview-close, then its renderBody() -
+  // paintLeagueOverview({ initial: true }) - rewrites #league-overview-head (lo.lastHead is still '' at that moment), which REPLACES the close button with an unbound copy; and the
+  // once-a-minute repaint replaces it again whenever the header's text changes. The close is therefore answered HERE, on the wrap that survives every repaint. (When the bound copy
+  // does survive, both run: closeLeagueOverview() is idempotent, the second call finds no sheet.) The close carries no data-lo-action, so it is asked only when no action matched.
+  const t = e.target?.closest?.('[data-lo-action]');
+  if (!t && e.target?.closest?.('#league-overview-close')) { closeLeagueOverview(); return; }
+  if (!t || t.disabled || t.getAttribute?.('aria-disabled') === 'true') return;
+  const action = t.getAttribute('data-lo-action');
+  const sport = t.getAttribute('data-sport') || '';
+  switch (action) {
+    case 'enter': {
+      haptic('selection');
+      const tab = t.getAttribute('data-tab');
+      enterSportContext(sport, { tab: SPORT_TABS.includes(tab) ? tab : 'dashboard', source: 'overview' });
+      break;
+    }
+    case 'live':
+      haptic('selection');
+      closeLeagueOverview({ immediate: true, restoreFocus: false });
+      navigateTo('home');
+      try { if (typeof _sportOps.openGameDay === 'function') _sportOps.openGameDay(); } catch (err) { console.warn('[overview] Game Day could not open', err); }
+      break;
+    case 'join': runJoinTap(sport); break;
+    case 'setup': {
+      haptic('medium');
+      closeLeagueOverview({ immediate: true, restoreFocus: false });
+      const entry = leagueSports().find((s) => s.dbCode === sport);
+      if (entry && entry.competition?.isDefault === true) openWeekWizardSheet({ forceNew: true });
+      else if (typeof _sportOps.setupWeek === 'function') _sportOps.setupWeek(sport);
+      break;
+    }
+    case 'league-page': haptic('selection'); closeLeagueOverview({ immediate: true, restoreFocus: false }); showLeaguePageOverlay(); break;
+    case 'switch-league': haptic('selection'); closeLeagueOverview({ immediate: true, restoreFocus: false }); showLeagueSelectorSheet(); break;
+    case 'comm-add-sport': haptic('selection'); if (typeof _sportOps.addSport === 'function') _sportOps.addSport({ source: 'overview' }); break;
+    case 'comm-manage': haptic('selection'); closeLeagueOverview({ immediate: true, restoreFocus: false }); if (typeof _sportOps.manageSport === 'function') _sportOps.manageSport(sport); break;
+    case 'comm-entries': haptic('selection'); closeLeagueOverview({ immediate: true, restoreFocus: false }); if (typeof _sportOps.sportEntries === 'function') _sportOps.sportEntries(); break;
+    default: break;
+  }
+}
+
+export const _openLeagueOverviewForTest = openLeagueOverview;
+export const _closeLeagueOverviewForTest = closeLeagueOverview;
+export const _leagueOverviewStateForTest = () => (_lo ? { focusSport: _lo.focusSport, timer: _lo.timer !== null } : null);
+export const _joinStateForTest = _joinState;
+export const _buildLeagueOverviewModelForTest = buildLeagueOverviewModel;
+export const _computeSportCardsForTest = computeSportCards;
+export const _sportDueItemsForTest = sportDueItems;
+export const _joinSportFromOverviewForTest = joinSportFromOverview;
+export const _paintLeagueOverviewForTest = paintLeagueOverview;
+export const _leagueLiveGameCountForTest = leagueLiveGameCount;
+
+// ── entering a sport (DI-523) ────────────────────────────────────────────────────────────────────────────────
+/**
+ * THE ONE way any surface changes the sport (overview cards and chips, feed cards, pushes, links, Game Day's Dashboard button). It validates against THIS league's non-archived sports (an
+ * unknown, archived or forged code changes nothing: a toast and Home), then against what the viewer PLAYS (a valid but unjoined sport opens the league overview at that sport's Join and
+ * changes nothing else, DI-555), then sets the pointer and navigates. `scope: 'all'` (Dashboard only) selects All sports without moving the pointer. A `weekId` that is not a week of that
+ * sport is ignored (never honoured across sports). With ONE sport it is just the navigation.
+ * @returns {boolean} whether the app landed on the sport's tab
+ */
+export function enterSportContext(dbCode, { tab = 'dashboard', weekId = null, gameId = null, scope = null, source = '' } = {}) {
+  void gameId; void source;   // the game and the source ride along for the callers that deep-link or log; the destination tabs read neither today
+  const code = typeof dbCode === 'string' ? dbCode : '';
+  const sport = leagueSports().find((s) => s.dbCode === code);
+  if (!sport) {
+    showToast("That sport isn't active in this league.", 'warning');
+    navigateTo('home');
+    return false;
+  }
+  const goTab = SPORT_TABS.includes(tab) ? tab : 'dashboard';
+  const multi = isMultiSport();
+  if (multi && !playedSports().some((s) => s.dbCode === code)) {
+    openLeagueOverview({ focusSport: code });   // the Join lives here and nowhere else
+    return false;
+  }
+  if (multi) {
+    if (goTab === 'dashboard' && scope === DASHBOARD_ALL && playedSports().length >= 2) setDashboardScope(DASHBOARD_ALL);
+    else { setActiveSportKey(code); if (goTab === 'dashboard') setDashboardScope(null); }
+  }
+  if (weekId && typeof weekId === 'string') {
+    const w = getWeek(weekId);
+    const comp = w ? competitionForWeek(w) : null;
+    const belongs = !!w && (multi ? (comp ? comp.sport === code : code === (getContextCompetition()?.sport || code)) : true);
+    if (belongs) state.viewingWeekId = (weekId === getContextWeek()?.weekId) ? null : weekId;
+  }
+  closeLeagueOverview({ immediate: true, restoreFocus: false });
+  if (document.getElementById('league-page-overlay')) hideLeaguePageOverlay();
+  navigateTo(goTab);
+  return true;
+}
+
+// ── the switcher (DI-521 rev 3 / DI-555) ─────────────────────────────────────────────────────────────────────
+const _sportScroll = new Map();     // `${tab}|${sportValue}` -> window.scrollY; in memory only, cleared by onContextSwitch (DI-538)
+
+function repaintSportTab(tab) {
+  ({ picks: renderPicksPage, dashboard: renderDashboard, leaderboard: renderLeaderboard })[tab]?.();
+}
+
+/**
+ * The chrome around a sport tab that another sport's change can move WITHOUT changing the tab's own content (the Realtime other-sport gate, DI-527 #4): the header (its week badge and meta), the
+ * league pill and its dot, and the switcher's dots. Nothing in the tab body is rebuilt, so a scroll position, a half-made pick and a swipe in progress are left alone.
+ */
+function refreshSportChrome() {
+  try { refreshHeader(); } catch (e) { console.warn('[sport] the header could not refresh', e); }
+  try { if (isMultiSport()) renderLeaguePill(); } catch (e) { console.warn('[sport] the pill could not refresh', e); }
+  try {
+    const tab = state.currentTab;
+    if (SPORT_TABS.includes(tab)) paintSportSwitcher(document.getElementById(`page-${tab}`), tab);
+  } catch (e) { console.warn('[sport] the switcher could not refresh', e); }
+}
+
+/** Paint the switcher into a freshly painted sport page. Absent unless the member plays two or more sports (DI-555); idempotent. */
+function paintSportSwitcher(c, tab) {
+  if (!c) return;
+  for (const child of Array.from(c.children || [])) if (child.classList?.contains('sport-seg-host')) child.remove();
+  if (!isMultiSport() || isContentWithheld()) return;
+  const sports = playedSports();
+  if (sports.length < 2) return;
+  const due = sportDueItems();
+  const dueLabels = {};
+  for (const d of due) dueLabels[d.dbCode] = d.left ? `picks due in ${d.left}` : 'picks due';
+  const html = sportSwitcherHTML({
+    sports: sports.map((s) => ({ dbCode: s.dbCode, code: s.code, label: s.label })),
+    selected: tab === 'dashboard' ? getDashboardScope() : getActiveSportKey(),
+    dueCodes: due.map((d) => d.dbCode), dueLabels, allSports: tab === 'dashboard', escHtml,
+  });
+  if (!html) return;
+  const header = Array.from(c.children || []).find((child) => child.classList?.contains('section-header'));
+  if (header) header.insertAdjacentHTML('afterend', html); else c.insertAdjacentHTML('afterbegin', html);
+  bindSportSwitcher(c, tab);
+}
+
+function bindSportSwitcher(c, tab) {
+  const group = Array.from(c.children || []).find((child) => child.classList?.contains('sport-seg-host'))?.querySelector?.('.sport-seg');
+  if (!group) return;
+  const buttons = Array.from(group.querySelectorAll('.sport-seg-btn'));
+  buttons.forEach((btn, i) => {
+    btn.addEventListener('click', () => selectSportSegment(tab, btn.getAttribute('data-sport'), { fromIndex: buttons.findIndex((b) => b.getAttribute('aria-checked') === 'true') }));
+    btn.addEventListener('keydown', (e) => {
+      const next = nextSegmentIndex(buttons.length, i, e.key);
+      if (next === i || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) return;
+      e.preventDefault?.();
+      selectSportSegment(tab, buttons[next].getAttribute('data-sport'), { fromIndex: i, refocus: true });
+    });
+  });
+}
+
+/** A tap (or arrow key) on a segment: move the pointer (or the Dashboard's scope), swap the page's content, remember the scroll of the page you left, restore the one you arrive at. */
+function selectSportSegment(tab, value, { fromIndex = 0, refocus = false } = {}) {
+  if (!SPORT_TABS.includes(tab) || typeof value !== 'string') return false;
+  const current = tab === 'dashboard' ? getDashboardScope() : getActiveSportKey();
+  if (value === current) return false;
+  if (value === DASHBOARD_ALL) {
+    if (tab !== 'dashboard' || !setDashboardScope(DASHBOARD_ALL)) return false;
+  } else {
+    if (!setActiveSportKey(value)) return false;
+    if (tab === 'dashboard') setDashboardScope(null);
+  }
+  haptic('selection');
+  _sportScroll.set(`${tab}|${current}`, Number(window.scrollY) || 0);
+  repaintSportTab(tab);
+  try { renderLeaguePill(); } catch (e) { console.warn('[sport] the pill could not refresh', e); }
+  try { renderHeaderWeek(); } catch (e) { console.warn('[sport] the header week could not refresh', e); }   // the header is about the sport on screen: it follows the switch at once
+  try { armLockFlipForPage(); } catch { /* the page's own paint already armed it */ }
+  const y = _sportScroll.get(`${tab}|${value}`) || 0;
+  scrollWindow(window, { top: y, left: 0, behavior: 'instant' }, 'scrollTo');
+  animateSportSwitch(tab, fromIndex, refocus);
+  return true;
+}
+
+/** The thumb slides from the segment you left (--motion-fast, --ease-native) and the page content fades in (150 ms); Reduce Motion: neither. Decoration only. */
+function animateSportSwitch(tab, fromIndex, refocus) {
+  try {
+    const page = document.getElementById(tab === 'leaderboard' ? 'page-leaderboard' : `page-${tab}`);
+    const group = page?.querySelector?.('.sport-seg');
+    if (!group) return;
+    const sel = group.querySelector('.sport-seg-btn[aria-checked="true"]');
+    if (refocus) sel?.focus?.({ preventScroll: true });
+    if (prefersReducedMotion()) return;
+    const thumb = group.querySelector('.sport-seg-thumb');
+    const toIndex = Number(String(group.getAttribute('style') || '').match(/--seg-i:(\d+)/)?.[1]);
+    if (thumb && typeof thumb.animate === 'function' && Number.isFinite(toIndex) && toIndex !== fromIndex) {
+      thumb.animate([{ transform: `translateX(calc(${fromIndex} * (100% + 2px)))` }, { transform: `translateX(calc(${toIndex} * (100% + 2px)))` }], { duration: motionMs('--motion-fast', 150), easing: cssToken('--ease-native', 'cubic-bezier(.32,.72,0,1)') });
+    }
+    page.classList.remove('sport-swap-in');
+    void page.offsetWidth;
+    page.classList.add('sport-swap-in');
+  } catch { /* decoration never blocks a switch */ }
+}
+
+export const _selectSportSegmentForTest = selectSportSegment;
+export const _paintSportSwitcherForTest = paintSportSwitcher;
+
+// ── DI-538 — nothing cached survives a switch of account, league or sport ─────────────────────────────────────
+/**
+ * ONE hook, called by the identity chokepoint (applyIdentityDeltaIfChanged): forget every piece of sport-session state the sport context added — the overview and its timer, the per-sport
+ * viewed weeks, the scroll memory and the other accounts' device-stored pointers. (The draft buckets are cleared by clearPickDraft() in the same chokepoint; the device-local pointer
+ * is keyed by account and league and survives only for the account that is here now.)
+ */
+function onContextSwitch({ keepAccountId = null } = {}) {
+  clearPollHealth(_sportPollHealth); _stallPainted.clear(); _stallVisit = null;   // D1 / DI-557: poll health is this device's observation for ONE account and league; the next one starts with none
+  resetLensSport();   // D1 / DI-538 (S14): the commissioner's LOCAL Comm sport lens is per (account, league); an account or league change forgets it, so the next one starts on the league's own default sport. The ONE call (merge 2026-10-08)
+  try { if (_lo) closeLeagueOverview({ immediate: true, restoreFocus: false }); } catch (e) { console.warn('[sport] the overview could not close', e); }
+  for (const k of Object.keys(_viewingBySport)) delete _viewingBySport[k];
+  _sportScroll.clear();
+  _joinState.joining.clear(); _joinState.failed.clear();
+  try { clearSportContextExcept(keepAccountId); } catch (e) { console.warn('[sport] the stored pointer could not be pruned', e); }
+}
+export const _onContextSwitchForTest = onContextSwitch;
+export const _sportScrollForTest = _sportScroll;
+export const _viewingBySportForTest = _viewingBySport;
+
+/**
+ * D1 DI-527 #4 - does this Realtime row belong to a sport OTHER than the one on screen? True only when ALL hold: the league has several sports, the current tab is sport-aware (Picks,
+ * Dashboard, Standings), the row is about a week (a `weeks` row's own id, or `week_id` on games / picks / weekly_results), that week resolves to a competition, and that competition is
+ * not the context sport (the Dashboard's All sports shows every played sport, so nothing is "other" there). Anything else answers false, which means "repaint as before": an unknown
+ * week, a table that is not about a week, a league-wide tab. A wrong `false` costs one repaint; a wrong `true` would hide a visible change, so every doubt is a repaint.
+ */
+function realtimeEventForOtherSport(table, payload) {
+  try {
+    if (!isMultiSport() || !SPORT_TABS.includes(state.currentTab)) return false;
+    if (state.currentTab === 'dashboard' && getDashboardScope() === DASHBOARD_ALL) return false;
+    const row = payload && (payload.new || payload.old);
+    if (!row || typeof row !== 'object') return false;
+    const weekId = table === 'weeks' ? row.id : (table === 'games' || table === 'picks' || table === 'weekly_results') ? row.week_id : null;
+    if (typeof weekId !== 'string' || !weekId) return false;
+    const week = getWeek(weekId);
+    if (!week) return false;
+    const comp = competitionForWeek(week);
+    const here = getContextCompetition();
+    return !!comp && !!here && comp.id !== here.id;
+  } catch { return false; }
+}
+export const _realtimeEventForOtherSportForTest = realtimeEventForOtherSport;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DI-314/DI-315 — LEAGUE PAGE + LEAGUE STANDINGS (pushed overlay)
@@ -31677,7 +37238,7 @@ function _setLeaguesHomeOverlayInert(on) {
  * DI-D3's player profile both call, CONVENTIONS #21) supplies the rows.
  */
 function leaguePageVisibleResultWeeks() {
-  const allWeeksRaw = getWeeks();
+  const allWeeksRaw = getContextWeeks();   // D1 DI-526: the League Page's Standings opens in the ACTIVE sport, so its week list is that sport's (one sport: every week)
   const visibleWeekIds = new Set(
     allWeeksRaw.filter(isWeekShownInStandings).map(w => w.weekId)); // SB-19 — the one standings week-scope rule
   const resultWeekIds = new Set(
@@ -31747,11 +37308,17 @@ function renderLeaguePageOverlayBody({ transition = null } = {}) {
         sportDefault: active?.sportDefault || undefined,
         weekSports: getWeeks().map(w => w?.sport).filter(Boolean),
       }),
+      // D1 DI-522 — with several sports the Sports region is the overview's own cards (null for a one-sport league: today's markup, byte for byte).
+      sportsHTML: isMultiSport() ? leaguePageSportsHTML(buildLeagueOverviewModel(), overviewDeps()) : null,
       // N1 (DI-430 frame 6) — a league with NO weeks states what happened, why and what next; the commissioner gets "Set up first week", a player gets one line.
       // Only when content is being served: an un-hydrated mirror reads as no weeks, and that must never be painted as "no picks to make yet".
       slateEmpty: (!isContentWithheld() && getWeeks().length === 0) ? (getSession()?.isAdmin ? 'commissioner' : 'player') : null,
+      // D1 (DI-532): the commissioner's "+ Add a sport" is a REAL entry while the platform offers a sport this league does not run (else the card is absent; never a dead stub).
+      addSportOpen: getSession()?.isAdmin ? addSportAvailable() : null,
       escHtml, icon },
   );
+  ov.querySelector('[data-action="add-sport"]')?.addEventListener('click', () => { haptic('selection'); openAddSportSheet({ onDone: () => { try { showLeaguePageOverlay(); } catch { /* the page repaints on next open */ } } }); });
+  if (isMultiSport()) bindLeaguePageSportCards(ov);
   ov.querySelector('[data-action="league-page-back"]')?.addEventListener('click', hideLeaguePageOverlay);
   // N1 (DI-430 frame 6): "Set up first week" opens the T-18 wizard cold (the League Page steps aside first: the wizard's "Edit slate in Games tab" navigates to Comm).
   ov.querySelector('[data-action="league-setup-first-week"]')?.addEventListener('click', () => {
@@ -31796,13 +37363,22 @@ function renderLeaguePageOverlayBody({ transition = null } = {}) {
 // self-block on touchstart, since each of these overlays' own presence is
 // one of THAT function's suspending conditions. A short, occasionally-
 // duplicated list, not a cycle.
-function _dismissBlockingSurfaceUp({ excludeWizard = false, excludeLeaguesHome = false, excludeCreate = false, excludeDelete = false, excludeLeave = false } = {}) {
+function _dismissBlockingSurfaceUp({ excludeWizard = false, excludeLeaguesHome = false, excludeCreate = false, excludeDelete = false, excludeLeave = false, excludeLateEntry = false, excludePushed = false, excludeSpOverlay = false, excludeSpSheet = false, excludeSort = false, excludeAdminAi = false, excludeShare = false, excludeSwap = false } = {}) {
   if (document.getElementById('site-gate-overlay')) return true;
   if (document.querySelector('.modal-overlay')) return true;
   if (document.getElementById('chat-sheet-wrap')) return true;
   if (!excludeWizard && document.getElementById('week-wizard-sheet-wrap')) return true;
+  // PF-1 / Amendment 1 (2026-10-01) — the Late Entry sheet ("Re-open Picks" after the lock instant) is a SIXTH body-appended sheet of the same shape, with its own "OTHER surface" carve-out.
+  if (!excludeLateEntry && document.getElementById('late-entry-sheet-wrap')) return true;
+  // D1 Lane B / DI-607 (2026-10-08) — the Dashboard's Sort sheet is a SEVENTH body-appended sheet of the same shape, with its own "OTHER surface" carve-out (excludeSort) so its own swipe-down can arm.
+  if (!excludeSort && document.getElementById('sort-sheet-wrap')) return true;
+  // D1 Lane B / DI-597 (2026-10-08) — the Share to chat sheet: one more body-appended sheet of the same shape, with its own "OTHER surface" carve-out (excludeShare) so its swipe-down can arm.
+  if (!excludeShare && document.getElementById('share-sheet-wrap')) return true;
   // N1 (DI-430, 2026-09-30) — the New League sheet is a FOURTH surface on this list, with its own "OTHER surface" carve-out (excludeCreate), same shape as the wizard's.
   if (!excludeCreate && document.getElementById('league-create-sheet-wrap')) return true;
+  // D1 (v0.30.0, DI-554) — the League Overview sheet is an EIGHTH body-appended sheet of the same shape, with its own "OTHER surface" carve-out (_loOwnSwipe, a module flag rather than a parameter so this signature stays the one the other branches also extend) so its own swipe-down can arm.
+  // ...and it does not block a sheet opened ABOVE it (Add a sport, OVERVIEW_CHILD_SHEET_IDS): that sheet's own swipe-down asks this same question, with the overview underneath.
+  if (!_loOwnSwipe && document.getElementById('league-overview-sheet-wrap') && !overviewChildSheetUp()) return true;
   // UN-389 / DI-446 (2026-09-30) — the Delete Account sheet is a FIFTH surface on this list (it was a `.modal-overlay`, which the `.modal-overlay` line above already counted; now that it
   // is the shared sheet shell it needs its own entry), with the same "OTHER surface" carve-out (excludeDelete) so its own swipe-down can arm.
   if (!excludeDelete && document.getElementById('pwacct-delete-overlay')) return true;
@@ -31815,9 +37391,24 @@ function _dismissBlockingSurfaceUp({ excludeWizard = false, excludeLeaguesHome =
   // #leagues-home-overlay, mirroring showLeaguePageOverlay()'s own). Same
   // "OTHER surface" carve-out shape as excludeWizard, just above.
   if (!excludeLeaguesHome && document.getElementById('leagues-home-overlay')) return true;
+  // D1 Lane C (DI-644) — the SCRIBE profile pane is a FULL-SCREEN push with its own native swipe-back, and its sheets are the shared sheet shell: two more surfaces on this list,
+  // each with its own "OTHER surface" carve-out (excludeSpOverlay / excludeSpSheet) so its own gesture can arm.
+  if (!excludeSpOverlay && document.getElementById('scribe-profile-overlay')) return true;
+  if (!excludeSpSheet && document.getElementById('scribe-profile-sheet-wrap')) return true;
+  // D1 Lane C (DI-634 / DI-637) — the Admin routing sheet and the status-row sheet are the shared sheet shell too: one more surface on this list, with its own "OTHER surface" carve-out.
+  if (!excludeAdminAi && document.getElementById('admin-ai-sheet-wrap')) return true;
+  // D1 (W-68, DI-W68.3) - the swap picker is the shared sheet shell too: one more surface on this list, with its own "OTHER surface" carve-out (excludeSwap) so its own swipe-down can arm.
+  if (!excludeSwap && document.getElementById('swap-picker-sheet-wrap')) return true;
   if (document.querySelector('#control-center[data-open="true"]')) return true;
+  // D1 Lane B / DI-571 (2026-10-07) — the pushed-screen shell (js/pushed-screen.js) is the SIXTH full-screen surface on this list, with its own "OTHER surface" carve-out (excludePushed) so its swipe-back can arm.
+  if (!excludePushed && document.getElementById('pushed-root')) return true;
+  // D1 Lane B / DI-595 - the rival picker sheet (the shared sheet shell) is one more surface on this list, with its own "OTHER surface" carve-out (_rivalOwnSwipe, a module flag so this signature stays the one the other branches extend).
+  if (!_rivalOwnSwipe && document.getElementById('rival-picker-sheet-wrap')) return true;
+  // D1 Lane C (DI-672): the News "Also from" sheet, with its own "OTHER surface" carve-out (a module flag, so this signature stays the one other branches extend).
+  if (!_newsAlsoOwnSwipe && document.getElementById('news-also-sheet-wrap')) return true;
   return false;
 }
+export const _dismissBlockingSurfaceUpForTest = _dismissBlockingSurfaceUp;
 /** The League Page's swipe-back: blocked by any other surface on top,
  *  including the week wizard's sheet and the Leagues Home overlay. */
 function isDismissGestureBlockedByOtherSurface() {
@@ -31978,6 +37569,7 @@ function hideLeaguePageOverlay() {
   _unbindLeaguePageSwipeBack?.();
   _unbindLeaguePageSwipeBack = null;
   document.getElementById('league-page-overlay')?.remove();
+  if (_lpSportsTimer) { clearInterval(_lpSportsTimer); _lpSportsTimer = null; }   // D1: the Sports region's once-a-minute repaint goes with the overlay
   _setLeaguePageOverlayInert(false);
   _leaguePageOverlayView = 'league';
   lsTeardown();   // SP-53 — League Settings' page state, its action-sheet layer and its hand-off sheet go with the overlay (a sweep by the identity chokepoint lands here too)
@@ -32018,12 +37610,33 @@ function lsIsCommissioner() { const m = lsActiveMembership(); return !!m && m.ro
 const lsPageLive = (st) => !!st && _ls === st && _leaguePageOverlayView === 'settings' && !!lsById('ls-title');
 
 // ── Q-W (a) and the facts about the leaver's own picks (their OWN picks only: the blind rule) ───────────────────────────────────────────────────────────────────────────────────────────
+/**
+ * PF-1 / DI-495(b) (reviewer BLOCK #1 N8, 2026-10-01) — THE WEEKS LIST THE LEAVE ROW READS, with each week's LOCK INSTANT in `picksLockAt`. From migration 0043 `leave_league` sees a week as in
+ * progress from the week's lock instant (`pick_window_open()` is false from it), not only from a stored `picks_lock_at`; the pure predicate (`isWeekInProgressForLeave`) is UNCHANGED and reads
+ * `picksLockAt`, so this is the one place that hands it the instant the server uses: `computeEffectiveLockAt` (picks_lock_at when set, else first kickoff minus the offset; ISO, or null when the
+ * week has no dated game). A DEMO week is exempt from the derived instant on the server (its own explicit clause still applies), so it passes with its stored `picksLockAt` untouched.
+ * lockinstanttest [4c] pins the model; leaguesettingsuitest [4e] and [6j2] pin this call site.
+ */
+function lsWeeksForLeave() {
+  return getWeeks().map((w) => {
+    if (!w || w.dataSourceMode === DATA_SOURCE_MODE.DEMO) return w;
+    let at = null;
+    try { const d = computeEffectiveLockAt(w, getGames(w.weekId)); at = d && !Number.isNaN(d.getTime()) ? d.toISOString() : null; } catch { at = null; }
+    return { ...w, picksLockAt: at };
+  });
+}
 function lsLeaveBlockedWeekIds() {
   const me = getSession().playerId;   // getSession() never returns null; this exact shape is the blind-rule scan's ([64]) "demonstrably the viewer's own" read
   if (!me) return [];
-  try { return LSV.leaveBlockedWeekIds({ weeks: getWeeks(), picks: getPicks(null, me), games: getGames(), memberId: me, now: new Date() }); } catch { return []; }   // games: the G-6 bound's first-kickoff anchor (MC-1)
+  try { return LSV.leaveBlockedWeekIds({ weeks: lsWeeksForLeave(), picks: getPicks(null, me), games: getGames(), memberId: me, now: new Date() }); } catch { return []; }   // weeks carry each week's LOCK INSTANT (PF-1 N8); games: the G-6 bound's first-kickoff anchor (MC-1)
 }
 const lsBlockedWeekCount = () => Math.max(lsLeaveBlockedWeekIds().length, _ls ? _ls.blockedOverride : 0);
+/** DI-542 (W-21): how many sports the viewer is entered in, for the Leave reason's WORDING only (the server decides who may leave). Their own picks only (the blind rule). */
+function lsEnteredSportCount() {
+  const me = getSession().playerId;   // the same demonstrably-the-viewer's-own read as lsLeaveBlockedWeekIds() above
+  if (!me) return 0;
+  try { return LS.enteredSportCount({ weeks: getWeeks(), picks: getPicks(null, me), memberId: me, sportOf: (w) => competitionForWeek(w)?.sport }); } catch { return 0; }   // the sport of a week is its COMPETITION's (a week carries no `.sport` of its own)
+}
 /** True when the leaver has picks in a week that is still OPEN (leaving before lock), so "Picks you've made for the current week won't be scored." is true. A FACT, never a pick. */
 function lsOpenWeekPicks() {
   const me = getSession().playerId;
@@ -32031,7 +37644,7 @@ function lsOpenWeekPicks() {
   try {
     const now = new Date();
     const own = new Set(getPicks(null, me).map((p) => p.weekId));
-    return getWeeks().some((w) => w && own.has(w.weekId) && w.status === 'open' && !LS.isWeekInProgressForLeave(w, now));
+    return lsWeeksForLeave().some((w) => w && own.has(w.weekId) && w.status === 'open' && !LS.isWeekInProgressForLeave(w, now));
   } catch { return false; }
 }
 /** The leaver's unsettled obligations: the current season (demo weeks already excluded) plus, for the pilot, the 2K25 carryover (real debts). A COUNT the sheet states; nothing is altered. */
@@ -32069,7 +37682,7 @@ function lsPaintSettingsView(ov) {
   const st = { seq: ++_lsPageSeq, leagueId: m.leagueId, name: m.leagueName || '', draft: m.leagueName || '', phase: 'idle', paused, accept, leavePhase: 'idle', blockedOverride: 0, savedTimer: null };
   _ls = st;
   ov.innerHTML = LSV.settingsPageHTML({
-    leagueName: st.name, isCommissioner: isComm, paused, pausedText: PAUSED_LEAGUE_BANNER_TEXT, sportsLabel: lsSportsLabel(m), accepting: accept, blockedWeeks: lsBlockedWeekCount(),
+    leagueName: st.name, isCommissioner: isComm, paused, pausedText: PAUSED_LEAGUE_BANNER_TEXT, sportsLabel: lsSportsLabel(m), accepting: accept, blockedWeeks: lsBlockedWeekCount(), enteredSports: lsEnteredSportCount(),
   }, lsDeps());
   const input = ov.querySelector('#ls-name-input');
   if (input) {
@@ -32351,7 +37964,7 @@ function lsShowActionSheet(kind, html, ctx = {}) {
   el.addEventListener('click', lsOnLayerClick);
   lsSyncKeys();
   lsSyncInert();
-  haptic('warning');   // a confirmation: the warning notification as the sheet appears
+  if (ctx.noHaptic !== true) haptic('warning');   // a confirmation: the warning notification as the sheet appears (D1 W-68: a CHOICE - add or swap, the More list - is not a warning, so it passes noHaptic)
   try { el.querySelector('.lc-as-bold')?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ }
 }
 function lsHideActionSheet({ restoreFocus = true } = {}) {
@@ -32378,7 +37991,9 @@ function lsOnLayerClick(e) {
     case 'confirm-leave': lsRunLeave({ archive: false }); break;
     case 'confirm-leave-archive': lsRunLeave({ archive: true }); break;
     case 'confirm-waive': lsConfirmWaive(); break;
-    default: break;
+    case 'confirm-deny': obConfirmDeny(); break;   // R-19 follow-up (0046): the Deny sheet, current season and 2K25
+    case 'confirm-archive-sport': lsConfirmArchiveSport(); break;   // D1 (S7): Comm -> Week -> Sport options -> Archive
+    default: slateSheetAction(el.getAttribute('data-ls-action'), p); break;   // D1 (W-68 / W-69): the add-or-swap choice, the remove confirm, the More list (every `slate-*` action)
   }
 }
 
@@ -32390,7 +38005,7 @@ function lsPatchLeave() {
   const had = document.activeElement && document.activeElement.id === 'ls-leave-row';
   card.innerHTML = LSV.leaveRowHTML({ phase: st.leavePhase, blockedWeeks: lsBlockedWeekCount() }, { escHtml });
   const foot = lsById('ls-leave-foot');
-  if (foot) foot.innerHTML = LSV.leaveFooterHTML({ leagueName: st.name, isCommissioner: lsIsCommissioner(), blockedWeeks: lsBlockedWeekCount() }, { escHtml });
+  if (foot) foot.innerHTML = LSV.leaveFooterHTML({ leagueName: st.name, isCommissioner: lsIsCommissioner(), blockedWeeks: lsBlockedWeekCount(), enteredSports: lsEnteredSportCount() }, { escHtml });
   if (had) { try { lsById('ls-leave-row')?.focus?.({ preventScroll: true }); } catch { /* courtesy */ } }
 }
 
@@ -32454,7 +38069,7 @@ async function lsRunLeave({ archive = false } = {}) {
   // The zero-league landing must not auto-link the account straight back into the seat it just left (the dispute flow's rule): latch the once-per-page attempt BEFORE the call.
   if (getCachedMemberships().length <= 1) _autoLinkAttempted = true;
   const outcome = await leaveLeague(leagueId, { confirmArchive: archive === true, role });
-  const copy = LS.leaveOutcomeCopy(outcome, { leagueName, weekCount: Math.max(1, lsLeaveBlockedWeekIds().length) });
+  const copy = LS.leaveOutcomeCopy(outcome, { leagueName, weekCount: Math.max(1, lsLeaveBlockedWeekIds().length), sports: lsEnteredSportCount() });
   if (outcome.status === 'done') {
     haptic('success');
     showToast(copy.text, 'success');
@@ -32764,6 +38379,13 @@ function lsApplyWaive(obId, waiveKind) {
 export const _leagueSettingsStateForTest = () => _ls;
 export const _lsAcceptStoreForTest = (leagueId, value) => lsAcceptStore(leagueId, value);
 export const _lsOnWaiveClickForTest = (btn) => lsOnWaiveClick(btn);
+// 0046 (R-19 follow-up) — the Deny sheet and a player's 2K25 path, driven by leaguesettingsuitest [7]. Production never calls these.
+export const _handleObligationActionForTest = (obId, action, opts) => handleObligationAction(obId, action, opts);
+export const _handleOb2025ActionForTest = (obligationId, action, opts) => handleOb2025Action(obligationId, action, opts);
+export const _renderSeason2025OutstandingForTest = () => renderSeason2025OutstandingSection();
+export const _isSyncFailureBannerUpForTest = () => isSyncFailureBannerUp();
+export const _bindSeason2025SectionsForTest = (c) => bindSeason2025Sections(c);
+export const _setOb2025SettleForTest = (fn) => { _ob2025Settle = typeof fn === 'function' ? fn : (args) => sb.settleOb2025(args); };
 export const _lsLeaveBlockedWeekIdsForTest = () => lsLeaveBlockedWeekIds();
 export const _lsLandAfterLeaveForTest = () => lsLandAfterLeave();
 export const _lsPatchInviteLineForTest = () => lsPatchInviteLine();
@@ -32803,7 +38425,7 @@ function renderLeaguesHomeOverlayBody() {
       // nav-bar heading of its own.
       showTitle: false,
       // N1 (DI-430/433) — same two inputs as the boot-time selector above: one card list, one gate.
-      createOpen: getCachedLeagueCreationOpen(),
+      createOpen: leagueCreationAvailable(),
       notice: leaguesHomeNoticeHTML(),
     })}</div>`;
   ov.querySelector('[data-action="leagues-home-back"]')?.addEventListener('click', hideLeaguesHomeOverlay);
@@ -32929,6 +38551,9 @@ function weekWizardApi() {
     clearAvailableGames, getAvailableGames, getGames, saveGame, createGame,
     claimedAlmaMaters, saveFetchProof, isSuggestionRejected, showToast,
     nativeHapticImpact, isNativeShell,
+    profileForWeek, suggestSlateFor,        // D1 (DI-533 #3/#4): a non-college week fetches its own scoreboard and builds its slate by kickoff
+    slateTargetFor: (week) => slateTargetOf(profileForWeek(week)),   // D1 (W-68, DI-W68.6): the bulk add stops at the sport's slate size
+    sportLabelFor: (week) => commSportCodeFor(week),      // D1 (DI-533): messages name the sport in a multi-sport league ('NFL Week 6 is open'), nothing in a one-sport league
     // Coordinator fix (2026-09-27) — `getWeek` re-reads the mirror's CURRENT
     // row rather than a caller's possibly-stale `week` closure (RG-256
     // class); `confirmFinalizeTiebreaker`/`confirmFinalizeExtraPoint`/
@@ -32939,13 +38564,141 @@ function weekWizardApi() {
     // exact function today's three separate cards already call (no new
     // math anywhere — see week-wizard.js's own DI-359 header).
     calculateAtsWinner, calculateAlmaMaterTotal, almaMatersForAutoCalc,
+    effectiveTiebreakerActual: effectiveTiebreakerActualForWeek,   // D1 / DI-516: Step 2's suggestion reads the live module (the NFL's designated game included)
     gradeWeekExtraPoint, weekHasUnresolvedTie, finalizeWeek,
     // SP-54 / DI-469 — Step 4's inline warning prefers the dynamic notice (it names the stage the preview actually reaches); week-wizard.js keeps
     // its legacy body for a caller that supplies no such dependency, and keeps ZERO imports.
     finalizeTieNotice,
+    // FB-027 / DI-519 — did the finalize reach the server? (finalizeWeekFromWizard()). Read through a wrapper so the test seam can answer for it.
+    confirmSaved: (week) => finalizeConfirmSaved(week),
   });
   return _weekWizardApi;
 }
+
+/**
+ * FB-027 / DI-519 — the server's answer on a Finalize Week from the guided flow. Supabase data mode: the adapter's own PF-467 primitive,
+ * `sb.flushAndConfirm('cfbp_weeks')` (the finalize_week RPC rides the weeks key, carrying the results and obligations). Local mode has no server:
+ * `'saved'`. The same split as trackScribeReviewSave().
+ *
+ * B1 (review round 1; DI-519 amended inline by the coordinator, 2026-10-07) — A 'pending' FIRST ANSWER IS NOT THE LAST. A transient failure is
+ * re-sent by the adapter itself on its retry schedule (RETRY_BACKOFF_MS, 1 s / 3 s / 8 s, up to +40% jitter), so the sheet WAITS through it
+ * ("Finalizing…"), watching the two read-only signals that settle it: the week's SERVER-confirmed status turning 'final' (`getConfirmedWeekStatus`,
+ * advanced only by a finalize_week that succeeded) and the weeks key being latched refused (`getStatus().refusedKeys`). A network hold has no
+ * schedule (it goes out when the device is back online), so an 'offline' emit ends the wait at once. Still pending after that ⇒ 'pending'.
+ */
+const FINALIZE_WAIT_MS = 18000;   // the adapter's whole retry schedule (1 + 3 + 8 s, each up to +40%: 16.8 s) plus a margin
+const FINALIZE_POLL_MS = 250;
+/** Review follow-up 1 (2026-10-08) — how long "Week N is final." is on screen before a success that still holds a refused week write reloads the app. */
+const FINALIZE_RELOAD_AFTER_TOAST_MS = 1500;
+let _finalizeConfirmOverride = null;
+let _finalizeServerFinalOverride = null;
+/**
+ * PF-416 follow-up, review N2 (coordinator, 2026-10-08) — A WEEK THE SERVER HOLDS FINAL IS A SUCCESS, whatever this device's own write was told.
+ * Another device may have finalized first: this device's write is then refused (or still queued), yet the week IS final, and the refused row's "still
+ * live for everyone" would be false. So the answer is 'saved' whenever the server's copy holds the week final, and the sheet says "Week N is final."
+ */
+async function finalizeConfirmSaved(week) {
+  const state = await finalizeConfirmAnswer(week);
+  return state !== 'saved' && finalizeServerHoldsFinal(week) ? 'saved' : state;
+}
+async function finalizeConfirmAnswer(week) {
+  if (typeof _finalizeConfirmOverride === 'function') return _finalizeConfirmOverride(week);
+  if (getBackendMode() !== 'supabase') return 'saved';
+  let offline = false;
+  const unsubscribe = sb.onStatus((status, detail) => {
+    if (status === 'offline' && detail && Array.isArray(detail.heldOffline) && detail.heldOffline.length) offline = true;
+  });
+  const refused = () => { try { return (sb.getStatus().refusedKeys || []).includes('cfbp_weeks'); } catch { return false; } };
+  try {
+    let state = 'pending';
+    try { state = await sb.flushAndConfirm('cfbp_weeks'); } catch { state = 'pending'; }
+    if (state !== 'pending') return state;
+    const deadline = Date.now() + FINALIZE_WAIT_MS;
+    while (!offline && Date.now() < deadline) {
+      if (finalizeServerHoldsFinal(week)) return 'saved';
+      if (refused()) return 'refused';
+      await new Promise((r) => setTimeout(r, FINALIZE_POLL_MS));
+    }
+    if (finalizeServerHoldsFinal(week)) return 'saved';
+    return refused() ? 'refused' : 'pending';
+  } finally { unsubscribe(); }
+}
+/**
+ * B1 — does the SERVER hold `week` final? Supabase data mode: the adapter's base row, which only a hydrate, a Realtime fold or a finalize_week that
+ * SUCCEEDED advances. Deliberately NOT serverConfirmedWeekStatus(): that falls back to this device's mirror when the base has no row, and after a
+ * pending press the mirror already says 'final'. Local mode has no server: false (a device-final week is re-asked instead, which answers 'saved').
+ */
+function finalizeServerHoldsFinal(week) {
+  if (!week) return false;
+  if (typeof _finalizeServerFinalOverride === 'function') return !!_finalizeServerFinalOverride(week);
+  if (getBackendMode() !== 'supabase') return false;
+  try { return sb.getConfirmedWeekStatus(week.weekId) === 'final'; } catch { return false; }
+}
+/**
+ * B1 — ONE press of Finalize Week, or of Retry. Decided BEFORE anything is written (finalizePressAction(), js/week-wizard.js):
+ *   the server already holds the week final        ⇒ success, and never a second finalize;
+ *   this device already shows it final (queued)   ⇒ ONLY re-ask the server (finalizeConfirmSaved): no confirmFinalizeWeek(), no finalizeWeek(),
+ *                                                   so finalizedAt is never re-stamped and results are never re-written — a results write
+ *                                                   outside finalize_week() is refused by the adapter (`results_outside_finalize`);
+ *   a required value is missing                   ⇒ nothing is written;
+ *   otherwise                                     ⇒ the one first-time finalize (finalizeWeekFromWizard()).
+ * Returns { ok, state, action, week }.
+ */
+async function finalizeFromGuidedFlow(week) {
+  try {
+    const cur = getWeek(week.weekId) || week;
+    const action = finalizePressAction({
+      serverFinal: finalizeServerHoldsFinal(cur),
+      deviceStatus: cur.status,
+      blocked: finalizeReviewFor(cur, getGames(cur.weekId)).blocked,
+    });
+    if (action === 'confirmed') return { ok: true, state: 'saved', action, week: cur };
+    if (action === 'blocked') return { ok: false, state: 'blocked', action, week: cur };
+    if (action === 'reask') {
+      let state = 'pending';
+      try { state = await finalizeConfirmSaved(cur); } catch { state = 'pending'; }
+      return { ok: state === 'saved', state, action, week: cur };
+    }
+    const r = await weekWizardApi().finalizeWeekFromWizard({ week: cur });
+    return { ...r, action };
+  } finally {
+    // PF-416 / FB-026 follow-up (W-46) — whatever the answer: if the server now holds the week final, its waiting announcements go out, once. (The
+    // adapter's status emit usually got there first; this does not depend on it.)
+    releaseWeekFinalAnnouncements();
+  }
+}
+export const _finalizeFromGuidedFlowForTest = finalizeFromGuidedFlow;
+/**
+ * PF-416 / FB-026 follow-up, item 3 (thread 100726-D1, 2026-10-07) — has THIS DEVICE committed the finalize the server does not hold yet? It shows the
+ * week final (the press ran confirmFinalizeWeek(): the tiebreaker, the longest field goal and the results are queued with it) and the server's base
+ * does not: the press is pending, or refused. The same split finalizePressAction() calls 'reask'. While it holds, the guided flow is pinned to Step 4:
+ * every Finalize entry opens there (finalizeEntryState(), js/week-wizard.js) and Step 4 offers no Back, because walking Steps 1-3 again would offer a
+ * fresh finalize with values the queued one never carries. Reproduced before this fix: the Manage screen (which reads the SERVER's status, live)
+ * offered "Finalize Week", and it opened Approve Scores.
+ */
+function finalizeCommittedHere(week) {
+  if (!week) return false;
+  const cur = getWeek(week.weekId) || week;
+  return finalizePressAction({ serverFinal: finalizeServerHoldsFinal(cur), deviceStatus: cur.status, blocked: false }) === 'reask';
+}
+/** Is the week write latched refused (the adapter's `refusedKeys`)? A committed finalize then re-enters on the refused row, not on "Not sent yet". */
+function finalizeWeeksWriteRefused() {
+  if (getBackendMode() !== 'supabase') return false;
+  try { return (sb.getStatus().refusedKeys || []).includes('cfbp_weeks'); } catch { return false; }
+}
+/** Every Finalize entry (the Manage button, the status-row "Finalize", openFinalizeWeekFlow()) sets the flow's step and outcome through here. */
+function enterFinalizeFlow(week) {
+  const entry = finalizeEntryState({ committed: finalizeCommittedHere(week), refused: finalizeWeeksWriteRefused() });
+  _finalizeStep = entry.step;
+  _finalizeOutcome = entry.outcome;
+}
+/** Test seam (`_xForTest` convention): answers for the server — a function returning 'saved' | 'refused' | 'pending' (or a promise of one); null restores. */
+export function _setFinalizeConfirmForTest(fn) { _finalizeConfirmOverride = typeof fn === 'function' ? fn : null; }
+/** Test seam: answers "does the server hold this week final?" in local mode (where there is no server); null restores. */
+export function _setFinalizeServerFinalForTest(fn) { _finalizeServerFinalOverride = typeof fn === 'function' ? fn : null; }
+/** Test seam (read-only): which guided-Finalize step is open, for which week — so a suite whose DOM cannot paint the sheet (ranktest's stub) can still
+ *  prove a Finalize press OPENED the flow rather than applying `final`. */
+export function _finalizeFlowStateForTest() { return { step: _finalizeStep, targetWeekId: _weekWizardTargetWeekId }; }
 
 let _weekWizardStep = 1;
 /**
@@ -33002,7 +38755,224 @@ function weekWizardTargetWeek() {
     const w = getWeek(_weekWizardTargetWeekId);
     if (w) return w;
   }
-  return getCurrentWeek();
+  return commWeek();
+}
+
+// ══ D1 (DI-534, 2026-10-07) — THE COMMISSIONER'S SPORT LENS ══════════════════════════════════════════════════════════════════════════════════════════════════
+// In a league with TWO OR MORE sports the Comm panel and the Week Wizard work on ONE sport's week at a time, chosen by the lens (js/sport-seam.js: the client's sport pointer when it accepts the sport, else the commissioner's own local choice).
+// In a one-sport league none of this exists: commWeek() IS getCurrentWeek() and commWeeks() IS getWeeks(), so every surface below reads exactly as it did in v0.29.0.
+/** The week the Comm panel and the wizard work on. A multi-sport league with no week in the lens sport answers null - NEVER the other sport's week. */
+function commWeek() {
+  return isMultiSportLeague() ? lensWeek(null) : getCurrentWeek();
+}
+export const _commWeekForTest = commWeek;
+/** The weeks the Comm panel lists/selects: the lens competition's own weeks in a multi-sport league, every week otherwise. A NEW array. */
+function commWeeks() {
+  if (!isMultiSportLeague()) return getWeeks();
+  const c = lensCompetition();
+  return c ? getWeeksForCompetition(c.id) : [];
+}
+export const _commWeeksForTest = commWeeks;
+/** Point the lens sport's current-week pointer at a week: a NON-default sport's own `competitions.active_week_id`, or the league's `active_week` (the default sport's, and every one-sport league's). */
+function setCommActiveWeekId(weekId) {
+  const other = nonDefaultCompetitionOf(getWeek(weekId));
+  if (other) saveLeagueCompetition({ ...other, activeWeekId: weekId });
+  else setActiveWeekId(weekId);
+}
+/** The sport's short code ('NFL') for a week in a MULTI-sport league, '' otherwise: what a toast prefixes ("NFL Week 6 is open"). */
+function commSportCodeFor(week) {
+  if (!week || !isMultiSportLeague()) return '';
+  try { return profileForWeek(week).code || ''; } catch { return ''; }
+}
+function commProfileFor(competition) {
+  try { return getProfile(competition.sport); } catch { return null; }
+}
+
+/** One segment of the sport lens (a radio): the sport's code, selected when it is the lens. */
+function commSportLensSegHTML(c, here) {
+  const pr = commProfileFor(c);
+  const on = c.sport === here;
+  return `<button type="button" role="radio" class="cc-quick-seg" data-action="comm-lens" data-sport="${escHtml(c.sport)}" aria-checked="${on}" tabindex="${on ? 0 : -1}">${escHtml(pr ? (pr.code || pr.label) : String(c.sport).toUpperCase())}</button>`;
+}
+
+/** The sport lens: the same segmented control the player screens use (`.cc-quick-*`, a radiogroup), at the top of Comm -> Week. Multi-sport leagues only. */
+function commSportLensHTML({ tab = 'week' } = {}) {
+  const comps = liveLeagueCompetitions();
+  const here = getLensSport();
+  // The Games tab carries the SAME lens (one control, two places): the slate the commissioner builds there is the lens sport's.
+  // DI-534 REV 5 (third pass, item 3d): the caption "These controls change {CODE} only." exists ONLY while the lens is SEPARATE from the player pointer (a commissioner running a sport he has not
+  // joined, so Comm and his Picks are on different sports). Then it sits once under each lens control (Caption level, 8 pt under the control; the section's 16 pt keeps the first card clear) and the
+  // radiogroup is described by it, so VoiceOver reads it with the control. In the ordinary state (lens = pointer) there is no caption anywhere; the card titles name the sport on every card.
+  const noteText = lensIsSeparate() ? commLensNoteFor(here) : '';
+  const noteId = `comm-lens-note-${tab === 'week' ? 'week' : escHtml(tab)}`;
+  const note = noteText ? `<p class="text-secondary text-xs comm-lens-note" id="${noteId}">${escHtml(noteText)}</p>` : '';
+  return `<div class="admin-section comm-lens" data-comm-tab="${escHtml(tab)}" id="${tab === 'week' ? 'comm-sport-lens' : `comm-sport-lens-${escHtml(tab)}`}">
+    <div class="cc-quick-track" role="radiogroup" aria-label="Sport"${note ? ` aria-describedby="${noteId}"` : ''}>${comps.map((c) => commSportLensSegHTML(c, here)).join('')}</div>${note}
+  </div>`;
+}
+/** "These controls change NFL only." for the lens sport (its profile code), or '' when the sport is not placed. */
+function commLensNoteFor(dbCode) {
+  const pr = (listProfiles().find((x) => x.key === dbCode) || null);
+  const code = pr ? (pr.code || pr.label) : String(dbCode || '').toUpperCase();
+  return code ? MS_COPY.lensNote(code) : '';
+}
+
+/** The all-sports card's rows (DI-534), read through the seam: one per live sport with its week's state, counts of members IN (never a pick), the next lock time and ONE action. */
+function commAllSportsRows() {
+  const profiles = listProfiles();
+  return allSportsRows({
+    competitions: liveLeagueCompetitions(), profiles, lensDbCode: getLensSport(),
+    readers: {
+      currentWeekFor: (cid) => getCurrentWeekFor(cid),
+      gamesFor: (wid) => getGames(wid),
+      weeksFor: (cid) => getWeeksForCompetition(cid),
+      entrantsFor: (w) => entrantsForWeek(w),
+      submittedFor: (wid, pid) => { const st = submissionStateFor(wid, pid); return st === 'yes' ? true : st === 'no' ? false : null; },
+      lockState: (w, g) => { try { const st = weekLockState({ week: w, games: g }); const bp = weekBadgePhase({ week: w, games: g }); return { phase: bp.phase, label: bp.label, lockAtMs: st.lockAtMs }; } catch { return null; } },
+      formatTime: (ms) => formatGameTime(new Date(ms).toISOString(), getTimezone()),
+    },
+  });
+}
+export const _commAllSportsRowsForTest = commAllSportsRows;
+
+/** One sport's row in the all-sports card (Comm -> Week): the sport code and week, its status badge, the "k of n in" line and the one next action. Every dynamic part is escaped here. */
+function commSportRowHTML(r) {
+  const count = r.showCounts ? inCountText({ inCount: r.inCount, entrantCount: r.entrantCount }) : '';
+  const tail = [count, r.timeLabel].filter(Boolean).join(' · ');
+  const act = r.action
+    ? `<button type="button" class="btn btn-secondary btn-sm" style="min-height:44px" data-action="comm-sport-action" data-sport="${escHtml(r.dbCode)}" data-kind="${escHtml(r.action.kind)}">${escHtml(r.action.label)}</button>`
+    : '';
+  return `<div class="comm-sport-row" style="display:flex;flex-direction:column;gap:8px;padding:8px 0;border-top:1px solid var(--border)">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px">
+      <span><strong>${escHtml(r.code)}</strong> · Week ${escHtml(String(r.weekNumber))}</span><span class="badge badge-${escHtml(String(r.badgeKind))}">${escHtml(r.statusLabel)}</span>
+    </div>
+    ${tail ? `<div class="text-muted text-xs">${escHtml(tail)}</div>` : ''}
+    ${act}
+  </div>`;
+}
+
+function commAllSportsCardHTML() {
+  const rows = commAllSportsRows();
+  const nextLine = nextDeadlinesLine(rows);
+  return `<div class="admin-section" data-comm-tab="week">
+    <div class="admin-section-title">${escHtml(MS_COPY.allSportsTitle)}</div>
+    <div class="card" id="comm-all-sports-card">${rows.map((r) => commSportRowHTML(r)).join('')}${nextLine ? `<p class="text-muted text-xs" style="margin:8px 0 0">${escHtml(nextLine)}</p>` : ''}</div>
+  </div>`;
+}
+
+/** The Sport options card (Comm -> Week, under the lens): Archive for a NON-default sport. The league's main sport is never archived from here. */
+function commSportOptionsCardHTML() {
+  const c = lensCompetition();
+  if (!c || c.isDefault) return '';
+  const pr = commProfileFor(c);
+  const label = pr ? pr.label : c.sport;
+  const blocker = archiveBlocker({ weeks: getWeeksForCompetition(c.id), label: pr ? (pr.code || label) : label });
+  return `<div class="admin-section" data-comm-tab="week">
+    <div class="admin-section-title">Sport options</div>
+    <div class="card" id="comm-sport-options-card">
+      <button type="button" class="btn btn-danger btn-sm" style="min-height:44px" id="comm-archive-sport-btn" data-sport="${escHtml(c.sport)}"${blocker ? ' disabled aria-describedby="comm-archive-note"' : ''}>${escHtml(MS_COPY.archiveAction(pr ? (pr.code || label) : label))}</button>
+      ${blocker ? `<p class="text-muted text-xs" id="comm-archive-note" style="margin:8px 0 0">${escHtml(blocker)}</p>` : ''}
+    </div>
+  </div>`;
+}
+
+/** The weeks of the lens sport that are in progress (open / locked / live): the ones a removal must not pull a member out of. */
+function commSportWeeksInProgress() {
+  const c = lensCompetition();
+  return c ? getWeeksForCompetition(c.id).filter((w) => ['open', 'locked', 'live'].includes(w.status)) : [];
+}
+/** The Sport entries card (Comm -> Players): each member a 44 pt row with an In / Not in switch, plus Add everyone. Absent unless the lens sport is opt-in and the entries data path exists. */
+function commSportEntriesCardHTML() {
+  if (!isMultiSportLeague() || !entriesSupported()) return '';
+  const c = lensCompetition(); if (!c) return '';
+  const pr = commProfileFor(c); const label = pr ? (pr.code || pr.label) : c.sport;
+  const w = commWeek();
+  let lockMs = null; try { lockMs = w ? weekLockState({ week: w, games: getGames(w.weekId) }).lockAtMs : null; } catch { lockMs = null; }
+  const inProgress = commSportWeeksInProgress();
+  const model = sportEntriesModel({
+    competition: c, members: getPlayers(), entryRows: entryRows(c.id), currentLockAtMs: lockMs, label,
+    hasPicksInProgress: (id) => inProgress.some((x) => submissionStateFor(x.weekId, id) === 'yes'),
+  });
+  if (!model) return '';
+  const rows = model.rows.map((r) => `<div class="comm-entry-row" style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px">
+      <span><span class="font-display">${escHtml(r.name)}</span>${r.note ? ` <span class="text-muted text-xs">${escHtml(r.note)}</span>` : ''}</span>
+      <button type="button" role="switch" class="btn ${r.isIn ? 'btn-secondary' : 'btn-ghost'} btn-sm" style="min-height:44px;min-width:76px" data-action="comm-entry-toggle" data-member="${escHtml(r.memberId)}" aria-checked="${r.isIn ? 'true' : 'false'}" aria-label="${escHtml(r.name)}: ${escHtml(r.isIn ? MS_COPY.entryIn : MS_COPY.entryOut)}">${escHtml(r.isIn ? MS_COPY.entryIn : MS_COPY.entryOut)}</button>
+    </div>`).join('');
+  return `<div class="admin-section" data-comm-tab="players">
+    <div class="admin-section-title">${escHtml(model.title)}</div>
+    <div class="card" id="comm-sport-entries-card">
+      <p class="text-muted text-xs" style="margin:0 0 8px">${escHtml(model.caption)}</p>
+      ${rows}
+      ${model.notInIds.length ? `<button type="button" class="btn btn-ghost btn-sm" style="min-height:44px;margin-top:8px" data-action="comm-entry-add-everyone">${escHtml(MS_COPY.addEveryone)}</button>` : ''}
+    </div>
+  </div>`;
+}
+function bindCommSportEntries() {
+  const c = lensCompetition(); if (!c) return;
+  const inProgress = commSportWeeksInProgress();
+  document.querySelectorAll('#comm-sport-entries-card [data-action="comm-entry-toggle"]').forEach((b) => b.addEventListener('click', () => {
+    const id = b.dataset.member; const isIn = b.getAttribute('aria-checked') === 'true';
+    if (isIn) {
+      if (inProgress.some((x) => submissionStateFor(x.weekId, id) === 'yes')) { const p = getPlayers().find((q) => String(q.playerId) === String(id)); showToast(MS_COPY.removeBlocked(p ? p.displayName : id), 'error'); return; }
+      sportSeamRemoveEntry(c.id, id);
+    } else sportSeamAddEntry(c.id, id, 'commissioner');
+    haptic('selection'); renderCommPage();
+  }));
+  document.querySelector('#comm-sport-entries-card [data-action="comm-entry-add-everyone"]')?.addEventListener('click', () => {
+    for (const p of getPlayers().filter((q) => q && q.active)) sportSeamAddEntry(c.id, String(p.playerId), 'commissioner');
+    haptic('selection'); renderCommPage();
+  });
+}
+
+/**
+ * Run a sport's one next action from the all-sports card. It acts on THAT ROW'S OWN competition and its current week, resolved directly - never through the commissioner's lens or the player pointer
+ * (reviewer B1: a commissioner who does not play the opt-in NFL could not move the played-only pointer onto it, and Lock on the NFL row locked the college week). The lens is moved too, best effort, so the
+ * screen follows the row he tapped. A sport this league does not run, or a week the sport's resolver cannot place, REFUSES loudly and writes nothing.
+ */
+function runSportNextAction({ kind, sport }) {
+  const comp = liveLeagueCompetitions().find((c) => c.sport === sport);
+  if (!comp) { showToast('That sport is not part of this league.', 'error'); return; }
+  setLensSport(sport);
+  const week = kind === 'setup' ? null : getCurrentWeekFor(comp.id);
+  const code = commSportCodeFor(week) || (listProfiles().find((x) => x.key === sport) || {}).code || '';
+  if (kind === 'setup') { openWeekWizardSheet({ forceNew: true }); return; }
+  let ownCompetition = null;
+  try { ownCompetition = week ? competitionForWeek(week) : null; } catch { ownCompetition = null; }
+  if (!week || !ownCompetition || ownCompetition.id !== comp.id) {          // the resolver must place the week IN THIS ROW'S competition (R1), or nothing is written
+    showToast(`${code ? code + ' has' : 'This sport has'} no week to ${kind}.`, 'error'); renderCommPage(); return;
+  }
+  const games = getGames(week.weekId);
+  if (kind === 'finalize') { openFinalizeWeekFlow(getWeek(week.weekId) || week); return; }
+  if (kind === 'lock') {
+    const statusResult = applyWeekStatusChange(week, 'locked');
+    refreshHeader(); showToast(`${code ? code + ' ' : ''}Week ${week.weekNumber} is locked.`, 'success');
+    notifySpreadLockRefusals(week.weekId, statusResult?.spreadLockRefusals);   // S4: a spread refused at the freeze is as loud here as on every other Lock button
+    renderCommPage(); return;
+  }
+  if (kind === 'open') {
+    const r = weekWizardApi().openForPicks({ week, gamesCount: games.length, missingSpreadCount: countMissingSpreads(games), timingConfigured: !!computeEffectiveLockAt(week, games) });
+    if (!r || r.ok === false) {
+      const gate = (r && r.gate) || {};
+      const why = !gate.gamesOk ? 'it has no games yet' : !gate.spreadsOk ? `${countMissingSpreads(games)} game${countMissingSpreads(games) === 1 ? '' : 's'} need${countMissingSpreads(games) === 1 ? 's' : ''} a spread` : !gate.timingOk ? 'its lock time is not set' : 'it needs a weekly blurb';
+      showToast(`${code ? code + ' ' : ''}Week ${week.weekNumber} can't open yet: ${why}.`, 'error');
+      openWeekWizardSheet();        // the wizard names exactly what is missing, for THIS sport's week (the lens is on it)
+      return;
+    }
+    refreshHeader(); renderCommPage();
+  }
+}
+export const _runSportNextActionForTest = runSportNextAction;
+/** The competition a week belongs to, or null for the league's default (R1: only through competitionForWeek). */
+function nonDefaultCompetitionOf(week) {
+  if (!week || !week.competitionId) return null;
+  const c = competitionForWeek(week);
+  return c && !c.isDefault ? c : null;
+}
+/** The current week of the competition a (possibly absent) week belongs to: that sport's own resolver in a multi-sport league, getCurrentWeek() otherwise. */
+function currentWeekOfSportFor(week) {
+  if (!isMultiSportLeague()) return getCurrentWeek();
+  const c = week ? competitionForWeek(week) : lensCompetition();
+  return c ? getCurrentWeekFor(c.id) : null;
 }
 /**
  * BLOCK fix (b) — every DRAFT week other than getCurrentWeek(), oldest
@@ -33012,8 +38982,8 @@ function weekWizardTargetWeek() {
  * Duplicate button) that the commissioner has not yet finished setting up.
  */
 function weekWizardContinuableDrafts() {
-  const current = getCurrentWeek();
-  return getWeeks()
+  const current = commWeek();
+  return commWeeks()
     .filter((w) => w.status === WEEK_STATUS.DRAFT && (!current || w.weekId !== current.weekId))
     .sort((a, b) => (a.weekNumber || 0) - (b.weekNumber || 0));
 }
@@ -33096,7 +39066,18 @@ function wizardSetActiveWeekId(weekId) {
   // handles a stale/deleted pointer via its own fallback (js/storage.js) —
   // asking it, always, is the same question every other reader in the app
   // already asks, not a narrower one with its own gap.
-  const currentResolved = getCurrentWeek();
+  // D1 (DI-533/534): the pointer is PER COMPETITION. A week of a NON-default sport moves THAT competition's own pointer (`competitions.active_week_id`) and is guarded by THAT
+  // sport's in-progress week; it never touches the league's `active_week`, which is the default competition's (moving it onto an NFL week would put the college surfaces
+  // on the NFL). A default-competition week in a multi-sport league is guarded by the DEFAULT sport's current week, not whichever sport happens to be live. One sport: unchanged.
+  const target = getWeek(weekId);
+  const other = nonDefaultCompetitionOf(target);
+  if (other) {
+    const cur = getCurrentWeekFor(other.id);
+    if (cur && cur.weekId !== weekId && ['open', 'locked', 'live'].includes(cur.status)) return;
+    saveLeagueCompetition({ ...other, activeWeekId: weekId });
+    return;
+  }
+  const currentResolved = isMultiSportLeague() ? currentWeekOfSportFor(target) : getCurrentWeek();
   if (currentResolved && currentResolved.weekId !== weekId && ['open', 'locked', 'live'].includes(currentResolved.status)) {
     return;
   }
@@ -33191,12 +39172,26 @@ function weekWizardEntryCardHTML(week) {
   const newWeekBtnHTML = label === 'Manage This Week'
     ? `<button type="button" class="btn btn-secondary btn-block mt-sm" id="week-wizard-new-week-btn">New Week</button>`
     : '';
+  // D1 (S6, mockup frame 10): in a league that runs two sports the card is named for the lens sport and its week ("NFL · Week 6").
+  // DI-534 REV 5 (third pass, item 3d): the card no longer carries "These controls change {CODE} only." - that caption is ONCE per tab, under the lens control, and only while the lens is separate
+  // (commSportLensHTML); the title does the naming on every card. A one-sport league's card is exactly what it always was: no title.
+  const multi = isMultiSportLeague() ? commLensCardCopy(week) : null;
   return `<div class="admin-section" data-comm-tab="week">
     <div class="card" id="week-wizard-entry-card">
-      <button type="button" class="btn btn-primary btn-block" id="week-wizard-entry-btn">${escHtml(label)}</button>
+      ${multi ? `<div class="card-title mb-sm" id="week-wizard-entry-title">${escHtml(multi.title)}</div>` : ''}<button type="button" class="btn btn-primary btn-block" id="week-wizard-entry-btn">${escHtml(label)}</button>
       ${newWeekBtnHTML}
     </div>
   </div>`;
+}
+/** The title ("{CODE} · Week N") of the lens sport's week card. The week is the lens week; with none, the number the sport's next week will have. */
+function commLensCardCopy(week) {
+  const sport = getLensSport();
+  const pr = (listProfiles().find((x) => x.key === sport) || null);
+  const code = pr ? (pr.code || pr.label) : String(sport || '').toUpperCase();
+  if (!code) return null;
+  let n = week && Number.isFinite(Number(week.weekNumber)) ? Number(week.weekNumber) : null;
+  if (n === null) { try { n = nextWeekNumberFor(commWeeks()); } catch { n = 1; } }
+  return { title: MS_COPY.weekCardTitle(code, n) };
 }
 // DI-406 test seam — a pure function of storage state (no DOM), same
 // convention as `_weekWizardEntryLabelForTest`/`_weekWizardContinuableDraftsForTest`
@@ -33229,10 +39224,16 @@ function renderWeekWizardTrackerHTML(activeStep) {
 // 'espn_live' (see bindWeekWizardStep1()'s own read of this form), matching
 // this function's own prior in-form default — the commissioner can change it
 // afterward only via Admin → Week if genuinely needed.
-function weekCreateFormFieldsHTML(nextNum, { idPrefix = 'wiz-', defaults = {} } = {}) {
+function weekCreateFormFieldsHTML(nextNum, { idPrefix = 'wiz-', defaults = {}, sports = null } = {}) {
   const season = defaults.season ?? (getSettings().season || '2026');
   const weekNumber = defaults.weekNumber ?? nextNum;
+  // D1 (DI-533 #1): the Sport field, FIRST, shown only in a multi-sport league. A NEW week chooses its sport (default: the lens sport); a week that already exists shows its sport as
+  // plain text (a sport is not changed under a slate that may already hold games). `sports` is null in a one-sport league, so the form below is byte-identical to v0.29.0's.
+  const sportField = !sports ? '' : (sports.locked
+    ? `<div class="form-group"><span class="form-label">Sport</span><div class="form-static" id="${escHtml(idPrefix)}cw-sport-static">${escHtml(sports.lockedLabel || '')}</div></div>`
+    : `<div class="form-group"><label class="form-label" for="${escHtml(idPrefix)}cw-sport">Sport</label><select class="form-select" id="${escHtml(idPrefix)}cw-sport">${sports.options.map((o) => `<option value="${escHtml(o.dbCode)}" data-next-num="${escHtml(String(o.nextNum))}"${o.dbCode === sports.selected ? ' selected' : ''}>${escHtml(o.label)}</option>`).join('')}</select></div>`);
   return `
+    ${sportField}
     <div class="form-group"><label class="form-label">Season</label><input class="form-input" id="${escHtml(idPrefix)}cw-season" value="${escHtml(String(season))}" /></div>
     <div class="form-group"><label class="form-label">Week Number</label><input class="form-input" id="${escHtml(idPrefix)}cw-num" type="number" value="${escHtml(String(weekNumber))}" /></div>
     <div class="form-group"><label class="form-label">Custom Round Label <span class="text-muted text-xs">(added after the week number, e.g. "Part 2" — leave blank to use week number)</span></label><input class="form-input" id="${escHtml(idPrefix)}cw-round" placeholder="e.g. Part 2" value="${escHtml(defaults.roundLabel || '')}" /></div>
@@ -33241,14 +39242,23 @@ function weekCreateFormFieldsHTML(nextNum, { idPrefix = 'wiz-', defaults = {} } 
 }
 
 function renderWeekWizardStep1HTML(week) {
-  const allWeeks = getWeeks();
-  const nextNum = allWeeks.length ? Math.max(...allWeeks.map((w) => w.weekNumber)) + 1 : 1;
+  const multi = isMultiSportLeague();
+  // D1 (DI-533 #2): the next week NUMBER is within ONE competition (never league-wide: the NFL's Week 6 must not make the next college week 7).
+  const allWeeks = multi ? commWeeks() : getWeeks();
+  const nextNum = multi ? nextWeekNumberFor(allWeeks) : (allWeeks.length ? Math.max(...allWeeks.map((w) => w.weekNumber)) + 1 : 1);
   const defaults = week ? {
     season: week.season, weekNumber: week.weekNumber, roundLabel: week.roundLabel,
     startDate: week.startDate, endDate: week.endDate, dataSourceMode: week.dataSourceMode,
   } : {};
+  let sports = null;
+  if (multi) {
+    const comps = liveLeagueCompetitions();
+    const info = (c) => { const pr = listProfiles().find((x) => x.key === c.sport); return { dbCode: c.sport, label: pr ? pr.label : c.sport, nextNum: nextWeekNumberFor(getWeeksForCompetition(c.id)) }; };
+    if (week) { const wc = competitionForWeek(week); sports = { locked: true, lockedLabel: wc ? info(wc).label : '' }; }
+    else { sports = { locked: false, selected: getLensSport(), options: comps.map(info) }; }
+  }
   return `<div class="admin-section-title">Create</div>
-    ${weekCreateFormFieldsHTML(nextNum, { defaults })}
+    ${weekCreateFormFieldsHTML(nextNum, { defaults, sports })}
     <button type="button" class="btn btn-primary btn-block mt-md" id="wiz-step1-create">${week ? 'Save & Continue' : 'Create Week'}</button>`;
 }
 /** REVIEWER BLOCK item 2 (2026-09-25) — `week` is NEW: the current draft
@@ -33258,8 +39268,24 @@ function renderWeekWizardStep1HTML(week) {
  *  (no current week yet) — `createWeekFromWizard()`'s own `existingWeek`
  *  default (`null`) takes the mint-a-new-week branch exactly as before. */
 function bindWeekWizardStep1(bodyEl, week) {
+  // D1 (DI-533 #1): changing the Sport resets the week-number default to THAT sport's next number (the dates and the tiebreaker defaults follow the sport when the week is created).
+  bodyEl.querySelector('#wiz-cw-sport')?.addEventListener('change', (e) => {
+    const opt = e.target.selectedOptions && e.target.selectedOptions[0];
+    const n = opt && opt.dataset ? opt.dataset.nextNum : null;
+    const numEl = bodyEl.querySelector('#wiz-cw-num');
+    if (n && numEl) numEl.value = n;
+  });
   bodyEl.querySelector('#wiz-step1-create')?.addEventListener('click', () => {
+    // D1 (DI-533 #2): the week's competition and its PROFILE - whether that competition is the default or not (so a league whose main sport is the NFL builds NFL weeks).
+    // A new week of the default competition carries NO competitionId (absent), so a college week stays byte-identical.
+    let wizSport = null;
+    if (!week) {
+      const picked = bodyEl.querySelector('#wiz-cw-sport')?.value || null;
+      const live = liveLeagueCompetitions();
+      wizSport = (picked && live.find((c) => c.sport === picked)) || (isMultiSportLeague() ? lensCompetition() : (live.find((c) => c.isDefault) || live[0] || null));
+    }
     const fields = {
+      ...(wizSport ? { competitionId: wizSport.isDefault ? null : wizSport.id, profile: (() => { try { return getProfile(wizSport.sport); } catch { return null; } })() } : {}),
       season: bodyEl.querySelector('#wiz-cw-season')?.value || '2026',
       weekNumber: parseInt(bodyEl.querySelector('#wiz-cw-num')?.value, 10) || 1,
       roundLabel: bodyEl.querySelector('#wiz-cw-round')?.value.trim() || '',
@@ -33277,6 +39303,7 @@ function bindWeekWizardStep1(bodyEl, week) {
       // time this handler fires (coordinator fix, 2026-09-27).
     };
     const created = weekWizardApi().createWeek(fields, week);
+    if (created && wizSport && isMultiSportLeague()) setLensSport(wizSport.sport);      // D1 (DI-534): Comm is now "in" the sport this week belongs to
     // Coordinator fix (2026-09-27) — the wizard now points itself at the
     // week it just created/edited directly, never by reading back
     // getCurrentWeek() (which wizardSetActiveWeekId() may correctly have
@@ -33303,11 +39330,18 @@ function renderWeekWizardStep2HTML(week) {
   // (fetched OR manually added — Drew's own words cover both paths). "Fetch
   // ESPN…" copy drops "ESPN" throughout this step (wizard-scoped only; the
   // Admin panel's diagnostic "Fetch ESPN Data" card, DI-352, is untouched).
-  const hasGames = getGames(week.weekId).length > 0;
+  const n = getGames(week.weekId).length;
+  const hasGames = n > 0;
+  // D1 (W-68, DI-W68.5a, 2026-10-14) - "roght now nothing happens": a manual add saved the game and repainted THIS step, which had no slate list and no count, so nothing visible changed.
+  // Step 2 now carries a standing line with the slate's count and a way to review it, and the status line says what the last add or swap did (a polite live region; `_weekWizardStep2Note` is
+  // consumed by this paint, so it never outlives the repaint it was written for).
+  const note = _weekWizardStep2Note;
+  _weekWizardStep2Note = '';
   return `<div class="admin-section-title">Populate games</div>
     <button type="button" class="btn btn-primary btn-block" id="wiz-fetch-apply-btn">Fetch Games</button>
-    <button type="button" class="btn btn-ghost btn-sm mt-sm" id="wiz-step2-add-manual">Add a game manually</button>
-    <div id="wiz-fetch-status" class="text-sm mt-sm text-muted"></div>
+    <button type="button" class="btn btn-ghost btn-sm wiz-slate-btn mt-sm" id="wiz-step2-add-manual">Add a game manually</button>
+    <div id="wiz-fetch-status" class="text-sm mt-sm text-muted" role="status" aria-live="polite">${escHtml(note)}</div>
+    <div class="wiz-slate-count text-sm mt-sm" id="wiz-step2-count">${hasGames ? `<span>${escHtml(`${n} ${plural(n, 'game', 'games')} on your slate`)}</span> <button type="button" class="btn btn-ghost btn-sm wiz-slate-btn wiz-review-slate" id="wiz-step2-review">Review slate</button>` : '<span class="text-muted">No games on your slate yet.</span>'}</div>
     <div id="wiz-fetch-skeleton" class="week-wizard-skeleton-rows" style="display:none" aria-busy="true">${Array.from({ length: 10 }, () => '<div class="week-wizard-skeleton-row"></div>').join('')}</div>
     ${hasGames ? '' : '<p class="text-muted text-xs mt-sm">Add at least one game to continue.</p>'}
     <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step2-back">Back</button><button type="button" class="btn btn-primary" id="wiz-step2-next" ${hasGames ? '' : 'disabled'}>Next</button></div>`;
@@ -33325,8 +39359,15 @@ function bindWeekWizardStep2(bodyEl, week) {
   // pattern the Games tab's own "Add Manually" button already uses,
   // js/app.js:14298) — the wizard's own body re-render afterward re-evaluates
   // the Next button's disabled state.
-  bodyEl.querySelector('#wiz-step2-add-manual')?.addEventListener('click', () => {
-    showGameModal(null, week, (data) => { saveGame(createGame(week.weekId, data)); renderWeekWizardSheetBody(); });
+  // D1 (W-68, DI-W68.1): the manual add goes through the ONE door - at the slate's size it asks (add an extra, or swap) BEFORE the form, so nothing typed is lost on Cancel; every outcome
+  // repaints this step with the count and a status line.
+  bodyEl.querySelector('#wiz-step2-add-manual')?.addEventListener('click', (e) => {
+    startManualAdd({ weekId: week.weekId, invoker: e.currentTarget });
+  });
+  bodyEl.querySelector('#wiz-step2-review')?.addEventListener('click', () => {
+    if (getGames(week.weekId).length === 0) return;
+    _weekWizardStep = 3;
+    renderWeekWizardSheetBody();
   });
   const fetchBtn = bodyEl.querySelector('#wiz-fetch-apply-btn');
   fetchBtn?.addEventListener('click', async () => {
@@ -33369,13 +39410,17 @@ function bindWeekWizardStep2(bodyEl, week) {
       // was already showing for an unrelated reason.
       hideBackendErrorBanner('wizard');
       status?.classList?.remove?.('wiz-fetch-status-error');
-      if (status) status.textContent = result.partial ? WIZARD_COPY.FETCH_PARTIAL(result.fetched) : WIZARD_COPY.FETCH_SUCCESS(result.added);
+      if (status) status.textContent = (result.partial ? WIZARD_COPY.FETCH_PARTIAL(result.fetched) : WIZARD_COPY.FETCH_SUCCESS(result.added)) + (result.held > 0 ? SLATE_COPY.bulkHeldTail(result.target) : '');   // D1 (W-68, DI-W68.6): a bulk add stops at the slate size and says so
+      spreadFindUI().autoCheck(week.weekId);   // W-71: ESPN has just been read; ask the other source ONCE, quietly, for any game still without a line
       // DI-411 item 5 — a fetch can report `ok:true` (ESPN answered) while
       // adding zero games to the slate (every candidate already on it, or
       // the suggested-slate builder kept none). That must NOT auto-advance
       // to an empty Step 3 — only re-render Step 2, where the Next button
       // (now correctly still disabled) and its status line stay visible.
-      if (getGames(week.weekId).length > 0) {
+      // D1 (W-68, DI-W68.6): a fetch that HELD games back (the slate is at its size) stays on this step so the commissioner reads why - "The slate is at 10; add more one at a time." - and the
+      // status line is carried through the repaint (it used to be wiped by it).
+      if (status && status.textContent) _weekWizardStep2Note = status.textContent;
+      if (getGames(week.weekId).length > 0 && !(result.held > 0)) {
         _weekWizardStep = 3;
       }
       renderWeekWizardSheetBody();
@@ -33392,24 +39437,118 @@ function bindWeekWizardStep2(bodyEl, week) {
   });
 }
 
-function renderWeekWizardStep3HTML(games) {
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// W-71 (2026-10-14) - FIND SPREADS: the one UI instance, built on first use. Everything it needs is handed in, so this section is only the wiring (DI-W71.2, DI-W71.5).
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+let _spreadUI = null;
+function spreadFindUI() {
+  if (_spreadUI) return _spreadUI;
+  _spreadUI = createSpreadFindUI({
+    get document() { return document; },   // read at each use: the page has one document, but a test swaps it between seeds
+    escHtml, getWeek, getGames, saveGame,
+    formatTime: (iso) => formatGameTime(iso, getTimezone()),
+    // Stage 1 of "Find spreads": the SAME scoreboard read Build slate uses, for this week's dates and sport; read-only - the caller adds no game and replaces no pool.
+    fetchEspn: (week) => {
+      const prof = profileForWeek(week);
+      const other = prof.key !== 'cfb';
+      return fetchByDateRange({ startDate: week.startDate, endDate: week.endDate || week.startDate, season: week.season, almaMaters: [], ...(other ? { sport: prof.key } : {}) });
+    },
+    lookup: (weekId) => callOddsLookup(weekId),
+    toast: (msg, kind) => showToast(msg, kind), haptic: (kind) => haptic(kind), now: () => new Date().toISOString(), reducedMotion: () => prefersReducedMotion(),
+    // A write changed the rows and the banner count: the screens repaint.
+    // The ONE slate-change door (W-69): the Games section patches in place (scroll, filters and focus survive), a wizard on Step 2/3 repaints, the other Comm tabs are marked stale.
+    repaintHost: () => afterSlateChange(),
+  });
+  return _spreadUI;
+}
+export const _spreadFindUIForTest = () => spreadFindUI();
+
+/**
+ * D1 (DI-533 #6/#7, D-31) - the two controls an NFL week adds to Step 3, under the slate: the TIEBREAKER GAME (a select of the slate's games, the LAST kickoff first as the
+ * default - Monday night) and the OPTIONAL longest-field-goal contest (a switch, OFF until the commissioner turns it on). A college week - and any week whose profile has an
+ * alma-mater affinity - renders '' here, so a college Step 3 is byte-identical to v0.29.0's.
+ */
+function wizardSportExtrasHTML(week, games) {
+  if (!week) return '';
+  const prof = profileForWeek(week);
+  if (prof.key === 'cfb' || prof.affinity) return '';
+  const opts = tiebreakerGameOptions(games, { nameOf: (g) => `${g.awayTeam} at ${g.homeTeam}` });
+  if (!opts.length) return '';
+  const chosen = opts.some((o) => o.gameId === week.tiebreakerGameId) ? week.tiebreakerGameId : opts[0].gameId;
+  const optionsHTML = opts.map((o) => `<option value="${escHtml(o.gameId)}"${o.gameId === chosen ? ' selected' : ''}>${escHtml(o.label)}</option>`).join('');
+  const fgLabel = prof.sideContest && prof.sideContest.label ? prof.sideContest.label : 'Side contest';
+  return `<div class="admin-section-title mt-md">Tiebreaker game</div>
+    <div class="form-group"><select class="form-select" id="wiz-tb-game" aria-label="Tiebreaker game" data-wiz-autosave>${optionsHTML}</select>
+      <p class="text-muted text-xs mt-sm">The tiebreaker is the total combined points scored in this game. Closest guess wins, over or under.</p></div>
+    <div class="form-group" data-wiz-autosave>${switchRowHTML({ id: 'wiz-ep-enabled', label: fgLabel + ' contest (optional)', on: week.extraPointEnabled === true })}
+      <p class="text-muted text-xs mt-sm">A side bet that only comes into play in Weekly Ties. It never changes anyone's correct-pick count.</p></div>`;
+}
+function renderWeekWizardStep3HTML(games, week = null) {
   const missing = countMissingSpreads(games);
   const banner = games.length && missing > 0 ? `<div class="warning-box mb-sm">${escHtml(WIZARD_COPY.MISSING_SPREADS(missing))}</div>` : '';
+  const spreadFind = week ? spreadFindUI().hostHTML(week, games) : '';   // W-71: "Find spreads" under the count line, and a card per line another source has
+  // D1 (W-69, DI-W69.7): each row is the existing tap target (matchup and spread; tap opens the unchanged game modal) with a Remove text button beside it. They are SIBLINGS, never a button
+  // inside a button; the Remove button carries `data-wiz-remove` (not `data-game-id`, which stays the row's alone).
   const rows = games.map((g) => {
     const hasSpread = typeof g.spread === 'number' && Number.isFinite(g.spread);
-    return `<button type="button" class="card week-wizard-game-row" data-game-id="${escHtml(g.gameId)}">
-      <span>${escHtml(g.awayTeam)} @ ${escHtml(g.homeTeam)}</span>
-      <span class="${hasSpread ? 'text-muted' : 'week-wizard-spread-missing'}">${hasSpread ? escHtml(formatSpread(g.spread, g.favorite, g) || 'Spread set') : 'Set spread'}</span>
-    </button>`;
+    return `<div class="week-wizard-game-item" data-item-game="${escHtml(g.gameId)}">
+      <button type="button" class="card week-wizard-game-row" data-game-id="${escHtml(g.gameId)}">
+        <span>${escHtml(g.awayTeam)} @ ${escHtml(g.homeTeam)}</span>
+        <span class="${hasSpread ? 'text-muted' : 'week-wizard-spread-missing'}">${hasSpread ? `${escHtml(formatSpread(g.spread, g.favorite, g) || 'Spread set')} <em class="games-row-src">${escHtml(SF.spreadSourceLabel(g))}</em>` : 'Set spread'}</span>
+      </button>
+      <button type="button" class="btn btn-ghost week-wizard-game-remove" data-wiz-remove="${escHtml(g.gameId)}" aria-label="${escHtml(`Remove ${g.awayTeam} @ ${g.homeTeam}`)}">Remove</button>
+    </div>`;
   }).join('');
+  const empty = `<p class="text-muted text-sm">No games on the slate yet.</p><button type="button" class="btn btn-secondary btn-sm wiz-slate-btn mt-sm" id="wiz-step3-back-to-add">Back to add games</button>`;
   return `<div class="admin-section-title">Confirm slate + spreads</div>
-    ${banner}<div class="week-wizard-game-list">${rows || '<p class="text-muted text-sm">No games on the slate yet.</p>'}</div>
-    <button type="button" class="btn btn-ghost btn-sm mt-sm" id="wiz-step3-edit-in-games-tab">Edit slate in Games tab</button>
-    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step3-back">Back</button><button type="button" class="btn btn-primary" id="wiz-step3-next">Next</button></div>`;
+    ${banner}${spreadFind}<div class="week-wizard-game-list">${rows || empty}</div>
+    ${wizardSportExtrasHTML(week, games)}
+    <button type="button" class="btn btn-ghost btn-sm wiz-slate-btn mt-sm" id="wiz-step3-edit-in-games-tab">Edit slate in Games tab</button>
+    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step3-back">Back</button><button type="button" class="btn btn-primary" id="wiz-step3-next"${games.length ? '' : ' disabled'}>Next</button></div>`;
+}
+let _wizRemoveTimer = null;
+/**
+ * Step 3's Remove, after the slate write: the removed row collapses over 200 ms (never under Reduce Motion), then the step repaints (so the banner, the NFL tiebreaker select and the Next gate
+ * recompute from the mirror). The repaint is the same one every wizard change uses; a second remove inside the window cancels the pending one and repaints once, with the latest state.
+ */
+function collapseWizardRowThenRepaint(bodyEl, gameId) {
+  if (_wizRemoveTimer) { clearTimeout(_wizRemoveTimer); _wizRemoveTimer = null; }
+  const repaint = () => { _wizRemoveTimer = null; if (document.getElementById('week-wizard-sheet-wrap') && _weekWizardStep === 3) renderWeekWizardSheetBody(); markCommStale(); };
+  let reduced = false; try { reduced = prefersReducedMotion(); } catch { reduced = false; }
+  const item = Array.from(bodyEl.querySelectorAll('.week-wizard-game-item')).find((n) => n.getAttribute('data-item-game') === gameId);
+  if (!item || reduced) { repaint(); return; }
+  try { const h = item.offsetHeight; if (h) { item.style.maxHeight = `${h}px`; void item.offsetHeight; } item.classList.add('is-leaving'); } catch { /* an unmeasurable row simply goes with the repaint */ }
+  _wizRemoveTimer = setTimeout(repaint, GAMES_COLLAPSE_MS);
 }
 function bindWeekWizardStep3(bodyEl, week, games) {
+  spreadFindUI().bind(bodyEl);   // W-71: Find spreads / Include / No thanks
+  // D1 (DI-533 #6/#7): an NFL week's tiebreaker game and its optional longest-field-goal switch. Both write over the mirror's CURRENT week row (RG-256 class), never the render's closure,
+  // and "Next" persists the visible choice (so the default - the last kickoff - is recorded as a deliberate value, not left implicit).
+  const saveTbGame = () => {
+    const sel = bodyEl.querySelector('#wiz-tb-game'); if (!sel || !week) return;
+    const cur = getWeek(week.weekId) || week;
+    const game = getGames(week.weekId).find((g) => g.gameId === sel.value); if (!game) return;
+    const f = tiebreakerFieldsFor({ week: cur, game, profile: profileForWeek(cur), questionFor: tiebreakerQuestionFor });
+    if (f) saveWeek({ ...cur, ...f, updatedAt: new Date().toISOString() });
+  };
+  bodyEl.querySelector('#wiz-tb-game')?.addEventListener('change', saveTbGame);
+  bodyEl.querySelector('#wiz-ep-enabled')?.addEventListener('click', (e) => {
+    const on = toggleSwitchRow(e.currentTarget);
+    const cur = getWeek(week.weekId) || week;
+    saveWeek({ ...cur, extraPointEnabled: on, updatedAt: new Date().toISOString() });
+  });
   bodyEl.querySelector('#wiz-step3-back')?.addEventListener('click', () => { _weekWizardStep = 2; renderWeekWizardSheetBody(); });
-  bodyEl.querySelector('#wiz-step3-next')?.addEventListener('click', () => { _weekWizardStep = 4; renderWeekWizardSheetBody(); });
+  bodyEl.querySelector('#wiz-step3-next')?.addEventListener('click', () => {
+    // The slate is re-read when the tap LANDS (RG-256 class): a Remove that emptied it is still collapsing, so the button painted before it is still enabled for up to 200 ms. An empty slate does not advance;
+    // the step repaints now (its empty state, "Back to add games", and a disabled Next) instead of waiting for the hold.
+    if (week && getGames(week.weekId).length === 0) {
+      if (_wizRemoveTimer) { clearTimeout(_wizRemoveTimer); _wizRemoveTimer = null; }
+      showToast('Add at least one game to continue.', 'warning');
+      renderWeekWizardSheetBody();
+      return;
+    }
+    saveTbGame(); _weekWizardStep = 4; renderWeekWizardSheetBody();
+  });
   // DI-412 (UN-367) — a LATERAL move (Games tab, richer editor), not a step
   // forward/back: dismisses the sheet WITHOUT clearing wizard state (never
   // closeWeekWizardSheet()), then reuses the SAME tab-switch mechanism the
@@ -33419,6 +39558,21 @@ function bindWeekWizardStep3(bodyEl, week, games) {
     dismissWizardSheetForNavigation();
     state.commTab = 'games';
     navigateTo('commissioner');
+  });
+  bodyEl.querySelector('#wiz-step3-back-to-add')?.addEventListener('click', () => { _weekWizardStep = 2; renderWeekWizardSheetBody(); });
+  // D1 (W-69, DI-W69.7): Remove on a slate row asks in the app's action sheet (names the picks), then the row collapses over 200 ms and the step repaints - the missing-spread banner and the Next gate
+  // recompute. Same sheet and same operation as the Games list's Remove (removeGameFromSlate). The repaint waits for the collapse; a newer remove or a touch in that window supersedes it.
+  bodyEl.querySelectorAll('[data-wiz-remove]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const gid = btn.getAttribute('data-wiz-remove');
+      if (!gid || !week) return;
+      const g = getGames(week.weekId).find((x) => x.gameId === gid);
+      if (!g) { showToast(SLATE_COPY.swapGone, 'error'); renderWeekWizardSheetBody(); return; }   // another device removed it: say so, and bring the list up to date
+      lsShowActionSheet('slate-remove', removeSheetHTML({ escHtml, name: slateName(g), pickCount: countPicksForGame(gid), hasCounterpart: getAvailableGames(week.weekId).some((p) => slateMatchFor(p, [g])) }), {
+        weekId: week.weekId, gameId: gid, invoker: btn,
+        onDone: () => { patchGamesSection(); collapseWizardRowThenRepaint(bodyEl, gid); },
+      });
+    });
   });
   bodyEl.querySelectorAll('[data-game-id]').forEach((row) => {
     row.addEventListener('click', () => {
@@ -33906,7 +40060,7 @@ function renderWeekWizardStep6HTML(week, games) {
     <div class="admin-section-title mt-md">Tiebreaker</div>
     <div class="form-group">
       <label class="form-label" for="wiz-tb-question">Question</label>
-      <input class="form-input" id="wiz-tb-question" value="${escHtml(tb.question)}" />
+      <input class="form-input" id="wiz-tb-question" data-wiz-autosave value="${escHtml(tb.question)}" />
       <p class="text-muted text-xs mt-xs">${escHtml(tb.calculationModeCaption)}</p>
     </div>
     <div class="admin-section-title mt-md">When</div>
@@ -33998,7 +40152,8 @@ function bindWeekWizardStep6(bodyEl, week, games) {
  *  while `week.status === 'open'` (§4.2 — "hidden, not disabled, for every
  *  other status"), inside the Manage screen. */
 function renderScribeReminderControlsHTML(week) {
-  const activeReminderPlayers = getPlayers().filter((p) => p.active);
+  // D1 (DI-531 / DI-537): who has to pick is the week's ENTRANTS in a league that runs two or more sports (an NFL week is not waiting on a college-only member); one sport = every active player.
+  const activeReminderPlayers = (isMultiSportLeague() ? entrantsForWeek(week) : getPlayers()).filter((p) => p.active);
   // REVIEWER minor finding (916bdb7 review, 2026-09-25) — Array.prototype
   // .every() on an EMPTY array is vacuously true, so a roster with zero
   // active players (real, if rare — everyone deactivated) read as "everyone
@@ -34008,8 +40163,11 @@ function renderScribeReminderControlsHTML(week) {
     return `<div class="admin-section-title mt-md">SCRIBE Reminders</div>
       <p class="text-muted text-sm">No active players to remind.</p>`;
   }
+  // UN-412 / A1 (Drew, 2026-10-01: Q3 yes) — "everyone picked" asks the ONE definition (submissionStateFor), not hasPlayerSubmitted(). Under RLS the
+  // commissioner's device holds only his OWN picks on an open week, so the old check was never true for the league and the controls never
+  // switched to "everyone is in". 'unknown' (no count on the device) is NOT "picked": it keeps the controls, which is the safe side.
   const everyoneSubmitted = activeReminderPlayers
-    .every((p) => hasPlayerSubmitted(week.weekId, p.playerId));
+    .every((p) => submissionStateFor(week.weekId, p.playerId) === 'yes');
   if (everyoneSubmitted) {
     return `<div class="admin-section-title mt-md">SCRIBE Reminders</div>
       <p class="text-muted text-sm">${escHtml(WIZARD_COPY.EVERYONE_PICKED)}</p>`;
@@ -34022,7 +40180,7 @@ function renderScribeReminderControlsHTML(week) {
   return `<div class="admin-section-title mt-md">SCRIBE Reminders</div>
     <div class="form-group">
       <label class="form-label">Cadence while open</label>
-      <select class="form-select" id="wiz-reminder-cadence">
+      <select class="form-select" id="wiz-reminder-cadence" data-wiz-autosave>
         <option value="daily"${cadence === 'daily' ? ' selected' : ''}>Daily</option>
         <option value="twice-daily"${cadence === 'twice-daily' ? ' selected' : ''}>Twice daily</option>
         <option value="hourly-final-day"${cadence === 'hourly-final-day' ? ' selected' : ''}>Hourly on lock day</option>
@@ -34031,7 +40189,7 @@ function renderScribeReminderControlsHTML(week) {
     </div>
     <div class="form-group">
       <label class="form-label">Manual cooldown (hours)</label>
-      <input class="form-input" type="number" min="1" id="wiz-reminder-cooldown" value="${escHtml(String(cooldown))}" />
+      <input class="form-input" type="number" min="1" id="wiz-reminder-cooldown" data-wiz-autosave value="${escHtml(String(cooldown))}" />
     </div>
     <button type="button" class="btn btn-secondary btn-block" id="wiz-scribe-remind-btn">SCRIBE: remind the stragglers</button>
     <p class="text-muted text-xs mt-xs">${escHtml(lastLabel)}</p>`;
@@ -34062,6 +40220,24 @@ function reminderSkipToastCopy(data) {
 }
 export const _reminderSkipToastCopyForTest = reminderSkipToastCopy;
 
+/** Test seam (UN-412 / A1) — the controls' "everyone picked" decision is driven through the REAL renderer. No production caller. */
+export const _renderScribeReminderControlsHTMLForTest = renderScribeReminderControlsHTML;
+
+/**
+ * The manual reminder's request body (D1, reviewer B3). A league that runs one sport sends exactly what it always sent, `{ league_id }`. A league that runs two or more names the SPORT the managed week
+ * belongs to by `competitionId` (resolved through the one resolver, R1), so the nudge reminds that sport's entrants about that sport's week - never the default sport's. The server validates the id
+ * against the league's own live competitions before it reserves the cooldown.
+ */
+export function manualReminderBodyFor(week, leagueId) {
+  const body = { league_id: leagueId };
+  if (week && isMultiSportLeague()) {
+    let c = null;
+    try { c = competitionForWeek(week); } catch { c = null; }
+    if (c && c.id) body.competitionId = c.id;
+  }
+  return body;
+}
+
 function bindScribeReminderControls(bodyEl, week) {
   bodyEl.querySelector('#wiz-reminder-cadence')?.addEventListener('change', (e) => saveSetting('reminderCadence', e.target.value));
   bodyEl.querySelector('#wiz-reminder-cooldown')?.addEventListener('change', (e) => {
@@ -34085,7 +40261,7 @@ function bindScribeReminderControls(bodyEl, week) {
       // attaches the current session's access token automatically, and the
       // manual branch is a SECOND, header-selected entry point on the SAME
       // `reminders` Edge Function (no RPC, no job secret reachable here).
-      const { data, error } = await client.functions.invoke('reminders', { body: { league_id: leagueId } });
+      const { data, error } = await client.functions.invoke('reminders', { body: manualReminderBodyFor(week, leagueId) });
       if (error) throw error;
       // REVIEWER BLOCK item 4 (916bdb7 review, 2026-09-25) — was an inline
       // comparison against `'cooldown'`, a string that never appears
@@ -34118,23 +40294,24 @@ function bindScribeReminderControls(bodyEl, week) {
  *  only) the DI-C3 reminder controls. */
 function renderWeekWizardManageHTML(week, games) {
   // RG-251 — offered from the SERVER-confirmed status, never a leg it refused.
-  const buttons = weekWizardApi().narrowedStatusButtons(serverConfirmedWeekStatus(week))
+  const confirmedStatus = serverConfirmedWeekStatus(week);
+  const buttons = weekWizardApi().narrowedStatusButtons(confirmedStatus)
     // STEP B(14) (third pass) — D-1: the Munera glyph + text, never the emoji
     // label (kept on the entry only for the drift check vs the Comm panel).
     .map((b) => `<button type="button" class="btn ${b.cls} btn-sm week-wizard-status-btn" data-to="${b.to}">${wizardStatusIconHTML(b)}${escHtml(b.text)}</button>`).join('');
-  // DI-359 (2026-09-27) — the guided Finalize Week entry, replacing the
-  // retired standalone card's inline "✅ Confirm Finalization" banner.
-  // Same trigger (`week.pendingFinalization === true`) as that banner used;
-  // "Not yet" reuses the SAME id/handler that banner's own dismiss button
-  // already had (bindCommEventListeners()'s `dismiss-pending-btn`).
-  const pendingFinalizationBannerHTML = week.pendingFinalization ? `
-    <div class="pending-final-banner">
-      <div><strong>⏰ All games are final.</strong> Ready to close this week and lock standings?</div>
-      <div class="flex gap-sm mt-sm">
-        <button type="button" class="btn btn-primary btn-sm" id="wiz-open-finalize-btn">Finalize Week</button>
-        <button class="btn btn-ghost btn-sm" id="dismiss-pending-btn">Not yet</button>
-      </div>
-    </div>` : '';
+  // FB-027 / DI-518 (bug batch W, 2026-10-07) — THE GUIDED FINALIZE ENTRY, keyed to the week being LIVE (the same server-confirmed status the row above
+  // is built from), never to `week.pendingFinalization`. That flag is raised by the background tick only once every game is final on a commissioner device
+  // that happens to tick, and "Not yet" used to clear it — so the entry was usually absent and the status-row "Finalize" (which applied `final` directly,
+  // skipping the tiebreaker and the longest field goal) was the one Finalize on screen. A full-width primary button above Timing, the commissioner's next
+  // action; the all-final banner above it when every game is final. "Not yet" hides the banner on this screen and WRITES NOTHING (pendingFinalization also
+  // drives the 24 h commissioner reminder, reminder-rules.js). The Comm panel's legacy `dismiss-pending-btn` handler, which wrote the flag, is removed.
+  const entry = weekWizardFinalizeEntry(week, games, confirmedStatus);
+  const finalizeEntryHTML = entry.show ? `${entry.allFinal && _finalizeBannerHiddenFor !== week.weekId ? `
+    <div class="pending-final-banner" id="wiz-final-banner">
+      <div><strong>${escHtml(FINALIZE_COPY.ALL_FINAL_LEAD)}</strong> ${escHtml(FINALIZE_COPY.ALL_FINAL_ASK)}</div>
+      <div class="flex gap-sm mt-sm"><button type="button" class="btn btn-ghost btn-sm" id="wiz-final-not-yet">${escHtml(FINALIZE_COPY.NOT_YET)}</button></div>
+    </div>` : ''}
+    <button type="button" class="btn btn-primary btn-block mb-md" id="wiz-open-finalize-btn">${escHtml(entry.label)}</button>` : '';
   // BLOCK fix (a) (app-shell part 3A review, 2026-09-27) — once this week is
   // anything but a draft, this screen was the ONLY place a commissioner
   // reliably lands via the top-level entry button, and it offered no way
@@ -34150,9 +40327,15 @@ function renderWeekWizardManageHTML(week, games) {
   })();
   const setupNextHTML = `<div class="admin-section-title mt-md">Next week</div>
     <button type="button" class="btn btn-primary btn-block" id="wiz-manage-setup-next">Set up Week ${escHtml(String(nextWeekNum))}</button>`;
-  return `<div class="text-sm text-muted mb-sm">Status: ${escHtml(week.status.toUpperCase())}</div>
-    <div class="flex gap-sm flex-wrap mb-md">${buttons}</div>
-    ${pendingFinalizationBannerHTML}
+  // D1 / DI-510 row 9 — the commissioner sees the STORED status (the buttons below act on it) and, when the lock time has passed on a week still stored open, one calm line saying
+  // so. The server job (when its switch is on) or a commissioner's open device then moves the stored status; the badge players see already reads LOCKED.
+  // (Integration, 2026-10-07: reads the same server-confirmed status the row above is built from, `confirmedStatus`, FB-027.)
+  const manageLockLine = weekLockState({ week, games, confirmedStatus }).derived
+    ? '<div class="text-sm text-muted mb-sm">Lock time has passed. The week locks automatically.</div>' : '';
+  // DI-518 touched-screen audit — the status line is a status badge (the header's own markup), not raw text.
+  return `<div class="text-sm text-muted mb-sm">Status: <span class="badge badge-${escHtml(week.status)}">${escHtml(week.status.toUpperCase())}</span></div>${manageLockLine}
+    <div class="flex gap-sm flex-wrap mb-md week-wizard-status-row">${buttons}</div>
+    ${finalizeEntryHTML}
     <div class="admin-section-title">Timing</div>
     ${renderWeekWizardTimingFieldsHTML(week, games)}
     <button type="button" class="btn btn-secondary btn-block mt-sm" id="wiz-manage-save-timing">Save Timing</button>
@@ -34165,12 +40348,55 @@ function renderWeekWizardManageHTML(week, games) {
 /** RG-251 reviewer note 2 (2026-09-26) — test-only seam, so authtest [44k3] can drive the Manage
  *  screen from a POLLUTED mirror (the phase-5a twin); same `_xForTest` convention. */
 export const _renderWeekWizardManageHTMLForTest = renderWeekWizardManageHTML;
+/** FB-027 / DI-518 — the Manage screen's Finalize entry for `week`: finalizeEntry() (js/week-wizard.js) fed the sport code when the league runs more than
+ *  one (non-archived) competition. A competition read that throws (an unregistered sport) degrades to the single-sport label, never to no button. */
+function weekWizardFinalizeEntry(week, games, status) {
+  const { multiSport, sportCode } = weekSportLabelContext(week);
+  return finalizeEntry({ status, games, sportCode, weekNumber: week?.weekNumber ?? null, multiSport });
+}
+/** FB-027 / DI-518 — does the league run more than one (non-archived) competition, and which sport code names `week`? Shared by the Manage screen's
+ *  Finalize button and the draft view's live-week row. */
+function weekSportLabelContext(week) {
+  try {
+    const multiSport = getLeagueCompetitions().filter((c) => c && !c.archivedAt).length > 1;
+    return { multiSport, sportCode: multiSport ? (profileForWeek(week)?.code || null) : null };
+  } catch { return { multiSport: false, sportCode: null }; }
+}
+/**
+ * FB-027 / DI-518 AMENDMENT (coordinator, 2026-10-07) — the draft view's "Week N is live" row. When the wizard is on a DRAFT and a LIVE week of the
+ * same sport exists (liveWeekBehindDraft(), js/week-wizard.js; the server-confirmed status; the competition compared through competitionForWeek(), the
+ * one resolver), the top of the draft view offers "Finalize Week N", which opens the guided flow for THAT week (openFinalizeWeekFlow()). Without it
+ * the live week's Finalize was unreachable from the wizard: the entry button routes straight to the lone continuable draft. `null` when none hides.
+ */
+function weekWizardLiveWeekBehind(week) {
+  if (!week || week.status !== WEEK_STATUS.DRAFT) return null;
+  const compId = (w) => { try { return competitionForWeek(w)?.id ?? null; } catch { return null; } };
+  return liveWeekBehindDraft({ draft: week, weeks: getWeeks(), statusOf: serverConfirmedWeekStatus, sameSport: (a, b) => compId(a) === compId(b) });
+}
+function renderLiveWeekFinalizeRowHTML(liveWeek) {
+  const copy = liveWeekRowCopy({ weekNumber: liveWeek.weekNumber, ...weekSportLabelContext(liveWeek) });
+  return `<div class="wiz-live-week-row" id="wiz-live-week-row">
+      <span class="wiz-live-week-text">${escHtml(copy.text)}</span>
+      <button type="button" class="btn btn-primary btn-sm" id="wiz-live-finalize-btn">${escHtml(copy.button)}</button>
+    </div>`;
+}
+function bindLiveWeekFinalizeRow(bodyEl, liveWeek) {
+  bodyEl.querySelector('#wiz-live-finalize-btn')?.addEventListener('click', () => {
+    // Review N5 — remember the draft view this came from, so Step 1's Cancel returns to it.
+    openFinalizeWeekFlow(getWeek(liveWeek.weekId) || liveWeek, { returnTo: { targetWeekId: _weekWizardTargetWeekId, step: _weekWizardStep } });
+  });
+}
 function bindWeekWizardManage(bodyEl, week) {
   // DI-359 — opens the guided Finalize Week flow, IN THE SAME SHEET (no new
   // sheet component — this just switches renderWeekWizardSheetBody()'s own
   // branch via `_finalizeStep`, below).
   bodyEl.querySelector('#wiz-open-finalize-btn')?.addEventListener('click', () => {
-    _finalizeStep = 1;
+    enterFinalizeFlow(week && (getWeek(week.weekId) || week));   // PF-416 follow-up, item 3: Step 1, or Step 4 for a finalize already committed here
+    renderWeekWizardSheetBody();
+  });
+  // FB-027 / DI-518 — "Not yet" clears nothing: it hides the all-final prompt for this sheet session (until the sheet closes) and writes no field.
+  bodyEl.querySelector('#wiz-final-not-yet')?.addEventListener('click', () => {
+    _finalizeBannerHiddenFor = week ? week.weekId : null;
     renderWeekWizardSheetBody();
   });
   // BLOCK fix (a) — starts a brand-new draft, independent of THIS (non-draft)
@@ -34207,6 +40433,10 @@ function bindWeekWizardManage(bodyEl, week) {
     btn.addEventListener('click', () => {
       const to = btn.dataset.to;
       if (!week) return;
+      // FB-027 / DI-518 — "Finalize" OPENS THE GUIDED FLOW; it never applies `final`. Applying it here finalized the week with no tiebreaker and no
+      // longest field goal (Steps 2 and 3 skipped), which is the bug. The unresolved-tie notice this branch used to raise as a confirm() is Step 4's
+      // inline warning now (renderFinalizeStep4HTML()).
+      if (to === 'final') { enterFinalizeFlow(getWeek(week.weekId) || week); renderWeekWizardSheetBody(); return; }   // PF-416 follow-up, item 3
       // SECURITY GATE FINDING 2 (2026-09-25) — same staleness risk, same
       // fix, as saveWizardTiming() just above: this sheet does not repaint
       // on Realtime, so the `week` this handler closed over can be stale by
@@ -34216,18 +40446,12 @@ function bindWeekWizardManage(bodyEl, week) {
       // silent-reopen shape Finding 2 describes, just via a status button
       // instead of the timing form. Re-read immediately before use.
       const liveWeekForStatus = getWeeks().find(w => w.weekId === week.weekId) || week;
-      if (to === 'final' && arePicksPublic(liveWeekForStatus)) {
-        // SP-54 / DI-469 — the one composer (see the manual Finalize button's note); the same text on every site.
-        const notice = finalizeTieNotice(liveWeekForStatus, getPlayers().filter((p) => p.active), getPicks(liveWeekForStatus.weekId), getGames(liveWeekForStatus.weekId), 'confirm');
-        if (notice.show && !confirm(notice.text)) return;
-      }
+      // PF-1 / Amendment 1 (A1.1) — same interception as the Comm Week tab's button: a lapsed lock instant means "pick a new lock time", through the Late Entry sheet.
+      if (to === 'open' && maybeOpenLateEntrySheet(liveWeekForStatus, { onDone: () => { renderWeekWizardSheetBody(); renderCommPage(); } })) return;
       const statusResult = applyWeekStatusChange(liveWeekForStatus, to);
       refreshHeader();
       showToast(`Week: ${to}`, 'success');
-      if (statusResult?.spreadLockRefusals?.length) {
-        const names = statusResult.spreadLockRefusals.map((g) => `${g.awayTeam} @ ${g.homeTeam}`).join(', ');
-        showToast(`⚠️ Spread NOT locked for ${statusResult.spreadLockRefusals.length} game${statusResult.spreadLockRefusals.length > 1 ? 's' : ''} — sign contradicts recorded favorite: ${names}. Fix the spread/favorite in Games, then lock again.`, 'error');
-      }
+      notifySpreadLockRefusals(liveWeekForStatus.weekId, statusResult?.spreadLockRefusals);   // PF-1 / DI-496: this device already told the commissioner; the server's echo of the same lock must not toast it again
       renderWeekWizardSheetBody();
       renderCommPage();
     });
@@ -34244,9 +40468,23 @@ function bindWeekWizardManage(bodyEl, week) {
 // Extra Point ever becomes a calculateWeeklyResults() standings input.
 // ══════════════════════════════════════════════════════════════════════════
 
-function renderFinalizeTrackerHTML(step) {
-  const dots = FINALIZE_STEPS.map((s) => `<span class="week-wizard-step-dot${s.step === step ? ' active' : ''}${s.step < step ? ' done' : ''}"></span>`).join('');
-  return `<div class="week-wizard-tracker">${dots}<span class="week-wizard-tracker-label">Step ${step} of ${FINALIZE_STEP_COUNT}</span></div>`;
+// FB-027 / DI-518 / DI-519 (bug batch W, 2026-10-07) — the flow's own state beyond `_finalizeStep`: `_finalizeInFlight` (Step 4's Finalize Week is
+// pressed and the server's answer is awaited — the button reads "Finalizing…", and a second press, Retry or Back does nothing), `_finalizeOutcome`
+// (null, or the last answer that was not a success: 'pending' ⇒ "Not sent yet…" with Retry; 'refused' ⇒ the terminal refused row with Reload app —
+// review round 1, B1; PF-416 follow-up, item 2), `_finalizeBannerHiddenFor` (the weekId whose all-final prompt "Not yet" hid for this sheet session), and
+// `_finalizeReturnTo` (the draft view the flow was opened from through the live-week row, so Cancel returns there — review N5). All but the first are
+// cleared whenever the sheet opens or closes.
+let _finalizeInFlight = false;
+let _finalizeOutcome = null;
+let _finalizeBannerHiddenFor = null;
+let _finalizeReturnTo = null;
+
+/** The tracker counts the VISIBLE steps (three when the week does not run the longest-field-goal contest, DI-519). */
+function renderFinalizeTrackerHTML(step, week) {
+  const steps = finalizeStepsFor(week);
+  const pos = finalizeStepPosition(step, week);
+  const dots = steps.map((s, i) => `<span class="week-wizard-step-dot${i + 1 === pos.index ? ' active' : ''}${i + 1 < pos.index ? ' done' : ''}"></span>`).join('');
+  return `<div class="week-wizard-tracker">${dots}<span class="week-wizard-tracker-label">Step ${numHtml(pos.index)} of ${numHtml(pos.count)}</span></div>`;
 }
 
 /** Step 1 — Approve Scores. A pure readiness check + review, never final
@@ -34259,60 +40497,106 @@ function renderFinalizeStep1HTML(week, games) {
     const reason = ok ? '' : (g.status !== 'final' ? ' — not final yet' : ' — no locked spread');
     return `<div class="week-wizard-check-row${ok ? ' ok' : ''}"><span aria-hidden="true">${ok ? '✓' : '○'}</span> ${escHtml(`${g.awayTeam} @ ${g.homeTeam}`)}${escHtml(reason)}</div>`;
   }).join('');
+  // DI-519 — the count line, `{F} of {N} games final · spreads locked`.
   return `<div class="admin-section-title">Approve Scores</div>
+    <p class="text-sm mb-sm" id="wiz-fin-score-count">${escHtml(finalizeScoresCountLabel(summary))}</p>
     ${rows || '<p class="text-muted text-sm">No games on this slate.</p>'}
     ${summary.blocked ? `<div class="warning-box mt-sm">Every game needs a FINAL status and a locked spread before scores can be approved. Fix it in Games, or remove the game from the slate, then come back.</div>` : ''}
     <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-fin-cancel">Cancel</button>
     <button type="button" class="btn btn-primary" id="wiz-fin-next" ${summary.blocked ? 'disabled' : ''}>Next</button></div>`;
 }
 function bindFinalizeStep1(bodyEl, week, games) {
-  bodyEl.querySelector('#wiz-fin-cancel')?.addEventListener('click', () => { _finalizeStep = null; closeWeekWizardSheet(); });
+  bodyEl.querySelector('#wiz-fin-cancel')?.addEventListener('click', () => {
+    // Review N5 — opened from a draft's "Week N is live" row: Cancel goes BACK to that draft, at the step it was on (its unsaved Step 6 choices are
+    // module state openFinalizeWeekFlow() leaves alone), instead of closing the sheet on the commissioner's set-up.
+    if (_finalizeReturnTo && getWeek(_finalizeReturnTo.targetWeekId)) {
+      const back = _finalizeReturnTo;
+      _finalizeReturnTo = null; _finalizeStep = null; _finalizeOutcome = null;
+      _weekWizardTargetWeekId = back.targetWeekId;
+      _weekWizardStep = back.step;
+      renderWeekWizardSheetBody();
+      return;
+    }
+    _finalizeStep = null; closeWeekWizardSheet();
+  });
   bodyEl.querySelector('#wiz-fin-next')?.addEventListener('click', () => {
     if (!week) return;
     const cur = getWeek(week.weekId) || week;
     const curGames = getGames(cur.weekId);
     const result = weekWizardApi().finalizeApproveScores({ week: cur, games: curGames });
     if (!result.ok) { renderWeekWizardSheetBody(); return; } // blocked — repaint to show the current reason
-    _finalizeStep = 2;
+    _finalizeStep = finalizeNextStep(1, cur) || 2;
     renderWeekWizardSheetBody();
   });
 }
 
-/** Step 2 — Confirm Tiebreaker. Auto-Calc prefills; the commissioner can
+/** Step 2 — Confirm Tiebreaker. The calculated value prefills (DI-516: the
+ *  live module, the NFL's designated game included); the commissioner can
  *  accept or override. Writes through the SAME save path the standalone
  *  Tiebreaker card's own "Save Tiebreaker" button already uses. */
 function renderFinalizeStep2HTML(week) {
   const autoCalc = weekWizardApi().finalizeAutoCalcTiebreaker(week);
-  const summary = tiebreakerConfirmSummary({ week, autoCalcValue: autoCalc.ok ? autoCalc.value : null });
+  const calculated = autoCalc.ok ? autoCalc.value : null;
+  const summary = tiebreakerConfirmSummary({ week, autoCalcValue: calculated });
+  // DI-519 — the effective value (the one on file, else the calculated total) in the override field, with its source chip (DI-516's rule).
+  const chip = tiebreakerChipForValue(week, summary.prefillValue);
   return `<div class="admin-section-title">Confirm Tiebreaker</div>
     <p class="text-sm">${summary.hasQuestion ? escHtml(summary.question) : '<span class="text-muted">No tiebreaker question set.</span>'}</p>
-    <p class="text-muted text-xs">${autoCalc.ok ? `Auto-Calc suggests: <strong>${numHtml(autoCalc.value)}</strong>` : 'Auto-Calc: no final alma mater scores yet.'}</p>
+    <p class="text-muted text-xs" id="wiz-fin-tb-calculated">${calculated !== null ? `Calculated: <strong>${numHtml(calculated)}</strong>` : 'Calculated: no final scores yet.'}</p>
     <div class="form-group">
       <label class="form-label" for="wiz-fin-tb-value">Actual Value</label>
-      <input class="form-input" id="wiz-fin-tb-value" type="number" value="${summary.prefillValue != null ? numHtml(summary.prefillValue) : ''}" />
+      <input class="form-input" id="wiz-fin-tb-value" type="number" inputmode="numeric" value="${summary.prefillValue != null ? numHtml(summary.prefillValue) : ''}" />
     </div>
-    <div id="wiz-fin-tb-refusal" class="text-sm" style="color:var(--loss)"></div>
+    <p class="text-xs mb-sm"><span class="wiz-fin-chip" id="wiz-fin-tb-chip"${chip ? '' : ' hidden'}>${escHtml(chip)}</span></p>
+    <div id="wiz-fin-tb-refusal" class="text-sm" role="alert" style="color:var(--loss)"></div>
     <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-fin-back">Back</button>
     <button type="button" class="btn btn-primary" id="wiz-fin-next">Confirm</button></div>`;
 }
+/**
+ * FB-027 / DI-519 — how many entrants have a tiebreaker guess on file for `week` (entrants = active players until DI-531's playersForCompetition()
+ * lands). A count of OTHER players' submissions is still a disclosure, so it is read only once picks are public (live/final, the blind rule) and is 0
+ * otherwise — which can only ever make the tiebreaker optional, never required.
+ */
+function finalizeTiebreakerGuessCount(week) {
+  if (!week || !arePicksPublic(week)) return 0;
+  return playersForWeek(week).filter((p) => getTiebreakerGuess(week.weekId, p.playerId) != null).length;   // D1 (B2) + DI-531 (C4): the week's entrants
+}
+/**
+ * FB-027 / DI-519 + DI-516 (D1 integration, 2026-10-07) — the source chip for a tiebreaker VALUE the commissioner is looking at (Step 2's field, as
+ * prefilled or as typed): DI-516's answer for the week WITH THAT VALUE ON FILE, read through the same effectiveTiebreakerActualForWeek() every ranking
+ * surface uses, so the guided flow, the review card and the Comm card share one rule (`matchesCalculated`: equal to a COMPLETE calculated total ⇒
+ * "Calculated", anything else ⇒ "Commissioner-set", no value ⇒ no chip). Read-only: the week passed in is a copy, nothing is saved.
+ */
+function tiebreakerChipForValue(week, value, games = null) {
+  if (!week || value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) return '';
+  return tiebreakerSourceChip(effectiveTiebreakerActualForWeek({ ...week, actualTiebreakerValue: Number(value) }, games));
+}
 function bindFinalizeStep2(bodyEl, week) {
   bodyEl.querySelector('#wiz-fin-back')?.addEventListener('click', () => { _finalizeStep = 1; renderWeekWizardSheetBody(); });
+  // The chip follows the field: the complete calculated total reads "Calculated", anything else typed reads "Commissioner-set" (DI-516's rule).
+  bodyEl.querySelector('#wiz-fin-tb-value')?.addEventListener('input', (e) => {
+    const chipEl = bodyEl.querySelector('#wiz-fin-tb-chip');
+    const raw = e && e.target ? e.target.value : '';
+    const chip = tiebreakerChipForValue(getWeek(week.weekId) || week, raw === '' ? null : parseFloat(raw));
+    if (chipEl) { chipEl.textContent = chip; chipEl.hidden = !chip; }
+  });
   bodyEl.querySelector('#wiz-fin-next')?.addEventListener('click', () => {
     if (!week) return;
     const cur = getWeek(week.weekId) || week;
     const raw = bodyEl.querySelector('#wiz-fin-tb-value')?.value;
     const refusalEl = bodyEl.querySelector('#wiz-fin-tb-refusal');
-    // null stays legal (an explicit "no tiebreaker value yet") — only a
-    // NON-EMPTY, non-finite entry (garbage text) is refused, matching
-    // confirmFinalizeTiebreaker()'s own guard.
+    // DI-519 — once the week asks a question AND an entrant guessed, a blank (or provisional) value cannot be confirmed: finalizing would settle a
+    // tie with no tiebreaker. Otherwise null stays legal (an explicit "no tiebreaker value yet"); a NON-EMPTY, non-finite entry is refused either way.
+    const { required } = tiebreakerRequirement({ week: cur, guessCount: finalizeTiebreakerGuessCount(cur) });
+    const refuse = required ? FINALIZE_COPY.TB_REQUIRED : 'Enter a number, or leave blank.';
     const actualValue = (raw === '' || raw === undefined || raw === null) ? null : parseFloat(raw);
     if (actualValue !== null && !Number.isFinite(actualValue)) {
-      if (refusalEl) refusalEl.textContent = 'Enter a number, or leave blank.';
+      if (refusalEl) refusalEl.textContent = refuse;
       return;
     }
-    const result = weekWizardApi().confirmFinalizeTiebreaker({ week: cur, actualValue });
-    if (!result.ok) { if (refusalEl) refusalEl.textContent = 'Enter a number, or leave blank.'; return; }
-    _finalizeStep = 3;
+    const result = weekWizardApi().confirmFinalizeTiebreaker({ week: cur, actualValue, required });
+    if (!result.ok) { if (refusalEl) refusalEl.textContent = refuse; return; }
+    _finalizeStep = finalizeNextStep(2, result.week) || 4;
     renderWeekWizardSheetBody();
   });
 }
@@ -34322,21 +40606,55 @@ function bindFinalizeStep2(bodyEl, week) {
  *  week is well past lock, so this is a formality, not a live risk, but the
  *  gate is kept rather than special-cased away. */
 function renderFinalizeStep3HTML(week) {
-  const players = getPlayers().filter((p) => p.active);
+  const players = playersForWeek(week);                     // D1 (B2) + DI-531 (C4): the week's entrants
   const summary = weekWizardApi().finalizeExtraPointSummary({ week, players });
   const canSeeOthers = canViewOtherPicks(week);
-  return `<div class="admin-section-title">Confirm Extra Point</div>
+  // DI-519 — shown only when the week runs the contest (finalizeStepsFor()); the DI's copy; prefilled from detection (the Comm card's "Detect" result,
+  // week.extraPointDetect.yards) when no actual is on file. The finite-number check below stays.
+  const detected = week && week.extraPointDetect && Number.isFinite(Number(week.extraPointDetect.yards)) ? Number(week.extraPointDetect.yards) : null;
+  const prefill = summary.actualValue != null ? summary.actualValue : detected;
+  const title = (FINALIZE_STEPS.find((s) => s.id === 'confirm-extra-point') || {}).title || '';
+  // Review round 1, R3 — Detect, here: the Comm card's ep-detect-btn (ESPN scoring plays → week.extraPointDetect), so the commissioner never has to
+  // leave the wizard to find the yards. The line beside it says what the last detection found.
+  const detectLine = week && week.extraPointDetect ? `${week.extraPointDetect.yards} yd — ${week.extraPointDetect.text || ''} (${week.extraPointDetect.matchup || ''})` : '';
+  return `<div class="admin-section-title">${escHtml(title)}</div>
     <div class="form-group">
-      <label class="form-label" for="wiz-fin-ep-value">Actual longest FG (yards)</label>
-      <input class="form-input" id="wiz-fin-ep-value" type="number" min="15" max="75" value="${summary.actualValue != null ? numHtml(summary.actualValue) : ''}" />
+      <label class="form-label" for="wiz-fin-ep-value">${escHtml(FINALIZE_COPY.EP_LABEL)}</label>
+      <input class="form-input" id="wiz-fin-ep-value" type="number" inputmode="numeric" min="15" max="75" value="${prefill != null ? numHtml(prefill) : ''}" />
     </div>
+    <div class="wiz-fin-ep-detect-row"><button type="button" class="btn btn-secondary btn-sm" id="wiz-fin-ep-detect">${escHtml(FINALIZE_COPY.EP_DETECT)}</button>
+      <span class="text-muted text-xs" id="wiz-fin-ep-detect-status" aria-live="polite">${escHtml(detectLine)}</span></div>
     <div id="wiz-fin-ep-refusal" class="text-sm" style="color:var(--loss)"></div>
     ${canSeeOthers && summary.graded ? renderExtraPointResultsHTML(week, summary.graded, escHtml) : (canSeeOthers ? '' : '<p class="text-muted text-xs">Other players\' guesses stay hidden until kickoff.</p>')}
     <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-fin-back">Back</button>
     <button type="button" class="btn btn-primary" id="wiz-fin-next">Confirm</button></div>`;
 }
 function bindFinalizeStep3(bodyEl, week) {
-  bodyEl.querySelector('#wiz-fin-back')?.addEventListener('click', () => { _finalizeStep = 2; renderWeekWizardSheetBody(); });
+  bodyEl.querySelector('#wiz-fin-back')?.addEventListener('click', () => { _finalizeStep = finalizePrevStep(3, week) || 2; renderWeekWizardSheetBody(); });
+  // R3 — the SAME detection and the SAME store as ep-detect-btn (`saveWeek({...getWeek(id), extraPointDetect: r.best})`, re-reading the mirror's row,
+  // RG-256). The field takes the detected yards when it is empty or still holds the previous detection — never over a value the commissioner typed.
+  bodyEl.querySelector('#wiz-fin-ep-detect')?.addEventListener('click', async () => {
+    if (!week) return;
+    const btn = bodyEl.querySelector('#wiz-fin-ep-detect');
+    const st = bodyEl.querySelector('#wiz-fin-ep-detect-status');
+    const prevDetected = (getWeek(week.weekId) || week).extraPointDetect?.yards;
+    if (btn) btn.disabled = true;
+    if (st) st.textContent = FINALIZE_COPY.EP_DETECTING;
+    try {
+      const r = await detectLongestFieldGoal(getGames(week.weekId));
+      if (r.best) {
+        saveWeek({ ...(getWeek(week.weekId) || week), extraPointDetect: r.best });
+        const inp = bodyEl.querySelector('#wiz-fin-ep-value');
+        if (inp && (!inp.value || (prevDetected != null && inp.value === String(prevDetected)))) inp.value = String(r.best.yards);
+        if (st) st.textContent = `${r.best.yards} yd — ${r.best.text} (${r.best.matchup})` + (r.skipped.length ? ` · ${r.skipped.length} game(s) skipped` : '');
+      } else if (st) {
+        st.textContent = FINALIZE_COPY.EP_DETECT_NONE + (r.skipped.length ? ` ${r.skipped.length} game(s) unavailable.` : '');
+      }
+    } catch (e) {
+      console.warn('[week-wizard] longest field goal detection failed', e);
+      if (st) st.textContent = FINALIZE_COPY.EP_DETECT_FAILED;
+    } finally { if (btn) btn.disabled = false; }
+  });
   bodyEl.querySelector('#wiz-fin-next')?.addEventListener('click', () => {
     if (!week) return;
     const cur = getWeek(week.weekId) || week;
@@ -34351,7 +40669,7 @@ function bindFinalizeStep3(bodyEl, week) {
     // SP-54 / DI-467 part 4 — the same helper `ep-save-btn` uses. This step runs BEFORE the week is final, so it is a no-op here; it is wired so a
     // result entered through this flow on an already-final week can never silently fail to apply.
     { const r = recomputeFinalWeekAfterEdit(result.week); if (r.recomputed || r.blocked) { const t = extraPointSavedToast(r); showToast(t.msg, t.type); } }
-    _finalizeStep = 4;
+    _finalizeStep = finalizeNextStep(3, result.week) || 4;
     renderWeekWizardSheetBody();
   });
 }
@@ -34361,7 +40679,7 @@ function bindFinalizeStep3(bodyEl, week) {
  *  itself is the EXACT sequence confirm-finalize-btn's handler used to run —
  *  unchanged, just sequenced behind this guided flow. */
 function renderFinalizeStep4HTML(week, games) {
-  const players = getPlayers().filter((p) => p.active);
+  const players = playersForWeek(week);                     // D1 (B2) + DI-531 (C4): the week's entrants
   // Blind rule (loadtest.mjs's whole-tree structural guard) — the SAME
   // explicit gate bindWeekWizardManage()'s manual "Finalize" status button
   // already uses before reading other players' picks for its own tie-check
@@ -34371,8 +40689,23 @@ function renderFinalizeStep4HTML(week, games) {
   // requires LIVE, which arePicksPublic() always treats as public) this is
   // a formality, not a live risk — but the gate is explicit here too, not
   // assumed, matching every other reader of `picks` in this file.
-  const picks = arePicksPublic(week) ? getPicks(week.weekId) : [];
+  const picks = arePicksPublic(week) ? picksOfRoster(getPicks(week.weekId), players) : [];
   const warning = weekWizardApi().unresolvedTieWarning({ week, players, picks, games });
+  // FB-027 / DI-519 — THE REVIEW CARD: every required value, one row each (Scores, Tiebreaker, Longest field goal, Players counted), read from the
+  // mirror at paint time. A missing required value reads "Missing" (never 0) and keeps Finalize Week disabled. Each row's mark is the Munera glyph
+  // (D-1, review N5): `check` when met, `warning` when missing. The outcome row and the in-flight state are module state (`_finalizeOutcome`,
+  // `_finalizeInFlight`), so a repaint keeps them.
+  const review = finalizeReviewFor(week, games);
+  const rowsHTML = review.rows.map((r) => `<div class="week-wizard-check-row${r.ok ? ' ok' : ' is-missing'}" data-review="${escHtml(r.id)}"><span class="wiz-fin-review-mark" aria-hidden="true">${r.ok ? icon('check') : icon('warning')}</span> <span class="wiz-fin-review-text">${escHtml([r.label, ...r.parts].join(' · '))}</span></div>`).join('');
+  // B1 (review round 1) — the outcome row: 'pending' ⇒ "Not sent yet…" with Retry (re-ask only); 'refused' ⇒ the terminal refused row with Reload
+  // app (PF-416 follow-up, item 2), and Finalize Week stays disabled: a refused write cannot succeed by being sent again.
+  const outcome = _finalizeOutcome ? finalizeOutcomeView(_finalizeOutcome) : null;
+  // PF-416 follow-up, review N6 (coordinator, 2026-10-08) — WEIGHT BY MEANING (DI-180c's rule, the network-hold banner's family): a finalize that is
+  // only NOT SENT YET is the muted amber `.wiz-fin-pending` and a polite `role="status"`; red `.wiz-fin-failure` and `role="alert"` are the refusal's
+  // alone. Each has its own id (review follow-up 3, 2026-10-08): #wiz-fin-pending, #wiz-fin-failure (also the empty, hidden slot).
+  const pending = !!outcome && outcome.kind === 'not-sent';
+  const outcomeHTML = `<div class="${escHtml(pending ? 'wiz-fin-pending' : 'wiz-fin-failure')} mt-sm" id="${escHtml(pending ? 'wiz-fin-pending' : 'wiz-fin-failure')}" role="${escHtml(pending ? 'status' : 'alert')}"${outcome ? '' : ' hidden'}><span>${escHtml(outcome ? outcome.text : '')}</span>${outcome && outcome.action === 'retry' ? ` <button type="button" class="btn btn-secondary btn-sm" id="wiz-fin-retry"${_finalizeInFlight ? ' disabled aria-busy="true"' : ''}>${escHtml(_finalizeInFlight ? FINALIZE_COPY.FINALIZING : outcome.actionLabel)}</button>` : ''}${outcome && outcome.action === 'reload' ? ` <button type="button" class="btn btn-secondary btn-sm" id="wiz-fin-reload"${_finalizeInFlight ? ' disabled' : ''}>${escHtml(outcome.actionLabel)}</button>` : ''}</div>`;
+  const confirmDisabled = review.blocked || _finalizeInFlight || _finalizeOutcome === 'refused';
   // Carry-over fix (app-shell part 3A review, 2026-09-27) — the three
   // "// No icon('warning')..." lines this comment replaces were INSIDE the
   // template literal below (a `//` comment has no meaning inside a template
@@ -34384,24 +40717,108 @@ function renderFinalizeStep4HTML(week, games) {
   // (Step 6's blocked-open banner, Step 2/3's own boxes) are UNCHANGED —
   // out of this fix's scope; D-1's phased inventory reaches them separately.
   const warningIconHTML = icon('warning');
+  // PF-416 follow-up, item 3 — a finalize this device has committed (queued or refused) offers no Back: Steps 1-3 would take values it never carries.
+  const backHTML = finalizeCommittedHere(week) ? '' : `<button type="button" class="btn btn-ghost" id="wiz-fin-back"${_finalizeInFlight ? ' disabled' : ''}>Back</button>
+    `;
+  // Review N6 — while the finalize is not sent yet, ONE control: the row's Retry. Finalize Week would be the same re-ask under a second name.
+  const confirmHTML = pending ? '' : `<button type="button" class="btn btn-primary" id="wiz-fin-confirm"${confirmDisabled ? ' disabled' : ''}${_finalizeInFlight ? ' aria-busy="true"' : ''}>${escHtml(_finalizeInFlight ? FINALIZE_COPY.FINALIZING : 'Finalize Week')}</button>`;
   return `<div class="admin-section-title">Finalize</div>
-    <p class="text-muted text-sm">Approve scores, tiebreaker and Extra Point are set. Finalizing locks standings for ${escHtml(formatWeekLabel(week))}.</p>
+    <div class="wiz-fin-review" id="wiz-fin-review">${rowsHTML}</div>
     ${warning.show ? `<div class="warning-box mt-sm">${warningIconHTML} ${escHtml(warning.text)}</div>` : ''}
-    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-fin-back">Back</button>
-    <button type="button" class="btn btn-primary" id="wiz-fin-confirm">Finalize Week</button></div>`;
+    ${outcomeHTML}
+    ${backHTML || confirmHTML ? `<div class="flex gap-sm mt-md">${backHTML}${confirmHTML}</div>` : ''}`;
 }
-function bindFinalizeStep4(bodyEl, week) {
-  bodyEl.querySelector('#wiz-fin-back')?.addEventListener('click', () => { _finalizeStep = 3; renderWeekWizardSheetBody(); });
-  bodyEl.querySelector('#wiz-fin-confirm')?.addEventListener('click', () => {
-    if (!week) return;
-    const cur = getWeek(week.weekId) || week;
-    weekWizardApi().confirmFinalizeWeek(cur);
-    _finalizeStep = null;
-    refreshHeader();
-    showToast('Week finalized — standings locked ✅', 'success');
-    closeWeekWizardSheet();
-    renderCommPage();
+/** DI-519 — the review card's inputs, gathered for finalizeReview() (js/week-wizard.js). Entrants and members are the week's own sport's ENTRANTS (D1 DI-531, C4; a one-sport league: the active players).
+ *  The Extra Point grading (who was closest) is read only behind the blind rule; hidden, the row drops that clause. */
+function finalizeReviewFor(week, games) {
+  const players = playersForWeek(week);                     // D1 (B2) + DI-531 (C4): "Players counted" is the week's entrants out of the league's active members
+  const members = getPlayers().filter((p) => p.active);
+  const epGraded = canViewOtherPicks(week) ? weekWizardApi().finalizeExtraPointSummary({ week, players }).graded : null;
+  return finalizeReview({
+    week, games, guessCount: finalizeTiebreakerGuessCount(week), effective: effectiveTiebreakerActualForWeek(week, games),
+    epGraded, entrants: players.length, members: members.length,
   });
+}
+export const _finalizeReviewForTest = finalizeReviewFor;   // test seam (D1 / B2): the review card's inputs, read for a week
+function bindFinalizeStep4(bodyEl, week) {
+  bodyEl.querySelector('#wiz-fin-back')?.addEventListener('click', () => {
+    if (_finalizeInFlight) return;
+    _finalizeOutcome = null;
+    _finalizeStep = finalizePrevStep(4, (week && getWeek(week.weekId)) || week) || 1;
+    renderWeekWizardSheetBody();
+  });
+  // The sheet may have been closed (or reopened on another week) while the server's answer was awaited: only THIS session's Step 4 is repainted.
+  const stillHere = (weekId) => !!document.getElementById('week-wizard-sheet-wrap') && _finalizeStep === 4 && _weekWizardTargetWeekId === weekId;
+  const inFlightPaint = () => bodyEl.querySelectorAll('#wiz-fin-confirm, #wiz-fin-retry, #wiz-fin-reload, #wiz-fin-back').forEach((b) => {
+    b.disabled = true;
+    // Review N6 — while pending, Retry is the only control, so it is the one that reads "Finalizing…" while the server's answer is awaited.
+    if (b.id === 'wiz-fin-confirm' || b.id === 'wiz-fin-retry') { b.textContent = FINALIZE_COPY.FINALIZING; b.setAttribute('aria-busy', 'true'); }
+  });
+  // FB-027 / DI-519, B1 (review round 1) — Finalize Week and Retry are ONE action, finalizeFromGuidedFlow(): it re-sends or re-asks, and never
+  // finalizes a second time. Disabled on press ("Finalizing…"), so a double tap posts once; the server's answer is AWAITED, through the adapter's
+  // retry schedule. 'saved' ⇒ the toast, the success haptic, the sheet closes. 'pending' ⇒ "Not sent yet…" with Retry. Anything else ⇒ the terminal
+  // refused row with Reload app (PF-416 follow-up, item 2). The red sync banner (the adapter's) is never touched here.
+  const run = async () => {
+    if (!week || _finalizeInFlight) return;
+    // PF-416 follow-up, item 2 — TERMINAL: after a refusal no press sends anything (the button is disabled; this holds wherever a click still lands).
+    // A re-ask would put the same refused finalize back on the wire, and a refused write is not made acceptable by sending it again.
+    if (_finalizeOutcome === 'refused') return;
+    const weekId = week.weekId;
+    // A missing required value is decided here, synchronously: nothing is written, nothing is awaited, the button never reads "Finalizing…".
+    const pre = getWeek(weekId) || week;
+    const preAction = finalizePressAction({ serverFinal: finalizeServerHoldsFinal(pre), deviceStatus: pre.status, blocked: finalizeReviewFor(pre, getGames(weekId)).blocked });
+    if (preAction === 'blocked') { renderWeekWizardSheetBody(); return; }
+    _finalizeInFlight = true;
+    inFlightPaint();
+    let result;
+    try { result = await finalizeFromGuidedFlow(getWeek(weekId) || week); }
+    catch (e) { console.warn('[week-wizard] finalize failed', e); result = { ok: false, state: 'error' }; }
+    finally { _finalizeInFlight = false; }
+    refreshHeader();
+    // Review N2 — a week the server holds final is a success on every path, an error included (finalizeConfirmSaved() covers the answered ones).
+    if ((result && result.ok) || finalizeServerHoldsFinal(getWeek(weekId) || week)) { succeeded(weekId); return; }
+    _finalizeOutcome = result && result.state === 'blocked' ? null : (result && result.state === 'pending' ? 'pending' : 'refused');
+    if (stillHere(weekId)) renderWeekWizardSheetBody();
+  };
+  // Reload the app: the one step that ends a refused write this device still holds (the queue is in memory; the device snapshot is never written
+  // while anything is queued), so the mirror re-reads the server. Reload app's own action and the success path below share it.
+  const reloadApp = () => {
+    try { window.location.reload(); } catch (e) { console.warn('[week-wizard] reload after a refused finalize failed', e); }
+  };
+  // The one success path: the toast, the success haptic, the sheet closes.
+  // Review follow-up 1 (coordinator, 2026-10-08) — A SUCCESS THE ADAPTER STILL CALLS REFUSED. Review N2 reports success when the server holds the week
+  // final although this device's own week write was refused (another device finalized first). The adapter still holds that refusal, so the red sync
+  // banner stayed up beside "Week N is final." with nothing on this device that is sure to clear it (the adapter releases the latch only when some
+  // later write happens to run a flush that finds nothing left to send). So when the week write is latched refused at the success, the app RELOADS
+  // after the toast (Reload app's path): the mirror re-reads the server and the banner comes down honestly. Decided at the success, not re-checked at
+  // the reload: a latch an incidental flush released in the meantime makes the reload redundant, never wrong. The refusal is never cleared by hand and
+  // the banner is never hidden here (loud-fail, AD-06).
+  const succeeded = (weekId) => {
+    _finalizeOutcome = null;
+    // The coordinator's copy decision (2026-10-08): a success that will reload says "Refreshing…", so the reload does not look like a crash.
+    const reloading = finalizeWeeksWriteRefused();
+    showToast((reloading ? FINALIZE_COPY.SUCCESS_REFRESHING : FINALIZE_COPY.SUCCESS)((getWeek(weekId) || week).weekNumber), 'success');
+    haptic('success');
+    if (stillHere(weekId)) { _finalizeStep = null; closeWeekWizardSheet(); }
+    renderCommPage();
+    if (reloading) setTimeout(reloadApp, FINALIZE_RELOAD_AFTER_TOAST_MS);
+  };
+  // PF-416 / FB-026 follow-up, item 2 — after a refusal, the one real next step: RELOAD THE APP. This was a re-sync (ensureSupabaseDataHydrated())
+  // that cleared the row and re-enabled Finalize Week, but a refused week write stays queued across a re-sync by the adapter's design (its rebase keeps
+  // a dirty key and re-sends it once per hydrate), so the next press re-sent the same refused finalize_week and was refused again: Reload, Finalize,
+  // re-ask, refused, as often as the commissioner tried (reproduced on the real adapter: finalize_week calls 1, 2, 3, 4). A reload ends this page and the
+  // refused write with it (the queue is in memory; the device snapshot is never written while anything is queued), so the week reads here as it does
+  // for everyone: live. The week-final announcements were never sent (they wait for the server), so nothing has to be taken back.
+  const reload = () => {
+    if (!week || _finalizeInFlight) return;
+    // Review N2 — the sheet does not repaint on Realtime, so the server may have reached final (another device finalized) while this row was up:
+    // then the week IS final, and that is what the commissioner is told — never "still live for everyone", and no reload.
+    if (finalizeServerHoldsFinal(getWeek(week.weekId) || week)) { succeeded(week.weekId); return; }
+    reloadApp();
+  };
+  bodyEl.querySelector('#wiz-fin-confirm')?.addEventListener('click', run);
+  bodyEl.querySelector('#wiz-fin-retry')?.addEventListener('click', run);
+  bodyEl.querySelector('#wiz-fin-reload')?.addEventListener('click', reload);
 }
 
 function renderFinalizeStepHTML(step, week, games) {
@@ -34471,6 +40888,13 @@ function bindWeekWizardContinuePicker(bodyEl) {
  *  would strand a commissioner mid-step every time a Realtime event
  *  repaints the page). */
 function renderWeekWizardSheetBody() {
+  // W-70 (DI-W70.2) - a repaint must not replace the node under a finger while the step pager owns the touch (or while a refused swipe's spring-back is still sliding): it is parked
+  // and runs when the touch ends. Then the paint, then the baseline "unsaved edits" is measured against (DI-W70.1).
+  if (deferRenderWhileWeekSwiping('week-wizard', renderWeekWizardSheetBody)) return;
+  paintWeekWizardSheetBody();
+  captureWizardBaseline();
+}
+function paintWeekWizardSheetBody() {
   const wrap = document.getElementById('week-wizard-sheet-wrap');
   if (!wrap) return;
   const titleEl = wrap.querySelector('#week-wizard-title');
@@ -34501,7 +40925,9 @@ function renderWeekWizardSheetBody() {
 
   if (_finalizeStep && week) {
     if (titleEl) titleEl.textContent = `Finalize ${formatWeekLabel(week)}`;
-    if (trackerEl) trackerEl.innerHTML = renderFinalizeTrackerHTML(_finalizeStep);
+    // FB-027 / DI-519 — a step the week no longer shows (the contest switched off mid-flow) lands on the next visible one.
+    _finalizeStep = finalizeNormalizeStep(_finalizeStep, week);
+    if (trackerEl) trackerEl.innerHTML = renderFinalizeTrackerHTML(_finalizeStep, week);
     bodyEl.innerHTML = renderFinalizeStepHTML(_finalizeStep, week, games);
     bindFinalizeStep(bodyEl, _finalizeStep, week, games);
     return;
@@ -34517,12 +40943,16 @@ function renderWeekWizardSheetBody() {
 
   if (titleEl) titleEl.textContent = 'Set up Week';
   if (trackerEl) trackerEl.innerHTML = renderWeekWizardTrackerHTML(_weekWizardStep);
-  if (_weekWizardStep === 1) { bodyEl.innerHTML = renderWeekWizardStep1HTML(week); bindWeekWizardStep1(bodyEl, week); }
-  else if (_weekWizardStep === 2) { bodyEl.innerHTML = renderWeekWizardStep2HTML(week); bindWeekWizardStep2(bodyEl, week); }
-  else if (_weekWizardStep === 3) { bodyEl.innerHTML = renderWeekWizardStep3HTML(games); bindWeekWizardStep3(bodyEl, week, games); }
-  else if (_weekWizardStep === 4) { bodyEl.innerHTML = renderWeekWizardStep4HTML(week, games); bindWeekWizardStep4(bodyEl, week); }
-  else if (_weekWizardStep === 5) { bodyEl.innerHTML = renderWeekWizardStep5HTML(week); bindWeekWizardStep5(bodyEl, week); }
-  else { bodyEl.innerHTML = renderWeekWizardStep6HTML(week, games); bindWeekWizardStep6(bodyEl, week, games); }
+  // FB-027 / DI-518 amendment — a LIVE week of the same sport hiding behind this draft keeps its Finalize, at the top of every step of the draft view.
+  const liveBehind = weekWizardLiveWeekBehind(week);
+  const liveRowHTML = liveBehind ? renderLiveWeekFinalizeRowHTML(liveBehind) : '';
+  if (_weekWizardStep === 1) { bodyEl.innerHTML = liveRowHTML + renderWeekWizardStep1HTML(week); bindWeekWizardStep1(bodyEl, week); }
+  else if (_weekWizardStep === 2) { bodyEl.innerHTML = liveRowHTML + renderWeekWizardStep2HTML(week); bindWeekWizardStep2(bodyEl, week); }
+  else if (_weekWizardStep === 3) { bodyEl.innerHTML = liveRowHTML + renderWeekWizardStep3HTML(games, week); bindWeekWizardStep3(bodyEl, week, games); }
+  else if (_weekWizardStep === 4) { bodyEl.innerHTML = liveRowHTML + renderWeekWizardStep4HTML(week, games); bindWeekWizardStep4(bodyEl, week); }
+  else if (_weekWizardStep === 5) { bodyEl.innerHTML = liveRowHTML + renderWeekWizardStep5HTML(week); bindWeekWizardStep5(bodyEl, week); }
+  else { bodyEl.innerHTML = liveRowHTML + renderWeekWizardStep6HTML(week, games); bindWeekWizardStep6(bodyEl, week, games); }
+  if (liveBehind) bindLiveWeekFinalizeRow(bodyEl, liveBehind);
 }
 
 /** DI-C1 §2.2 — a native-feeling bottom sheet, reusing `.chat-sheet`
@@ -34567,25 +40997,352 @@ let _unbindWizardSheetDismiss = null;
  */
 function mountWeekWizardSheetShell() {
   // N1 (DI-430, 2026-09-30) — the DOM shell is now the shared mountSheetShell() (below), which the New League sheet also mounts; this is its thin wizard caller. The
-  // markup, the ids, the backdrop/close bindings, the first paint and the header-only swipe-to-dismiss are exactly what they were.
+  // markup, the ids, the backdrop/close bindings and the first paint are exactly what they were.
   _unbindWizardSheetDismiss?.();
   _unbindWizardSheetDismiss = null;
-  const { unbind } = mountSheetShell({
+  _unbindWizardPager?.();
+  _unbindWizardPager = null;
+  _wizBaseline = null; _wizLastField = null;
+  const { wrap, unbind, pagerEl } = mountSheetShell({
     wrapId: 'week-wizard-sheet-wrap',
     sheetId: 'week-wizard-sheet',
     headerInnerHTML: `<div class="chat-sheet-title" id="week-wizard-title">Set up Week</div>
         <button class="chat-sheet-close" id="week-wizard-close" aria-label="Close">✕</button>`,
     afterHeaderHTML: '<div id="week-wizard-step-tracker"></div>',
     bodyId: 'week-wizard-body',
+    pagerId: 'week-wizard-pager',
     closeId: 'week-wizard-close',
-    onBackdrop: closeWeekWizardSheet,
+    // W-70 (DI-W70.1) - the backdrop and the ✕ go through the SAME door as the swipe: requestCloseWeekWizardSheet() asks first when there are unsaved edits (or a finalize is in flight).
+    onBackdrop: requestCloseWeekWizardSheet,
     renderBody: renderWeekWizardSheetBody,
-    // Drag-to-dismiss, header/handle only — see the file comment above. No-ops on web (bindSwipeToDismiss() is native-only). Bound ONCE per mount;
+    // Swipe-down to dismiss: anywhere on the sheet (the header, or the body at scroll-top), on the iPhone app AND on a touch device in the web app (W-70). Bound ONCE per mount;
     // renderWeekWizardSheetBody() only ever repaints #week-wizard-body, never the header, so this never needs rebinding mid-flow.
     // Security gate F2 (third pass) — its OWN predicate: the shared one counts this very sheet as a blocking surface, so the gesture never armed.
-    drag: { getBlocked: isWizardDismissGestureBlocked, onProgress: wizardSheetDragProgress, onSettle: settleWizardSheetDrag },
+    drag: { getBlocked: isWizardDismissGestureBlocked, onProgress: wizardSheetDragProgress, onSettle: settleWizardSheetDrag, scope: 'sheet', allowWeb: true, canStart: wizardSheetDragCanStart },
   });
   _unbindWizardSheetDismiss = unbind;
+  // The last text field focused, so "Keep Editing" can hand focus back to it (a focus listener on the sheet; it dies with the wrap).
+  wrap.addEventListener('focusin', (e) => { const t = e.target; if (t && typeof t.matches === 'function' && t.matches('input, textarea, select')) _wizLastField = t; });
+  if (pagerEl) bindWizardPager(pagerEl);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// W-70 (2026-10-14) - NATIVE NAVIGATION IN THE WIZARD: swipe down to close (asking first when there are unsaved edits) and swipe left/right between steps.
+// The decisions are js/wizard-nav.js's (pure, tested alone); this section wires them to the sheet. DI-W70.1 / DI-W70.2.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+let _unbindWizardPager = null;
+let _wizBaseline = null;      // the body's tracked controls right after the last paint (wizard-nav snapshotWizardControls)
+let _wizLastField = null;     // the last text field focused in the sheet, for "Keep Editing"
+
+/** Called after EVERY wizard paint: what the controls read now is the clean state; an edit is any difference from it. */
+function captureWizardBaseline() {
+  const bodyEl = document.getElementById('week-wizard-body');
+  _wizBaseline = bodyEl ? snapshotWizardControls(bodyEl) : null;
+}
+/** Does the open step hold edits that nothing has saved? Controls that save on change carry `data-wiz-autosave` and never count. */
+function wizardHasUnsavedEdits() {
+  const bodyEl = document.getElementById('week-wizard-body');
+  return !!bodyEl && wizardControlsDirty(_wizBaseline, bodyEl);
+}
+export const _wizardHasUnsavedEditsForTest = wizardHasUnsavedEdits;
+
+/** The sheet's swipe-down may start here? (the whole sheet is the scope: see wizard-nav canStartWizardSheetDrag). */
+function wizardSheetDragCanStart(e) {
+  return canStartWizardSheetDrag({ target: e && e.target, bodyEl: document.getElementById('week-wizard-body'), viewportWidthPx: window.innerWidth });
+}
+
+/**
+ * DI-W70.1 - THE ONE DOOR every way of closing the wizard goes through (the swipe, the ✕, the backdrop). A finalize in flight: nothing closes and a calm toast says why. Unsaved edits:
+ * nothing closes and the discard sheet is raised. Otherwise it closes. `closeWeekWizardSheet()` stays the unconditional closer that the flows themselves call when they are DONE.
+ * Returns true when the sheet closed.
+ */
+function requestCloseWeekWizardSheet() {
+  if (!document.getElementById('week-wizard-sheet-wrap')) return false;
+  if (_finalizeInFlight) { showToast(WIZ_NAV_COPY.FINALIZING, 'info'); return false; }
+  if (wizardHasUnsavedEdits()) { promptWizardDiscard(() => closeWeekWizardSheet()); return false; }
+  closeWeekWizardSheet();
+  return true;
+}
+export const _requestCloseWeekWizardSheetForTest = requestCloseWeekWizardSheet;
+
+/** The "Discard changes?" action sheet (the app's own, never a browser dialog). Scrim tap and Keep Editing are the safe choice and hand focus back to the field the commissioner was in. */
+function promptWizardDiscard(then) {
+  lsShowActionSheet('wizard-discard', LC.actionSheetHTML({
+    escHtml, titleId: 'wiz-discard-title', title: WIZ_NAV_COPY.DISCARD_TITLE, message: WIZ_NAV_COPY.DISCARD_MESSAGE,
+    danger: { label: WIZ_NAV_COPY.DISCARD, action: 'discard' }, cancel: { label: WIZ_NAV_COPY.KEEP_EDITING, action: 'keep-editing' },
+    scrimAction: 'keep-editing', actionAttr: 'data-ls-action',
+  }), { then, invoker: _wizLastField && _wizLastField.isConnected ? _wizLastField : null });
+}
+
+// ── the step pager ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+function wizardPagerBodyEl() { return document.getElementById('week-wizard-body'); }
+
+/** The step pager's navigation state, read fresh at every touchstart. The Manage screen and the Continue picker have no steps (inert: nothing is claimed and nothing bounces). */
+function wizardPagerGetState() {
+  const inert = { inert: true, weekIds: [], currentWeekId: null, tab: 'week-wizard' };
+  if (!document.getElementById('week-wizard-sheet-wrap') || _weekWizardShowContinuePicker) return inert;
+  const week = weekWizardTargetWeek();
+  if (_finalizeStep && week) {
+    // The Finalize flow pages BACK only: its forward steps apply scores and finalize, and a swipe never does that.
+    const prev = finalizePrevStep(_finalizeStep, week);
+    return { weekIds: [prev ? String(prev) : null, String(_finalizeStep)].filter((x) => x !== null), currentWeekId: String(_finalizeStep), tab: 'week-wizard' };
+  }
+  if (week && week.status !== 'draft') return inert;
+  const live = week ? (getWeek(week.weekId) || week) : null;
+  const plan = wizardCreateStepPlan({ step: _weekWizardStep, hasGames: !!week && getGames(week.weekId).length > 0, blurbValid: !!live && blurbGate(live).ok });
+  return { weekIds: plan.weekIds, currentWeekId: plan.currentWeekId, tab: 'week-wizard' };
+}
+
+/** The button a swipe in `direction` stands for (+1 = swipe right = Back, -1 = swipe left = Next), or null. The swipe commits by CLICKING it: one path with the tap. */
+function wizardPagerButton(direction) {
+  const bodyEl = wizardPagerBodyEl();
+  if (!bodyEl) return null;
+  if (_finalizeStep) return direction > 0 ? bodyEl.querySelector('#wiz-fin-back') : null;
+  return bodyEl.querySelector(`#${wizardStepButtonId(_weekWizardStep, direction)}`);
+}
+
+/** The incoming step, drawn by the step's own pure renderer (inert layer, ids and radio names stripped so the copy cannot join a real radio group or shadow an id). */
+function wizardPagerPreview(targetId) {
+  try {
+    const week = weekWizardTargetWeek();
+    const n = Number(targetId);
+    const games = week ? getGames(week.weekId) : [];
+    let html = '';
+    if (_finalizeStep && week) html = renderFinalizeStepHTML(n, week, games);
+    else {
+      const liveBehind = weekWizardLiveWeekBehind(week);
+      const liveRow = liveBehind ? renderLiveWeekFinalizeRowHTML(liveBehind) : '';
+      if (n === 1) html = renderWeekWizardStep1HTML(week);
+      else if (n === 2) html = renderWeekWizardStep2HTML(week);
+      else if (n === 3) html = renderWeekWizardStep3HTML(games, week);
+      else if (n === 4) html = renderWeekWizardStep4HTML(week, games);
+      else if (n === 5) html = renderWeekWizardStep5HTML(week);
+      else if (n === 6 && week) html = renderWeekWizardStep6HTML(week, games);
+      else return null;
+      html = liveRow + html;
+    }
+    const node = document.createElement('div');
+    node.innerHTML = html;
+    commPaneScrub(node);
+    return node;
+  } catch (err) {
+    console.warn('[week-wizard] the step preview could not be drawn', err);
+    return null;
+  }
+}
+
+/** Would the button this swipe stands for let it through? (asked at release, so a refused change never plays a slide). */
+function wizardPagerCanCommit(_targetId, dir) {
+  const btn = wizardPagerButton(dir > 0 ? 1 : -1);
+  if (!btn || btn.disabled || _finalizeInFlight) return false;
+  if (dir > 0) return !wizardHasUnsavedEdits();      // Back with unsaved edits asks first (the Back BUTTON keeps its silent discard: a tap is deliberate, a swipe can be an accident)
+  if (_finalizeStep) return false;
+  const bodyEl = wizardPagerBodyEl();
+  const week = weekWizardTargetWeek();
+  const live = week ? (getWeek(week.weekId) || week) : null;
+  return wizardCanAdvance({
+    step: _weekWizardStep,
+    hasGames: !!week && getGames(week.weekId).length > 0,
+    blurbMissing: !!live && !blurbGate(live).ok,
+    openAtTyped: !!(bodyEl && bodyEl.querySelector('#wiz-picks-open-at')?.value),
+    blurbRequired: !!live && blurbGate(live).required,
+    blurbTypedOk: blurbCheck((bodyEl && bodyEl.querySelector('#wiz-blurb-body')?.value) || '').ok,
+  });
+}
+
+/** A swipe the pager refused: Back with edits raises the discard sheet (and, if confirmed, steps back); a Next the button itself refuses is CLICKED so its own inline message appears. */
+function wizardPagerRefused(dir) {
+  const btn = wizardPagerButton(dir > 0 ? 1 : -1);
+  if (!btn || btn.disabled || _finalizeInFlight) return;
+  if (dir > 0) {
+    if (!wizardHasUnsavedEdits()) return;
+    promptWizardDiscard(() => { const b = wizardPagerButton(1); if (b && !b.disabled) { b.click(); const body = wizardPagerBodyEl(); if (body) body.scrollTop = 0; } });
+    return;
+  }
+  btn.click();
+}
+
+/** The commit: the engine has slid the outgoing step away; the button's own handler does the step change (and any save), and the new step lands at its top. */
+function wizardPagerNavigate(targetId) {
+  const dir = Number(targetId) > Number(_finalizeStep || _weekWizardStep) ? -1 : 1;
+  const btn = wizardPagerButton(dir > 0 ? 1 : -1);
+  if (btn && !btn.disabled) btn.click();
+  const body = wizardPagerBodyEl();
+  if (body) body.scrollTop = 0;
+}
+
+function bindWizardPager(pagerEl) {
+  _unbindWizardPager?.();
+  _unbindWizardPager = bindWeekSwipe(pagerEl, wizardPagerGetState, wizardPagerNavigate, {
+    layers: 'pane',
+    renderPreview: wizardPagerPreview,
+    // The wizard sheet is itself one of the shared gate's blockers (gesturesSuspended counts it), and the drawer can never arm under it: the pager asks "is ANOTHER surface on top of me".
+    isSuspended: isWizardDismissGestureBlocked,
+    yieldToDrawer: false,
+    shouldYield: (target) => isPagerYieldTarget(target, pagerEl),
+    canCommit: wizardPagerCanCommit,
+    onRefused: wizardPagerRefused,
+  });
+}
+export const _wizardPagerForTest = { getState: wizardPagerGetState, canCommit: wizardPagerCanCommit, button: wizardPagerButton, repaint: () => renderWeekWizardSheetBody() };
+
+
+// ═══ D1 Lane C (DI-672, 2026-10-08) — THE "ALSO FROM" SHEET ═══════════════════════════════════════════════════════════════════════════════════════════
+// A News card whose duplicate coverage was grouped shows "Also from CBS Sports and Yahoo Sports"; tapping it opens THIS standard bottom sheet (the shared sheet shell:
+// swipe-down on iOS, the close button and the backdrop on web — PARITY-BY-DESIGN). Every row (headline, publisher, time, Open) is built by newsCard.js's
+// renderAlsoFromSheet() through its own quote-complete esc() (C10): this file splices the string and interpolates nothing. A row opens ITS article by id: the id is
+// resolved against the group the sheet was opened for, the URL re-validated against that source's own link hosts, and only the validated href is opened.
+const NEWS_ALSO_SHEET_WRAP_ID = 'news-also-sheet-wrap';
+let _newsAlsoSheet = null;
+let _newsAlsoOwnSwipe = false;       // this sheet's own swipe-down asks _dismissBlockingSurfaceUp() too: it must not see ITSELF as a blocker
+let _unbindNewsAlsoDrag = null;
+function closeNewsAlsoSheet({ immediate = false } = {}) {
+  _unbindNewsAlsoDrag?.(); _unbindNewsAlsoDrag = null;
+  if (_newsAlsoSheet && _newsAlsoSheet.onKey) { try { document.removeEventListener('keydown', _newsAlsoSheet.onKey); } catch { /* courtesy */ } }
+  _newsAlsoSheet = null;
+  const wrap = document.getElementById(NEWS_ALSO_SHEET_WRAP_ID);
+  if (!wrap) return;
+  if (immediate) { wrap.remove(); return; }
+  playDeleteSheetExit(wrap, () => { try { if (document.getElementById(NEWS_ALSO_SHEET_WRAP_ID) === wrap) wrap.remove(); } catch { /* already gone */ } }, { sheetId: 'news-also-sheet', dragVar: '--news-also-drag-y' });
+}
+function openNewsAlsoSheet(item) {
+  if (isContentWithheld() || !item || !Array.isArray(item.alsoFrom) || !item.alsoFrom.length) return;
+  const body = renderAlsoFromSheet(item);
+  if (!body) return;
+  closeNewsAlsoSheet({ immediate: true });
+  _newsAlsoSheet = { item, onKey: null };
+  const { unbind } = mountSheetShell({
+    wrapId: NEWS_ALSO_SHEET_WRAP_ID, sheetId: 'news-also-sheet',
+    sheetAttrs: ' role="dialog" aria-modal="true" aria-labelledby="news-also-sheet-title"',
+    headerInnerHTML: `<div class="chat-sheet-title" id="news-also-sheet-title" tabindex="-1">Also covered by</div><button type="button" class="chat-sheet-close admin-ai-close" id="news-also-sheet-close" aria-label="Close">${icon('close')}</button>`,
+    bodyId: 'news-also-sheet-body', closeId: 'news-also-sheet-close',
+    onBackdrop: () => closeNewsAlsoSheet(),
+    renderBody: () => { const b = document.getElementById('news-also-sheet-body'); if (b) b.innerHTML = body; },
+    drag: {
+      getBlocked: () => { _newsAlsoOwnSwipe = true; try { return _dismissBlockingSurfaceUp(); } finally { _newsAlsoOwnSwipe = false; } },
+      onProgress: (wrap, sheetEl, progress) => { sheetEl.setAttribute('data-dragging', 'true'); wrap.setAttribute('data-dragging', 'true'); wrap.style.setProperty('--news-also-drag-y', String(progress)); },
+      onSettle: (wrap, sheetEl, { dismissed, reducedMotion } = {}) => {
+        sheetEl.removeAttribute('data-dragging'); wrap.removeAttribute('data-dragging');
+        if (!dismissed) { wrap.style.setProperty('--news-also-drag-y', '0'); return; }
+        finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--news-also-drag-y', '1'), reducedMotion: !!reducedMotion, done: () => closeNewsAlsoSheet({ immediate: true }) });
+      },
+    },
+  });
+  _unbindNewsAlsoDrag = unbind;
+  const wrap = document.getElementById(NEWS_ALSO_SHEET_WRAP_ID);
+  // the row dispatcher lives in newsCard.js (one place, browser-tested): it re-validates the alternate's url against THAT source's hosts (S-C1) and hands back only the href
+  bindAlsoFromSheetEvents(wrap, item, { onOpen: (href) => { closeNewsAlsoSheet({ immediate: true }); openNewsArticle(href); } });
+  _newsAlsoSheet.onKey = (e) => { if (e.key === 'Escape') closeNewsAlsoSheet(); };
+  document.addEventListener('keydown', _newsAlsoSheet.onKey);
+  try { wrap?.querySelector('#news-also-sheet-title')?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+}
+
+// ═══ D1 Lane C (DI-669 / DI-665 / DI-666, 2026-10-08) — THE HOME CONTENT CARD DETAIL ═════════════════════════════════════════════════════════════════════════════════════
+// A matchup, player or spotlight card opens a PUSHED SCREEN (the card detail's shell, Lane B's js/pushed-screen.js): it paints AT ONCE from the card the feed already holds (no
+// skeleton flash, no spinner), asks feed_content_get for every fact, gap and source, and repaints in place when they arrive (invalidateScreens). A card that is gone by then (withdrawn,
+// expired, no longer visible) becomes the one calm unavailable state. Every button is allow-listed by `data-content-action` and must be one of the actions the CURRENT row offers.
+// What can leave the device is built in content-card.js from the PUBLIC payload only: the "Talk about it" line (DI-666) and the spotlight share text (DI-665); never the private reason.
+const _contentDetail = new Map();   // contentId -> { status: 'ready'|'partial'|'gone', row }
+const CONTENT_TALK_REPEAT_MS = 10 * 60 * 1000;
+/** The league's game for a card's ESPN event (so "Open game" can go somewhere), or null. Read from EVERY sport's current week (currentWeeksToSweep(), DI-535), matched by the ESPN
+ *  event id; never a guess by team name. */
+function contentGameFor(row) {
+  const ev = row && typeof row.eventRef === 'string' ? row.eventRef.replace(/^espn:event:/, '') : '';
+  if (!/^[0-9]{1,20}$/.test(ev)) return null;
+  for (const week of currentWeeksToSweep()) {
+    const g = week ? (getGames(week.weekId) || []).find((x) => x && String(x.espnEventId || '') === ev) : null;
+    if (g) return g;
+  }
+  return null;
+}
+function openContentDetail(item) {
+  if (isContentWithheld() || !item || typeof item.contentId !== 'string') return;
+  ensurePushedScreens();
+  haptic('light');
+  const id = item.contentId;
+  _contentDetail.set(id, { status: 'partial', row: item });
+  const meta = CONTENT_KIND_META[item.cardKind];
+  pushScreen({
+    id: `content:${id}`,
+    title: meta ? meta.label : 'Details',
+    backLabel: 'Home',
+    restoreKey: `news:${item.id}`,                         // Back returns focus to the card that opened it (its feed item's data-card-key)
+    render: () => {
+      const st = _contentDetail.get(id);
+      if (!st || st.status === 'gone' || !st.row) return contentDetailUnavailableHTML();
+      return contentDetailHTML({ ...st.row, reason: item.reason }, { ...contentDetailCaps(st.row), ...contentTimeOpts() });   // the reason pill is the viewer's own, painted on this device only
+    },
+    onClick: (e, api) => onContentDetailClick(e, api, id),
+  });
+  void refreshContentDetail(id);
+}
+/** Review N2: every time on a content surface in the PLAYER'S zone — the house formatter for instants (formatGameTime, as Home's cards use) and the zone's IANA name. */
+function contentTimeOpts() {
+  const key = getTimezone() || DEFAULT_TZ;
+  return { timeZone: (TIME_ZONES.find((z) => z.key === key) || TIME_ZONES[0]).iana, formatTime: (iso) => formatGameTime(iso, key) };
+}
+/** Review N4: what the detail may offer — "Open game" needs the league's game, and both chat-bound actions need league chat ON (Lane B's capability rule). */
+function contentDetailCaps(row) {
+  const chatAvailable = isChatEnabled();
+  return { gameAvailable: chatAvailable && !!contentGameFor(row), chatAvailable };
+}
+async function refreshContentDetail(id) {
+  try {
+    const row = await fetchContentDetail(id);
+    // Review B1: the detail row replaces the card's, but a detail that carries no source list never empties the Sources section the card already had
+    const prev = _contentDetail.get(id);
+    const merged = row ? { ...row, sources: Array.isArray(row.sources) && row.sources.length ? row.sources : (prev && prev.row && Array.isArray(prev.row.sources) ? prev.row.sources : []) } : null;
+    _contentDetail.set(id, merged ? { status: 'ready', row: merged } : { status: 'gone', row: null });
+    if (isScreenOpen()) invalidateScreens();
+  } catch {
+    /* the card the feed holds stays on screen; its missing sections already say "isn't available right now" */
+  }
+}
+function onContentDetailClick(e, api, id) {
+  const btn = e && e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-content-action]') : null;
+  if (!btn) return;
+  const act = btn.getAttribute('data-content-action');
+  if (act === 'back') { api.pop(); return; }
+  const st = _contentDetail.get(id);
+  const row = st && st.row;
+  if (!row || !contentDetailActions(row, contentDetailCaps(row)).some((a) => a.id === act)) return;   // not offered by the CURRENT row (or chat is off): nothing happens
+  haptic('light');
+  if (act === 'open-game') { const g = contentGameFor(row); if (g) openGameChatSheet(g.gameId); return; }
+  if (act === 'share') { void shareContentSpotlight(row); return; }
+  if (act === 'talk') { api.close('navigate'); talkAboutContent(row); }
+}
+/** DI-666: Chat opens with the composer PREFILLED by the deterministic line; the member edits it and taps Send themselves (never automatic). The same line already sent by this
+ *  member in the last 10 minutes answers "Already shared." instead. An existing draft is kept: the line is added after it. */
+function talkAboutContent(row) {
+  if (!isChatEnabled()) { showToast('Chat has been turned off by the commissioner.', 'warning'); return; }   // review N4: the house copy (navigateTo's own chat-off rule)
+  const line = talkLine(row, { timeZone: contentTimeOpts().timeZone });
+  if (!line) return;
+  const mine = (() => { const s = getSession(); return s && s.playerId ? s.playerId : null; })();
+  const now = Date.now();
+  if (mine && getChatMessages({}).some((m) => m && m.author === mine && m.body === line && Number(m.ts) > now - CONTENT_TALK_REPEAT_MS)) { showToast('Already shared.', 'info'); return; }
+  navigateTo('chat');
+  requestAnimationFrame(() => {
+    const input = document.getElementById('chat-input');
+    if (!input) return;
+    const draft = String(input.value || '').trim();
+    input.value = draft ? `${draft} ${line}` : line;
+    try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch { /* autosize is a courtesy */ }
+    try { input.focus({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+  });
+}
+/** DI-665 — PARITY-BY-DESIGN, the house pair: the native share sheet (the Share plugin) in the app; copy with "Copied." on the web. `navigator.share` is never used (league-create's
+ *  rule: the approved pair is "native share vs copy"). The text is public sports data only. */
+async function shareContentSpotlight(row) {
+  const text = spotlightShareText(row);
+  if (!text) return;
+  const Share = isNativeShell() && typeof window !== 'undefined' && window.Capacitor && window.Capacitor.Plugins ? window.Capacitor.Plugins.Share : null;
+  if (Share && typeof Share.share === 'function') {
+    try { await Share.share({ text, dialogTitle: 'Share' }); return; }
+    catch (err) { if (/cancel|dismiss|abort/i.test(String((err && err.message) || err || ''))) return; }
+  }
+  if (await lcCopyText(text)) showToast('Copied.', 'success');
+  else showToast("Couldn't copy automatically.", 'warning');
 }
 
 /**
@@ -34596,7 +41353,7 @@ function mountWeekWizardSheetShell() {
  * teardown (null when no drag was requested or the shell is not native).
  */
 function mountSheetShell({
-  wrapId, sheetId, sheetAttrs = '', headerInnerHTML = '', afterHeaderHTML = '', bodyId,
+  wrapId, sheetId, sheetAttrs = '', headerInnerHTML = '', afterHeaderHTML = '', bodyId, pagerId = null,
   closeId = null, onClose = null, onBackdrop, renderBody, drag = null,
 }) {
   document.getElementById(wrapId)?.remove();
@@ -34605,6 +41362,10 @@ function mountSheetShell({
   // SECURITY GATE FINDING 1 — swept by tearDownRenderedContentForHold() if a
   // hold fires while this sheet is open.
   wrap.setAttribute('data-hold-teardown', '');
+  // W-70 (DI-W70.2) - a sheet that pages (the wizard) wraps its body in a PANE (what slides) inside a CLIP (a stationary box that cuts the slide off at the sheet's edge and hosts the exit
+  // layer). Every other sheet keeps the body as the sheet's direct child, byte-identical.
+  const bodyHTML = `<div id="${escHtml(bodyId)}" class="chat-sheet-scroll"></div>`;
+  const pagedHTML = pagerId ? `<div class="wiz-pager-clip"><div class="wiz-pager" id="${escHtml(pagerId)}">${bodyHTML}</div></div>` : bodyHTML;
   wrap.innerHTML = `
     <div class="chat-sheet-backdrop"></div>
     <div class="chat-sheet" id="${escHtml(sheetId)}"${sheetAttrs}>
@@ -34612,7 +41373,7 @@ function mountSheetShell({
         ${headerInnerHTML}
       </div>
       ${afterHeaderHTML}
-      <div id="${escHtml(bodyId)}" class="chat-sheet-scroll"></div>
+      ${pagedHTML}
     </div>`;
   document.body.appendChild(wrap);
   wrap.querySelector('.chat-sheet-backdrop')?.addEventListener('click', onBackdrop);
@@ -34620,14 +41381,19 @@ function mountSheetShell({
   renderBody();
   const sheetEl = wrap.querySelector(`#${sheetId}`);
   const headerEl = wrap.querySelector('.chat-sheet-header');
-  const unbind = (drag && sheetEl && headerEl) ? bindSwipeToDismiss(headerEl, {
+  // W-70 (DI-W70.1) - `drag.scope === 'sheet'` binds the swipe-down to the WHOLE sheet (header and body) instead of the header alone; `drag.canStart(e)` then says which touches may start
+  // it (the body only at scroll-top and off a field). `drag.allowWeb` lets it run on a touch device in the web app. Absent => the header-only, native-only drag, unchanged.
+  const bindEl = drag && drag.scope === 'sheet' ? sheetEl : headerEl;
+  const unbind = (drag && sheetEl && bindEl) ? bindSwipeToDismiss(bindEl, {
     axis: 'y',
     getBlocked: drag.getBlocked,
     getDistancePx: () => sheetEl.getBoundingClientRect().height || window.innerHeight || 1,
     onProgress: (progress) => drag.onProgress(wrap, sheetEl, progress),
     onSettle: (result) => drag.onSettle(wrap, sheetEl, result),
+    ...(drag.allowWeb === true ? { allowWeb: true } : {}),
+    ...(typeof drag.canStart === 'function' ? { canStart: (e) => drag.canStart(e), claimForwardOnly: true } : {}),
   }) : null;
-  return { wrap, sheetEl, unbind };
+  return { wrap, sheetEl, pagerEl: pagerId ? wrap.querySelector(`#${pagerId}`) : null, unbind };
 }
 
 function openWeekWizardSheet({ forceNew = false } = {}) {
@@ -34649,7 +41415,7 @@ function openWeekWizardSheet({ forceNew = false } = {}) {
     // resolution at all, matching `#wiz-manage-setup-next`'s own
     // `_weekWizardTargetWeekId = null` shape exactly.
   } else {
-    const currentWeek = getCurrentWeek();
+    const currentWeek = commWeek();
     week = currentWeek;
     if (currentWeek && currentWeek.status !== WEEK_STATUS.DRAFT) {
       const drafts = weekWizardContinuableDrafts();
@@ -34673,6 +41439,7 @@ function openWeekWizardSheet({ forceNew = false } = {}) {
   // DI-359 — a fresh open never starts inside the Finalize flow; it is only
   // ever entered explicitly from the Manage screen's own button.
   _finalizeStep = null;
+  _finalizeOutcome = null; _finalizeBannerHiddenFor = null; _finalizeReturnTo = null; // FB-027: a fresh sheet shows no stale outcome row and the all-final prompt again
   const games = week ? getGames(week.weekId) : [];
   const entry = weekWizardApi().selectEntry({ week, games, timingConfigured: true });
   _weekWizardStep = entry.mode === 'steps' ? entry.step : 1;
@@ -34702,6 +41469,13 @@ function settleWizardSheetDrag(wrap, sheetEl, { dismissed, reducedMotion } = {})
     wrap.style.setProperty('--wizard-drag-y', '0');
     return;
   }
+  // W-70 (DI-W70.1) - a dismiss that has to be ASKED about (unsaved edits) or refused (a finalize in flight) springs back first, then goes through the same door as the ✕ and the
+  // backdrop: nothing slides away and then comes back.
+  if (_finalizeInFlight || wizardHasUnsavedEdits()) {
+    wrap.style.setProperty('--wizard-drag-y', '0');
+    requestCloseWeekWizardSheet();
+    return;
+  }
   // Reviewer R2 — play the rest of the slide, then close; never pop.
   finishSlideThenRemove({
     listenEl: sheetEl,
@@ -34711,6 +41485,29 @@ function settleWizardSheetDrag(wrap, sheetEl, { dismissed, reducedMotion } = {})
   });
 }
 export const _openWeekWizardSheetForTest = openWeekWizardSheet;
+/**
+ * FB-027 / DI-518 — the guided Finalize flow for `week`, opened from Comm → Week's status row or from the draft view's live-week row. The same guard and
+ * shell as openWeekWizardSheet(), but pinned to THIS week (never re-resolved through getCurrentWeek()/continuable drafts, which could land on a draft)
+ * and entered at Step 1. When the wizard sheet is already open (the draft view), the sheet switches in place — no second mount, no second slide-in.
+ * It never applies `final` itself; only Step 4 does.
+ */
+function openFinalizeWeekFlow(week, { returnTo = null } = {}) {
+  if (!week || isContentWithheld()) return;
+  const alreadyOpen = !!document.getElementById('week-wizard-sheet-wrap');
+  _weekWizardForceNewWeek = false;
+  _weekWizardShowContinuePicker = false;
+  _weekWizardTargetWeekId = week.weekId;
+  // Review N5 — the draft's unsaved Step 6 choices (`_weekWizardOpenMode`, `_weekWizardScheduleAt`, `_weekWizardPendingOpenAt`) are LEFT ALONE: a
+  // Cancel from Step 1 returns to that draft (`returnTo`, set by the live-week row) with them intact.
+  // PF-416 follow-up, item 4 (DI-404) — …when the OPEN sheet switches in place. A fresh MOUNT is a fresh sheet session with no draft to return to, so
+  // it starts clean, exactly as openWeekWizardSheet() does: nothing chosen or typed in an earlier sheet carries into this one.
+  if (!alreadyOpen) { _weekWizardOpenMode = null; _weekWizardScheduleAt = null; _weekWizardPendingOpenAt = null; }
+  _finalizeOutcome = null; _finalizeBannerHiddenFor = null;
+  _finalizeReturnTo = returnTo && returnTo.targetWeekId ? { targetWeekId: returnTo.targetWeekId, step: returnTo.step || 1 } : null;
+  enterFinalizeFlow(week);   // PF-416 follow-up, item 3: Step 1, or Step 4 for a finalize already committed here
+  if (alreadyOpen) { renderWeekWizardSheetBody(); return; }
+  mountWeekWizardSheetShell();
+}
 /** STEP B(14) — the status button's glyph. `b.icon` is a name from a frozen
  *  module-constant table (js/week-wizard.js FULL_STATUS_BUTTONS), never data;
  *  icon() returns '' for an unknown name, so a typo degrades to text-only. */
@@ -34725,12 +41522,16 @@ function closeWeekWizardSheet() {
   const hadParked = !!gamesTabTargetWeek();
   _unbindWizardSheetDismiss?.();
   _unbindWizardSheetDismiss = null;
+  _unbindWizardPager?.();           // W-70 - the step pager listens on the document too (visibility, pagehide): it goes with the sheet
+  _unbindWizardPager = null;
+  _wizBaseline = null; _wizLastField = null;
   document.getElementById('week-wizard-sheet-wrap')?.remove();
   // Hygiene — the next open() always re-derives its own target (above); this
   // just avoids holding a stale weekId in memory between opens.
   _weekWizardTargetWeekId = null;
   _weekWizardPendingOpenAt = null; // DI-404: closing the sheet ends the session — a carried Auto-Open time goes with it
   _finalizeStep = null;
+  _finalizeOutcome = null; _finalizeBannerHiddenFor = null; _finalizeReturnTo = null; // FB-027: the outcome row, a "Not yet" and a return-to-draft belong to the sheet session that just ended
   // BLOCK fix (a)/(b) hygiene — same reasoning: the next open() always
   // recomputes both from scratch (openWeekWizardSheet(), above), so nothing
   // here should survive to strand the NEXT open in "forced new week" or "show
@@ -34771,6 +41572,8 @@ function closeWeekWizardSheet() {
 function dismissWizardSheetForNavigation() {
   _unbindWizardSheetDismiss?.();
   _unbindWizardSheetDismiss = null;
+  _unbindWizardPager?.();
+  _unbindWizardPager = null;
   document.getElementById('week-wizard-sheet-wrap')?.remove();
 }
 export const _dismissWizardSheetForNavigationForTest = dismissWizardSheetForNavigation;
@@ -34806,7 +41609,792 @@ export const _resumeWeekWizardSheetForTest = resumeWeekWizardSheet;
  *  DOM open, so the "teardown keeps state" / "resume lands on the same step"
  *  proof can drive it directly. */
 export function _weekWizardSessionForTest() {
-  return { step: _weekWizardStep, targetWeekId: _weekWizardTargetWeekId, forceNew: _weekWizardForceNewWeek };
+  // PF-416 follow-up, item 4 (DI-404): Step 6's open choices and the Auto-Open time carried from Step 4, so wizardfinalizetest [3b] can prove a fresh
+  // sheet session starts without them.
+  return { step: _weekWizardStep, targetWeekId: _weekWizardTargetWeekId, forceNew: _weekWizardForceNewWeek,
+    openMode: _weekWizardOpenMode, scheduleAt: _weekWizardScheduleAt, pendingOpenAt: _weekWizardPendingOpenAt };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// D1 LANE C — THE SCRIBE PROFILE PANE (FB-006 / UN-468 / PF-468; DI-643…648, DI-681, DI-682). DOM AND NETWORK WIRING ONLY.
+//
+// The text half is js/scribe-profile-rules.js (vocabularies, validators, the fixed-field shapers the Edge Function also uses), the rendered half is js/scribe-profile-view.js (pure
+// markup, `escHtml` injected), the network half is js/scribe-profile-client.js (the one call into `scribe-profile`). THIS section paints, binds and sequences them, and does nothing
+// the League Page overlay does not already do: a full-screen push overlay with an inert background, a native edge swipe-back, scroll restore, and the shared bottom-sheet shell.
+//
+// ONE APPROVAL PATH (DI-643, batch O): Approve / Reject / Turn off / Undo are `applyScribeLearningDecision()` / `applyScribeCanonDecision()` / `toggleScribeLearningStatus()` — the
+// id-keyed, idempotent status write with Saving… / Couldn't save · Retry, confirmed by the SERVER before anything acts on it. The pane draws the status the SERVER holds (the
+// `scribe-profile` view) and overlays only the tracker's in-flight state on the row; it never draws the optimistic local write. A row moves from Pending to Active only after the
+// save is confirmed. The pane's rows carry the SERVER's row ids; `sb.mirrorRowIds()` maps an id to the mirror position the decision functions key by (checked, never guessed).
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+const SP_OVERLAY_ID = 'scribe-profile-overlay';
+const SP_SHEET_WRAP_ID = 'scribe-profile-sheet-wrap';
+let _sp = null;                       // the open pane's state, or null
+let _unbindSpSwipe = null;
+let _unbindSpSheetDrag = null;
+let _spOnKey = null;                  // Esc (web): closes the sheet if one is up, else the pane
+let _spLoadSeq = 0;                   // a view load that returns after a newer one started is dropped
+const spDeps = () => ({ escHtml, icon });
+const spPretty = (k) => String(k || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+/** Is the SCRIBE profile offered here at all? Supabase data mode (the function is an Edge Function) on the PILOT league (the Trainer tier, DI-318), to the commissioner. */
+export function scribeProfileAvailable() {
+  return getAuthMode() === 'supabase' && isPilotLeague(activeLeagueRow());
+}
+
+/** The entry card's counts from the MIRROR (synchronous, cached): what the card shows before — and the pane shows while — the function answers. */
+export function scribeProfileCachedCounts() {
+  const learnings = getScribeLearnings();
+  const canon = getScribeCanon();
+  const now = Date.now();
+  let rules = 0, examples = 0, pending = 0;
+  learnings.forEach((l, idx) => {
+    if (!l) return;
+    const status = scribeReviewEffectiveStatus('learnings', idx, l);
+    if (l.kind === 'learning' && isLearningLive(l, status, now)) rules += 1;
+    if (status === 'pending' && ['learning', 'experiment', 'fact_candidate'].includes(l.kind)) pending += 1;
+  });
+  canon.forEach((c, idx) => {
+    if (!c) return;
+    const status = scribeReviewEffectiveStatus('canon', idx, c);
+    if (status === 'approved' && c.kind !== 'anti_canon' && Number(c.confidence) >= LIVE_CONFIDENCE_FLOOR) examples += 1;
+    if (status === 'pending') pending += 1;
+  });
+  // N3 / B3 — the SAME definition of "active" as the pane's view: the rules SCRIBE reads (at most the cap) plus the examples it imitates. Lore is league history, not a rule: counted by neither.
+  return { active: Math.min(rules, RULE_CAP) + examples, pending, rules };
+}
+/** The entry card for the Commissioner -> SCRIBE tab (first card), or '' where the profile is not offered. */
+export function scribeProfileEntryCardHTML() {
+  if (!scribeProfileAvailable()) return '';
+  return SPV.entryCardHTML(scribeProfileCachedCounts(), spDeps());
+}
+/**
+ * The Trainer card's ONE row where its pending and learned lists used to be (DI-648). Written here, not in scribe-profile-view.js, so xsstest's classifier can follow every
+ * interpolation (a view-module function that takes `escHtml` as a parameter is a destructured binding it cannot vouch for).
+ */
+export function scribeProfileTrainerRowHTML() {
+  const pending = Number(scribeProfileCachedCounts().pending) || 0;
+  return `<div class="divider"></div>
+        <button type="button" class="sp-trainer-row" id="scribe-profile-open-from-trainer">
+          <span class="sp-trainer-row-text"><strong>${pending} waiting for review</strong> · ${escHtml(SPV.SP_COPY.trainerRow)}</span>
+          <span class="sp-chev">${icon('chevronRight')}</span>
+        </button>`;
+}
+/**
+ * D-51 (DI-682) — the READ-ONLY lore block a plain MEMBER sees in My SCRIBE File: the league's lore entries, nothing tappable. Same reason as above for living here. `lore` is the
+ * memory-record shape (`key`, `value`); an entry without both is skipped; an empty list is ''.
+ */
+function isScribeLoreRecord(row) { return !!(row && row.kind === 'lore' && row.key && row.value); }
+export function scribeMemberLoreBlockHTML(lore) {
+  const rows = (lore || []).filter(isScribeLoreRecord);
+  const items = rows.map(row => `<li><strong>${escHtml(String(row.key))}</strong>: ${escHtml(String(row.value))}</li>`).join('');
+  if (!items) return '';
+  return `<div class="scribe-file-section sp-member-lore" data-sp-member-lore>
+      <h4 class="scribe-file-h">League lore</h4>
+      <p class="text-muted text-xs">The league history SCRIBE may refer to. Only the commissioner can change it.</p>
+      <ul class="sp-ul">${items}</ul>
+    </div>`;
+}
+
+// ── the mirror <-> server-id bridge ────────────────────────────────────────────────────────────────
+function spMirrorRef(listName, id) {
+  const key = listName === 'canon' ? 'cfbp_scribe_canon' : 'cfbp_scribe_learnings';
+  const ids = sb.mirrorRowIds(key);
+  if (!ids) return null;
+  const idx = ids.indexOf(String(id));
+  if (idx < 0) return null;
+  const arr = listName === 'canon' ? getScribeCanon() : getScribeLearnings();
+  return arr[idx] ? { idx, item: arr[idx], listName: listName === 'canon' ? 'canon' : 'learnings' } : null;
+}
+const spRowKey = (row) => `${row.list === 'canon' ? 'canon' : 'learnings'}:${row.id}`;
+function spSetRowMessage(row, message) { if (_sp) { _sp.rowError = _sp.rowError || {}; _sp.rowError[spRowKey(row)] = message; } }
+function spClearRowMessage(row) { if (_sp && _sp.rowError) delete _sp.rowError[spRowKey(row)]; }
+/** Stamp every row with the tracker's state for it (`ui`) — the ONLY thing the pane takes from the mirror. */
+function spDecorate(view) {
+  if (!view) return view;
+  const decorate = (rows) => {
+    for (const row of rows || []) {
+      const ref = spMirrorRef(row.list, row.id);
+      const st = ref ? scribeReviewState(ref.listName, ref.idx, ref.item) : null;
+      row.ui = st ? { phase: st.phase, approving: st.approving, action: st.action } : {};
+      // The pre-send freshness check (below) reads as the row saving: the tap is acknowledged at once, the buttons go quiet.
+      if (_sp && _sp.checking && _sp.checking.key === spRowKey(row)) row.ui = { phase: 'saving', approving: _sp.checking.approving, action: 'check' };
+      row.rowMessage = (_sp && _sp.rowError && _sp.rowError[spRowKey(row)]) || '';
+      row.canToggle = !!view.canEdit;
+    }
+  };
+  decorate(view.active); decorate(view.pending); decorate(view.examples); decorate(view.turnedOff);
+  // B3 — the 16th rule is refused by the database; the pane says so BEFORE sending: what would ADD a live rule is cap-blocked when the league already has the cap's worth. A Replace is net
+  // zero (never blocked), an experiment / fact candidate is not a rule, and Keep on a rule SCRIBE already reads adds nothing.
+  const atCap = spAtCap(view);
+  for (const r of view.pending || []) r.capBlocked = atCap && r.list !== 'canon' && r.kind === 'learning' && !r.replaces;
+  for (const r of view.turnedOff || []) r.capBlocked = atCap;
+  for (const r of view.active || []) r.capBlocked = atCap && !r.live;
+  return view;
+}
+function spAtCap(view) {
+  const cap = view && view.capacity;
+  return !!cap && Number(cap.rules) >= Number(cap.cap || RULE_CAP);
+}
+
+// ── paint ───────────────────────────────────────────────────────────────────────────────────────────
+function spScrollEl() { return document.getElementById('sp-scroll'); }
+function spPaint({ transition = null, keepScroll = true, fade = false } = {}) {
+  const ov = document.getElementById(SP_OVERLAY_ID);
+  if (!ov || !_sp) return;
+  spDecorate(_sp.view);
+  const prev = keepScroll ? spScrollEl() : null;
+  const top = prev ? prev.scrollTop : 0;
+  const hadFocus = document.activeElement && ov.contains(document.activeElement) ? document.activeElement.getAttribute?.('data-sp-seg') : null;
+  ov.innerHTML = SPV.paneHTML({ ..._sp, cached: _sp.cached, standardsVersion: SCRIBE_STANDARDS.version }, spDeps());
+  const sc = spScrollEl();
+  if (sc && keepScroll) sc.scrollTop = top;
+  if (hadFocus) ov.querySelector(`[data-sp-seg="${hadFocus}"]`)?.focus?.({ preventScroll: true });
+  if (fade) {
+    // N5 — a segment change crossfades its panel in over 150 ms (--motion-fast); Reduce Motion drops the animation in CSS.
+    try {
+      const panelEl = document.getElementById('sp-panel');
+      if (panelEl && panelEl.classList) { panelEl.classList.add('sp-fade-in'); panelEl.addEventListener?.('animationend', () => panelEl.classList.remove('sp-fade-in'), { once: true }); }
+    } catch { /* decoration */ }
+  }
+  if (transition === 'push') {
+    try {
+      ov.classList.add('lc-step-in');
+      ov.addEventListener('animationend', () => ov.classList.remove('lc-step-in'), { once: true });
+      ov.querySelector('#sp-title')?.focus?.({ preventScroll: true });
+    } catch { /* decoration and focus are courtesies */ }
+  }
+}
+
+// ── load ─────────────────────────────────────────────────────────────────────────────────────────────
+async function spLoadView({ silent = false } = {}) {
+  if (!_sp) return;
+  const seq = ++_spLoadSeq;
+  if (!silent) { _sp.status = _sp.view ? 'ready' : 'loading'; if (!_sp.view) spPaint(); }
+  const r = await callScribeProfile('view');
+  if (!_sp || seq !== _spLoadSeq) return;
+  if (r.ok) {
+    _sp.view = r.data;
+    _sp.status = 'ready';
+  } else if (r.skipped === 'league_paused') {
+    _sp.status = 'paused';
+  } else if (r.error === 'not_commissioner') {
+    _sp.status = 'denied';
+  } else if (!silent || !_sp.view) {
+    _sp.status = 'error';
+  }
+  spPaint();
+}
+async function spLoadHistory({ more = false } = {}) {
+  if (!_sp) return;
+  const h = _sp.history;
+  if (h.status === 'loading') return;
+  h.status = 'loading';
+  spPaint();
+  const r = await callScribeProfile('history', more && h.cursor ? { cursor: h.cursor } : {});
+  if (!_sp) return;
+  if (r.ok) {
+    h.entries = more ? h.entries.concat(r.data.entries || []) : (r.data.entries || []);
+    h.cursor = r.data.cursor || null;
+    h.more = !!r.data.more;
+    h.status = 'ready';
+    h.loaded = true;
+  } else {
+    h.status = 'error';
+  }
+  spPaint();
+  if (_sp.sheet) spPaintSheet();
+}
+async function spRefresh() {
+  if (!_sp) return;
+  try { await ensureSupabaseDataHydrated('scribe-profile-refresh'); } catch { /* the view load below reports its own failure */ }
+  await spLoadView();
+  if (_sp && _sp.history.loaded) await spLoadHistory();
+}
+
+// ── open / close ──────────────────────────────────────────────────────────────────────────────────────
+export function openScribeProfilePane({ seg = 'active' } = {}) {
+  if (isContentWithheld()) return false;
+  if (getAuthMode() !== 'supabase') { showToast('The SCRIBE profile needs the signed-in league.', 'error'); return false; }
+  document.getElementById(SP_OVERLAY_ID)?.remove();
+  _sp = { seg, status: 'loading', view: null, cached: scribeProfileCachedCounts(), history: { status: 'idle', entries: [], cursor: null, more: false, loaded: false }, sheet: null, rowError: {} };
+  const el = document.createElement('div');
+  el.id = SP_OVERLAY_ID;
+  el.setAttribute('data-hold-teardown', '');
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-modal', 'true');
+  el.setAttribute('aria-labelledby', 'sp-title');
+  document.body.appendChild(el);
+  el.addEventListener('click', spOnClick);
+  if (_spOnKey) document.removeEventListener('keydown', _spOnKey);
+  _spOnKey = (e) => {
+    if (e.key !== 'Escape') return;
+    if (!document.getElementById(SP_OVERLAY_ID)) { document.removeEventListener('keydown', _spOnKey); _spOnKey = null; return; }
+    if (document.getElementById(SP_SHEET_WRAP_ID)) spCloseSheet(); else closeScribeProfilePane();
+  };
+  document.addEventListener('keydown', _spOnKey);
+  _setLeaguePageOverlayInert(true);
+  spPaint({ transition: 'push', keepScroll: false });
+  _unbindSpSwipe?.();
+  _unbindSpSwipe = bindSwipeToDismiss(el, {
+    axis: 'x',
+    getBlocked: () => _dismissBlockingSurfaceUp({ excludeSpOverlay: true }),
+    getDistancePx: () => el.getBoundingClientRect().width || window.innerWidth || 1,
+    onProgress: (progress) => { el.setAttribute('data-dragging', 'true'); el.style.setProperty('--sp-drag-x', String(progress)); },
+    onSettle: (result) => settleScribeProfileSwipe(el, result),
+  });
+  if (seg === 'history') spLoadHistory();
+  spLoadView();
+  return true;
+}
+function settleScribeProfileSwipe(el, { dismissed, reducedMotion } = {}) {
+  el.removeAttribute('data-dragging');
+  if (!dismissed) { el.style.setProperty('--sp-drag-x', '0'); return; }
+  finishSlideThenRemove({ listenEl: el, apply: () => el.style.setProperty('--sp-drag-x', '1'), reducedMotion: !!reducedMotion, done: () => closeScribeProfilePane() });
+}
+export function closeScribeProfilePane() {
+  spCloseSheet({ immediate: true });
+  _unbindSpSwipe?.(); _unbindSpSwipe = null;
+  if (_spOnKey) { document.removeEventListener('keydown', _spOnKey); _spOnKey = null; }
+  document.getElementById(SP_OVERLAY_ID)?.remove();
+  _setLeaguePageOverlayInert(false);
+  const learned = _sp && _sp.view && _sp.view.counts ? { active: Number(_sp.view.counts.active) || 0, pending: Number(_sp.view.counts.pending) || 0 } : null;
+  _sp = null;
+  spRefreshEntryPoints(learned);
+}
+export function _scribeProfileStateForTest() { return _sp; }
+/** TEST SEAM: ask the function for the view again (what a silent reload does), returning when the pane has painted it. */
+export function _scribeProfileReloadViewForTest() { return spLoadView({ silent: true }); }
+/**
+ * After the pane closes: the Comm card and the Trainer row show the numbers the pane last learned (the SERVER's, when the view loaded; the mirror's otherwise).
+ * N3 — UPDATED IN PLACE, never replaced: the card's wrapper carries the Comm panel's collapse listener and chevron (wireCollapsibleSections binds the title once, at render), so swapping its markup
+ * would leave a card that no longer collapses. Only the count line, the pill and the aria-label change.
+ */
+function spRefreshEntryPoints(counts) {
+  try {
+    const c = counts || scribeProfileCachedCounts();
+    const card = document.querySelector('[data-comm-card="scribe-profile"]');
+    if (card && scribeProfileAvailable()) {
+      const line = card.querySelector('.sp-entry-line');
+      if (line) line.innerHTML = SPV.entryLineHTML(c);
+      card.querySelector('#scribe-profile-open')?.setAttribute('aria-label', SPV.entryAriaLabel(c));
+      const title = card.querySelector('.admin-section-title');
+      const pill = card.querySelector('.sp-pill-count');
+      if (pill) { if (c.pending > 0) pill.textContent = String(c.pending); else pill.remove(); }
+      else if (title && c.pending > 0) { const el = document.createElement('span'); el.className = 'sp-pill sp-pill-count'; el.setAttribute('aria-hidden', 'true'); el.textContent = String(c.pending); title.appendChild(el); }
+    }
+    const row = document.getElementById('scribe-profile-open-from-trainer');
+    if (row) { const strong = row.querySelector('strong'); if (strong) strong.textContent = `${c.pending} waiting for review`; }
+  } catch { /* a courtesy */ }
+}
+export function bindScribeProfileEntryPoints() {
+  // Idempotent: the Comm page and the Admin panel's shared binder can both run for one render, and a double-bound row would open the pane twice.
+  const bindOnce = (id, handler) => {
+    const el = document.getElementById(id);
+    if (!el || el.getAttribute('data-sp-bound')) return;
+    el.setAttribute('data-sp-bound', '1');
+    el.addEventListener('click', handler);
+  };
+  bindOnce('scribe-profile-open', () => { haptic('selection'); openScribeProfilePane(); });
+  bindOnce('scribe-profile-open-from-trainer', () => { haptic('selection'); openScribeProfilePane({ seg: 'pending' }); });
+}
+
+// ── pane clicks ──────────────────────────────────────────────────────────────────────────────────────
+function spRow(el) {
+  const rowEl = el.closest('[data-sp-id]');
+  if (!rowEl || !_sp || !_sp.view) return null;
+  const list = rowEl.getAttribute('data-sp-list');
+  const id = rowEl.getAttribute('data-sp-id');
+  const pools = [_sp.view.pending, _sp.view.active, _sp.view.turnedOff, _sp.view.examples];
+  for (const pool of pools) { const hit = (pool || []).find((r) => String(r.id) === id && (r.list === 'canon' ? 'canon' : 'learnings') === list); if (hit) return hit; }
+  return null;
+}
+function spOnClick(e) {
+  const seg = e.target.closest('[data-sp-seg]');
+  if (seg && _sp) {
+    const next = seg.getAttribute('data-sp-seg');
+    if (next !== _sp.seg) {
+      const sc = spScrollEl();
+      _sp.scrollBySeg = _sp.scrollBySeg || {};
+      if (sc) _sp.scrollBySeg[_sp.seg] = sc.scrollTop;
+      _sp.seg = next;
+      _sp.rowError = {};
+      haptic('light');
+      spPaint({ keepScroll: false, fade: true });
+      const sc2 = spScrollEl();
+      if (sc2 && _sp.scrollBySeg[next]) sc2.scrollTop = _sp.scrollBySeg[next];
+      if (next === 'history' && !_sp.history.loaded && _sp.history.status !== 'loading') spLoadHistory();
+    }
+    return;
+  }
+  const act = e.target.closest('[data-sp-act]');
+  if (!act || !_sp) return;
+  const kind = act.getAttribute('data-sp-act');
+  switch (kind) {
+    case 'back': closeScribeProfilePane(); break;
+    case 'retry': spRefresh(); break;
+    case 'history-retry': spLoadHistory(); break;
+    case 'history-more': spLoadHistory({ more: true }); break;
+    case 'standards': spOpenSheet({ kind: 'standards' }); break;
+    case 'add': spOpenSheet({ kind: 'add', tab: 'instruction' }); break;
+    case 'approve': { const row = spRow(act); if (row) spDecide(row, true); break; }
+    case 'reject': { const row = spRow(act); if (row) spDecide(row, false); break; }
+    case 'toggle': { const row = spRow(act); if (row) spToggle(row, { viaUndo: true }); break; }       // the row's own Undo button (a fresh auto-apply)
+    case 'turn-on': { const row = spRow(act); if (row) spToggle(row); break; }
+    case 'toggle-off-group': { _sp.showOff = !_sp.showOff; haptic('light'); spPaint(); break; }
+    case 'detail': { const row = spRow(act); if (row) spOpenSheet({ kind: 'rule', rowId: row.id }); break; }
+    case 'lore-detail': { const k = act.closest('[data-sp-lore]')?.getAttribute('data-sp-lore'); if (k) spOpenSheet({ kind: 'lore', key: k }); break; }
+    case 'player': { const m = act.getAttribute('data-sp-member'); if (m) spOpenSheet({ kind: 'player', memberId: m }); break; }
+    default: break;
+  }
+}
+
+// ── decisions: the batch O path, with the pane's own bookkeeping around it ─────────────────────────
+async function spDecide(row, approving) {
+  let ref = spMirrorRef(row.list, row.id);
+  if (!ref) {
+    showToast('This list is out of date. Refreshing it.', 'error');
+    spRefresh();
+    return { state: 'stale' };
+  }
+  spClearRowMessage(row);
+  // S2 / B3 — pre-checks the database repeats: a proposal whose replace target is gone has nothing to replace, and a plain Approve of a 16th rule is refused. Say so; send nothing.
+  if (approving && row.replaces && row.replacesActive === false) { showToast(SPV.SP_COPY.replaceGone, 'error'); return { state: 'orphan' }; }
+  if (approving && row.capBlocked) { showToast(RULE_CAP_MESSAGE, 'error'); return { state: 'capped' }; }
+  // Round 3 — what the database can refuse an Approve for (the 16th rule; a Replace whose target moved) is checked against a view read RIGHT NOW, before anything is sent, and BEFORE the
+  // commissioner is asked to confirm a held proposal (no confirming something that cannot go through).
+  if (approving && row.list !== 'canon' && row.kind === 'learning') {
+    const f = await spCheckFresh(row, { turningOn: false });
+    if (!f.row) return { state: f.state };
+    row = f.row;
+    ref = spMirrorRef(row.list, row.id);
+    if (!ref) { showToast('This list is out of date. Refreshing it.', 'error'); spRefresh(); return { state: 'stale' }; }
+  }
+  if (approving && row.flaggedHostile && !confirm(HOLD_CONFIRM)) return { state: 'cancelled' };
+  haptic(approving ? 'medium' : 'light');
+  const r = row.list === 'canon' ? applyScribeCanonDecision(ref.idx, approving) : applyScribeLearningDecision(ref.idx, approving);
+  spPaint();                                        // "Saving…" (or "Couldn't save" if the seam refused up front) from this paint on
+  if (!r.saved) return { state: 'failed' };
+  let state;
+  try { ({ state } = await r.saved); } catch (e) { console.warn('[scribe-profile] the save did not settle', e); state = 'failed'; }
+  if (!_sp) return { state };
+  if (state === 'saved') {
+    haptic('success');
+    showToast(approving ? (row.replaces ? SPV.SP_COPY.toast.replaced : SPV.SP_COPY.toast.approved) : SPV.SP_COPY.toast.rejected, 'success');
+    await spCollapseRow(row);                                      // N5 — the row leaves over 200 ms, after the server has it
+    if (!_sp) return { state };
+    spApplyDecisionLocally(row, approving);
+    // A REPLACE also retires the old rule on the server (the guard trigger, in the same transaction); pull that into the mirror so the old row's position reads as retired.
+    if (approving && row.replaces) { try { await ensureSupabaseDataHydrated('scribe-profile-replace'); } catch { /* the view load below is the display's truth */ } }
+    if (!_sp) return { state };
+    spLoadView({ silent: true });
+  } else {
+    haptic('error');
+  }
+  spPaint();
+  if (_sp.sheet) spPaintSheet();
+  return { state };
+}
+/**
+ * Round-3 reviewer note 1 — a decision the DATABASE can refuse for a reason the pane's view may have gone stale on (an Approve that would be the 16th rule: rule_cap_reached; a Replace whose
+ * target moved: replaces_invalid; a Turn on at the cap) is checked against a view read right before it is sent. The adapter's write path cannot take such a refusal quietly: a refused
+ * PATCH latches the learnings key and raises the red sync banner (AD-06), which is right for a real sync failure and wrong for "the list moved under you". So the function is asked first;
+ * if it says the decision would be refused, NOTHING is sent: the row says why (the cap sentence, or that the rule changed), the view is already the fresh one, and the buttons now reflect it.
+ * Returns `{ row }` (the FRESH row, safe to send) or `{ state }` (nothing to send). A check that cannot run sends nothing either, and says so on the row.
+ * What remains is a race of the length of one round trip between this answer and the write; a refusal in THAT window is the adapter's loud failure, which is the honest one.
+ */
+async function spCheckFresh(row, { turningOn = false } = {}) {
+  if (!_sp) return { state: 'closed' };
+  if (_sp.checking) return { state: 'in_flight' };
+  _sp.checking = { key: spRowKey(row), approving: !turningOn };
+  spPaint();
+  ++_spLoadSeq;                                   // an older view load still in flight is dropped; this answer is newer than it
+  let r;
+  try { r = await callScribeProfile('view'); } catch { r = { ok: false, error: 'network' }; }
+  if (!_sp) return { state: 'closed' };
+  _sp.checking = null;
+  if (!r.ok) {
+    spSetRowMessage(row, SPV.SP_COPY.checkFailed);
+    haptic('error');
+    spPaint();
+    return { state: 'check_failed' };
+  }
+  _sp.view = r.data;
+  _sp.status = 'ready';
+  spDecorate(_sp.view);
+  const pool = turningOn ? _sp.view.turnedOff : _sp.view.pending;
+  const fresh = (pool || []).find((x) => String(x.id) === String(row.id) && x.list === row.list) || null;
+  if (!fresh) {
+    // Decided or changed somewhere else: there is no row left to carry a message, so say it once, and show the list as it is.
+    showToast(SPV.SP_COPY.ruleChanged, 'error');
+    haptic('error');
+    spPaint();
+    return { state: 'changed' };
+  }
+  if (!turningOn && fresh.replaces && fresh.replacesActive === false) {
+    // The replace target moved: the row now prints its own sentence and offers Reject only (S2); nothing to send.
+    haptic('error');
+    spPaint();
+    return { state: 'orphan' };
+  }
+  if (fresh.capBlocked) {
+    spSetRowMessage(fresh, RULE_CAP_MESSAGE);
+    haptic('error');
+    spPaint();
+    return { state: 'capped' };
+  }
+  spPaint();
+  return { row: fresh };
+}
+/** Once the server has confirmed a decision, move the row the way the server now holds it (the silent view reload that follows reconciles anything this misses). */
+function spApplyDecisionLocally(row, approving) {
+  const v = _sp && _sp.view;
+  if (!v) return;
+  v.pending = (v.pending || []).filter((r) => !(r.id === row.id && r.list === row.list));
+  v.counts = { ...(v.counts || {}), pending: v.pending.length };
+  if (!approving) return;
+  const moved = { ...row, status: 'approved', ui: {}, live: true };
+  if (row.list === 'canon') { if (row.kind === 'canon') v.examples = [moved, ...(v.examples || [])]; return; }
+  if (row.kind === 'learning') {
+    Object.assign(moved, { humanApproved: true, approvedAt: new Date().toISOString(), provisional: false, autoApplied: false, undoable: false, flaggedHostile: false });
+    delete moved.replaces; delete moved.replacesText; delete moved.replacesActive;
+    v.active = [moved, ...(v.active || []).filter((r) => r.id !== row.replaces)];
+    // B3 — keep the pane's fullness current without waiting for the reload: a plain approval adds a live rule, a Replace is net zero (the reload that follows reconciles any drift)
+    if (v.capacity && !row.replaces) v.capacity = { ...v.capacity, rules: (Number(v.capacity.rules) || 0) + 1 };
+  }
+}
+/**
+ * Turn a rule off or on (Undo, the detail sheet's Turn off, the Turned off group's Turn on) through batch O's id-keyed switch — the row moves only after the SERVER confirms. Turning ON
+ * makes the rule human-approved (the database's guard stamps a commissioner's Turn on) and is cap-checked; the Turn off toast carries an Undo for a few seconds (B1).
+ */
+async function spToggle(row, { viaUndo = false } = {}) {
+  let ref = spMirrorRef(row.list, row.id);
+  if (!ref) { showToast('This list is out of date. Refreshing it.', 'error'); spRefresh(); return { state: 'stale' }; }
+  const turningOn = row.status === 'superseded';
+  spClearRowMessage(row);
+  if (turningOn && row.capBlocked) { showToast(RULE_CAP_MESSAGE, 'error'); return { state: 'capped' }; }
+  // Round 3 — Turn on is cap-checked by the database; confirm against a fresh view first, so a stale list is told so on the row instead of being refused by the adapter's write path.
+  if (turningOn) {
+    const f = await spCheckFresh(row, { turningOn: true });
+    if (!f.row) return { state: f.state };
+    row = f.row;
+    ref = spMirrorRef(row.list, row.id);
+    if (!ref) { showToast('This list is out of date. Refreshing it.', 'error'); spRefresh(); return { state: 'stale' }; }
+  }
+  haptic('light');
+  const r = toggleScribeLearningStatus(ref.idx);
+  if (!r.ok) return { state: r.error === 'in_flight' ? 'in_flight' : 'failed' };
+  spPaint();
+  if (_sp.sheet) spPaintSheet();
+  if (!r.saved) return { state: 'failed' };
+  let state;
+  try { ({ state } = await r.saved); } catch (e) { console.warn('[scribe-profile] the save did not settle', e); state = 'failed'; }
+  if (!_sp) return { state };
+  if (state === 'saved') {
+    haptic('success');
+    if (r.on) showToast(SPV.SP_COPY.toast.on, 'success');
+    else if (viaUndo) showToast(SPV.SP_COPY.toast.off, 'success');
+    else spToastWithUndo(SPV.SP_COPY.toast.off, () => { const back = ((_sp && _sp.view && _sp.view.turnedOff) || []).find((x) => x.id === row.id && x.list === row.list); if (back) spToggle(back, { viaUndo: true }); });
+    await spCollapseRow(row);
+    if (!_sp) return { state };
+    spApplyToggleLocally(row, !!r.on);
+    if (_sp.sheet && _sp.sheet.kind === 'rule') spCloseSheet();
+    spLoadView({ silent: true });
+  } else {
+    haptic('error');
+  }
+  spPaint();
+  if (_sp && _sp.sheet) spPaintSheet();
+  return { state };
+}
+/** Once the server has confirmed a switch, move the rule between Active and Turned off the way the server now holds it (the silent reload that follows reconciles anything this misses). */
+function spApplyToggleLocally(row, on) {
+  const v = _sp && _sp.view;
+  if (!v) return;
+  v.active = (v.active || []).filter((x) => x.id !== row.id);
+  v.turnedOff = (v.turnedOff || []).filter((x) => x.id !== row.id);
+  if (on) {
+    v.active = [{ ...row, status: 'approved', ui: {}, live: true, humanApproved: true, approvedAt: new Date().toISOString(), provisional: false, autoApplied: false, undoable: false, keepable: false }, ...v.active];
+  } else {
+    v.turnedOff = [{ ...row, status: 'superseded', ui: {}, live: false, undoable: false }, ...v.turnedOff];
+  }
+  v.counts = { ...(v.counts || {}), active: v.active.filter((x) => x.live).length + (v.examples || []).filter((x) => x.live).length };
+  if (v.capacity) v.capacity = { ...v.capacity, rules: v.active.filter((x) => x.live).length };
+}
+/** The commissioner's KEEP (B1): the database stamps human approval under HIS JWT (scribe_learning_keep -> the guard); the pane draws the result only after the server confirms. */
+async function spKeep(row) {
+  if (!_sp || !row) return { state: 'none' };
+  if (_sp.keep && _sp.keep.phase === 'saving') return { state: 'in_flight' };
+  if (row.capBlocked) { showToast(RULE_CAP_MESSAGE, 'error'); return { state: 'capped' }; }
+  haptic('medium');
+  _sp.keep = { id: row.id, phase: 'saving' };
+  spPaintSheet();
+  const r = await callScribeProfile('keep', { id: row.id });
+  if (!_sp) return { state: 'closed' };
+  if (!r.ok) {
+    _sp.keep = { id: row.id, phase: 'failed', message: describeProfileError(r.error, SPV.SP_COPY.toggleSaveFailed) };
+    haptic('error');
+    spPaintSheet();
+    return { state: 'failed' };
+  }
+  haptic('success');
+  _sp.keep = null;
+  showToast(SPV.SP_COPY.toast.kept, 'success');
+  const mine = (_sp.view && _sp.view.active || []).find((x) => x.id === row.id);
+  if (mine) Object.assign(mine, { humanApproved: true, approvedAt: new Date().toISOString(), provisional: false, autoApplied: false, undoable: false, keepable: false, live: true });
+  // The stamp was made server-side; pull it into the mirror so a later switch on this rule starts from what the server holds.
+  try { await ensureSupabaseDataHydrated('scribe-profile-keep'); } catch { /* the view reload below is the display's truth */ }
+  if (!_sp) return { state: 'saved' };
+  spPaint();
+  if (_sp.sheet) spPaintSheet();
+  spLoadView({ silent: true });
+  return { state: 'saved' };
+}
+
+/**
+ * N5 — a row that LEAVES a list (a confirmed decision or switch) collapses over 200 ms (height, padding and opacity to zero; `.sp-item-leaving`) before the list repaints without it. No row on
+ * screen, or Reduce Motion, resolves at once. Bounded: finishSlideThenRemove() falls back to a timer if the transition never ends.
+ */
+function spCollapseRow(row) {
+  return new Promise((resolve) => {
+    let el = null;
+    try {
+      const ov = document.getElementById(SP_OVERLAY_ID);
+      const list = row.list === 'canon' ? 'canon' : 'learnings';
+      el = ov && ov.querySelectorAll ? [...ov.querySelectorAll('[data-sp-id]')].find((n) => n.getAttribute('data-sp-id') === String(row.id) && n.getAttribute('data-sp-list') === list) : null;
+    } catch { el = null; }
+    if (!el) { resolve(); return; }
+    let reduced = false; try { reduced = prefersReducedMotion(); } catch { reduced = false; }
+    finishSlideThenRemove({
+      listenEl: el, reducedMotion: reduced,
+      apply: () => { try { el.style.height = `${el.offsetHeight}px`; void el.offsetHeight; el.classList.add('sp-item-leaving'); el.style.height = '0px'; } catch { /* decoration */ } },
+      done: () => resolve(),
+    });
+  });
+}
+/** A success toast that carries an Undo (B1: the Turn off toast). 5 seconds, longer than a plain toast, because it asks for a decision; the button is a 44 pt target. */
+function spToastWithUndo(message, onUndo) {
+  const c = document.getElementById('toast-container');
+  if (!c) return;
+  const t = document.createElement('div');
+  t.className = 'toast success sp-toast';
+  t.innerHTML = `<span class="sp-toast-text">${escHtml(message)}</span><button type="button" class="sp-toast-undo" data-sp-toast-undo>${escHtml(SPV.SP_COPY.toast.undo)}</button>`;
+  c.appendChild(t);
+  let settled = false;
+  const gone = () => { try { t.remove(); } catch { /* already gone */ } };
+  t.querySelector?.('[data-sp-toast-undo]')?.addEventListener('click', () => { if (settled) return; settled = true; gone(); haptic('light'); onUndo(); });
+  setTimeout(() => { settled = true; try { t.style.cssText += 'opacity:0;transition:opacity .3s'; } catch { /* decoration */ } setTimeout(gone, 300); }, SP_UNDO_TOAST_MS);
+}
+const SP_UNDO_TOAST_MS = 5000;
+
+// ── sheets (the shared sheet shell) ───────────────────────────────────────────────────────────────────
+function spSheetTitle(sh) {
+  if (!sh) return '';
+  if (sh.kind === 'add') return sh.correcting ? 'Correct' : SPV.SP_COPY.add.title;
+  if (sh.kind === 'standards') return 'SCRIBE standards';
+  if (sh.kind === 'rule') return 'Details';
+  if (sh.kind === 'lore') return sh.key || 'League lore';
+  if (sh.kind === 'player') { const p = ((_sp.view || {}).players || []).find((x) => x.memberId === sh.memberId); return p ? p.name : 'Player'; }
+  return '';
+}
+function spOpenSheet(sh) {
+  if (!_sp) return;
+  const players = ((_sp.view || {}).players || []);
+  if (sh.kind === 'add') {
+    sh = {
+      category: INSTRUCTION_CATEGORIES[0].value, text: '', key: '', value: '', loreKey: '', loreText: '', playerId: (players[0] || {}).memberId || '',
+      requestId: newRequestId(), busy: false, error: '', invalid: true, ...sh,
+    };
+    sh.invalid = spAddInvalid(sh);
+  }
+  if (sh.kind === 'rule' && !_sp.history.loaded && _sp.history.status !== 'loading') spLoadHistory();
+  _sp.sheet = sh;
+  document.getElementById(SP_SHEET_WRAP_ID)?.remove();
+  _unbindSpSheetDrag?.(); _unbindSpSheetDrag = null;
+  const { unbind } = mountSheetShell({
+    wrapId: SP_SHEET_WRAP_ID, sheetId: 'scribe-profile-sheet',
+    headerInnerHTML: `<div class="chat-sheet-title" id="scribe-profile-sheet-title"></div><button class="chat-sheet-close" id="scribe-profile-sheet-close" aria-label="Close">✕</button>`,
+    bodyId: 'scribe-profile-sheet-body', closeId: 'scribe-profile-sheet-close',
+    onBackdrop: () => spCloseSheet(), renderBody: spPaintSheet,
+    drag: { getBlocked: () => _dismissBlockingSurfaceUp({ excludeSpSheet: true, excludeSpOverlay: true }), onProgress: spSheetDragProgress, onSettle: spSheetSettleDrag },
+  });
+  _unbindSpSheetDrag = unbind;
+  const wrap = document.getElementById(SP_SHEET_WRAP_ID);
+  if (wrap) {
+    wrap.addEventListener('click', spOnSheetClick);
+    wrap.addEventListener('input', spOnSheetInput);
+    wrap.addEventListener('change', spOnSheetInput);
+  }
+  const title = document.getElementById('scribe-profile-sheet-title');
+  if (title) title.textContent = spSheetTitle(sh);
+}
+function spSheetDragProgress(wrap, sheetEl, progress) {
+  sheetEl.setAttribute('data-dragging', 'true'); wrap.setAttribute('data-dragging', 'true');
+  wrap.style.setProperty('--sp-sheet-drag-y', String(progress));
+}
+function spSheetSettleDrag(wrap, sheetEl, { dismissed, reducedMotion } = {}) {
+  sheetEl.removeAttribute('data-dragging'); wrap.removeAttribute('data-dragging');
+  if (!dismissed) { wrap.style.setProperty('--sp-sheet-drag-y', '0'); return; }
+  finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--sp-sheet-drag-y', '1'), reducedMotion: !!reducedMotion, done: () => spCloseSheet({ immediate: true }) });
+}
+/**
+ * S3 — a sheet LEAVES the way it arrived: Cancel, Done, the backdrop, the ✕, Esc and a finished action all slide it down on the same 300 ms curve it came up on (a Reduce Motion crossfade
+ * instead), through the delete-account sheet's own exit (`playDeleteSheetExit`, generalized by id and drag property, never forked) — and only THEN is its node removed (that node and no other:
+ * a sheet opened during the exit is a different node and survives). `immediate` is for the pane closing and for a drag that already carried the sheet off screen.
+ */
+function spCloseSheet({ immediate = false } = {}) {
+  _unbindSpSheetDrag?.(); _unbindSpSheetDrag = null;
+  if (_sp) { _sp.sheet = null; _sp.keep = null; }
+  const wrap = document.getElementById(SP_SHEET_WRAP_ID);
+  if (!wrap) return;
+  if (immediate) { wrap.remove(); return; }
+  playDeleteSheetExit(wrap, () => { try { if (document.getElementById(SP_SHEET_WRAP_ID) === wrap) wrap.remove(); } catch { /* already gone */ } }, { sheetId: 'scribe-profile-sheet', dragVar: '--sp-sheet-drag-y' });
+}
+function spPaintSheet() {
+  const body = document.getElementById('scribe-profile-sheet-body');
+  const sh = _sp && _sp.sheet;
+  if (!body || !sh) return;
+  const v = _sp.view || {};
+  const deps = spDeps();
+  if (sh.kind === 'add') body.innerHTML = SPV.addSheetBodyHTML(sh, deps, { players: v.players || [], pilot: v.pilot !== false, atCap: spAtCap(v) });
+  else if (sh.kind === 'standards') body.innerHTML = SPV.standardsSheetBodyHTML(SCRIBE_STANDARDS, { heat: spPretty(getScribeHeat()), participation: spPretty(getScribeFrequency()), learning: spPretty(getScribeLearningRate()) }, deps);
+  else if (sh.kind === 'rule') {
+    const row = (v.active || []).find((r) => String(r.id) === String(sh.rowId));
+    if (!row) { body.innerHTML = `<p class="text-muted">That rule is no longer active.</p><div class="sp-actions sp-actions-sheet"><button type="button" class="btn btn-primary sp-btn" data-sp-act="sheet-cancel">Done</button></div>`; return; }
+    spDecorate({ active: [row], canEdit: v.canEdit, capacity: v.capacity });
+    const lines = ((_sp.history.entries) || []).filter((e) => e.rowId === row.id).map((e) => ({ sentence: SPV.historySentence(e), when: new Date(e.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) }));
+    body.innerHTML = SPV.ruleDetailSheetBodyHTML(row, lines, deps, { canEdit: !!v.canEdit, keep: _sp.keep && _sp.keep.id === row.id ? _sp.keep : null });
+  } else if (sh.kind === 'lore') {
+    const entry = (v.lore || []).find((x) => x.key === sh.key);
+    body.innerHTML = entry ? SPV.loreDetailSheetBodyHTML(entry, deps, { busy: !!sh.busy, error: sh.error || '', confirmRemove: !!sh.confirmRemove }) : '<p class="text-muted">That entry is gone.</p>';
+  } else if (sh.kind === 'player') {
+    const p = (v.players || []).find((x) => x.memberId === sh.memberId);
+    body.innerHTML = p ? SPV.playerSheetBodyHTML(p, deps, { canEdit: !!v.canEdit, busyKey: sh.busyKey || '', error: sh.error || '' }) : '<p class="text-muted">That player is gone.</p>';
+  }
+  const title = document.getElementById('scribe-profile-sheet-title');
+  if (title) title.textContent = spSheetTitle(sh);
+}
+function spAddInvalid(s) {
+  if (s.tab === 'fact') return !s.playerId || !validateFact({ key: s.key, value: s.value }).ok;
+  if (s.tab === 'lore') return !validateLore({ key: s.loreKey, text: s.loreText }).ok;
+  return !validateInstruction({ category: s.category, text: s.text }).ok;
+}
+function spOnSheetInput(e) {
+  const sh = _sp && _sp.sheet;
+  if (!sh || sh.kind !== 'add' || sh.busy) return;
+  const f = e.target.getAttribute?.('data-sp-field');
+  if (!f) return;
+  sh[f] = e.target.value;
+  sh.error = '';
+  sh.invalid = spAddInvalid(sh);
+  const counters = { text: ['sp-c-text', TEXT_MAX], key: ['sp-c-key', KEY_MAX], value: ['sp-c-value', TEXT_MAX], loreKey: ['sp-c-lkey', KEY_MAX], loreText: ['sp-c-ltext', TEXT_MAX] };
+  if (counters[f]) { const c = document.getElementById(counters[f][0]); if (c) c.textContent = `${String(e.target.value).length} / ${counters[f][1]}`; }
+  const btn = document.getElementById('sp-submit');
+  if (btn) btn.disabled = sh.invalid;
+}
+function spOnSheetClick(e) {
+  const sh = _sp && _sp.sheet;
+  if (!sh) return;
+  const tab = e.target.closest('[data-sp-tab]');
+  if (tab && sh.kind === 'add' && !sh.busy) { sh.tab = tab.getAttribute('data-sp-tab'); sh.error = ''; sh.invalid = spAddInvalid(sh); haptic('light'); spPaintSheet(); return; }
+  const act = e.target.closest('[data-sp-act]');
+  if (!act) return;
+  const kind = act.getAttribute('data-sp-act');
+  const v = _sp.view || {};
+  switch (kind) {
+    case 'sheet-cancel': spCloseSheet(); break;
+    case 'sheet-submit': spSubmitAdd(); break;
+    case 'detail-toggle': { const row = (v.active || []).find((r) => String(r.id) === String(sh.rowId)); if (row) spToggle(row); break; }
+    case 'detail-keep': { const row = (v.active || []).find((r) => String(r.id) === String(sh.rowId)); if (row && row.keepable) spKeep(row); break; }
+    case 'detail-correct': {
+      const row = (v.active || []).find((r) => String(r.id) === String(sh.rowId));
+      if (row && row.list === 'learnings' && row.correctable) spOpenSheet({ kind: 'add', tab: 'instruction', category: row.category, text: row.text, correcting: { kind: 'instruction', id: row.id } });
+      break;
+    }
+    case 'lore-correct': {
+      const entry = (v.lore || []).find((x) => x.key === sh.key);
+      if (entry) spOpenSheet({ kind: 'add', tab: 'lore', loreKey: entry.key, loreText: entry.text, correcting: { kind: 'lore', key: entry.key } });
+      break;
+    }
+    case 'lore-remove': sh.confirmRemove = true; sh.error = ''; spPaintSheet(); break;
+    case 'lore-remove-cancel': sh.confirmRemove = false; spPaintSheet(); break;
+    case 'lore-remove-confirm': spRemoveLore(sh); break;
+    case 'fact-add': spOpenSheet({ kind: 'add', tab: 'fact', playerId: sh.memberId }); break;
+    case 'fact-remove': spRemoveFact(sh, act.getAttribute('data-sp-key')); break;
+    default: break;
+  }
+}
+async function spSubmitAdd() {
+  const sh = _sp && _sp.sheet;
+  if (!sh || sh.kind !== 'add' || sh.busy) return;
+  sh.invalid = spAddInvalid(sh);
+  if (sh.invalid) return;
+  // B3 — a NEW instruction at the cap would be the 16th rule; the database refuses it, and the pane says so first.
+  if (sh.tab === 'instruction' && !sh.correcting && spAtCap(_sp.view)) { sh.error = RULE_CAP_MESSAGE; spPaintSheet(); return; }
+  let action, params;
+  if (sh.tab === 'fact') {
+    const v = validateFact({ key: sh.key, value: sh.value });
+    action = 'add_fact'; params = { playerId: sh.playerId, key: v.key, value: v.value };
+  } else if (sh.tab === 'lore') {
+    const v = validateLore({ key: sh.loreKey, text: sh.loreText });
+    action = sh.correcting ? 'correct_lore' : 'add_lore'; params = { key: v.key, text: v.text };
+  } else {
+    const v = validateInstruction({ category: sh.category, text: sh.text });
+    action = sh.correcting ? 'correct_instruction' : 'add_instruction';
+    params = { requestId: sh.requestId, category: v.category, text: v.text };
+    if (sh.correcting) params.supersedes = sh.correcting.id;
+  }
+  sh.busy = true; sh.error = '';
+  spPaintSheet();
+  const r = await callScribeProfile(action, params);
+  if (!_sp || _sp.sheet !== sh) return;
+  sh.busy = false;
+  if (!r.ok) {
+    sh.error = describeProfileError(r.error, SPV.SP_COPY.addSaveFailed);
+    haptic('error');
+    spPaintSheet();
+    return;
+  }
+  haptic('success');
+  const t = SPV.SP_COPY.toast;
+  const held = sh.tab === 'instruction' && r.data && r.data.flagged;
+  showToast(held ? t.addedHeld : sh.correcting ? t.corrected : sh.tab === 'fact' ? t.fact : sh.tab === 'lore' ? t.lore : t.added, held ? 'warning' : 'success');
+  spCloseSheet();
+  if (held) _sp.seg = 'pending';
+  // The new row exists on the server; pull it into the mirror so a later Turn off / Approve on it can key by its mirror position (the Realtime fold would get there too).
+  if (sh.tab === 'instruction') { try { await ensureSupabaseDataHydrated('scribe-profile-add'); } catch { /* the view reload below is the display's truth */ } }
+  if (!_sp) return;
+  spLoadView({ silent: true });
+  if (_sp.history.loaded) spLoadHistory();
+}
+async function spRemoveFact(sh, key) {
+  if (!_sp || sh.busyKey) return;
+  sh.busyKey = key; sh.error = '';
+  spPaintSheet();
+  const r = await callScribeProfile('remove_fact', { playerId: sh.memberId, key });
+  if (!_sp || _sp.sheet !== sh) return;
+  sh.busyKey = '';
+  if (!r.ok) { sh.error = describeProfileError(r.error, SPV.SP_COPY.removeSaveFailed); haptic('error'); spPaintSheet(); return; }
+  haptic('success');
+  showToast(SPV.SP_COPY.toast.removed, 'success');
+  const p = ((_sp.view || {}).players || []).find((x) => x.memberId === sh.memberId);
+  if (p) { p.facts = (p.facts || []).filter((f) => f.key !== key); p.factCount = Math.max(0, (p.factCount || 1) - 1); }
+  spPaintSheet(); spPaint();
+  spLoadView({ silent: true });
+}
+async function spRemoveLore(sh) {
+  if (!_sp || sh.busy) return;
+  sh.busy = true; sh.error = '';
+  spPaintSheet();
+  const r = await callScribeProfile('remove_lore', { key: sh.key });
+  if (!_sp || _sp.sheet !== sh) return;
+  sh.busy = false;
+  if (!r.ok) { sh.error = describeProfileError(r.error, SPV.SP_COPY.removeSaveFailed); sh.confirmRemove = false; haptic('error'); spPaintSheet(); return; }
+  haptic('success');
+  showToast(SPV.SP_COPY.toast.removed, 'success');
+  if (_sp.view) _sp.view.lore = (_sp.view.lore || []).filter((x) => x.key !== sh.key);
+  spCloseSheet(); spPaint();
+  spLoadView({ silent: true });
 }
 
 window.navigateTo=navigateTo;
@@ -34986,6 +42574,90 @@ function reconcileLogoVariants(root) {
   });
   return started;
 }
+// ── FB-024 (bugfixer, 2026-10-07) — A REPAINT NEVER BLANKS A LOGO THE PAGE HAS ALREADY LOADED ───────────────────────────────────────────
+// Drew, v0.29.0: "When I refresh, the logos all blank out for a fraction of a second and it looks glitchy". Every repaint rebuilds its markup
+// with innerHTML (Home's paint() in js/home.js, renderDashboard(), the Picks renders, the Games tab), so every logo is a NEW <img> that starts at
+// opacity:0, waits for its own 'load' and then fades in over --motion-fast, even when the browser already holds the file; on a dark surface it
+// also waits for the 500-dark swap. A pull-to-refresh, the sync tap, a score tick and the news slot's arrival on Home all did it.
+// THE FIX lives in the one shared binder (all four logo classes, every bound page): the URLs of logo files that LOADED on this page are
+// remembered (the load arm, before any swap); right after a repaint of a bound container (a MutationObserver: its records are delivered as a
+// microtask, after the synchronous innerHTML write and before the next frame), and once when a container is first bound (renderDashboard()
+// binds after its first paint), a logo whose SURFACE-CORRECT file is one of them is shown at once with no fade (`.is-loaded` + `.logo-instant`,
+// styles.css). Anything else keeps the cached -> load -> fade path unchanged.
+// WHAT IT NEVER DOES: show a file other than the <img>'s own surface-correct file (no element is reused and nothing survives from the old
+// markup, so a league switch can never flash another game's logo); show a stored default on a dark surface (the choice is the same
+// logoVariantForSurface() the load path makes, and the dark file must itself have loaded here); ask again for a known-missing dark file;
+// write a URL logoOk() refuses. A file that errors is forgotten, so the next repaint waits for it. URLs only (public ESPN assets), in memory,
+// for this page's life, never persisted. Inert with the Team-logos switch off (the default): no logo <img> exists and nothing has loaded.
+const _loadedLogoUrls = new Set();
+const LOGO_IMG_SELECTOR = LOGO_VARIANT_CLASSES.map((c) => `img.${c}`).join(',');
+function isTeamLogoImg(img) { return !!img?.classList && LOGO_VARIANT_CLASSES.some((c) => img.classList.contains(c)); }
+function logoSrcNow(img) { try { return (typeof img?.getAttribute === 'function' ? img.getAttribute('src') : img?.src) || null; } catch { return null; } }
+/** The load arm: this file is now in the browser's hands. (Only ever an <img> a gated render path emitted; never validated here, never written anywhere.) */
+function rememberLoadedLogo(img) { const u = logoSrcNow(img); if (u) _loadedLogoUrls.add(u); }
+/** The error arm: this file failed, so no repaint shows it before it loads again. */
+function forgetLoadedLogo(img) { if (!isTeamLogoImg(img)) return; const u = logoSrcNow(img); if (u) _loadedLogoUrls.delete(u); }
+// ── D1 batch L follow-up (reviewer, 2026-10-07; Lane B) — A LOGO FILE THAT ALREADY FAILED IS NOT ASKED FOR AGAIN ────────────────────────────────────────────
+// A broken logo URL (ESPN has no file for that id) used to be re-requested on EVERY repaint: Home and the Live Peek repaint on every score tick, every news arrival and every pull-to-refresh, and each
+// repaint builds a new <img> that asks the network again and flashes opacity 0 -> the name fallback. The default file's failure is now remembered for this page's life (URLs only, public ESPN assets, in
+// memory, capped, never persisted — the same budget _failedDarkLogoUrls gives a missing dark file). The EMIT side (logoSrcAttr(), used by the one <img> template and the Live Peek pick chip) writes NO src for a
+// known-failed file, so there is no request at all; the repaint step (applyKnownFailedLogo()) then gives that <img> the same fallback the error arm gives (markLogoBroken()). Offline is not "broken": while
+// navigator.onLine is false every logo fails, and none is remembered. Parse-time logoOk() is untouched (a transient failure must never null a logo that is stored on a game).
+const _failedLogoUrls = new Set();
+const FAILED_LOGO_CAP = 400;
+function isKnownFailedLogo(url) { return typeof url === 'string' && _failedLogoUrls.has(url); }
+/** The `src` attribute for a team-logo <img>: the escaped URL, or `data-logo-failed` (no request) when this exact file already failed on this page. */
+function logoSrcAttr(url) { return isKnownFailedLogo(url) ? 'data-logo-failed="1"' : `src="${escHtml(url)}"`; }
+function rememberFailedLogo(img) {
+  if (!isTeamLogoImg(img)) return;
+  if (typeof navigator !== 'undefined' && navigator && navigator.onLine === false) return;   // offline: every logo fails; none of them is broken
+  const u = storedLogoUrl(img);
+  if (u && _failedLogoUrls.size < FAILED_LOGO_CAP) _failedLogoUrls.add(u);
+}
+/** An <img> the emit side marked `data-logo-failed` gets the error arm's fallback at once (once). Returns true when it did. */
+function applyKnownFailedLogo(img) {
+  if (!isTeamLogoImg(img) || typeof img.hasAttribute !== 'function' || !img.hasAttribute('data-logo-failed') || img.dataset?.logoFailedApplied) return false;
+  if (img.dataset) img.dataset.logoFailedApplied = '1';
+  markLogoBroken(img);
+  return true;
+}
+/** Show ONE logo at once if, and only if, the file that belongs on its surface has already loaded on this page. Returns true when it did. */
+function primeLoadedLogo(img) {
+  if (!isTeamLogoImg(img) || !img.dataset || img.dataset.logoVariant || img.classList.contains('is-loaded')) return false;
+  const stored = storedLogoUrl(img);
+  const dark = darkLogoUrl(stored);
+  if (!stored || (!_loadedLogoUrls.has(stored) && !(dark && _loadedLogoUrls.has(dark)))) return false;   // cheap exit, before any style read
+  const want = logoVariantForSurface(img);
+  const url = logoUrlForVariant(img, want);   // already validated there: the https gate on the stored default, ESPN's own path for the dark file
+  if (!url || !_loadedLogoUrls.has(url)) return false;   // the file THIS surface needs has not loaded here: the normal load path
+  swapLogoForDarkSurface(img);   // the ONE writer: records the stored default and the variant, and points src at the dark file when that is the one
+  if (img.dataset.logoVariant !== want) return false;   // (the same decision on the same surface cannot differ; if it ever did, the load path shows it)
+  img.classList.add('logo-instant');
+  img.classList.add('is-loaded');
+  return true;
+}
+/** Every not-yet-shown logo in `root` (a bound container, or a node a repaint added), the node itself included. Returns how many it showed. */
+function primeLoadedLogosIn(root) {
+  if (!root || (!_loadedLogoUrls.size && !_failedLogoUrls.size)) return 0;
+  let shown = 0;
+  try {
+    if (typeof root.matches === 'function' && root.matches(LOGO_IMG_SELECTOR) && (applyKnownFailedLogo(root) || primeLoadedLogo(root))) shown++;
+    if (typeof root.querySelectorAll === 'function') {
+      root.querySelectorAll(LOGO_IMG_SELECTOR).forEach((img) => { try { if (applyKnownFailedLogo(img) || primeLoadedLogo(img)) shown++; } catch { /* one bad logo never stops the rest */ } });
+    }
+  } catch { /* never breaks a repaint: the load path still shows every logo */ }
+  return shown;
+}
+/** One observer per bound container (bindLogoImageEvents() runs once per element). No MutationObserver (Node) or not a Node: the load path alone, as before. */
+function observeLogoRepaints(container) {
+  if (typeof MutationObserver !== 'function' || !container) return;
+  try {
+    new MutationObserver((records) => {
+      if (!_loadedLogoUrls.size && !_failedLogoUrls.size) return;
+      for (const r of records) for (const node of (r.addedNodes || [])) { if (node && node.nodeType === 1) primeLoadedLogosIn(node); }
+    }).observe(container, { childList: true, subtree: true });
+  } catch { /* not a Node */ }
+}
 /**
  * SP-52 / DI-452 + DI-455 — the palette has STOPPED MOVING (300ms after a fade begins; SCHEME_SETTLE_MS after a non-animated change).
  * Runs once per change, after `body.scheme-swap` is removed: the chrome gets its final sync and every logo re-picks its file against
@@ -34998,4 +42670,6 @@ function onSchemeSettled() {
 /** Test-only seam (same `_xForTest` convention as the rest of this file). */
 export const _logoVariantForTest = { swapLogoForDarkSurface, revertDarkLogo, logoSurfaceLuminance, DARK_SURFACE_MAX_LUMINANCE,
   LOGO_VARIANT_CLASSES, LOGO_VARIANT_SELECTOR, storedLogoUrl, logoVariantForSurface, logoUrlForVariant, setLogoVariant,
-  reconcileLogoVariants, onSchemeSettled, failedDarkLogoUrls: _failedDarkLogoUrls };
+  reconcileLogoVariants, onSchemeSettled, failedDarkLogoUrls: _failedDarkLogoUrls,
+  primeLoadedLogo, primeLoadedLogosIn, loadedLogoUrls: _loadedLogoUrls,   // FB-024
+  failedLogoUrls: _failedLogoUrls, isKnownFailedLogo, logoSrcAttr, rememberFailedLogo, applyKnownFailedLogo, markLogoBroken, FAILED_LOGO_CAP };   // D1 batch L follow-up

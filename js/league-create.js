@@ -68,6 +68,10 @@ export const LC_COPY = Object.freeze({
   failed: "Couldn't create the league. Nothing was saved — check your connection and try again.",
   limit: "You've reached the limit for new leagues right now. Try again tomorrow.",
   paused: "New leagues aren't being created right now — check back soon.",
+  // DI-550 (RP-1): a server refusal `creation_admins_only` reaches a stale client that still drew the card.
+  adminsOnly: "Creating a league isn't available to your account yet.",
+  // DI-548 #10 (G-3): join_league / link_member past the re-entry bound. No number, no window - the same non-disclosure as the creation limits.
+  rejoinLimit: "You've joined and left this league too many times. Ask the commissioner.",
   invalidLink: 'That invite link has expired. Ask whoever invited you to send it again.',
   // created step
   createdTitle: 'Created',
@@ -322,7 +326,7 @@ export function dismissMode(state) {
  *   {type:'slow'}             past 8 seconds: the button says "Still working…"
  *   {type:'failed'}           red persistent banner; input and ticks kept
  *   {type:'limit'}            gold banner; the primary becomes Done
- *   {type:'paused'}           the emergency valve: field and Next disabled
+ *   {type:'paused', reason?}  the emergency valve: field and Next disabled (`reason: 'admins_only'` swaps the sentence, DI-550)
  *   {type:'created', created} success: the Created screen
  *   {type:'refreshFailed', created}  the server made it, this device could not load it
  *   {type:'code', code}       the league's join code arrived (read after creation, or on "Invite Friends" from the League Page)
@@ -353,7 +357,7 @@ export function reduce(state, action) {
     case 'failed': return { ...state, phase: 'failed', slow: false };
     case 'limit': return { ...state, phase: 'limit', slow: false };
     // The emergency valve can close between "Next" and "Create" (the server is the authority); the sheet returns to the name step, where frame 10 lives.
-    case 'paused': return { ...state, step: 'name', phase: 'paused', slow: false };
+    case 'paused': return { ...state, step: 'name', phase: 'paused', slow: false, pausedReason: a.reason === 'admins_only' ? 'admins_only' : null };
     case 'code': return state.created ? { ...state, created: { ...state.created, code: String(a.code || '') } } : state;
     case 'created': return { ...state, step: 'created', phase: 'idle', slow: false, created: a.created || null, discardPrompt: false };
     case 'refreshFailed': return { ...state, phase: 'refresh_failed', slow: false, created: a.created || null };
@@ -369,14 +373,15 @@ export function reduce(state, action) {
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 /**
- * Turn a create failure into one of the mockup's looks: 'paused' (frame 10: the emergency valve / the release gate), 'limit' (frame 9: gold banner, one copy for all
+ * Turn a create failure into one of the mockup's looks: 'admins_only' (DI-550: frame 10's look with its own sentence), 'paused' (frame 10: the emergency valve / the release gate / 0049's push_not_ready), 'limit' (frame 9: gold banner, one copy for all
  * three server limits so no cap is disclosed), 'created_not_loaded' (frame 13) or 'failed' (frame 8: red, persistent, retry). Matching is by the server's own snake_case
  * words in `error.message`, against a fixed table, never against free text — an unrecognised message is 'failed', never something reassuring.
  */
 export function createErrorKind(err) {
   if (err && (err.name === 'LeagueCreatedNotLoadedError' || err.code === 'league_created_not_loaded')) return 'created_not_loaded';
   const raw = `${(err && err.message) || ''} ${(err && err.code) || ''}`;
-  if (/creation_closed|signups_closed/.test(raw)) return 'paused';
+  if (/creation_admins_only/.test(raw)) return 'admins_only';
+  if (/creation_closed|signups_closed|push_not_ready/.test(raw)) return 'paused';
   if (/league_limit|creation_rate|creation_paused/.test(raw)) return 'limit';
   return 'failed';
 }
@@ -435,7 +440,7 @@ export function phaseBannerHTML(state, { escHtml, icon } = {}) {
   switch (state.phase) {
     case 'failed': return bannerHTML('err', LC_COPY.failed, { escHtml, icon });
     case 'limit': return bannerHTML('info', LC_COPY.limit, { escHtml, icon });
-    case 'paused': return bannerHTML('info', LC_COPY.paused, { escHtml, icon });
+    case 'paused': return bannerHTML('info', state.pausedReason === 'admins_only' ? LC_COPY.adminsOnly : LC_COPY.paused, { escHtml, icon });
     case 'refresh_failed': return bannerHTML('err', refreshFailedCopy((state.created && state.created.name) || state.name), { escHtml, icon });
     default: return '';
   }
@@ -546,16 +551,31 @@ export function inviteStepHTML(state, { escHtml, icon = noIcon } = {}) {
  * `scrimAction` is what tapping the dimmed scrim does (always "the safe choice": keep editing / cancel). With no `message` and the defaults, the output is BYTE-IDENTICAL to what
  * `discardSheetHTML()` has always returned (pinned by the golden in accountexittest.mjs).
  *
- * @param {{ escHtml: Function, titleId: string, title: string, message?: string, danger: { label: string, action: string }, cancel: { label: string, action: string }, scrimAction: string, actionAttr?: string }} args
+ * `fieldHTML` (R-19 follow-up, 0046 — the Deny sheet's optional reason) is ONE pre-built field placed between the message and the destructive button. It is MARKUP, so it comes only
+ * from a view builder that escapes every value it interpolates (league-settings-view.js `denySheetHTML`); empty (every other caller) leaves the output byte-identical.
+ *
+ * `actions` (D1 W-68 / W-69, DI-W68.2) - ADDITIVE: N ordinary actions in the first group instead of the one destructive `danger` (`[{ label, action, danger? }]`; an entry with `danger: true` takes the
+ * destructive colour - the More sheet's "Clear all slate games"). Mutually exclusive with `danger` (both, or neither, throws). With `danger` supplied the output is byte-identical to what it was before `actions`
+ * existed (the golden in accountexittest.mjs).
+ *
+ * @param {{ escHtml: Function, titleId: string, title: string, message?: string, fieldHTML?: string, danger?: { label: string, action: string }, actions?: Array<{ label: string, action: string, danger?: boolean }>, cancel: { label: string, action: string }, scrimAction: string, actionAttr?: string }} args
  */
-export function actionSheetHTML({ escHtml, titleId, title, message = '', danger, cancel, scrimAction, actionAttr = 'data-lc-action' } = {}) {
+export function actionSheetHTML({ escHtml, titleId, title, message = '', fieldHTML = '', danger, actions = null, cancel, scrimAction, actionAttr = 'data-lc-action' } = {}) {
   requireEscHtml(escHtml, 'actionSheetHTML');
+  const hasList = Array.isArray(actions) && actions.length > 0;
+  if (hasList === !!danger) throw new TypeError('actionSheetHTML() takes exactly one of `danger` or a non-empty `actions` list');
   const ttlCls = message ? 'lc-as-ttl lc-as-ttl-has-msg' : 'lc-as-ttl';
   const msg = message ? `<div class="lc-as-msg">${escHtml(message)}</div>` : '';
+  // ONE button builder for the first group, so the attribute-name site (`actionAttr`) stays the three it always was (scrim, this, Cancel). The group is joined by concatenation: it is pre-built markup whose own
+  // interpolations (the escaped action and label) are each swept where they are written.
+  const btn = (isDanger, action, label) => `<button type="button" class="lc-as-act${isDanger ? ' lc-as-danger' : ''}" ${actionAttr}="${escHtml(action)}">${escHtml(label)}</button>`;
+  const first = hasList
+    ? actions.map((a) => btn(!!a.danger, a.action, a.label)).join('\n        ')
+    : btn(true, danger.action, danger.label);
   return `<div class="lc-scrim" ${actionAttr}="${escHtml(scrimAction)}"></div>
     <div class="lc-actionsheet" role="alertdialog" aria-modal="true" aria-labelledby="${escHtml(titleId)}">
-      <div class="lc-as-grp"><div class="${ttlCls}" id="${escHtml(titleId)}">${escHtml(title)}</div>${msg}
-        <button type="button" class="lc-as-act lc-as-danger" ${actionAttr}="${escHtml(danger.action)}">${escHtml(danger.label)}</button></div>
+      <div class="lc-as-grp"><div class="${ttlCls}" id="${escHtml(titleId)}">${escHtml(title)}</div>${msg}${fieldHTML}
+        ` + first + `</div>
       <div class="lc-as-grp"><button type="button" class="lc-as-act lc-as-bold" ${actionAttr}="${escHtml(cancel.action)}">${escHtml(cancel.label)}</button></div>
     </div>`;
 }

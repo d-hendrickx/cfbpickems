@@ -67,8 +67,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // cache-busted dynamic imports are the established way around that, e.g.
 // notifytest.mjs's `?mutant=`/`?restored=` query strings).
 let seq = 0;
+// W-22 — every module copy this suite creates, so [17] can retire them ALL (a retry left armed by an earlier section reaches whichever plugin
+// is installed when it fires; see [17d2]).
+const everyPushNative = [];
+const trackPushNative = (m) => { everyPushNative.push(m); return m; };   // the sections' own mutant / restored copies too
 async function freshPushNative() {
-  return import(`./js/push-native.js?t=${Date.now()}_${seq++}`);
+  return trackPushNative(await import(`./js/push-native.js?t=${Date.now()}_${seq++}`));
 }
 
 /** Builds a fake OneSignalCapacitor plugin with call-tracking. Every method a
@@ -267,7 +271,7 @@ console.log('\n[3] initNativePush() — not-configured / plugin-unavailable / su
 
     let mutantSecondOk = false;
     try {
-      const mutantMod = await import(`./js/push-native.js?mutant=${Date.now()}`);
+      const mutantMod = trackPushNative(await import(`./js/push-native.js?mutant=${Date.now()}`));
       const failOncePlugin = fakePlugin();
       let n = 0;
       const realInit = failOncePlugin.initialize.bind(failOncePlugin);
@@ -286,7 +290,7 @@ console.log('\n[3] initNativePush() — not-configured / plugin-unavailable / su
     const restored = await readFile(target, 'utf8');
     assert(restored === original, '[3n] source restored byte-for-byte from the scratch copy — never via git checkout/restore/stash');
 
-    const freshMod = await import(`./js/push-native.js?restored=${Date.now()}`);
+    const freshMod = trackPushNative(await import(`./js/push-native.js?restored=${Date.now()}`));
     const failOncePlugin2 = fakePlugin();
     let n2 = 0;
     const realInit2 = failOncePlugin2.initialize.bind(failOncePlugin2);
@@ -702,7 +706,7 @@ console.log('\n[14] MUTATION-PROVE — proceedWithWillDisplay omitted ⇒ RED (r
 
   let mutantCalledProceed = true;
   try {
-    const mutantMod = await import(`./js/push-native.js?mutant=${Date.now()}`);
+    const mutantMod = trackPushNative(await import(`./js/push-native.js?mutant=${Date.now()}`));
     const plugin = fakePlugin();
     installPlugin(plugin);
     withFetchOk();
@@ -724,7 +728,7 @@ console.log('\n[14] MUTATION-PROVE — proceedWithWillDisplay omitted ⇒ RED (r
   const restored = await readFile(target, 'utf8');
   assert(restored === original, '[14c] source restored byte-for-byte from the scratch copy — never via git checkout/restore/stash');
 
-  const freshMod = await import(`./js/push-native.js?restored=${Date.now()}`);
+  const freshMod = trackPushNative(await import(`./js/push-native.js?restored=${Date.now()}`));
   const plugin2 = fakePlugin();
   installPlugin(plugin2);
   withFetchOk();
@@ -839,11 +843,11 @@ console.log('\n[16] N-4 — the persisted identity flag survives process death, 
       // would keep `_initAttempted()` true across both calls (no real
       // process restart), which would make this proof pass for the WRONG
       // reason regardless of the mutation.
-      const mutantSession1 = await import(`./js/push-native.js?mutant1=${Date.now()}`);
+      const mutantSession1 = trackPushNative(await import(`./js/push-native.js?mutant1=${Date.now()}`));
       const sharedStore = new Map();
       installPluginWithPrefs(fakePlugin(), fakePreferences(sharedStore));
       await mutantSession1.loginNativePush('memberA');   // session 1: attach + persist
-      const mutantSession2 = await import(`./js/push-native.js?mutant2=${Date.now()}`);
+      const mutantSession2 = trackPushNative(await import(`./js/push-native.js?mutant2=${Date.now()}`));
       const plugin2 = fakePlugin();
       installPluginWithPrefs(plugin2, fakePreferences(sharedStore));   // "restart", same store
       await mutantSession2.logoutNativePush();            // session 2: signed-out boot
@@ -857,11 +861,11 @@ console.log('\n[16] N-4 — the persisted identity flag survives process death, 
     const restored = await readFile(target, 'utf8');
     assert(restored === original, '[16k] source restored byte-for-byte from the scratch copy — never via git checkout/restore/stash');
 
-    const restoredSession1 = await import(`./js/push-native.js?restored2a=${Date.now()}`);
+    const restoredSession1 = trackPushNative(await import(`./js/push-native.js?restored2a=${Date.now()}`));
     const store2 = new Map();
     installPluginWithPrefs(fakePlugin(), fakePreferences(store2));
     await restoredSession1.loginNativePush('memberC');
-    const restoredSession2 = await import(`./js/push-native.js?restored2b=${Date.now()}`);
+    const restoredSession2 = trackPushNative(await import(`./js/push-native.js?restored2b=${Date.now()}`));
     const pluginRestored = fakePlugin();
     installPluginWithPrefs(pluginRestored, fakePreferences(store2));
     await restoredSession2.logoutNativePush();
@@ -891,8 +895,9 @@ console.log('\n[17] UN-315 — the native device follows the ACCOUNT: alias iden
   const loginsOf = (plugin) => plugin.calls.filter((c) => c[0] === 'login' && MINE.has(c[1].externalId)).map((c) => c[1].externalId);
   const created = [];
   /** Retire every module a previous scenario created: `_resetForTest()` zeroes its generation, so any retry
-   *  timer it still has armed sees a stale generation and does nothing. */
-  const retireAll = () => { for (const n of created.splice(0)) { try { n._resetForTest(); } catch { /* ignore */ } } };
+   *  timer it still has armed sees a stale generation and does nothing. W-22: every module the SUITE created, earlier sections' included
+   *  (`everyPushNative`), not only this section's: theirs were reaching [17d]'s window on a loaded machine ([17d2]). */
+  const retireAll = () => { created.splice(0); for (const n of everyPushNative.splice(0)) { try { n._resetForTest(); } catch { /* ignore */ } } };
 
   /** A fresh native module + plugin + prefs, with `minter(scope)` answering the mint. */
   async function world({ minter, store = new Map() } = {}) {
@@ -941,6 +946,30 @@ console.log('\n[17] UN-315 — the native device follows the ACCOUNT: alias iden
     // ── (e) force — the Turn On repair.
     await keep(native.loginNativePush('u17x', 'acctB', { force: true }));
     assert(loginsOf(plugin).length === 4, '[17i] { force:true } re-asserts even though a binding is recorded (the explicit Turn On / Reconnect repair)');
+  }
+
+  // ── W-22 (2026-10-08) — [17d] went red in two parallel --quick passes (139/139 alone): its window caught LOGINS FOR p1, p2 AND memberX, the
+  // member ids of sections [5], [6] and [8]. Those sections' modules fall back to the member id when the alias mint fails and arm the retry
+  // ladder (400 ms, then 4000 ms); a retry reads window.Capacitor when it FIRES, so it lands on whichever plugin is installed then. Alone the
+  // 400 ms retries fire ~300 ms after [17d]'s window has closed; a slower machine moves the window onto them. Not an app defect: the app has
+  // ONE push-native module, and a retry reaching the current plugin is the point; these are other module COPIES (`?t=` imports) left armed.
+  // The guard: an earlier scenario's module with its 400 ms retry armed, then [17d]'s league switch read past that retry.
+  {
+    const strayPlugin = fakePlugin({ loginThrows: true });
+    installPluginWithPrefs(strayPlugin, fakePreferences(new Map()));
+    withFetchOk();
+    const stray = await freshPushNative();
+    stray._setIdentityMinterForTest(async () => ({ ok: true, externalId: 'p17stray', mode: 'dual' }));
+    await keep(stray.loginNativePush('p17stray', 'acctS'));   // its login throws: the ladder arms the 400 ms retry
+    const armed = strayPlugin.calls.some((c) => c[0] === 'login');
+    const tArmed = Date.now();
+    const { plugin, native, mints } = await world({ minter: aliasAnswer() });
+    await keep(native.loginNativePush('u17x', 'acctA'));
+    const callsBefore = plugin.calls.length, mintsBefore = mints.length;
+    await keep(native.loginNativePush('u17y', 'acctA'));
+    await wait(Math.max(60, 700 - (Date.now() - tArmed)));   // [17d]'s read, moved past the stray's retry (what a loaded machine did)
+    assert(armed && plugin.calls.length === callsBefore && mints.length === mintsBefore,
+      `[17d2] …and [17d] still holds when an EARLIER scenario's module has a retry armed that falls inside its window (a loaded machine): this world's plugin sees nothing but its own module (stray login attempted first ${armed}; extra calls ${JSON.stringify(plugin.calls.slice(callsBefore))})`);
   }
 
   // ── (f) dual + a failed mint: the member id, then a bounded retry of the alias.

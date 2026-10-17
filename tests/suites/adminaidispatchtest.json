@@ -1,0 +1,23 @@
+{
+  "id": "adminaidispatchtest",
+  "script": "adminaidispatchtest.mjs",
+  "summary": "strict",
+  "floor": 44,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/auth.js",
+    "js/chat.js",
+    "js/chat-ui.js",
+    "js/scribe-routes-card.js",
+    "js/content-status-card.js",
+    "js/source-chips.js",
+    "js/source-labels.js",
+    "js/admin-panel.js",
+    "index.html"
+  ],
+  "expectedMs": 6000,
+  "note": "D1 Lane C S-2 / G2: every new control tapped through the REAL dispatcher - the routing card (open, draft, save, failed save, in-flight lock, cancel/close/backdrop/Esc), who may, the read-failure retry, the status card (not installed, rows, row sheet, refresh, pull-to-refresh leg) and the source-chip click handler (server-minted rows only), on the real js/app.js over minidom with a fake Supabase edge. Registered 2026-10-08."
+}

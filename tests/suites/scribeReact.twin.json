@@ -1,0 +1,12 @@
+{
+  "id": "scribeReact.twin",
+  "script": "supabase/tests/functions/scribeReact.twin.mjs",
+  "label": "81s",
+  "summary": "loose",
+  "floor": 114,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 200,
+  "note": "SCRIBE v3 Package D (DI-283, 2026-09-24) — the emoji reaction writer end to end against the fake client: gate order, the target filter proved BEHAVIOURALLY (SCRIBE's own post, a system row, a react row and a private row are each refused as message_not_found, byte-identically to …"
+}

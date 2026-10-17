@@ -446,7 +446,10 @@ console.log('\n[5] THE BLIND RULE — three viewers, one store, one open week (R
 {
   // An OPEN week with a result already entered, exactly the state
   // renderCommExtraPointCardHTML() warns about in its own comment.
-  seedEpWeek({ weekId: 'w_open', weekNumber: 4, actual: 48, status: 'open',
+  // D1 (2026-10-07) — RE-DERIVED, NOT WEAKENED. This OPEN week's only kickoff is a fixed date that has now passed, and from PF-1 the client closes an open week at its lock instant (first kickoff minus
+  // the offset), exactly as the server's guard does (migration 0043); the commissioner, who then cannot edit, correctly sees the field (RG-37's invariant: you may never submit AND see). The blind-rule
+  // cases below are about an EDITABLE open week, so it gets an explicit far-future picksLockAt (honoured exactly by the client and the server): the cases still prove what they name.
+  seedEpWeek({ weekId: 'w_open', weekNumber: 4, actual: 48, status: 'open', picksLockAt: '2099-01-01T00:00:00Z',
                guesses: { zeta: 47, bravo: 30, alpha: 20, charl: 10 } });
   // alpha + bravo have submitted picks on that week; charlie has not.
   saveGame({ gameId: 'w_open_g1', weekId: 'w_open', homeTeam: 'H', awayTeam: 'A',
@@ -663,6 +666,58 @@ console.log('\n[9] escHtml — a hostile displayName…');
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('[10] D1 / DI-533 #7 (D-31) — the optional longest-field-goal contest settles NFL games through the SAME parse, against a REAL NFL summary…');
+// ═════════════════════════════════════════════════════════════════════════════
+{
+  // Two REAL ESPN NFL summaries, fetched 2026-10-07 (site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=…), reduced to the fields the parse reads
+  // (scoringPlays[].type.text, .text, .team.abbreviation). The plays are the real ones, in the real order, touchdowns included: the parse must skip them.
+  const SUMMARIES = {
+    '401872960': { scoringPlays: [   // BAL @ DAL (final)
+      { type: { text: 'Field Goal Good' }, text: 'Brandon Aubrey 28 Yd Field Goal', team: { abbreviation: 'DAL' } },
+      { type: { text: 'Rushing Touchdown' }, text: 'Javonte Williams 2 Yd Rush (Brandon Aubrey Kick)', team: { abbreviation: 'DAL' } },
+      { type: { text: 'Rushing Touchdown' }, text: 'Derrick Henry 4 Yd Rush (Tyler Loop Kick)', team: { abbreviation: 'BAL' } },
+      { type: { text: 'Field Goal Good' }, text: 'Tyler Loop 27 Yd Field Goal', team: { abbreviation: 'BAL' } },
+      { type: { text: 'Field Goal Good' }, text: 'Brandon Aubrey 38 Yd Field Goal ', team: { abbreviation: 'DAL' } },
+      { type: { text: 'Passing Touchdown' }, text: 'Jake Ferguson 19 Yd pass from Dak Prescott (Dak Prescott Pass to CeeDee Lamb for Two-Point Conversion)', team: { abbreviation: 'DAL' } },
+      { type: { text: 'Field Goal Good' }, text: 'Brandon Aubrey 23 Yd Field Goal ', team: { abbreviation: 'DAL' } },
+      { type: { text: 'Field Goal Good' }, text: 'Tyler Loop 56 Yd Field Goal', team: { abbreviation: 'BAL' } },
+    ] },
+    '401872953': { scoringPlays: [   // LAC @ BUF (final)
+      { type: { text: 'Passing Touchdown' }, text: 'Keaton Mitchell 1 Yd pass from Justin Herbert (Cameron Dicker Kick)', team: { abbreviation: 'LAC' } },
+      { type: { text: 'Field Goal Good' }, text: 'Cameron Dicker 31 Yd Field Goal', team: { abbreviation: 'LAC' } },
+      { type: { text: 'Field Goal Good' }, text: 'Tyler Bass 28 Yd Field Goal', team: { abbreviation: 'BUF' } },
+      { type: { text: 'Field Goal Good' }, text: 'Cameron Dicker 33 Yd Field Goal', team: { abbreviation: 'LAC' } },
+    ] },
+    '77': { scoringPlays: [{ type: { text: 'Field Goal Good' }, text: 'A Kicker 44 Yd Field Goal', team: { abbreviation: 'TX' } }] },   // a college-football event
+  };
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(String(url));
+    const m = /event=(\d+)/.exec(String(url));
+    const body = m && SUMMARIES[m[1]];
+    return body ? { ok: true, status: 200, json: async () => body } : { ok: false, status: 404, json: async () => ({}) };
+  };
+  const nflGame = (id, extra = {}) => ({ gameId: `g${id}`, espnEventId: id, espnSport: 'nfl', homeTeam: 'Dallas Cowboys', awayTeam: 'Baltimore Ravens', ...extra });
+  const r1 = await ep.detectLongestFieldGoal([nflGame('401872960')]);
+  assert(r1.ok && r1.best.yards === 56 && r1.best.team === 'BAL' && r1.all.map((x) => x.yards).sort((a, b) => b - a).join() === '56,38,28,27,23',
+    '[10a] a real NFL summary: the longest made field goal is 56 (Tyler Loop), the five field goals are found and every touchdown / two-point play is skipped');
+  assert(urls.length === 1 && urls[0] === 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=401872960',
+    '[10b] an NFL game is looked up on the NFL summary root (never the college one)');
+  urls.length = 0;
+  const r2 = await ep.detectLongestFieldGoal([nflGame('401872960'), nflGame('401872953', { homeTeam: 'Buffalo Bills', awayTeam: 'Los Angeles Chargers' }), { gameId: 'c1', espnEventId: '77', homeTeam: 'Texas', awayTeam: 'Utah' }]);
+  assert(r2.best.yards === 56 && r2.all.length === 5 + 3 + 1 && r2.skipped.length === 0, '[10c] a mixed slate: the best is still 56 across both sports, nine field goals counted, nothing skipped');
+  assert(urls.some((u) => u === 'https://site.api.espn.com/apis/site/v2/sports/football/college-football/summary?event=77')
+    && urls.filter((u) => u.includes('/football/nfl/summary')).length === 2, '[10d] a game with NO espnSport still goes to the college-football root; the two NFL games go to the NFL root');
+  urls.length = 0;
+  const r3 = await ep.detectLongestFieldGoal([{ gameId: 'x1', espnEventId: '5', espnSport: 'nba', homeTeam: 'A', awayTeam: 'B' }, nflGame('')]);
+  assert(urls.length === 0 && !r3.ok && r3.best === null && r3.skipped.length === 2 && r3.skipped.some((x) => /no summary feed for sport "nba"/.test(x.reason)) && r3.skipped.some((x) => /no ESPN event id/.test(x.reason)),
+    '[10e] a sport this engine has no feed for, and a game with no event id, are SKIPPED AND SAID SO with no request made - nothing is guessed (the commissioner enters the result)');
+  const r4 = await ep.detectLongestFieldGoal([nflGame('999')]);
+  assert(!r4.ok && r4.best === null && r4.skipped.length === 1 && /HTTP 404/.test(r4.skipped[0].reason), '[10f] a summary that cannot be fetched is skipped with its reason, never a made-up yardage');
+  globalThis.fetch = async () => { throw new Error('network disabled in eptest'); };
+}
+
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
 // `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS

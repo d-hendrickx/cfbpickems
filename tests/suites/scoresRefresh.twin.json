@@ -1,0 +1,12 @@
+{
+  "id": "scoresRefresh.twin",
+  "script": "supabase/tests/functions/scoresRefresh.twin.mjs",
+  "label": "81m",
+  "summary": "loose",
+  "floor": 162,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 200,
+  "note": "raised 121 -> 138 by the RG-260 follow-up (2026-09-26, Drew's identity ruling): [13-11/13-11b] an override without the cfbpickems product token (word boundary) or carrying a Mozilla string falls back to the constant and is reported as uaOverride:'rejected' (empty/whitespace read …"
+}

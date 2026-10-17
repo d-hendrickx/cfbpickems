@@ -1,0 +1,13 @@
+{
+  "id": "feedbacktest",
+  "script": "feedbacktest.mjs",
+  "label": "98",
+  "summary": "loose",
+  "floor": 263,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 700,
+  "note": "The pilot-era feedback-popover suite: Hit/Mid/Too much rating writes, the popover's open/close/re-mount lifecycle, the anchor-positioning mutation pairs ([28a]-[28d], including the two CONFIRMED-mutation findings for the popover landing inside the ⭐ button versus measuring from …"
+}

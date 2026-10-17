@@ -1,0 +1,12 @@
+{
+  "id": "shellrendertest",
+  "script": "shellrendertest.mjs",
+  "label": "112e",
+  "summary": "strict-noverdict",
+  "floor": 301,
+  "tags": [
+    "browser"
+  ],
+  "expectedMs": 7500,
+  "note": "RAISED from 291 by the v0.27.4 integration merge 1/6 (2026-09-30: Batch B RG-304's no-section-gap assertions and RG-305's catalog follow-ups, confirmed on the merged tree); before that, floor 291 — RAISED from 290 by round 3 (Opus, feat/control-center-v0272, 2026-09-29): [D] D-5 …"
+}

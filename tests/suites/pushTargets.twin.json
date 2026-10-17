@@ -1,0 +1,12 @@
+{
+  "id": "pushTargets.twin",
+  "script": "supabase/tests/functions/pushTargets.twin.mjs",
+  "label": "81u",
+  "summary": "loose",
+  "floor": 176,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "D1 Lane A (2026-10-08, DI-548/549/545/546): RAISED 132 -> 176 to the measured count. Before that: UN-315 — _shared/push-targets.mjs: PUSH_TARGET_MODE is a closed set of three and anything else is dual + a loud error; who a member is addressed by in each mode; a failed push_targets lookup is an answer (never a throw); the label sanitizer strips every control/bidi/invisible …"
+}

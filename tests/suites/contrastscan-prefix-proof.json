@@ -1,0 +1,15 @@
+{
+  "id": "contrastscan-prefix-proof",
+  "script": "contrastscan.mjs",
+  "args": [
+    "--prefix-proof"
+  ],
+  "label": "112c-prefix",
+  "summary": "strict-combined",
+  "floor": 15,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "contrastscan.mjs --prefix-proof actually ran its full set (got , floor 15, RAISED from 9 by the eed1d62 follow-up's four extra named surfaces (.bottom-nav/.toast/.modal/.submit-bar) — the at-rule/comment stripping-order fix also let the scanner see .submit-bar for the first …"
+}

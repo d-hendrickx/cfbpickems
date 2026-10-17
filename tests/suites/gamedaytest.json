@@ -1,0 +1,22 @@
+{
+  "id": "gamedaytest",
+  "script": "gamedaytest.mjs",
+  "summary": "strict",
+  "floor": 305,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "deps": [
+    "js/**",
+    "css/styles.css",
+    "index.html",
+    "d1homeenv.mjs",
+    "gamedayenv.mjs",
+    "statsfixtures.mjs",
+    "themeresolve.mjs",
+    "themetables.mjs",
+    "minidom.mjs"
+  ],
+  "note": "D1 Lane B Game Day (DI-603..609, DI-591/593/599/604/605, PF-420/443/445/447/448/452/455 rev 3; security C2-C7) over a real createHome() on a real element tree and the real storage seam: [1]-[9] the pills, every collapsed state, the open card, who sees what (blind form, C2/C3/C4/C7), excluded weeks, entry points and forged ids, names, escaping, contrast; [10] every button tapped through the real dispatcher; [11] the card's node survives feed changes and the rail HOLD, incl. a new touch during the hold (P-3); [13] the polite live region, the leaving pill, in-place ticks; [14] row logos; [15] What's next, the finish in place, the locked copy; [12] mutation proofs on a scratch copy (C2/C3/C4/C7, the hold, the announcer, the leaving pill, the in-place patch, logos, What's next). Floor history, verbatim: tests/suites/_archive.md ## gamedaytest. [16] every gate transition patched in place equals a fresh paint (card + panel, 64 each), [17] a throwing patch writes the whole card. Floor 305 set by D1 Game Day fix round 2, review round 3 (2026-10-08)."
+}

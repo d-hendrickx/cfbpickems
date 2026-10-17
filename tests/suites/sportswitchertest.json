@@ -1,0 +1,9 @@
+{
+  "id": "sportswitchertest",
+  "script": "sportswitchertest.mjs",
+  "summary": "strict",
+  "floor": 39,
+  "tags": ["quick"],
+  "expectedMs": 300,
+  "note": "D1 (v0.30.0) DI-521 rev 3 / DI-555: js/sport-switcher.js — renders only for a member who plays two or more sports, lists only those, All sports last and only where asked, the radiogroup contract, the due dot from the one due list, the keyboard model, hostile text"
+}

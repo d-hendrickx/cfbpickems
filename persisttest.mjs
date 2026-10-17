@@ -317,24 +317,48 @@ console.log('\n[7] RG-51 — ONE pick-draft reset, not seven divergent copies…
   // while leaving its name and all six call sites intact left the two
   // assertions above fully green, so the "guard" recorded as covering
   // draftExtraPoint covered nothing. Verified by mutation 2026-09-01.
-  function draftFieldsResetIn(src, fnName) {
+  //
+  // D1 (v0.30.0, DI-527, 2026-10-08) — THE SHAPE CHANGED, THE INVARIANT DID NOT. The three draft fields no longer
+  // sit on `state` as three plain properties; they are accessors over ONE per-week bucket
+  // ({ picks, tiebreaker, extraPoint }) so a half-filled CFB slate and a half-filled NFL slate coexist, and
+  // clearPickDraft() with no argument deletes EVERY bucket. The old matcher looked for three `state.x = {}`
+  // assignments in the body; the equivalent proof now has two halves, each with a canary:
+  //   (1) the helper's no-argument path deletes every bucket key (gut the loop and NOTHING is cleared), and
+  //   (2) each draft field accessor on `state` reads and writes THE BUCKET — so a field cannot be added to
+  //       `state` outside the bucket and be forgotten by the helper (the seventh-field defect RG-51 exists to stop).
+  function bucketsClearedIn(src, fnName) {
     const m = src.match(new RegExp(`function\\s+${fnName}\\s*\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}`));
     if (!m) return null;
-    return ['draftPicks', 'draftTiebreaker', 'draftExtraPoint']
-      .filter(f => new RegExp(`state\\.${f}\\s*=\\s*(?:\\{\\s*\\}|null)`).test(m[0]));
+    return /for\s*\(\s*const\s+k\s+of\s+Object\.keys\(\s*_draftBuckets\s*\)\s*\)\s*delete\s+_draftBuckets\[\s*k\s*\]/.test(m[0]);
   }
-  const resetInBody = draftFieldsResetIn(appSrc, 'clearPickDraft');
-  assert(resetInBody !== null,
+  function draftAccessorsOnBucket(rawSrc) {
+    const src = blankComments(rawSrc);
+    const lit = src.slice(src.indexOf('export const state = {'));
+    const body = lit.slice(0, lit.indexOf('\n};'));
+    const fields = ['draftPicks', 'draftTiebreaker', 'draftExtraPoint'];
+    return fields.filter(f => new RegExp(`get\\s+${f}\\(\\)\\s*\\{\\s*return\\s+_draftBucket\\(\\)\\.\\w+;\\s*\\}`).test(body)
+      && new RegExp(`set\\s+${f}\\(v\\)\\s*\\{\\s*_draftBucket\\(\\)\\.\\w+\\s*=`).test(body));
+  }
+  const bucketsCleared = bucketsClearedIn(appSrc, 'clearPickDraft');
+  assert(bucketsCleared !== null,
     'fixture check: clearPickDraft() exists and its body was parsed — a missing helper must fail here, not pass vacuously');
-  assert(resetInBody && resetInBody.length === 3,
-    `clearPickDraft()'s BODY resets all three draft fields (found: ${JSON.stringify(resetInBody)}) — the call sites being centralised proves nothing if the function they call is empty`);
+  assert(bucketsCleared === true,
+    "clearPickDraft()'s no-argument path deletes EVERY draft bucket — the call sites being centralised proves nothing if the function they call is empty");
+  const onBucket = draftAccessorsOnBucket(appSrc);
+  assert(onBucket.length === 3,
+    `all three draft fields (draftPicks, draftTiebreaker, draftExtraPoint) are accessors over the SAME bucket, so deleting it resets all three (found: ${JSON.stringify(onBucket)})`);
+  const factory = (blankComments(appSrc).match(/function _draftBucket\([\s\S]*?\n\}/) || [''])[0];
+  assert(/picks:\s*\{\}/.test(factory) && /tiebreaker:\s*null/.test(factory) && /extraPoint:\s*null/.test(factory),
+    "the bucket factory creates exactly the three draft fields, each empty — the thing a cleared bucket is reborn as");
 
-  assert((draftFieldsResetIn(
-      'function clearPickDraft() {\n  state.draftPicks = {};\n  state.draftTiebreaker = null;\n}',
-      'clearPickDraft') || []).length === 2,
-    'canary: a helper that resets only TWO of the three fields IS flagged — this is the exact mutation that survived the first version of this test');
-  assert(draftFieldsResetIn('function somethingElse() {}', 'clearPickDraft') === null,
-    'canary: a MISSING helper is reported as unparsed, never as three fields found');
+  assert(bucketsClearedIn('function clearPickDraft({ weekId = null } = {}) {\n  if (weekId !== null) { delete _draftBuckets[String(weekId)]; }\n  state.pickFormShownFor = null;\n}', 'clearPickDraft') === false,
+    'canary: a helper that clears only the ONE named week (no loop over every bucket) IS flagged — a sign-out would leave the other sport\'s draft for the next player');
+  assert(bucketsClearedIn('function clearPickDraft() {\n  for (const k of Object.keys(_draftBuckets)) delete _draftBuckets[k];\n}', 'clearPickDraft') === true,
+    'canary: the loop over every bucket passes');
+  assert(bucketsClearedIn('function somethingElse() {}', 'clearPickDraft') === null,
+    'canary: a MISSING helper is reported as unparsed, never as cleared');
+  assert(draftAccessorsOnBucket('export const state = {\n  draftPicks: {}, get draftTiebreaker() { return _draftBucket().tiebreaker; }, set draftTiebreaker(v) { _draftBucket().tiebreaker = v; },\n};').length === 1,
+    'canary: a draft field left as a plain property on `state` (outside the bucket) IS flagged — only the accessor-backed field is counted');
 
   // Canaries — each matcher must fail on the broken shape and pass on the fixed one.
   assert(picksFlowSessionResets(

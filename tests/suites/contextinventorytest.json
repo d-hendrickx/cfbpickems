@@ -1,0 +1,9 @@
+{
+  "id": "contextinventorytest",
+  "script": "contextinventorytest.mjs",
+  "summary": "strict",
+  "floor": 9,
+  "tags": ["quick"],
+  "expectedMs": 400,
+  "note": "D1 (v0.30.0) DI-520/524..527: every unscoped getCurrentWeek() / getWeeks() in js/app.js is classified with a reason (one-sport branch, lookup by id, league-wide, the commissioner's lens, another thread's); a new one fails, a dead entry fails, the three sport tabs and their helpers make none; canaries"
+}

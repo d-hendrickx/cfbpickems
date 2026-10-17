@@ -1,0 +1,12 @@
+{
+  "id": "navgesturestest",
+  "script": "navgesturestest.mjs",
+  "label": "101",
+  "summary": "loose",
+  "floor": 512,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 2700,
+  "note": "MERGE int deeb4e7d into feat/d1-history (2026-10-14): floor = the merged tree's measured 512 (this branch 511, int 501). | RAISED from 504 by the D1 Game Day consolidated round (2026-10-08): 5n-chat-sport-pills / -at-rest (the Locker Room's sport row joins DRAWER_HSCROLL_SELECTOR; red first), plus the merged int count. | MERGED int/v0.30.0 (d6e8ac5a) into feat/d1-gameday 2026-10-08: floor = the higher side's (504 / 500), to be re-measured on the merged tree. | RAISED from 495 by D1 Game Day fix round 1 (B1, 2026-10-08): Game Day's .gd-rail and the Rules page's .gr-sat-chips join DRAWER_HSCROLL_SELECTOR; 5n-gd-rail / -at-rest / -pill-no-rail, and the structural 5n-struct-1..6 (every horizontal scroller in the stylesheet is listed or exempt with a reason). | D1 integration 18 (2026-10-08): 500 measured on the merged tree (int 495 + feat/d1-sports 494 over base 489). RAISED from 494 by the W-22 review B1 mutation kit (2026-10-07): 5t3, the cut-short spring's own completion never runs later (it ended the next commit slide early); 493 -> 494 5s2 (N1), 491 -> 493 5t/5t2 (B1), 489 -> 491 5q-n2 and 5s."
+}

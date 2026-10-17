@@ -1,0 +1,31 @@
+{
+  "id": "almaprototest",
+  "script": "almaprototest.mjs",
+  "label": "73d2",
+  "summary": {
+    "regex": "(✅ ALL PASS|❌ \\d+ FAILED) — (\\d+) passed, (\\d+) failed",
+    "flags": "",
+    "passed": 2,
+    "failed": 3,
+    "verdict": {
+      "group": 1,
+      "equals": "✅ ALL PASS",
+      "combined": false
+    },
+    "skipped": null
+  },
+  "floor": 121,
+  "forbid": [
+    {
+      "regex": "ERR_MODULE_NOT_FOUND",
+      "flags": "",
+      "label": "almaprototest.mjs resolves its whole module graph (it imports app.js, the widest closure)"
+    }
+  ],
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 300,
+  "note": "set 2026-10-01 at its first spawned run: [1]-[10] the SB-12 prototype-name proofs (114), [11] reviewer finding 2's non-string roster element (+4), [12] the tree-wide bare-probe scan (+3)). Raise the floor when the suite grows; the ratchet only tightens"
+}

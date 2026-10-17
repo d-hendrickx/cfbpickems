@@ -1,0 +1,10 @@
+{
+  "id": "rulespagetest",
+  "script": "rulespagetest.mjs",
+  "summary": "strict",
+  "floor": 27,
+  "tags": ["quick"],
+  "deps": ["js/app.js", "js/sport-rules.js", "js/sports/nfl.js", "js/sports/index.js", "js/data-model.js"],
+  "expectedMs": 1500,
+  "note": "D1 / DI-536 + DI-512: the Rules page draws its cards from the league's sports - one page for a league with no NFL (byte for byte), the opening line + the NFL card for college football + NFL, no college cards for an NFL-only league; the card's words are DI-536's, the slate size is read from the profile, every string escaped."
+}

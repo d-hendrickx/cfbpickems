@@ -1,0 +1,19 @@
+{
+  "id": "chatscopetest",
+  "script": "chatscopetest.mjs",
+  "label": "130",
+  "summary": "strict",
+  "floor": 254,
+  "forbid": [
+    {
+      "regex": "ERR_MODULE_NOT_FOUND",
+      "flags": "",
+      "label": "chatscopetest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)"
+    }
+  ],
+  "tags": [
+    "slow"
+  ],
+  "expectedMs": 32500,
+  "note": "RAISED from 235 by the v0.29.0 Home wiring window (2026-10-01): [24] chatBoundToLeague (DI-372 amendment A1): the store-backed predicate through the real store and transport, a league switch, an account change, plus a nine-row truth table with five mutants (+19); before that …"
+}

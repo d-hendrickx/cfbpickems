@@ -1,0 +1,12 @@
+{
+  "id": "heattest",
+  "script": "heattest.mjs",
+  "label": "96",
+  "summary": "loose",
+  "floor": 226,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "SCRIBE v3 heat: the full effectiveScribeHeat() matrix in both directions, garbage failing COOL in every slot, the multi-subject min() fold, the five briefs' integrity (verbatim inside the persona snapshot, all seven fields, retired tics still retired at every rung) …"
+}

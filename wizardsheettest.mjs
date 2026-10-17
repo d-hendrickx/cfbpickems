@@ -120,10 +120,16 @@ if (ROOT !== here) console.log(`  (WIZTEST_ROOT — serving ${ROOT})`);
 // ── the app server: the real tree, local-mode config, no service worker ─────
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
   '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json' };
+let configDelayMs = 0, configServed = false;
 const server = createServer(async (req, res) => {
   let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (p.endsWith('/')) p += 'index.html';
-  if (p === '/config.json') { res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end('{}'); return; }
+  if (p === '/config.json') {   // W-22: `configDelayMs` holds the answer back (the boot-race guard, 1-2b); `configServed` says it has gone out
+    const send = () => { res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end('{}'); configServed = true; };
+    configServed = false;
+    if (configDelayMs) setTimeout(send, configDelayMs); else send();
+    return;
+  }
   if (p === '/service-worker.js') { res.writeHead(404); res.end(); return; }
   // Serve the app and nothing else: no dot-segments, no dotfiles (.env*,
   // .git…), nothing under /supabase/ (tests/.env* live there).
@@ -232,6 +238,12 @@ try {
       await pg.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 });
     }
   };
+  // W-22 (gate 3b, 2026-10-08) — a point in the game modal is read only once the modal has SETTLED. It slides up 30 px over 250 ms
+  // (modal-up); a point read as it opened was 30 px low by the time a tap delayed by machine load landed — in the modal's padding,
+  // so Save never ran and the modal stayed open (C-4 read "spread null"; C-5's next tap then hit that stale modal). A condition,
+  // bounded: the topmost modal's open animation has finished.
+  const modalSettled = () => waitFor(`(() => { const m = [...document.querySelectorAll('.modal-overlay .modal')].pop();
+    return !!m && m.getAnimations().every(a => a.playState === 'finished' || a.playState === 'idle'); })()`, 3000);
   const swipe = async (x, y, yDistance) => {   // a real touch scroll gesture, finger down at (x,y)
     await pg.send('Input.synthesizeScrollGesture', { x: Math.round(x), y: Math.round(y), yDistance, gestureSourceType: 'touch', speed: 1200 });
     await sleep(350);
@@ -264,6 +276,18 @@ try {
     const ok = await waitFor(`document.querySelector('#week-wizard-body [data-game-id], #week-wizard-body #wiz-step3-next, #week-wizard-body button')`);
     await settle();
     return ok;
+  };
+
+  // After a reload: the boot, then the wizard over the Commissioner page. W-22 (2026-10-08) — in local mode the boot's own last step is
+  // navigateTo(bootDefaultTab()), i.e. Home, after an async config fetch (js/app.js). Waiting only for window.navigateTo let a loaded machine land
+  // that navigation AFTER openWizard()'s navigateTo('commissioner'): the sheet (mounted on <body>) stayed up over HOME, one viewport tall, so A-0
+  // read "document 844px vs viewport 844px" and A-15/A-16/A-18 had no page to scroll. Wait for the boot's own landing first (bounded): Home's
+  // first RENDER, which replaces index.html's aria-busy "Loading Home" skeleton (weekpagertest's bootThenDashboard(), the same signal).
+  // A boot that never lands within 10 s is LOGGED, and the caller's fixture fails.
+  const bootThenOpenWizard = async () => {
+    const landed = await waitFor(`document.querySelector('#page-home.active') && !document.querySelector('#home-root .home-feed[aria-busy="true"]')`, 10000);
+    if (!landed) { console.log('  (W-22: the boot never landed — no first Home render within 10 s; the fixture fails)'); return false; }
+    return openWizard();
   };
 
   // ═════════════════════════════════════════════════════════════════════════
@@ -310,10 +334,23 @@ try {
     return { weekId: wk.weekId, games: st.getGames(wk.weekId).length, picksOpenAt: open.toISOString() };
   })()`);
   assert(seeded.games === 16, `1-1: fixture — 16 games seeded on a draft week through the app's own storage.js (got ${seeded.games})`);
+  // W-22 — the boot race, made permanent: the config answer held back 1.5 s, so the boot's own landing (local mode: navigateTo('home'), after the
+  // async config fetch) comes after the harness is ready to open the wizard. Load did this on two parallel runs (A-0 "document 844px vs viewport
+  // 844px": the sheet was up over Home). The fixture must still end with the sheet over the Commissioner page.
+  configDelayMs = 1500;
+  await navigate();
+  await waitFor(`!document.getElementById('site-gate-overlay') && window.navigateTo`);
+  const openedLate = await bootThenOpenWizard();
+  for (let t = 0; t < 6000 && !configServed; t += 50) await sleep(50);
+  await sleep(400);                                         // the boot's chain after the answer (this only delays the guard's own look)
+  configDelayMs = 0;
+  const raced = await evaluate(`({ comm: !!document.querySelector('#page-commissioner.active'), home: !!document.querySelector('#page-home.active'), sheet: !!document.getElementById('week-wizard-sheet-wrap'), docH: document.documentElement.scrollHeight, vh: innerHeight })`);
+  assert(openedLate && configServed && raced.comm && !raced.home && raced.sheet && raced.docH > raced.vh + 400,
+    `1-2b: with the boot's config answer held back 1.5 s (machine load), the wizard still ends up over the Commissioner page once the boot has landed — not over the boot's own Home (opened ${openedLate}; config served ${configServed}; Commissioner active ${raced.comm}, Home active ${raced.home}, sheet up ${raced.sheet}, document ${raced.docH}px vs viewport ${raced.vh}px)`);
   await navigate();
   assert(await waitFor(`!document.getElementById('site-gate-overlay') && window.navigateTo`),
     '1-2: fixture — after reload the app is past the site gate with a commissioner session');
-  assert(await openWizard(), '1-3: fixture — the wizard sheet opened from its real entry button');
+  assert(await bootThenOpenWizard(), '1-3: fixture — the boot landed (its first Home render) and the wizard sheet opened from its real entry button, over the Commissioner page');
   const step3 = await evaluate(`({ title: document.getElementById('week-wizard-title')?.textContent, rows: document.querySelectorAll('#week-wizard-body [data-game-id]').length, parent: document.getElementById('week-wizard-sheet-wrap')?.parentElement?.tagName })`);
   assert(step3.rows === 16 && step3.parent === 'BODY',
     `1-4: fixture — it landed on Step 3 (Confirm slate + spreads) with all 16 rows, the wrap mounted on <body> (title "${step3.title}", rows ${step3.rows})`);
@@ -365,9 +402,8 @@ try {
   const susp = await evaluate(`import('./js/nav-gestures.js').then(m => m.gesturesSuspended())`);
   assert(susp === true, 'A-11: gesturesSuspended() is TRUE while the sheet is open — nav-hide, pull-to-refresh, week-swipe and bottom-bounce all stand down (nav-gestures.js)');
 
-  // Header drag events still reach JS under the page lock — the native
-  // drag-to-dismiss binder (bindSwipeToDismiss on the header, native-only)
-  // depends on touchstart/touchmove arriving there; the lock is CSS-only.
+  // Header drag events still reach JS under the page lock — the swipe-to-dismiss binder
+  // (bindSwipeToDismiss on the sheet, W-70: native AND touch web) depends on touchstart/touchmove arriving there; the lock is CSS-only.
   await evaluate(`(() => { window.__hdrTouch = 0; document.querySelector('#week-wizard-sheet .chat-sheet-header').addEventListener('touchmove', () => { window.__hdrTouch++; }, { passive: true }); })()`);
   await pg.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: g.hdr.x, y: g.hdr.y }] });
   for (let i = 1; i <= 5; i++) await pg.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: g.hdr.x, y: g.hdr.y + i * 20 }] });
@@ -375,7 +411,12 @@ try {
   await sleep(150);
   const hdrTouch = await evaluate('window.__hdrTouch');
   assert(hdrTouch >= 3, `A-12: a downward drag on the header still delivers touchmove to the header's listeners (${hdrTouch} events) — the drag-to-dismiss handle is not starved by the page lock`);
-  assert(await evaluate(`!!document.getElementById('week-wizard-sheet-wrap')`), 'A-13: …and on web that drag did not dismiss the sheet (the gesture is native-only by design; dismissal on web is ✕ / scrim)');
+  // W-70 (2026-10-14, DI-W70.1) - RE-DERIVED, not weakened. This line asserted the OLD rule ("the gesture is native-only by design; dismissal on web is the close button and the scrim").
+  // Drew asked to "swipe down to close the week wizard", and the home-screen web app is where he tests: on a TOUCH device in the web app a fast downward drag on the header now dismisses
+  // the sheet (the close button and the scrim remain). The drag here is 100 px of a 692 px sheet delivered at once, so it is a flick, which dismisses. commnavbrowsertest [D] owns the
+  // rest of the gesture (the body, the discard question, the side panel); this suite keeps what it was always about - the page behind the sheet never scrolls.
+  assert(await waitFor(`!document.getElementById('week-wizard-sheet-wrap')`, 3000), 'A-13: …and on web (a touch device) that fast drag now DISMISSES the sheet - it plays the rest of the slide, then goes (W-70: swipe down to close; the close button and the scrim remain)');
+  assert(await openWizard(), 'A-13b: fixture — the sheet reopens (a clean sheet closes with no question) on Step 3 for the sections that follow');
 
   // A step whose content does NOT overflow — Step 2 (Back from Step 3).
   await evaluate(`document.getElementById('wiz-step3-back')?.click()`);
@@ -463,6 +504,7 @@ try {
   assert(m1 && m1.z > m1.wrapZ, `B-2: the modal overlay stacks ABOVE the sheet wrap (z-index ${m1?.z} vs ${m1?.wrapZ}; v0.27.0 had 200 vs 8000)`);
   assert(m1 && m1.hitInModal && m1.hitTopInModal && !m1.hitIsSheet,
     `B-3: THE BUG — a tap at the modal's centre and on its title bar lands IN the modal, not on the wizard (hit: ${m1?.hitDesc}; "${m1?.title}")`);
+  await modalSettled();
   const marg = await evaluate(`(() => { const e = document.getElementById('m-spread-margin'); e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
   await click(marg.x, marg.y);
   await sleep(100);
@@ -529,20 +571,33 @@ try {
     `B-15: RG-288 — a toast fired while the wizard is open is what a tap at its centre hits (hit: ${toastHit?.hit}) — not the wizard's scrim`);
   await evaluate(`document.querySelectorAll('#toast-container .toast').forEach(t => t.remove())`);
 
+  /** A REAL tap on Save, and what it did: `tapped` is what the tap hit, `closed` whether the modal went. `stallMs` holds the harness
+   *  up between reading the tap point and tapping (the injected-latency guard). */
+  const saveModal = async ({ stallMs = 0 } = {}) => {
+    await modalSettled();
+    const sv = await evaluate(`(() => { const e = document.getElementById('m-save'); e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect();
+      window.__saveTap = null; document.addEventListener('click', (ev) => { window.__saveTap = ev.target.id || String(ev.target.className || ev.target.tagName); }, { capture: true, once: true });
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+    if (stallMs) await sleep(stallMs);
+    await click(sv.x, sv.y);
+    const closed = await waitFor(`!document.querySelector('.modal-overlay')`, 3000);
+    await sleep(1200);
+    return { tapped: await evaluate('window.__saveTap'), closed };
+  };
+  const savedVia = (r) => r.tapped === 'm-save' && r.closed;
   // ═════════════════════════════════════════════════════════════════════════
   console.log('\n[C] RG-284 — a spread entered in the wizard\'s game modal is SAVED (390×844)…');
   // ═════════════════════════════════════════════════════════════════════════
   await click(row.x, row.y);
   assert(await waitFor(`document.querySelector('.modal-overlay')`, 3000), 'C-0: fixture — the row\'s modal reopened');
   await evaluate(`(() => { const s = document.getElementById('m-spread-fav'); s.value = 'home'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await modalSettled();
   const marg2 = await evaluate(`(() => { const e = document.getElementById('m-spread-margin'); e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
   await click(marg2.x, marg2.y);
   await evaluate(`document.getElementById('m-spread-margin').select()`);
   await pg.send('Input.insertText', { text: '3.5' });
-  const save = await evaluate(`(() => { const e = document.getElementById('m-save'); e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
-  await click(save.x, save.y);                              // a REAL tap on Save
-  await waitFor(`!document.querySelector('.modal-overlay')`, 3000);
-  await sleep(1200);                                        // debounced write
+  const sv1 = await saveModal();                            // a REAL tap on Save (then the debounced write)
+  assert(savedVia(sv1), `C-1-save: fixture — the Save tap landed on Save and the modal closed through it (hit ${sv1.tapped}, closed ${sv1.closed})`);
   const saved = await evaluate(`(async () => {
     const st = await import('./js/storage.js');
     const games = st.getGames('${seeded.weekId}');
@@ -568,12 +623,6 @@ try {
     // read-only display — #m-kickoff no longer renders for those games at
     // all. #m-save renders unconditionally, locked or not.
     return waitFor(`document.querySelector('.modal-overlay #m-save')`, 3000);
-  };
-  const saveModal = async () => {
-    const sv = await evaluate(`(() => { const e = document.getElementById('m-save'); e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
-    await click(sv.x, sv.y);
-    await waitFor(`!document.querySelector('.modal-overlay')`, 3000);
-    await sleep(1200);
   };
   const setSpreadOnly = async (fav, margin) => {
     await evaluate(`(() => { const s = document.getElementById('m-spread-fav'); s.value = '${fav}'; s.dispatchEvent(new Event('change', { bubbles: true }));
@@ -601,7 +650,8 @@ try {
   await openRow(rowIds[3]);
   await setSpreadOnly('away', '7');
   const before4 = await readGame(rowIds[3]);
-  await saveModal();
+  const sv4 = await saveModal();
+  assert(savedVia(sv4), `C-4-save: fixture — the Save tap landed on Save and the modal closed through it (hit ${sv4.tapped}, closed ${sv4.closed})`);
   const after4 = await readGame(rowIds[3]);
   const changed = KEEP.filter(k => JSON.stringify(before4[k]) !== JSON.stringify(after4[k]));
   assert(after4.spread === 7 && changed.length === 0,
@@ -610,15 +660,28 @@ try {
   const before5 = await readGame(rowIds[2]);
   await openRow(rowIds[2]);
   await setSpreadOnly('home', '1.5');
-  await saveModal();
+  const sv5 = await saveModal();
+  assert(savedVia(sv5), `C-5-save: fixture — the Save tap landed on Save and the modal closed through it (hit ${sv5.tapped}, closed ${sv5.closed})`);
   const after5 = await readGame(rowIds[2]);
   assert(before5.kickoffDateOnly === true && after5.kickoffDateOnly === true && after5.kickoffConfirmed === false && after5.kickoff === before5.kickoff && after5.spread === -1.5,
     `C-5: a TBD (date-only), ESPN-refreshable (LOCKED) game STAYS TBD through a spread-only edit — kickoffDateOnly ${after5.kickoffDateOnly}, kickoffConfirmed ${after5.kickoffConfirmed}, kickoff ${before5.kickoff} → ${after5.kickoff}`);
+  // W-22 — the save under LOAD (gate 3b, 2026-10-08: C-4 read "spread null", C-5 cascaded): the harness held up 300 ms between
+  // reading Save's point and tapping it, right after the modal opened. The modal slides up 30 px over 250 ms (modal-up); a point read
+  // as it opened was 30 px low by the time the tap landed — in the modal's padding, no save, the modal left open. Load is not the
+  // app losing an edit.
+  const before4b = await readGame(rowIds[4]);
+  await openRow(rowIds[4]);
+  await setSpreadOnly('away', '3');
+  const sv4b = await saveModal({ stallMs: 300 });
+  const after4b = await readGame(rowIds[4]);
+  assert(savedVia(sv4b) && after4b.spread === 3 && after4b.kickoff === before4b.kickoff,
+    `C-4b: …and with the harness held up 300 ms between reading Save's point and tapping it, the tap still lands on Save (hit ${sv4b.tapped}, closed ${sv4b.closed}) and the spread-only edit is saved (away by 3 ⇒ spread ${after4b.spread})`);
   // C-6 — a typed time on the MANUAL (non-refreshable, unlocked) game is
   // that LOCAL time, confirmed, one state.
   await openRow(manualId);
   await evaluate(`(() => { const e = document.getElementById('m-kickoff'); e.value = '2026-10-10T14:30'; e.dispatchEvent(new Event('input', { bubbles: true })); })()`);
-  await saveModal();
+  const sv6 = await saveModal();
+  assert(savedVia(sv6), `C-6-save: fixture — the Save tap landed on Save and the modal closed through it (hit ${sv6.tapped}, closed ${sv6.closed})`);
   const after6 = await readGame(manualId);
   assert(after6.kickoff === '2026-10-10T19:30:00.000Z' && after6.kickoffConfirmed === true && after6.kickoffDateOnly === false && after6.timeWindow === 'afternoon',
     `C-6: typing 2:30 PM (Chicago, CDT) on the manual (unlocked) game saves 19:30Z, confirmed and NOT date-only (RG-57's one state), time window re-derived (kickoff ${after6.kickoff}, confirmed ${after6.kickoffConfirmed}, dateOnly ${after6.kickoffDateOnly}, window ${after6.timeWindow})`);

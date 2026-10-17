@@ -1,0 +1,20 @@
+{
+  "id": "commpagertest",
+  "script": "commpagertest.mjs",
+  "summary": "strict",
+  "floor": 239,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/nav-gestures.js",
+    "js/wizard-nav.js",
+    "js/control-center.js",
+    "css/styles.css",
+    "index.html",
+    "minidom.mjs"
+  ],
+  "note": "W-70 (2026-10-14): the node half of native navigation in Comm - zone and yield, the new bindWeekSwipe / bindSwipeToDismiss options with defaults untouched, wizard-nav, source guards, and the REAL app through minidom (the Comm pager, the wizard's ask on every close path, the step pager, P-2 / P-3 holds)."
+}

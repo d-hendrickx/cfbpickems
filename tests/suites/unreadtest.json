@@ -1,0 +1,12 @@
+{
+  "id": "unreadtest",
+  "script": "unreadtest.mjs",
+  "label": "94",
+  "summary": "loose",
+  "floor": 88,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "RAISED to 88 from 68 on 2026-09-24 (teaser retired, Drew 2026-09-24 Option A) by the new §[16], which pins the one in-app signal the ruling KEPT: an incoming message still increments the chat pill's badge, entering the room still clears it, and neither step floats anything over …"
+}

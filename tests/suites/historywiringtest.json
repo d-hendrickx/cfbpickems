@@ -1,0 +1,25 @@
+{
+  "id": "historywiringtest",
+  "script": "historywiringtest.mjs",
+  "summary": "strict",
+  "floor": 253,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/compare.js",
+    "js/week-detail.js",
+    "js/stats.js",
+    "js/card-detail.js",
+    "js/home.js",
+    "js/chat-ui.js",
+    "js/chat.js",
+    "js/pushed-screen.js",
+    "js/nav-gestures.js",
+    "index.html",
+    "minidom.mjs",
+    "statsfixtures.mjs"
+  ],
+  "note": "D1 Lane B DI-594/595/596/598/600: the history screens through the REAL app.js over minidom - Standings' entries, the comparison, the rival picker sheet, the week detail (parity with Weekly History and the Dashboard, a tie, a pooled group, unreachable weeks, the gate re-asked on repaint), the card detail's Compare and Week results, the thread and the chat's filter label, identity and holds, and seven in-suite mutants. Every new button is tapped through the real handler. Registered 2026-10-08."
+}

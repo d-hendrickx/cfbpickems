@@ -666,10 +666,11 @@ console.log('\n[14] THE TRAINING CARD — RG-10, the Learnings list, and the exp
     '14-6: …and a Trainer row that auto-approved at >=0.9 is ALSO marked auto. That path has existed since Phase 4 with neither an announcement nor an undo — a real, unnamed gap this closes too');
   assert(html.includes(app.SCRIBE_HOLD_BADGE_LABEL),
     '14-7: a held row is visible as such on the LIVE list, which is the whole reason the filter writes the row instead of dropping it');
-  assert(html.includes('↩ Undo'),
-    '14-8: a FRESH auto-applied row offers Undo…');
-  assert(html.includes('⏻ Off') && html.includes('⏻ On'),
-    '14-9: …and an older one offers a plain on/off switch. One code path, two labels');
+  const ic = (await import('./js/icons.js')).icon;       // N7 (D-1, 2026-10-08): the switch's glyphs are the icon family now, not characters
+  assert(html.includes(`${ic('undo')} Undo`),
+    '14-8: a FRESH auto-applied row offers Undo… (with the undo glyph)');
+  assert(html.includes(`${ic('power')} Off`) && html.includes(`${ic('power')} On`) && !/[\u21A9\u23FB]/.test(html),
+    '14-9: …and an older one offers a plain on/off switch (the power glyph). One code path, two labels — and no emoji-like character is left on the card');
   assert(html.includes('too_mean') && html.includes('from:'),
     '14-10: the SOURCE QUOTE renders, which is what lets a non-engineer verify their own feedback did or did not land (UN-256)');
   assert(html.includes('provisional, fades if nothing confirms it'),
@@ -737,7 +738,8 @@ console.log('\n[14] THE TRAINING CARD — RG-10, the Learnings list, and the exp
     const code = handler.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1').replace(/\\'/g, "'");
     assert(/approving && before && before\.flaggedHostile/.test(code) && /confirm\(/.test(code),
       '14-19 [structural]: the approve handler CONFIRMS before making a held proposal live. Approve is one tap in a list of otherwise-ordinary rows, and a badge is skim-readable in a way a modal is not');
-    assert(code.includes('This proposal was held because it touches safety, a hard line, or a player\'s real life. SCRIBE will follow it if you approve it.'),
+    const { HOLD_CONFIRM } = await import('./js/scribe-profile-rules.js');          // N2 (2026-10-08): the confirmation is ONE constant, shared with the SCRIBE profile pane
+    assert(/confirm\(HOLD_CONFIRM\)/.test(code) && HOLD_CONFIRM === 'This proposal was held because it touches safety, a hard line, or a player\'s real life. SCRIBE will follow it if you approve it.',
       '14-19b (N1): …and the modal states the TRIGGER and the CONSEQUENCE — what was touched, and what approving does — with no claim about why it was written');
     assert(!/attempt to weaken|weaken SCRIBE/i.test(code),
       '14-19c (N1): …and no motive is asserted at the moment of the decision either');
@@ -1007,6 +1009,30 @@ console.log('\n[21] THE LIVE LOADER — decay, the cap and Locked, where the PRO
       '21-7: …and it keeps the NEWEST, which is the order the query already returns and the rule everywhere else in this feature');
   }
   {
+    // ── B2 (coordinator, 2026-10-08) — THE R-11 RUNTIME TWINS: Drew's ruling ("a human-approved learning is active whatever its confidence and never expires") as it reaches the PROMPT.
+    //    The writers' side is pinned in the Trainer / scribe-learn twins; this is the READ side — `loadActiveLearningsText`, where the prompt is assembled — and it is the half whose mutant
+    //    (`!human &&` on the confidence floor) turns exactly these assertions red. Asserting the assembled TEXT, not the query (the argument at the top of this section).
+    const day = 86400000;
+    const stamp = (ago) => ({ approvedBy: 'p1', approvedAt: new Date(now - ago).toISOString() });
+    const rows = [
+      L({ instruction: 'HUMAN_AT_040', confidence: 0.4, origin: 'human', ...stamp(2 * day) }),
+      L({ instruction: 'HUMAN_60D_STALE', confidence: 0.9, origin: 'instant', provisional: true, expiresAt: new Date(now - 50 * day).toISOString(), ...stamp(60 * day) }),
+      L({ instruction: 'INSTANT_PAST_7D', confidence: 0.9, origin: 'instant', provisional: true, expiresAt: new Date(now - 2 * day).toISOString() }),
+      L({ instruction: 'UNAPPROVED_AT_040', confidence: 0.4 }),
+      L({ instruction: 'STAMP_WITHOUT_TIME', confidence: 0.4, approvedBy: 'p1' }),
+    ];
+    const slot = await ctx.loadActiveLearningsText(fakeSb(rows), 'L', {});
+    const lineOf = (needle) => slot.text.split('\n').find((l) => l.includes(needle)) || '';
+    assert(slot.text.includes('HUMAN_AT_040') && lineOf('HUMAN_AT_040').includes('(commissioner-approved)'),
+      '21-7b: B2 — a HUMAN-APPROVED row at confidence 0.40 IS in the prompt, tagged commissioner-approved (R-11: whatever the confidence)');
+    assert(slot.text.includes('HUMAN_60D_STALE') && lineOf('HUMAN_60D_STALE').includes('(commissioner-approved)') && !lineOf('HUMAN_60D_STALE').includes('provisional'),
+      '21-7c: B2 — a human-approved row 60 DAYS old, with a stale `provisional: true` and an old `expiresAt` still on it, IS in the prompt, and is not tagged provisional (a person\'s tap ends the decay)');
+    assert(!slot.text.includes('INSTANT_PAST_7D'),
+      '21-7d: B2 — an UNAPPROVED instant row past its 7 days is NOT in the prompt (R-11 applies to rows a person approved, and to no others)');
+    assert(!slot.text.includes('UNAPPROVED_AT_040') && !slot.text.includes('STAMP_WITHOUT_TIME'),
+      '21-7e: …and neither is an unapproved row under the 0.75 floor, nor one carrying half a stamp (approvedBy with no approvedAt is not evidence of a human)');
+  }
+  {
     const canonRows = [
       { kind: 'canon', payload: { confidence: 0.9, contextSummary: 'GOOD_EXAMPLE', relevantFacts: 'f', preferredResponse: 'r', whyItWorked: 'w', pattern: 'p' } },
       { kind: 'anti_canon', payload: { kind: 'anti_canon', confidence: 0.9, contextSummary: 'REJECTED_PATTERN', line: 'REJECTED_PATTERN' } },
@@ -1069,6 +1095,511 @@ console.log('\n[21] THE LIVE LOADER — decay, the cap and Locked, where the PRO
       && ctx.heatExplorationEnabled({}) === false
       && ctx.heatExplorationEnabled({ scribeLearningRate: 'locked' }) === false,
       '21-15: the enable flag comes from the SHARED table, so exploration and the dial can never disagree about whether Fast is on');
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// [22] FB-005 / PF-467 (Drew, D-28) — AN APPROVAL IS SAVED BEFORE ANYTHING ACTS ON IT.
+//
+// Driven through the REAL adapter (js/supabase-backend.js) in Supabase data mode, over a PostgREST-shaped fake
+// that can hold a write open (`gate`) or refuse it (`failUpdates`), so "saving", "saved" and "failed" are each
+// a state the test can stand in. Two defects, one rule:
+//   (1) approving a FACT CANDIDATE fired scribe_memory_apply at once, while the status flip still sat in the
+//       adapter's 800 ms debounce — so the RPC ran against the PENDING row and applied nothing;
+//   (2) "✅ Approved" was claimed before the server had it, and a failed save left the device treating an
+//       unapproved proposal as approved (its status, and an experiment's pacing nudge).
+// PF-467's rule: distinguish pending / saving / approved / failed, and a failed save never makes the runtime
+// treat an unapproved learning as approved.
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[22] FB-005 / PF-467 — an approval is SAVED before anything acts on it (real adapter, Supabase data mode)…');
+{
+  const auth22 = await import('./js/auth.js');
+  const sb22 = await import('./js/supabase-backend.js');
+  const L22 = 'L-REVIEW';
+  const at = '2026-10-01T00:00:00.000Z';
+  const quiet = async (fn) => {
+    const rl = console.log, rw = console.warn, re = console.error, ri = console.info;
+    console.log = () => {}; console.warn = () => {}; console.error = () => {}; console.info = () => {};
+    try { return await fn(); } finally { console.log = rl; console.warn = rw; console.error = re; console.info = ri; }
+  };
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  // ── the SERVER: three pending Trainer proposals and one pending canon entry (no canonId, as the model often sends)
+  const srv = {
+    scribe_learnings: [
+      { league_id: L22, id: 'sl_r9_0', ord: 0, run_id: 'r9', kind: 'fact_candidate', status: 'pending', origin: 'trainer', created_at: at,
+        payload: { kind: 'fact_candidate', runId: 'r9', playerId: 'p2', key: 'school', value: 'Notre Dame', confidence: 0.8, status: 'pending', origin: 'trainer', createdAt: at } },
+      { league_id: L22, id: 'sl_r9_1', ord: 1, run_id: 'r9', kind: 'experiment', status: 'pending', origin: 'trainer', created_at: at,
+        payload: { kind: 'experiment', runId: 'r9', experiment: 'post less', reason: 'too chatty', confidence: 0.6, status: 'pending', origin: 'trainer', createdAt: at,
+          pacingNudge: { direction: 'slower', reasonCategory: 'annoying' } } },
+      { league_id: L22, id: 'sl_r9_2', ord: 2, run_id: 'r9', kind: 'learning', status: 'pending', origin: 'trainer', created_at: at,
+        payload: { kind: 'learning', learningId: 'lrn_r9_brevity', runId: 'r9', category: 'brevity', instruction: 'REVIEW_SAVE_LEARNING', confidence: 0.9, status: 'pending', origin: 'trainer', createdAt: at } },
+    ],
+    scribe_canon: [
+      { league_id: L22, id: 'sc_r9_0', ord: 0, run_id: 'r9', kind: 'canon', origin: 'trainer', approval_status: 'pending', created_at: at,
+        payload: { canonId: '', kind: 'canon', runId: 'r9', contextSummary: 'REVIEW_SAVE_CANON', preferredResponse: 'brutal', confidence: 0.8, approvalStatus: 'pending', origin: 'trainer', createdAt: at } },
+    ],
+  };
+  const log = [];                 // the order things reached the server
+  let gate = null;                // a Promise: while set, an UPDATE is held open (the "saving" window)
+  let failUpdates = null;         // a PostgREST error: while set, every UPDATE is refused
+  const builder = (table) => {
+    const b = { _op: 'select', _eq: [], _count: false, _payload: null };
+    b.select = (cols, opts) => { if (opts && opts.count) b._count = true; return b; };
+    b.eq = (c, v) => { b._eq.push([c, v]); return b; };
+    b.order = () => b; b.limit = () => b; b.gt = () => b; b.range = () => b;
+    b.update = (patch) => { b._op = 'update'; b._payload = patch; return b; };
+    b.insert = () => { b._op = 'insert'; return b; };
+    const run = async () => {
+      const rows = (srv[table] || []).filter((r) => b._eq.every(([c, v]) => r[c] === v));
+      if (b._op === 'select') return { data: rows.map((r) => JSON.parse(JSON.stringify(r))), error: null, count: b._count ? rows.length : null };
+      if (b._op === 'insert') return { data: null, error: { code: '42501', message: `permission denied for table ${table}` } };
+      if (gate) await gate;
+      if (failUpdates) return { data: null, error: failUpdates };
+      for (const r of rows) {
+        Object.assign(r, b._payload);
+        // scribe_guard's mirror-sync (0024): the payload's copy of the flip column follows the column.
+        r.payload = { ...r.payload, ...(table === 'scribe_learnings' ? { status: r.status } : { approvalStatus: r.approval_status }) };
+        log.push({ op: 'update', table, id: r.id, to: b._payload.status || b._payload.approval_status });
+      }
+      return { data: rows.map((r) => JSON.parse(JSON.stringify(r))), error: null };
+    };
+    b.then = (res, rej) => run().then(res, rej);
+    return b;
+  };
+  const fakeClient = {
+    from: (t) => builder(t),
+    rpc: async (name) => {
+      if (name === 'scribe_memory_apply') {
+        const ready = srv.scribe_learnings.filter((r) => r.kind === 'fact_candidate' && r.status === 'approved' && !r.payload.memoryAppliedAt);
+        log.push({ op: 'rpc', name, approvedAtCall: ready.map((r) => r.id) });
+        for (const r of ready) r.payload = { ...r.payload, memoryAppliedAt: at };
+        return { data: { applied: ready.length, skipped: 0 }, error: null };
+      }
+      return { data: [], error: null };
+    },
+  };
+  // The PENDING REVIEW list only: an approved learning also appears in "What SCRIBE has learned" above it, so a
+  // whole-card search would find it there and prove nothing about the review row.
+  const pendingOnly = () => {
+    const html = app.renderScribeTrainerAdminSectionHTML();
+    const start = html.indexOf('>Pending review<');
+    return start === -1 ? '' : html.slice(start, html.indexOf('scribe-export-learnings-btn', start));
+  };
+  const rowHTML = (needle) => (pendingOnly().split('<div class="flex-between"').find((p) => p.includes(needle)) || '');
+  const srvRow = (id) => srv.scribe_learnings.find((r) => r.id === id);
+  const cooldown = () => JSON.stringify((storage.getSettings().scribe || {}).autonomousCooldownMs ?? storage.getSettings().autonomousCooldownMs ?? null);
+
+  try {
+    localStorage.clear();
+    auth22._resetAuthForTest?.();
+    auth22.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true, supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon' });
+    auth22._setMembershipsForTest([{ leagueId: L22, memberId: 'p1', role: 'commissioner', displayName: 'Drew', leagueName: 'IRB' }]);
+    await quiet(() => auth22.setActiveLeagueId(L22));
+    auth22._setAccountUserIdForTest('u-review');
+    auth22._setStoredSessionForTest?.({ access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    auth22._setHasSupabaseDataBackendForTest(true);
+    sb22._resetForTest();
+    sb22.init({
+      register: auth22.registerSupabaseDataBackend,
+      getClient: () => fakeClient,
+      getActiveLeagueId: () => L22,
+      getIdentityEpoch: auth22.getIdentityEpoch,
+      getAccountUserId: auth22.getAccountUserId,
+      getDeviceDataOwnerTuple: auth22.getDeviceDataOwnerTuple,
+      getDeviceDataOwner: auth22.getDeviceDataOwner,
+      getLeagueName: auth22._switchBannerLeagueName,
+      getLeagueNameById: auth22._leagueNameById,
+      getSession: storage.getSession,
+      hasValidSupabaseSession: auth22.hasValidSupabaseSession,
+      isPrivilegeHeld: auth22.isPrivilegeHeld,
+      hasSheetMirror: auth22.hasSheetMirrorOnDevice,
+      isSiteUnlocked: storage.isSiteUnlocked,
+    });
+    await quiet(() => sb22.hydrate(L22, { epoch: auth22.getIdentityEpoch() }));
+    storage.setBackendMode('supabase');
+    assert(sb22.getState() === 'ACTIVE' && storage.getSession().isAdmin === true && storage.getScribeLearnings().length === 3,
+      `22-0: fixture — a COMMISSIONER over an ACTIVE hydrated adapter holding the three pending proposals (state ${sb22.getState()}, ${storage.getScribeLearnings().length} items)`);
+
+    // ── (1) THE FACT CANDIDATE: the memory sync runs only AFTER the server holds the approval ──
+    const r1 = app.applyScribeLearningDecision(0, true);
+    await quiet(async () => { await (r1.saved || sb22.flush()); await tick(); await tick(); });
+    const rpcAt = log.findIndex((e) => e.op === 'rpc');
+    const updAt = log.findIndex((e) => e.op === 'update' && e.id === 'sl_r9_0');
+    assert(rpcAt > -1 && updAt > -1 && updAt < rpcAt,
+      `22-1: the approval reached the server BEFORE scribe_memory_apply ran (server log: ${JSON.stringify(log.map((e) => e.op + ':' + (e.id || e.name)))}) — the RPC used to fire inside the 800 ms debounce, ahead of the write it depends on`);
+    assert(rpcAt > -1 && log[rpcAt].approvedAtCall.includes('sl_r9_0') && log.filter((e) => e.op === 'rpc').length === 1,
+      `22-2: …so the RPC found the fact APPROVED and applied it, exactly once (it saw ${JSON.stringify(rpcAt > -1 ? log[rpcAt].approvedAtCall : null)}) — before the fix it saw nothing to apply and the commissioner was told "Nothing new to apply"`);
+
+    // ── (2) SAVING: while the server has not answered, the row says so and offers nothing to tap ──
+    let release;
+    gate = new Promise((r) => { release = r; });
+    const r2 = app.applyScribeLearningDecision(2, true);
+    await tick();
+    const saving = rowHTML('REVIEW_SAVE_LEARNING');
+    assert(saving.includes('Saving…') && /scribe-approve-btn[^>]*disabled/.test(saving) && /scribe-reject-btn[^>]*disabled/.test(saving) && saving.includes('aria-busy="true"'),
+      `22-3: while the save is in flight the row stays in Pending review reading "Saving…", both buttons disabled and the tapped one aria-busy (row: ${JSON.stringify(saving.slice(0, 400))})`);
+    assert(!saving.includes('✅ Approve') && !/Approved/.test(saving),
+      '22-4: …and it does not claim "Approved" yet');
+    release(); gate = null;
+    const done2 = await quiet(() => r2.saved);
+    assert(done2 && done2.state === 'saved' && srvRow('sl_r9_2').status === 'approved' && rowHTML('REVIEW_SAVE_LEARNING') === '',
+      `22-5: once the server confirms, the result is "saved", the server row is approved and the row leaves Pending review (state ${done2 && done2.state}, server ${srvRow('sl_r9_2').status})`);
+
+    // ── (3) FAILED: refused by the server — loud, retryable, and the proposal stays INACTIVE everywhere ──
+    const before3 = cooldown();
+    failUpdates = { code: '42501', message: 'permission denied for table scribe_learnings' };
+    const r3 = app.applyScribeLearningDecision(1, true);
+    const done3 = await quiet(() => r3.saved);
+    assert(done3 && done3.state === 'failed' && srvRow('sl_r9_1').status === 'pending',
+      `22-6: a refused approval resolves "failed" and the server row is still pending (state ${done3 && done3.state}, server ${srvRow('sl_r9_1').status})`);
+    assert(storage.getScribeLearnings()[1].status === 'pending',
+      `22-7: …and THIS device no longer treats it as approved either: its status is back to pending (got ${storage.getScribeLearnings()[1].status})`);
+    assert(cooldown() === before3 && !(done3 && done3.paced && done3.paced.moved),
+      `22-8: …and the experiment's pacing nudge was NOT applied — that is the runtime acting on an approval the server never took (cooldown ${before3} -> ${cooldown()})`);
+    const failedRow = rowHTML('post less');
+    assert(failedRow.includes("Couldn't save") && /role="alert"/.test(failedRow) && /scribe-approve-btn[^>]*>Retry</.test(failedRow) && !/disabled/.test(failedRow),
+      `22-9: the row says "Couldn't save" inline, and the button that failed now reads Retry and is tappable (row: ${JSON.stringify(failedRow.slice(0, 500))})`);
+    failUpdates = null;
+    const r4 = app.applyScribeLearningDecision(1, true);          // what the Retry button does: the same handler, the same decision
+    const done4 = await quiet(() => r4.saved);
+    assert(done4 && done4.state === 'saved' && srvRow('sl_r9_1').status === 'approved' && done4.paced && done4.paced.moved && cooldown() !== before3,
+      `22-10: Retry saves it, and only NOW does the experiment's pacing nudge apply (state ${done4 && done4.state}, server ${srvRow('sl_r9_1').status}, cooldown ${cooldown()})`);
+    assert(!rowHTML('post less').includes("Couldn't save"), '22-11: …and the inline error is gone');
+
+    // ── (4) CANON, the same list's other rows: the same three states ──
+    gate = new Promise((r) => { release = r; });
+    const r5 = app.applyScribeCanonDecision(0, true);
+    await tick();
+    assert(rowHTML('REVIEW_SAVE_CANON').includes('Saving…'), '22-12: a canon approve shows "Saving…" while in flight');
+    release(); gate = null;
+    const done5 = await quiet(() => r5.saved);
+    assert(done5 && done5.state === 'saved' && srv.scribe_canon[0].approval_status === 'approved' && rowHTML('REVIEW_SAVE_CANON') === '',
+      `22-13: …and is approved once the server confirms (state ${done5 && done5.state}, server ${srv.scribe_canon[0].approval_status})`);
+  } catch (e) {
+    assert(false, `22-x: the section threw before it finished — ${e && e.message}`);
+  } finally {
+    storage.setBackendMode('local');
+    await quiet(() => sb22._resetForTest());
+  }
+
+  // ── (5) LOCAL (PIN-era) MODE: the seam writes synchronously, so there is no saving window to show ──
+  try {
+    storage.setScribeLearnings([{ kind: 'learning', status: 'pending', category: 'humor', instruction: 'LOCAL_REVIEW_ROW', confidence: 0.9 }]);
+    const r6 = app.applyScribeLearningDecision(0, true);
+    assert(!rowHTML('LOCAL_REVIEW_ROW').includes('Saving…'), '22-14: in local mode an approval never shows "Saving…" — the write already landed');
+    const done6 = await r6.saved;
+    assert(done6 && done6.state === 'saved' && storage.getScribeLearnings()[0].status === 'approved', '22-15: …and resolves "saved" with the row approved');
+  } catch (e) {
+    assert(false, `22-y: the local-mode case threw — ${e && e.message}`);
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// [23] D1 batch O follow-ups (2026-10-07; security + reviewer findings on 06c8f48) — the SAME three states for the on/off switch,
+//      the identity of a review row, and the revert's two guards.
+//
+//   * ON/OFF: "the SCRIBE on/off control shows the server's result, never an optimistic flip." `toggleScribeLearningStatus` used
+//     to write the flip and toast "Off" at once. It now goes through the same tracker as Approve/Reject: the row keeps the look it
+//     had and reads "Saving…" until the server answers; a refused save puts the old status back and reads "Couldn't save · Retry".
+//   * IDENTITY (F2 / mutation M5): a state is shown only on the row it was made for — kind, run, id, createdAt AND the text. Two
+//     proposals of one Trainer run share the first four, so without the text a list that shifted would hand one's "Saving…" to
+//     the other.
+//   * THE REVERT'S GUARDS (M7b): a failed save puts the previous status back only on the SAME row (identity) and only if it still
+//     holds the status this control wrote. A row someone else has since moved is never overwritten; and the revert's own write is
+//     flushed, so the key does not stay dirty after a failed save.
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[23] D1 batch O follow-ups — the on/off switch shows the server\'s result; identity and the revert guards (real adapter, Supabase data mode)…');
+{
+  const auth23 = await import('./js/auth.js');
+  const sb23 = await import('./js/supabase-backend.js');
+  const L23 = 'L-REVIEW2';
+  const at = '2026-10-01T00:00:00.000Z';
+  const quiet = async (fn) => {
+    const rl = console.log, rw = console.warn, re = console.error, ri = console.info;
+    console.log = () => {}; console.warn = () => {}; console.error = () => {}; console.info = () => {};
+    try { return await fn(); } finally { console.log = rl; console.warn = rw; console.error = re; console.info = ri; }
+  };
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const lrow = (ord, id, kind, status, payload) => ({ league_id: L23, id, ord, run_id: 'r5', kind, status, origin: 'trainer', created_at: at,
+    payload: { kind, runId: 'r5', status, origin: 'trainer', createdAt: at, confidence: 0.9, ...payload } });
+  const srv = {
+    scribe_learnings: [
+      lrow(0, 'lrn_r5_a', 'learning', 'approved', { learningId: 'lrn_r5_a', category: 'brevity', instruction: 'TOGGLE_ONE' }),
+      lrow(1, 'lrn_r5_b', 'learning', 'approved', { learningId: 'lrn_r5_b', category: 'humor', instruction: 'TOGGLE_TWO' }),
+      lrow(2, 'sl_r5_2', 'experiment', 'pending', { experiment: 'TWIN_ALPHA', reason: 'same run, same time' }),
+      lrow(3, 'sl_r5_3', 'experiment', 'pending', { experiment: 'TWIN_BETA', reason: 'same run, same time' }),
+      lrow(4, 'lrn_r5_c', 'learning', 'pending', { learningId: 'lrn_r5_c', category: 'frequency', instruction: 'PENDING_LEARNING' }),
+      lrow(5, 'lrn_r5_d', 'learning', 'pending', { learningId: 'lrn_r5_d', category: 'callbacks', instruction: 'MIDFLIGHT_LEARNING' }),
+    ],
+    scribe_canon: [
+      { league_id: L23, id: 'canon_a', ord: 0, run_id: 'r7', kind: 'canon', origin: 'trainer', approval_status: 'pending', created_at: at,
+        payload: { canonId: 'canon_a', kind: 'canon', runId: 'r7', contextSummary: 'same text', preferredResponse: 'same reply', confidence: 0.8, approvalStatus: 'pending', origin: 'trainer', createdAt: at } },
+    ],
+  };
+  const log = [];
+  let gate = null;
+  let failUpdates = null;
+  const builder = (table) => {
+    const b = { _op: 'select', _eq: [], _count: false, _payload: null };
+    b.select = (cols, opts) => { if (opts && opts.count) b._count = true; return b; };
+    b.eq = (c, v) => { b._eq.push([c, v]); return b; };
+    b.order = () => b; b.limit = () => b; b.gt = () => b; b.range = () => b;
+    b.update = (patch) => { b._op = 'update'; b._payload = patch; return b; };
+    b.insert = () => { b._op = 'insert'; return b; };
+    const run = async () => {
+      const rows = (srv[table] || []).filter((r) => b._eq.every(([c, v]) => r[c] === v));
+      if (b._op === 'select') return { data: rows.map((r) => JSON.parse(JSON.stringify(r))), error: null, count: b._count ? rows.length : null };
+      if (b._op === 'insert') return { data: null, error: { code: '42501', message: `permission denied for table ${table}` } };
+      if (gate) await gate;
+      if (failUpdates) return { data: null, error: failUpdates };
+      for (const r of rows) {
+        Object.assign(r, b._payload);
+        r.payload = { ...r.payload, ...(table === 'scribe_learnings' ? { status: r.status } : { approvalStatus: r.approval_status }) };
+        log.push({ op: 'update', table, id: r.id, to: b._payload.status || b._payload.approval_status });
+      }
+      return { data: rows.map((r) => JSON.parse(JSON.stringify(r))), error: null };
+    };
+    b.then = (res, rej) => run().then(res, rej);
+    return b;
+  };
+  const fakeClient = { from: (t) => builder(t), rpc: async () => ({ data: [], error: null }) };
+  const srvRow = (id) => srv.scribe_learnings.find((r) => r.id === id);
+  const sectionHTML = () => app.renderScribeTrainerAdminSectionHTML();
+  const pendingOnly = () => { const h = sectionHTML(); const i = h.indexOf('>Pending review<'); return i === -1 ? '' : h.slice(i, h.indexOf('scribe-export-learnings-btn', i)); };
+  const learnedOnly = () => { const h = sectionHTML(); const i = h.indexOf('What SCRIBE has learned'); return i === -1 ? '' : h.slice(i, h.indexOf('>Pending review<', i) === -1 ? undefined : h.indexOf('>Pending review<', i)); };
+  const rowOf = (html, needle) => (html.split('<div class="flex-between"').find((p) => p.includes(needle)) || '');
+  const dirty = () => sb23._dirtyKeysForTest().includes('cfbp_scribe_learnings');
+  const holdOpen = () => { let release; gate = new Promise((r) => { release = r; }); return () => { release(); gate = null; }; };
+
+  try {
+    localStorage.clear();
+    auth23._resetAuthForTest?.();
+    auth23.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true, supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon' });
+    auth23._setMembershipsForTest([{ leagueId: L23, memberId: 'p1', role: 'commissioner', displayName: 'Drew', leagueName: 'IRB' }]);
+    await quiet(() => auth23.setActiveLeagueId(L23));
+    auth23._setAccountUserIdForTest('u-review2');
+    auth23._setStoredSessionForTest?.({ access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    auth23._setHasSupabaseDataBackendForTest(true);
+    sb23._resetForTest();
+    sb23.init({
+      register: auth23.registerSupabaseDataBackend, getClient: () => fakeClient, getActiveLeagueId: () => L23,
+      getIdentityEpoch: auth23.getIdentityEpoch, getAccountUserId: auth23.getAccountUserId,
+      getDeviceDataOwnerTuple: auth23.getDeviceDataOwnerTuple, getDeviceDataOwner: auth23.getDeviceDataOwner,
+      getLeagueName: auth23._switchBannerLeagueName, getLeagueNameById: auth23._leagueNameById,
+      getSession: storage.getSession, hasValidSupabaseSession: auth23.hasValidSupabaseSession,
+      isPrivilegeHeld: auth23.isPrivilegeHeld, hasSheetMirror: auth23.hasSheetMirrorOnDevice, isSiteUnlocked: storage.isSiteUnlocked,
+    });
+    await quiet(() => sb23.hydrate(L23, { epoch: auth23.getIdentityEpoch() }));
+    storage.setBackendMode('supabase');
+    assert(sb23.getState() === 'ACTIVE' && storage.getScribeLearnings().length === 6,
+      `23-0: fixture — a COMMISSIONER over an ACTIVE hydrated adapter holding two live learnings and four pending proposals (state ${sb23.getState()}, ${storage.getScribeLearnings().length} items)`);
+
+    // ── (1) ON/OFF, SAVING: the row keeps the look it had; the control reads "Saving…" and cannot be tapped again ──
+    let release = holdOpen();
+    const t1 = app.toggleScribeLearningStatus(0);
+    await tick();
+    const savingRow = rowOf(learnedOnly(), 'TOGGLE_ONE');
+    assert(t1.ok && t1.on === false && storage.getScribeLearnings()[0].status === 'superseded',
+      `23-1: the switch reports where it is GOING (off) and the local row has moved (${storage.getScribeLearnings()[0].status})…`);
+    assert(/opacity:1/.test(savingRow) && !/opacity:0\.55/.test(savingRow) && savingRow.includes('Saving…') && /scribe-learning-toggle-btn[^>]*disabled/.test(savingRow) && savingRow.includes('aria-busy="true"'),
+      `23-2: …but the row still LOOKS ON (nothing is shown as switched off before the server has it), and its control reads "Saving…", disabled, aria-busy (row: ${JSON.stringify(savingRow.slice(0, 420))})`);
+    assert(!pendingOnly().includes('TOGGLE_ONE'), '23-3: …and a switch in flight is not drawn in the Pending review list');
+    const t1b = app.toggleScribeLearningStatus(0);
+    assert(t1b.ok === false && t1b.error === 'in_flight', '23-4: a second tap while the first is in flight does nothing (it must not flip twice)');
+    release();
+    const done1 = await quiet(() => t1.saved);
+    assert(done1 && done1.state === 'saved' && srvRow('lrn_r5_a').status === 'superseded' && log.filter((e) => e.id === 'lrn_r5_a').length === 1,
+      `23-5: once the server confirms, the result is "saved", the server row is switched off and it took exactly ONE write (state ${done1 && done1.state}, server ${srvRow('lrn_r5_a').status})`);
+    const offRow = rowOf(learnedOnly(), 'TOGGLE_ONE');
+    assert(/opacity:0\.55/.test(offRow) && offRow.includes(`${(await import('./js/icons.js')).icon('power')} On`) && !offRow.includes('Saving…') && !/disabled/.test(offRow),
+      `23-6: …and only now does the row look OFF, with an enabled "⏻ On" control (row: ${JSON.stringify(offRow.slice(0, 420))})`);
+
+    // ── (2) ON/OFF, FAILED: refused by the server — the switch stays where the server has it, says so, and Retry decides again ──
+    failUpdates = { code: '42501', message: 'permission denied for table scribe_learnings' };
+    const t2 = app.toggleScribeLearningStatus(1);
+    const done2 = await quiet(() => t2.saved);
+    assert(done2 && done2.state === 'failed' && srvRow('lrn_r5_b').status === 'approved' && storage.getScribeLearnings()[1].status === 'approved',
+      `23-7: a refused switch resolves "failed", the server row is still ON and THIS device no longer holds it off either (server ${srvRow('lrn_r5_b').status}, local ${storage.getScribeLearnings()[1].status})`);
+    const failedRow = rowOf(learnedOnly(), 'TOGGLE_TWO');
+    assert(failedRow.includes("Couldn't save") && /role="alert"/.test(failedRow) && />Retry</.test(failedRow) && !/disabled/.test(failedRow) && /opacity:1/.test(failedRow),
+      `23-8: the row still looks ON and says "Couldn't save" with an enabled Retry (row: ${JSON.stringify(failedRow.slice(0, 460))})`);
+    assert(!dirty(),
+      '23-9: …and the failed save left no unsent write behind (the revert\'s own write is flushed, so the key settles clean)');
+    failUpdates = null;
+    const t3 = app.toggleScribeLearningStatus(1);                     // what the Retry button does: the same handler, the same decision
+    const done3 = await quiet(() => t3.saved);
+    assert(t3.on === false && done3 && done3.state === 'saved' && srvRow('lrn_r5_b').status === 'superseded' && !rowOf(learnedOnly(), 'TOGGLE_TWO').includes("Couldn't save"),
+      `23-10: Retry makes the SAME decision (off), saves it, and the inline error is gone (server ${srvRow('lrn_r5_b').status})`);
+    // and turning one back on is the mirror image
+    const t4 = app.toggleScribeLearningStatus(0);
+    const done4 = await quiet(() => t4.saved);
+    assert(t4.on === true && done4.state === 'saved' && srvRow('lrn_r5_a').status === 'approved', '23-11: switching a learning back ON is the same path and the server confirms it');
+
+    // ── (3) IDENTITY — a state is shown only on the row it was made for (F2 / M5) ──
+    release = holdOpen();
+    const rows = storage.getScribeLearnings();
+    const alpha = rows[2];
+    const a1 = app.applyScribeLearningDecision(2, true);
+    await tick();
+    const st = (row, idx = 2) => app.scribeReviewState('learnings', idx, row);
+    assert(st(alpha) && st(alpha).phase === 'saving', '23-12: the row the decision was made on wears "saving"');
+    assert(st({ ...alpha, status: 'approved' }) !== null && st({ ...alpha, memoryAppliedAt: at }) !== null,
+      '23-13: …and still does after the control flipped its status or the server stamped it (identity is the proposal, not its bookkeeping)');
+    assert(st({ ...alpha, experiment: 'TWIN_BETA' }) === null,
+      '23-14: a TWIN — same kind, same run, same createdAt, different text — does NOT wear it (the four ident fields alone cannot tell two proposals of one run apart)');
+    assert(st({ ...alpha, runId: 'r6' }) === null && st({ ...alpha, createdAt: '2026-10-02T00:00:00.000Z' }) === null && st({ ...alpha, kind: 'fact_candidate' }) === null,
+      '23-15: …nor a row of another run, another time or another kind');
+    assert(st({ ...alpha, learningId: 'lrn_other' }) === null, '23-16: …nor one that carries a different learningId');
+    assert(st(alpha, 3) === null && st(null) === null && st(undefined) === null, '23-17: …and the state belongs to ITS position: another idx, or no row at all, wears nothing');
+    const beta = rows[3];
+    assert(!rowOf(pendingOnly(), 'TWIN_BETA').includes('Saving…') && rowOf(pendingOnly(), 'TWIN_ALPHA').includes('Saving…'),
+      '23-18: in the rendered list "Saving…" is on TWIN_ALPHA only — TWIN_BETA, its twin, keeps live Approve/Reject');
+    release(); await quiet(() => a1.saved);
+    // a pending LEARNING being approved is drawn in Pending review ("Saving…") and NOT in the learned list: a row the server has not
+    // approved yet is not "something SCRIBE has learned", whatever the local write says
+    release = holdOpen();
+    const lr = app.applyScribeLearningDecision(5, true);
+    await tick();
+    assert(rowOf(pendingOnly(), 'MIDFLIGHT_LEARNING').includes('Saving…') && !learnedOnly().includes('MIDFLIGHT_LEARNING'),
+      '23-18b: a pending learning mid-approve is in Pending review as "Saving…" and NOT yet in the learned list');
+    release(); await quiet(() => lr.saved);
+    assert(learnedOnly().includes('MIDFLIGHT_LEARNING') && !pendingOnly().includes('MIDFLIGHT_LEARNING'),
+      '23-18c: …and once the server confirms it moves to the learned list');
+    // CANON identity: two canon rows that differ ONLY in their canonId are different proposals
+    {
+      release = holdOpen();
+      const cA = storage.getScribeCanon()[0];
+      const c1 = app.applyScribeCanonDecision(0, true);
+      await tick();
+      assert(app.scribeReviewState('canon', 0, cA) !== null && app.scribeReviewState('canon', 0, { ...cA, canonId: 'canon_b' }) === null,
+        '23-18d: a canon row is identified by its canonId too (same text and run, another canonId is another proposal)');
+      release();
+      const doneC = await quiet(() => c1.saved);
+      assert(doneC.state === 'saved' && srv.scribe_canon[0].approval_status === 'approved', '23-18e: …and the canon decision itself saves');
+    }
+
+    // ── (4) THE REVERT'S GUARDS — a failed save never overwrites a row it did not write (M7b) ──
+    // (a) the row at that position is a DIFFERENT proposal that already reads "approved" (the list shifted while the save was in flight)
+    release = holdOpen();
+    const aRows = storage.getScribeLearnings().map((l) => ({ ...l }));
+    const b1 = app.applyScribeLearningDecision(3, true);              // TWIN_BETA pending -> approved, held open
+    await tick();
+    const shifted = aRows.map((l) => ({ ...l }));
+    shifted[3] = { ...aRows[4], status: 'approved' };                // a different proposal now sits at position 3, and is already approved
+    storage.setScribeLearnings(shifted);
+    failUpdates = { code: '42501', message: 'permission denied for table scribe_learnings' };
+    release();
+    const doneB1 = await quiet(() => b1.saved);
+    assert(doneB1.state === 'failed' && storage.getScribeLearnings()[3].status === 'approved' && storage.getScribeLearnings()[3].instruction === 'PENDING_LEARNING',
+      `23-19: the failed save does NOT revert a DIFFERENT row that now sits at its position (it is still "${storage.getScribeLearnings()[3].status}", not put back to pending)`);
+    failUpdates = null;
+    await quiet(async () => { storage.setScribeLearnings(aRows.map((l) => ({ ...l }))); await sb23.flush(); });
+
+    // (b) the SAME row, but someone else has since moved it to a status this control did not write
+    release = holdOpen();
+    const cRows = storage.getScribeLearnings().map((l) => ({ ...l }));
+    const c1 = app.applyScribeLearningDecision(3, true);
+    await tick();
+    const moved = cRows.map((l) => ({ ...l }));
+    moved[3] = { ...cRows[3], status: 'rejected' };                  // the same proposal, now REJECTED by a second tab / device
+    storage.setScribeLearnings(moved);
+    failUpdates = { code: '42501', message: 'permission denied for table scribe_learnings' };
+    release();
+    const doneC1 = await quiet(() => c1.saved);
+    assert(doneC1.state === 'failed' && storage.getScribeLearnings()[3].status === 'rejected',
+      `23-20: …nor does it put "pending" back over the SAME row when that row has since been moved to something else (it is "${storage.getScribeLearnings()[3].status}")`);
+    failUpdates = null;
+
+    // (c) the plain case still reverts, and the revert is flushed: nothing is left unsent
+    await quiet(async () => { storage.setScribeLearnings(aRows.map((l) => ({ ...l }))); await sb23.flush(); });
+    failUpdates = { code: '42501', message: 'permission denied for table scribe_learnings' };
+    const d1 = app.applyScribeLearningDecision(4, true);
+    const doneD1 = await quiet(() => d1.saved);
+    assert(doneD1.state === 'failed' && storage.getScribeLearnings()[4].status === 'pending' && srvRow('lrn_r5_c').status === 'pending',
+      `23-21: the ordinary failed approve puts the status back on this device (local ${storage.getScribeLearnings()[4].status}, server ${srvRow('lrn_r5_c').status})`);
+    assert(!dirty(), '23-22: …and the revert write was flushed: the key is not left dirty (a dirty key would send the unapproved flip later)');
+    failUpdates = null;
+
+    // ── (5) REFUSED BEFORE IT IS SENT: the seam refuses the write itself (this device is no longer the commissioner's) — nothing
+    //        changed, and the control says so ──
+    const asRole = (role) => auth23._setMembershipsForTest([{ leagueId: L23, memberId: 'p1', role, displayName: 'Drew', leagueName: 'IRB' }]);
+    asRole('player');
+    assert(storage.getSession().isAdmin === false, '23-23a: precondition — the device now reads as a PLAYER, whose route for this key is refused by the seam');
+    const e1 = app.toggleScribeLearningStatus(0);
+    const doneE1 = await quiet(() => e1.saved);
+    const refusedRow = rowOf(learnedOnly(), 'TOGGLE_ONE');
+    assert(e1.ok && doneE1.state === 'failed' && storage.getScribeLearnings()[0].status === 'approved' && refusedRow.includes("Couldn't save") && />Retry</.test(refusedRow) && /opacity:1/.test(refusedRow),
+      `23-23: a switch the seam refuses up front leaves the row ON, says "Couldn't save" and offers Retry (local ${storage.getScribeLearnings()[0].status}; row ${JSON.stringify(refusedRow.slice(0, 300))})`);
+    assert(log.filter((e) => e.id === 'lrn_r5_a').length === 2 && srvRow('lrn_r5_a').status === 'approved', '23-23b: …and nothing reached the server for it');
+    asRole('commissioner');
+    const e2 = app.toggleScribeLearningStatus(0);                // Retry
+    const doneE2 = await quiet(() => e2.saved);
+    assert(e2.on === false && doneE2.state === 'saved' && srvRow('lrn_r5_a').status === 'superseded', '23-23c: Retry after a refusal makes the same decision (off) and saves it');
+
+    // ── (5b) A FAILED SAVE WHOSE REVERT COULD NOT BE WRITTEN: the device is left holding the flip, but Retry still means what it meant.
+    //         The next decision starts from the status the SERVER holds (the effective status), not from the unreverted local flip.
+    release = holdOpen();
+    const f1 = app.toggleScribeLearningStatus(1);                // lrn_r5_b is OFF on the server (23-10) -> this switches it back ON
+    await tick();
+    asRole('player');                                            // mid-flight the device stops being the commissioner's: the revert write will be refused too
+    failUpdates = { code: '42501', message: 'permission denied for table scribe_learnings' };
+    release();
+    const doneF1 = await quiet(() => f1.saved);
+    asRole('commissioner');
+    failUpdates = null;
+    assert(doneF1.state === 'failed' && f1.on === true && srvRow('lrn_r5_b').status === 'superseded',
+      `23-23d: precondition — the save failed, the server still has it OFF, and the revert was refused (local ${storage.getScribeLearnings()[1].status})`);
+    const f2 = app.toggleScribeLearningStatus(1);                // Retry
+    const doneF2 = await quiet(() => f2.saved);
+    assert(f2.ok && f2.on === true && f2.status === 'approved',
+      `23-23e: Retry is the SAME decision as the one that failed (back ON), taken from the server's status — not the opposite of the unreverted local flip (on=${f2.on}, status ${f2.status})`);
+    assert(doneF2.state === 'failed' && srvRow('lrn_r5_b').status === 'superseded',
+      `23-23f: …and while the adapter still holds the key refused (it clears on a re-read, not on a timer) the save honestly fails again (state ${doneF2.state}, server ${srvRow('lrn_r5_b').status})`);
+    await quiet(() => sb23.hydrate(L23, { epoch: auth23.getIdentityEpoch() }));
+    const f3 = app.toggleScribeLearningStatus(1);
+    const doneF3 = await quiet(() => f3.saved);
+    assert(f3.on === true && doneF3.state === 'saved' && srvRow('lrn_r5_b').status === 'approved',
+      `23-23g: …and after the re-read the same Retry saves it (state ${doneF3.state}, server ${srvRow('lrn_r5_b').status})`);
+  } catch (e) {
+    assert(false, `23-x: the section threw before it finished — ${e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e}`);
+  } finally {
+    storage.setBackendMode('local');
+    await quiet(() => sb23._resetForTest());
+  }
+
+  // ── (5c) THE HANDLERS: a toast says "Off"/"Approved" only AFTER the server has (the click handlers are DOM-bound, so they are pinned by shape) ──
+  {
+    const src = await (await import('node:fs/promises')).readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+    const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+    for (const [name, anchor, call] of [
+      ['on/off', ".querySelectorAll('.scribe-learning-toggle-btn')", 'toggleScribeLearningStatus('],
+      ['approve/reject', ".querySelectorAll('.scribe-approve-btn, .scribe-reject-btn')", 'applyScribeLearningDecision('],
+      ['canon', ".querySelectorAll('.scribe-canon-approve-btn, .scribe-canon-reject-btn')", 'applyScribeCanonDecision('],
+    ]) {
+      const at0 = src.indexOf(anchor);
+      const code = strip(src.slice(at0, at0 + 2600));
+      const end = code.indexOf('});\n  });');
+      const h = end > 0 ? code.slice(0, end) : code;
+      const toastAt = h.indexOf('showToast(');
+      const thenAt = h.indexOf('.saved.then(');
+      const guardAt = h.indexOf("state === 'saved'");
+      assert(at0 > -1 && h.indexOf(call) > -1 && thenAt > h.indexOf(call) && guardAt > thenAt && toastAt > guardAt,
+        `23-26 [structural] (${name}): the handler calls ${call.replace('(', '')}, WAITS for \`saved\`, and only inside \`state === 'saved'\` does it toast (call ${h.indexOf(call)}, then ${thenAt}, guard ${guardAt}, toast ${toastAt})`);
+      assert(h.indexOf('renderCommPage()') > -1 && h.indexOf('renderCommPage()') < thenAt,
+        `23-27 [structural] (${name}): …and the row is repainted BEFORE the wait, so "Saving…" shows at once`);
+    }
+  }
+
+  // ── (6) LOCAL (PIN-era) MODE: the seam writes synchronously — there is no saving window to show for the switch either ──
+  try {
+    storage.setScribeLearnings([{ kind: 'learning', status: 'approved', category: 'humor', instruction: 'LOCAL_TOGGLE_ROW', confidence: 0.95, runId: 'rl', createdAt: at }]);
+    const t = app.toggleScribeLearningStatus(0);
+    assert(!rowOf(learnedOnly(), 'LOCAL_TOGGLE_ROW').includes('Saving…') && storage.getScribeLearnings()[0].status === 'superseded',
+      '23-24: in local mode a switch never shows "Saving…" — the write already landed');
+    const doneT = await t.saved;
+    assert(doneT && doneT.state === 'saved', '23-25: …and resolves "saved"');
+  } catch (e) {
+    assert(false, `23-y: the local-mode case threw — ${e && e.message}`);
   }
 }
 

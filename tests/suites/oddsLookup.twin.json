@@ -1,0 +1,17 @@
+{
+  "id": "oddsLookup.twin",
+  "script": "supabase/tests/functions/oddsLookup.twin.mjs",
+  "summary": "loose",
+  "floor": 183,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 2500,
+  "note": "W-71 (2026-10-14; DI-W71.4, security C1..C7): the odds-lookup Edge Function driven end to end against the fake client and a fake vendor - class-U auth before the key, the service role and the vendor; dormant without the secret; a fixed host, sport key and query that nothing in the body can steer; the key never echoed (a URL-echoing error, a hostile body); the credits floor and memo; fail-closed matching (Miami vs Miami (OH), +-3 h edges, two candidates) and the line derived from exactly-opposite points; fixed response fields under OUR four book names; no write of any kind. Raised 165 -> 183 (2026-10-14, fix/d1-odds-daily-cap, DI-W71.10 / Drew D-80 \"M45 b\"): the pilot-only section [10] (D-77) REPLACED by the daily-cap section: every league answered (no pilot gate), the cap reached and the next lookup refused daily_limit with zero vendor calls, memo hits never counted (a league at its cap still served from the memo), two leagues independent, a forged league refused at the gate (no reservation), every reservation failure a 500 reserve_failed with nothing echoed, the default and malformed cap values, the order key < games < reservation < vendor, the FCS second call reserved too, nothing reserved when no call will be made, and the adapter refusing the network without the word 'reserved'. The fake reservation models 0060's whole body (P-7) with the cap rule pglite0060 proves against the real SQL. 7-5d DE-FLAKED (+1, 7-5f): it searched the whole response text, and the runId's 8-character random base36 tail held 'g1' or 'h1' by chance (about 1 run in 90 on int); the block now pins Math.random to the colliding tail 'h1g1aaaa' (the worst case, every run), 7-5d judges each answer without its runId, and 7-5f proves the collision is present. W71-37 still caught on 7-5c and 7-5d; 40/40 consecutive green.",
+  "deps": [
+    "supabase/functions/odds-lookup/index.js",
+    "supabase/functions/odds-lookup/match.mjs",
+    "supabase/functions/odds-lookup/vendor.mjs",
+    "supabase/tests/fixtures/odds-cap-cases.mjs"
+  ]
+}

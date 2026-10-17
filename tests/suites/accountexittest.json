@@ -1,0 +1,12 @@
+{
+  "id": "accountexittest",
+  "script": "accountexittest.mjs",
+  "label": "116",
+  "summary": "loose",
+  "floor": 209,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "batch-5b integration 2026-10-01 — set to the measured merged count; earlier: floor 208 — new with UN-389 / DI-446, 2026-09-30: copy verbatim, the preflight gate, row kinds, server truth wins, the delete-enablement truth table, escaped renderers, the shared action sheet + the …"
+}

@@ -16,6 +16,7 @@
 import {
   getWeeks, getPlayers, getWeeklyResults, getGames, getPicks, getSettings,
 } from './storage.js';
+import { isMultiSport, competitionForWeek } from './competition.js';   // D1 DI-531/526: a recap is about ONE sport's weeks
 import { calculateSeasonStandings, calculateAtsWinner } from './scoring.js';
 import { formatWeekLabel } from './data-model.js';
 import { gradeWeekExtraPoint } from './extra-point.js';
@@ -64,9 +65,13 @@ function compareWeekOrder(a, b) {
 
 /** Most recent finalized, history-visible week strictly before `week` (same season first). */
 export function findPreviousFinalizedWeek(week) {
+  // D1 (DI-526): in a league with several sports "the previous week" is the previous week of THIS week's sport - never another sport's lower-numbered week (an NFL Week 2 does not recap CFB Week 1).
+  // A one-sport league never takes the filter, so its answer is exactly what it was.
+  const sport = isMultiSport() ? (competitionForWeek(week)?.id ?? null) : undefined;
   const weeks = getWeeks().filter(w =>
     w.status === 'final' && w.showInHistory !== false && w.weekId !== week?.weekId &&
-    w.dataSourceMode !== 'demo');   // demo data never drives a recap (v0.17.0)
+    w.dataSourceMode !== 'demo' &&   // demo data never drives a recap (v0.17.0)
+    (sport === undefined || (competitionForWeek(w)?.id ?? null) === sport));
   if (!weeks.length) return null;
   const sameSeason = weeks
     .filter(w => w.season === week?.season && (week ? compareWeekOrder(w, week) < 0 : true))
@@ -219,9 +224,12 @@ export function renderSeasonSummaryHTML(currentWeek) {
     </div>`;
   }
 
+  // D1 (DI-526): the prior-season standings are of the viewed week's own sport (a league that added a sport this season has no earlier season of it, so nothing blends).
+  const sportId = isMultiSport() ? (competitionForWeek(currentWeek)?.id ?? null) : undefined;
   const priorWeeks = getWeeks().filter(w =>
     w.season !== season && w.status === 'final' && w.showInHistory !== false &&
-    w.dataSourceMode !== 'demo');
+    w.dataSourceMode !== 'demo' &&
+    (sportId === undefined || (competitionForWeek(w)?.id ?? null) === sportId));
   if (!priorWeeks.length && !blurb) return '';
 
   let computed = '';

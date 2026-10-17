@@ -1,0 +1,26 @@
+{
+  "id": "ccscrolltest",
+  "script": "ccscrolltest.mjs",
+  "label": "112h-cc",
+  "summary": "strict-noverdict",
+  "floor": 98,
+  "tags": [
+    "browser",
+    "slow"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/sw-register.js",
+    "css/**",
+    "index.html",
+    "service-worker.js",
+    "manifest.json",
+    "config.json",
+    "icons/**",
+    "vendor/**",
+    "reveal/**",
+    "favicon.*"
+  ],
+  "expectedMs": 48900,
+  "note": "RAISED from 91 by the W-66 review round (N1-N4, 2026-10-14): +7 — G-10a the next Saturday is set before Find; G-14a-d a re-search keeps the previous games dimmed and inert under the loading line, no jump; G-15 a News team change does not freeze the card; H-0 opening a row leaves the other group's open row still. RAISED from 87 by the W-66 touched-screen audit (2026-10-14): +4 — G-12/G-13 the filter and the chat box stay live after the filter repaints and survive a close and reopen; [H] every drawer repaint keeps open rows open with no replayed opening, and a row still opening carries on. RAISED from 73 by W-66 (2026-10-14): [G] +14 — the drawer's Request a game row answers real finger taps (Find games loading line then ESPN's games, Request, Withdraw, a fresh card on reopen, a close during the search, no replayed opening), in a CFB-only and a CFB + NFL league. RAISED from 60 by SB-15 (2026-10-01): [F] +13 — the app's own Picks repaint mid-drawer-drag is parked and the release reaches the drawer; a drawer stranded by a raw repaint is recovered by ✕, the scrim, or the next touch in the left quarter (incl. at progress 0), and the page …"
+}

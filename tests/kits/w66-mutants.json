@@ -1,0 +1,268 @@
+[
+ {
+  "id": "M1 back to the Rules page",
+  "why": "the defect itself: the card's one repaint goes back to repainting the Rules page, which has not carried the card since DI-304",
+  "file": "js/app.js",
+  "old": "function repaintGameRequestCard() {\n  refreshControlCenterAndSettingsPage();\n}",
+  "new": "function repaintGameRequestCard() {\n  renderRulesPage();\n}",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-3: THE BUG — while ESPN has not answered, the drawer says so: \"Checking ESPN for that day…\", aria-busy, Find games disabled (text \"\", aria-busy null, disabled"
+  }
+ },
+ {
+  "id": "M2 no loading repaint",
+  "why": "Find games starts the search without repainting, so the drawer never shows the loading line (and the button stays live)",
+  "file": "js/app.js",
+  "old": "  g.date = date; g.loading = true; g.error = '';   // N1: the previous games and their filter stay until the answer lands\n  repaintGameRequestCard();",
+  "new": "  g.date = date; g.loading = true; g.error = '';   // N1: the previous games and their filter stay until the answer lands",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-3: THE BUG — while ESPN has not answered, the drawer says so: \"Checking ESPN for that day…\", aria-busy, Find games disabled (text \"\", aria-busy null, disabled"
+  }
+ },
+ {
+  "id": "M3 no results repaint",
+  "why": "ESPN's answer lands in state but the drawer is never repainted with it",
+  "file": "js/app.js",
+  "old": "  g.loading = false; g.filter = '';\n  repaintGameRequestCard();\n}",
+  "new": "  g.loading = false; g.filter = '';\n}",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-5: THE BUG — ESPN's answer reaches the drawer: both games listed, each with a Request button; not busy, Find games enabled, the date kept (rows [], aria-busy "
+  }
+ },
+ {
+  "id": "M4 no repaint after Request",
+  "why": "Request saves and toasts but the drawer keeps offering Request and never lists it under Your requests",
+  "file": "js/app.js",
+  "old": "  showToast('🙋 Requested — the commissioner sees it when that week gets built.', 'success');\n  repaintGameRequestCard();",
+  "new": "  showToast('🙋 Requested — the commissioner sees it when that week gets built.', 'success');",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-6: THE BUG — Request: saved through the seam AND shown in the drawer: that game reads \"Requested\" (the other still offers Request), \"Your requests\" lists it a"
+  }
+ },
+ {
+  "id": "M5 no repaint after Withdraw",
+  "why": "Withdraw saves and toasts but the drawer keeps showing the request as pending with its Withdraw button",
+  "file": "js/app.js",
+  "old": "  showToast('Request withdrawn.', 'success');\n  repaintGameRequestCard();",
+  "new": "  showToast('Request withdrawn.', 'success');",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-7: THE BUG — Withdraw: saved, and the drawer shows it withdrawn with no Withdraw button, and both games offer Request again (tapped true, stored [\"401999001:w"
+  }
+ },
+ {
+  "id": "M6 result rows never bound",
+  "why": "the repainted rows' Request buttons are never bound, so a tap on Request does nothing (proves G-6 taps through the real binding, not a direct call)",
+  "file": "js/app.js",
+  "old": "    btn.addEventListener('click', () => handleGameRequestWithdraw(btn.dataset.requestId));\n  });\n  bindGameRequestRows();\n}",
+  "new": "    btn.addEventListener('click', () => handleGameRequestWithdraw(btn.dataset.requestId));\n  });\n}",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-6: THE BUG — Request: saved through the seam AND shown in the drawer: that game reads \"Requested\" (the other still offers Request), \"Your requests\" lists it a"
+  }
+ },
+ {
+  "id": "M7 Find games live while loading",
+  "why": "the loading render leaves Find games enabled, so a second tap starts a second search",
+  "file": "js/app.js",
+  "old": "id=\"gr-find\"${g.loading ? ' disabled' : ''}>",
+  "new": "id=\"gr-find\">",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-3: THE BUG — while ESPN has not answered, the drawer says so: \"Checking ESPN for that day…\", aria-busy, Find games disabled (text \"Checking ESPN for that day…"
+  }
+ },
+ {
+  "id": "M8 the open row replays its opening",
+  "why": "a main-pane repaint lets every row that was already open replay its 220 ms opening (collapse to nothing, fade back)",
+  "file": "js/control-center.js",
+  "old": "if (a) a.currentTime = t; else if (b.style) b.style.animation = 'none';",
+  "new": "if (a) a.currentTime = t;",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-5b: …and the drawer does not jump: Find games stays where the finger tapped it, through the loading paint and the results paint (400px before the tap → 743px "
+  }
+ },
+ {
+  "id": "M9 only the request card stays open",
+  "why": "only the request card's body is kept still: the time zone, theme, appearance, logos and notifications rows still replay their opening",
+  "file": "js/control-center.js",
+  "old": "      if (!wasOpen.has(b.id)) return;",
+  "new": "      if (!wasOpen.has(b.id) || b.id !== 'cc-body-game-settings') return;",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "H-1: a tap on the Team logos switch repaints the drawer and both open rows stay open without replaying their opening (opened with cc-row-body-in; repainted true"
+  }
+ },
+ {
+  "id": "M10 a row still opening snaps open",
+  "why": "a repaint that lands while a row is still opening (Notifications, ~2 ms after its tap) cuts its opening short instead of carrying it on",
+  "file": "js/control-center.js",
+  "old": "if (a) a.currentTime = t; else if (b.style) b.style.animation = 'none';",
+  "new": "if (b.style) b.style.animation = 'none';",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "H-2: a time zone chosen while its row is still opening repaints the drawer and the opening carries on from where it was, neither restarting nor snapping open (a"
+  }
+ },
+ {
+  "id": "M11 the row reopens on a snapshot",
+  "why": "the drawer holds the card as the string from its last repaint, so a close and reopen loses the typed filter and the chat choice",
+  "file": "js/app.js",
+  "old": "get gameRequestHTML() { return renderGameRequestCardHTML(); },",
+  "new": "gameRequestHTML: renderGameRequestCardHTML(),",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-12: the filter keeps filtering as the player types on (\"ohio\" -> the Ohio State game true; then \"aub\" -> the Auburn game true), and its text and list survive "
+  }
+ },
+ {
+  "id": "M12 the chat box is not bound with the results",
+  "why": "the Post to the Locker Room box is not bound where the results are painted, so unticking it never changes the choice the Request button acts on",
+  "file": "js/app.js",
+  "old": "  document.getElementById('gr-chat-toggle')?.addEventListener('change', e => { state.gameRequest.postToChat = !!e.target.checked; });\n  document.getElementById('gr-filter')",
+  "new": "  document.getElementById('gr-filter')",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-13: \"Post to the Locker Room\", unticked after filtering, is the player's choice: the reopened row (drawn from that choice) shows it unticked (box after the ta"
+  }
+ },
+ {
+  "id": "M13 the filter is not bound with the results",
+  "why": "the filter box is not bound where the results are painted, so typing never filters the list",
+  "file": "js/app.js",
+  "old": "document.getElementById('gr-filter')?.addEventListener('input', e => {",
+  "new": "document.getElementById('gr-filter-unbound')?.addEventListener('input', e => {",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-12: the filter keeps filtering as the player types on (\"ohio\" -> the Ohio State game false; then \"aub\" -> the Auburn game false), and its text and list surviv"
+  }
+ },
+ {
+  "id": "M14 a re-search clears the previous games",
+  "why": "N1: Find games clears the previous games while ESPN is asked again, so the card shrinks and a drawer scrolled near its end jumps (158 px measured)",
+  "file": "js/app.js",
+  "old": "  g.date = date; g.loading = true; g.error = '';   // N1:",
+  "new": "  g.date = date; g.loading = true; g.error = ''; g.results = []; g.filter = '';   // N1:",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-14a: N1 — a re-search with Find games near the top of the drawer (80 px below it, 3 px of list below the fold) never moves it: 80px before, 238px while ESPN i"
+  }
+ },
+ {
+  "id": "M15 the dimmed games take taps",
+  "why": "N1: the dimmed previous games are not inert, so Request on a game from the old date saves during the re-search",
+  "file": "js/app.js",
+  "old": "<div class=\"gr-stale\" inert>",
+  "new": "<div class=\"gr-stale\">",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-14c: N1 — the dimmed games take no tap: Request on one saves nothing (inert false; stored [\"401999001:withdrawn\"] → [\"401999001:withdrawn\",\"401999002:pending\""
+  }
+ },
+ {
+  "id": "M16 the previous games are not dimmed",
+  "why": "N1 (P-8): the previous games stay at full strength during the re-search, indistinguishable from an answer",
+  "file": "css/styles.css",
+  "old": ".gr-stale{opacity:.6;",
+  "new": ".gr-stale{opacity:1;",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-14b: N1 — while ESPN is asked again the previous games stay on screen (401999002; were 401999002), dimmed (opacity 1), under the loading line (true), the list"
+  }
+ },
+ {
+  "id": "M17 opening a row repaints raw",
+  "why": "N2: the toggle path repaints the main pane directly, so opening a row replays the opening of the row open in the other group",
+  "file": "js/control-center.js",
+  "old": "    if (event.type === 'toggle-row' && (event.group === 'settings' || event.group === 'feedback')) {\n      paintMainContent();",
+  "new": "    if (event.type === 'toggle-row' && (event.group === 'settings' || event.group === 'feedback')) {\n      mainContentEl.innerHTML = renderMainPaneInnerHTML(ctx, state);",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "H-0: N2 — opening a row (Team logos) animates that row only: the row already open in the other group (Request a game) is repainted but holds still (Team logos c"
+  }
+ },
+ {
+  "id": "M18 a News change freezes the card",
+  "why": "N3: the News pane copies ctx.bodies with a spread, which reads the card's getter once and freezes it until the next update()",
+  "file": "js/control-center.js",
+  "old": "const bodies = Object.defineProperties({}, Object.getOwnPropertyDescriptors(ctx.bodies || {}));",
+  "new": "const bodies = { ...(ctx.bodies || {}) };",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-15: N3 — after a News team is added (Arkansas), the row still reopens on the card as it is now (filter \"\", games 401999001,401999002), not on the copy taken a"
+  }
+ },
+ {
+  "id": "M19 every chip sets this Saturday",
+  "why": "N4: a Saturday chip other than the first sets the wrong date; G-10a names it before Find games runs, instead of a misleading G-10",
+  "file": "js/app.js",
+  "old": "      state.gameRequest.date = chip.dataset.date || '';",
+  "new": "      state.gameRequest.date = document.querySelector('#gr-sat-chips .gr-sat-chip').dataset.date || '';",
+  "suites": [
+   "ccscrolltest.mjs"
+  ],
+  "red": {
+   "suite": "ccscrolltest.mjs",
+   "label": "G-10a: tapping the next Saturday's chip puts its date in the Game day field before Find games is tapped, as G-1 checks for \"This Sat\" (want 2026-10-24, field 20"
+  }
+ }
+]

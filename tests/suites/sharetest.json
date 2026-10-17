@@ -1,0 +1,23 @@
+{
+  "id": "sharetest",
+  "script": "sharetest.mjs",
+  "summary": "strict",
+  "floor": 56,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "deps": [
+    "js/chat-share.js",
+    "js/chat-ui.js",
+    "js/chat.js",
+    "js/app.js",
+    "js/home.js",
+    "js/card-detail.js",
+    "js/game-view.js",
+    "index.html",
+    "minidom.mjs",
+    "statsfixtures.mjs"
+  ],
+  "note": "RAISED from 53 (2026-10-14, security F-1): 5b-1 fifty shared messages cost at most ONE fresh read per paint; 5b-2 the pass's answer lives only as long as its task and an action asks the exact question. | (53 with 4h-2 gestures suspended under the sheet and 4n Cancel returns focus to the Share button.) D1 Lane B, DI-597 / PF-454 Share to chat (the consolidated Game Day round, 2026-10-08): the reference's one gate (closed types, bounded plain id, exactly two own keys), the body complete without the reference, the meta only { ref } (no key 0045 reserves), one message per Post (uuid id, never sys_/scribe_/pin_; duplicate within 10 minutes sends nothing; double tap; a failing send keeps the sheet with Retry and creates nothing), the reader's attachment rebuilt from the reader's own data (forged references render only the unavailable line and no forged text; demo / draft refused; the gate asked again at the tap), a share's text invariant under every pick and result change, Share hidden signed out / chat off / for an item the sharer may not see; eight chat-share.js mutants and two chat-ui source pins in-suite (the cross-file kit is tests/kits/gd-consolidated-mutants.json). Registered 2026-10-08."
+}

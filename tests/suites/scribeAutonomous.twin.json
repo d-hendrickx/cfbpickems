@@ -1,0 +1,12 @@
+{
+  "id": "scribeAutonomous.twin",
+  "script": "supabase/tests/functions/scribeAutonomous.twin.mjs",
+  "label": "81k",
+  "summary": "loose",
+  "floor": 757,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 900,
+  "note": "raised 642 -> 660 by the reviewer BLOCK fix on DI-439 item 4 + the audit note (2026-09-30): [N8-L26..L34] the alma verifier runs TWO parallel checks (leading-not-covering at half then losing outright verifies on the straight-up turn and states only the score; the underdog mirror …"
+}

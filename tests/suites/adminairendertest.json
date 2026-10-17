@@ -1,0 +1,22 @@
+{
+  "id": "adminairendertest",
+  "script": "adminairendertest.mjs",
+  "summary": "strict",
+  "floor": 40,
+  "tags": [
+    "browser"
+  ],
+  "deps": [
+    "css/**",
+    "js/admin-panel.js",
+    "js/scribe-routes-card.js",
+    "js/content-status-card.js",
+    "js/source-chips.js",
+    "js/source-labels.js",
+    "js/icons.js",
+    "js/app.js",
+    "js/chat-ui.js"
+  ],
+  "expectedMs": 25000,
+  "note": "D1 Lane C S-2 / P-8 / G3: the routing card, the status card, their sheets and the source chips MEASURED IN CHROMIUM at 375 pt with default and 1.35x text - no sideways overflow, 44 pt targets, 8 and 16 pt spacing, sheets fit a 375x667 phone and scroll inside, 97% press (and none under Reduce Motion), four measurement canaries, source pins so the replica cannot drift. The first run caught the cards' 34 pt Retry/Refresh buttons (fixed). Registered 2026-10-08."
+}

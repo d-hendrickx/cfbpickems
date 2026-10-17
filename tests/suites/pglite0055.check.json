@@ -1,0 +1,14 @@
+{
+  "id": "pglite0055.check",
+  "script": "supabase/tests/pglite0055.check.mjs",
+  "summary": "loose",
+  "floor": 1,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "supabase/migrations/0055_feed_content_store.sql"
+  ],
+  "expectedMs": 5000,
+  "note": "D1 Lane C 0055 (the Home content store: feed_items, league_insights, the content RPCs and the job RPCs) run END TO END in PGlite, attacker-first (P-1): a member's and a platform admin's own JWT against the table and every job RPC, a forged legal status, another league's insight by id (P-9: membership first), the pilot rule on list and get, blocked / withdrawn / expired / pending never served, the touch / throttle / supersede / re-publish write path, the attempt log cap, spotlights never model-written, the default-off due predicate (only boolean true in an active league), the subject selection (published slate, 72 h ahead and 30 h back with each game's status, live games included so a slate day's spotlights wait, no demo / draft / other sport, 12 per league, distinct, no league id), retention. 85 assertions WITH PGlite (PGLITE_DIR); without it the suite prints SKIP and counts its one skip (green and hollow: it says so on its first line). Its 29 mutants are tests/kits/lane-c-news-kit.mjs `content` (all RED, 2026-10-08)."
+}

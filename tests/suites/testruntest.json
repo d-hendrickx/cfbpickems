@@ -1,0 +1,21 @@
+{
+  "id": "testruntest",
+  "script": "testruntest.mjs",
+  "label": "runner",
+  "summary": "strict",
+  "floor": 636,
+  "timeoutMs": 900000,
+  "tags": [
+    "slow"
+  ],
+  "deps": [
+    "testrun.mjs",
+    "testruntest.mjs",
+    "tests/lib/**",
+    "tests/parity.mjs",
+    "loadtest.mjs"
+  ],
+  "affectedByDepsOnly": true,
+  "expectedMs": 290000,
+  "note": "M-49 (Drew, 2026-10-14: \"Yes, approve 47, 48, 49\"): floor 724 -> 636 by a MOVE, not a loss: 89 real-tree case assertions + 2 battery controls left for runnerrepotest (floor 95), +1 extractor stop, +2 for the M-49 mutant. Held to runner code only (tests/suites/** left the gate: every builder branch edits a manifest); its real-tree checks moved to runnerrepotest. | Review round 1 (2026-10-14): RAISED 688 -> 724, measured (B1, B2, N3-N5). M-42/M-43 (Drew, 2026-10-14, D-75/D-76): RAISED 593 -> 688, the measured count (5 cases, 16 mutants). affectedByDepsOnly - --affected runs it only when the runner, its tests, the manifests, the parity tool or loadtest.mjs change (it reads every file, so the map alone picked it for every diff); every --full runs it. | MERGE int deeb4e7d into feat/d1-history (2026-10-14): floor = the merged tree's measured 593 (this branch 591, int 590). | D1 W-68 / W-69 (2026-10-14, MERGE int a6ee12a5): RAISED 589 -> 590, the merged tree's measured count. D1 W-68 / W-69 (2026-10-14): RAISED 588 -> 589: the browser-suite list gains gameslistbrowsertest (seventeen Chromium suites). W-22 (2026-10-08): timeoutMs 900000 (the default 300 000 sat on its real duration: 287 s alone, 299 s in gate mode at load ~46, a TIMEOUT and a solo TIMEOUT at load ~200); expectedMs 290000 so the scheduler starts it first. D1 integration 20 (2026-10-08): 587 measured on the merged tree (feat/d1-lr-pills +1: chatsportbrowsertest in the exact browser lists). D1 integration 19 (2026-10-08): 586 measured on the merged tree (int 498 + fix/d1-runner 585 over base 497). D1 third pass (2026-10-08): RAISED 497 -> 498 - sportgeometrytest pinned in the exact browser lists. The tiered runner's own proof: evaluator arithmetic, the denylist, parallelism/browser cap/hermetic TMPDIR/tripwire/isolation/timeout-kills-the-group on fixture suites, --affected, the semaphore, the extractor, the real manifests and dependency map — each proved by a mutation battery on scratch copies. | RAISED from 588 to the measured 591 (D1 Lane B Game Day consolidated round, 2026-10-14; the pins now carry gdseamtest and sharetest in the tz set). | MERGED int/v0.30.0 (d6e8ac5a) into feat/d1-gameday 2026-10-08: floor = the higher side's (500 / 588), to be re-measured on the merged tree. | RAISED from 499 by D1 Game Day fix round 2 (2026-10-08): gameviewstyletest (the P-8 computed-style proof) joins the pinned browser lists (tagged browser + inferred browser: sixteen). | D1 integration 20 (2026-10-08): 587 measured on the merged tree (feat/d1-lr-pills +1: chatsportbrowsertest in the exact browser lists). D1 integration 19 (2026-10-08): 586 measured on the merged tree (int 498 + fix/d1-runner 585 over base 497). D1 third pass (2026-10-08): RAISED 497 -> 498 - sportgeometrytest pinned in the exact browser lists. The tiered runner's own proof: evaluator arithmetic, the denylist, parallelism/browser cap/hermetic TMPDIR/tripwire/isolation/timeout-kills-the-group on fixture suites, --affected, the semaphore, the extractor, the real manifests and dependency map — each proved by a mutation battery on scratch copies."
+}

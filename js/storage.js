@@ -33,6 +33,8 @@ import { cacheGet, cacheSet, isBackendReady } from './backend.js';
 // (supabase-backend.js never imports auth.js/storage.js/backend.js — DI §1.3's
 // register-don't-import rule is what keeps that true).
 import * as sb from './supabase-backend.js';
+// D1 Lane B / DI-579: the game-order preference's pure shape, coercion and writes (a leaf module — no imports, so no cycle).
+import { coerceGameOrder, withManualOrder, withMode } from './game-order.js';
 // Phase III Step 3a (DI-180f) — see the getSession() comment below. This is
 // the only new import this file gains for the whole build.
 import { getAuthMode, getSupabaseSession, isSupabaseWriteWithheld, AuthModeMismatchError } from './auth.js';
@@ -231,6 +233,23 @@ const KEYS = {
   // js/competition.js answers it with a VIRTUAL, never-persisted default competition, so no read
   // path ever writes one.
   COMPETITIONS: 'cfbp_competitions',
+  // D1 (v0.30.0) / DI-531, security A3 + C1 — WHO PLAYS EACH SPORT: one row per (competition, league member) the member has entered, from `competition_members` (migration 0033).
+  // SHARED league data (every roster, count and denominator reads it), so it is deliberately NOT in DEVICE_LOCAL_KEYS. An array of legacy objects
+  // `{ id, competitionId, memberId, enrolledBy: 'self'|'commissioner', joinedAt }` (supabase-projection.js COMPETITION_MEMBER_COLS). Insert and delete only: a member inserts their OWN
+  // row (RLS `cm_self_insert`), the commissioner any row (`cm_commissioner_all`); there is no UPDATE grant, so a row is never edited.
+  // `joinedAt` is SERVER-OWNED (C1: 0044's trigger stamps it `now()`); the projection never writes it, so a client can never back-date its own entry.
+  // NOT SEEDED, by construction (RG-12): absent reads as [] and ensureSeedData() never names this key. DEFAULT-WHEN-MISSING (CONVENTIONS #10): [] = nobody has joined an opt-in sport;
+  // an `enrollment:'all'` competition has no rows by design, and a league with zero or one competition never consults this key at all (js/competition.js playersForCompetition()).
+  COMPETITION_MEMBERS: 'cfbp_competition_members',
+  // D1 (v0.30.0) / DI-520 (security A5) — WHICH SPORT THIS DEVICE'S PICKS / DASHBOARD / STANDINGS ARE ON, per signed-in account and per league: `{ [userId]: { [leagueId]: dbCode } }`.
+  // DEVICE-LOCAL (in DEVICE_LOCAL_KEYS below) for the same reason SESSION is — it is a fact about what THIS handset was looking at; a phone in the other hand of the same account
+  // is not re-scoped by it — and under the `cfbp_` prefix ON PURPOSE, so the sign-out / handover sweep in auth.js clears it with no keep-list entry. It is read and written ONLY by
+  // js/competition.js (`getActiveSportKey` / `setActiveSportKey`), which VALIDATES every value on the way out: a stale or forged entry is ignored, never believed. DEFAULT-WHEN-MISSING
+  // (CONVENTIONS #10): absent / unparseable / the wrong shape reads as {} and the pointer resolves to the league's first sport the viewer plays (DI-555).
+  ACTIVE_SPORT: 'cfbp_active_sport',
+  // D1 / DI-520 rev 3 (D-59) — the Dashboard's own scope, `{ [userId]: { [leagueId]: 'all' | null } }`: "All sports" is a SCOPE of the Dashboard, never a sport, so choosing it changes
+  // the Dashboard and nothing else (Picks and Standings never read it). Device-local and validated exactly as ACTIVE_SPORT is; a value other than 'all' reads as no scope.
+  DASHBOARD_SCOPE: 'cfbp_dashboard_scope',
 };
 
 // Keys that ALWAYS stay device-local even when a shared backend is active.
@@ -343,6 +362,9 @@ const DEVICE_LOCAL_KEYS = new Set([
   KEYS.THEME_HINT,
   // SP-52 (DI-453) — see the KEYS comment above. Device-local for the same reason THEME_HINT is.
   KEYS.SCHEME_HINT,
+  // D1 DI-520 (security A5) / rev 3 — see the KEYS comments above. A fact about what THIS handset was looking at, keyed by account and league, never league state.
+  KEYS.ACTIVE_SPORT,
+  KEYS.DASHBOARD_SCOPE,
 ]);
 
 /**
@@ -960,6 +982,55 @@ export function clearSectionOrder(pageKey) {
   _setPlayerPref('sectionOrder', all);
 }
 
+// ── D1 Lane B / DI-579 (2026-10-07) — per-player GAME order (Kickoff · Live first · My order) ───────────────
+//
+// `player.preferences.gameOrder = { mode, manual: { [weekId]: [gameId, …] }, recent: [weekId, …] }` — js/game-order.js owns the shape, the
+// coercion and the ordering function; this is only the seam. Deliberately on the PLAYER RECORD via _playerPref/_setPlayerPref (the sectionOrder pair),
+// NEVER the league-shared `settings` blob (the UN-124 trap). Default when missing — and for every record in the database today — is Kickoff with
+// nothing saved, which orders games exactly as the Dashboard always did (kickoff ascending). Signed out: _playerPref is undefined and
+// _setPlayerPref no-ops, so an anonymous viewer reads the default and persists nothing (UN-127's shared-device rule).
+// Does not apply to the Picks page, the chat filter pills, CSV, notifications, Alma Mater Watch or SCRIBE (js/game-order.js lists why).
+export function getGameOrderMode() {
+  return coerceGameOrder(_playerPref('gameOrder')).mode;
+}
+export function setGameOrderMode(mode) {
+  return _setPlayerPref('gameOrder', withMode(_playerPref('gameOrder'), mode));
+}
+export function getManualGameOrder(weekId) {
+  const m = coerceGameOrder(_playerPref('gameOrder')).manual;
+  return typeof weekId === 'string' && Object.prototype.hasOwnProperty.call(m, weekId) ? m[weekId].slice() : [];
+}
+export function setManualGameOrder(weekId, ids) {
+  if (typeof weekId !== 'string' || weekId === '') return false;
+  return _setPlayerPref('gameOrder', withManualOrder(_playerPref('gameOrder'), weekId, ids));
+}
+export function clearManualGameOrder(weekId) {
+  return setManualGameOrder(weekId, []);
+}
+
+// ── D1 Lane B / DI-611 (2026-10-08, PF-457, Drew D-63/D-64) — "Show picks": BY PERSON or BY TEAM, for the Dashboard and for Game Day ───────────────
+//
+// Two per-member display preferences on the PLAYER RECORD (`player.preferences.picksViewDashboard` and `.picksViewGameDay`, each 'person' | 'team'), through the same
+// `_playerPref` / `_setPlayerPref` pair as `gameOrder`, `sectionOrder` and `logoView` (Architecture bullet 4: they follow the member across devices) — NEVER `localStorage`,
+// NEVER the league-shared `settings` blob (the UN-124 trap). No migration. DEFAULT WHEN MISSING (CONVENTIONS #10) is per place: the Dashboard reads 'person' (byte-identical to
+// v0.29.0 for every record in the database) and Game Day reads 'team' (the layout Drew approved). A value that is not exactly 'person' or 'team' (junk, a wrong type, missing)
+// reads as the place's default; only those two strings are ever written; an unknown `place` reads the Dashboard default and writes NOTHING. Signed out: the defaults, and the
+// write is refused (false) — a shared device never carries one visitor's choice to the next (UN-127). The setting is a display preference, not sport state: not keyed by sport.
+// Consumers are the Dashboard's Compact rows, Game Day's open card and the Game view's picks panel; NOT Picks, Standings, the chat chip, SCRIBE, CSV, notifications or feed cards.
+export const PICKS_VIEW_PLACES = Object.freeze(['dashboard', 'gameday']);
+export const PICKS_VIEW_VALUES = Object.freeze(['person', 'team']);
+const PICKS_VIEW_KEY = Object.freeze({ dashboard: 'picksViewDashboard', gameday: 'picksViewGameDay' });
+const PICKS_VIEW_DEFAULT = Object.freeze({ dashboard: 'person', gameday: 'team' });
+export function getPicksView(place) {
+  const p = PICKS_VIEW_PLACES.includes(place) ? place : 'dashboard';
+  const v = _playerPref(PICKS_VIEW_KEY[p]);
+  return PICKS_VIEW_VALUES.includes(v) ? v : PICKS_VIEW_DEFAULT[p];
+}
+export function setPicksView(place, value) {
+  if (!PICKS_VIEW_PLACES.includes(place) || !PICKS_VIEW_VALUES.includes(value)) return false;
+  return _setPlayerPref(PICKS_VIEW_KEY[place], value);
+}
+
 // ANY-player reads — the policy layer (js/notifications.js) resolves whether a
 // RECIPIENT (not necessarily the signed-in session) wants a given category,
 // exactly the same shape getAccentFor()/getChatNickFor() already use above.
@@ -1347,6 +1418,38 @@ export function saveCompetition(competition){
   if(idx>=0)all[idx]=upd;else all.push(upd);
   save(KEYS.COMPETITIONS,all);
 }
+
+// ─── COMPETITION MEMBERS (D1 / DI-531, security A3 + C1) ───────────────────────
+// Who plays each opt-in sport. The read side (who counts for a week, the joined-before-lock rule C1) is js/competition.js's `playersForCompetition()`; this seam only stores.
+// Insert and delete ONLY (0033 grants no UPDATE): a member inserts their OWN row, the commissioner any row. `joinedAt` is stamped locally for the mirror and NEVER sent —
+// the projection omits it, so the column default (and from 0044 the BEFORE INSERT trigger, C1b) stamps `now()` on the server and a client cannot back-date an entry.
+export function getCompetitionMembers(){ return load(KEYS.COMPETITION_MEMBERS)||[]; }
+/** Add ONE entry. Idempotent: an existing (competition, member) pair is left exactly as it is and `false` is returned (nothing is saved, nothing is sent). */
+export function addCompetitionMember({ competitionId, memberId, enrolledBy='self' } = {}){
+  if(!competitionId||!memberId)return false;
+  const all=getCompetitionMembers();
+  if(all.some(r=>r&&r.competitionId===competitionId&&r.memberId===memberId))return false;
+  save(KEYS.COMPETITION_MEMBERS,[...all,{id:`${competitionId}:${memberId}`,competitionId,memberId,enrolledBy:enrolledBy==='commissioner'?'commissioner':'self',joinedAt:new Date().toISOString()}]);
+  return true;
+}
+/** Remove ONE entry (the commissioner's removal, DI-534; a member's own pre-lock self-delete is not built this release). Returns whether a row was removed. */
+export function removeCompetitionMember({ competitionId, memberId } = {}){
+  const all=getCompetitionMembers();
+  const next=all.filter(r=>!(r&&r.competitionId===competitionId&&r.memberId===memberId));
+  if(next.length===all.length)return false;
+  save(KEYS.COMPETITION_MEMBERS,next);
+  return true;
+}
+
+// ─── SPORT CONTEXT POINTERS (D1 / DI-520, security A5) — DEVICE-LOCAL ─────────────────────────────────────────
+// Raw `{ [userId]: { [leagueId]: value } }` maps. js/competition.js validates every entry it believes; these accessors only keep the SHAPE sane (a plain object) so a stray
+// array / string / null in the key can never reach it as something it would index. The two writers are try/catch'd by their one caller: `save()` throws while the adapter is not
+// serving (the write interlock), and a pointer that did not persist is a harmless miss, never a reason to break a render.
+function _plainMap(v){ return v&&typeof v==='object'&&!Array.isArray(v)?v:{}; }
+export function getActiveSportMap(){ return _plainMap(load(KEYS.ACTIVE_SPORT)); }
+export function setActiveSportMap(map){ save(KEYS.ACTIVE_SPORT,_plainMap(map)); }
+export function getDashboardScopeMap(){ return _plainMap(load(KEYS.DASHBOARD_SCOPE)); }
+export function setDashboardScopeMap(map){ save(KEYS.DASHBOARD_SCOPE,_plainMap(map)); }
 
 export function getCurrentWeek(){
   const activeId=getActiveWeekId();
@@ -2255,6 +2358,24 @@ export function getWeekProgress(){
     return sb.get(WEEK_PROGRESS_KEY);
   }
   catch(e){ console.error('[Storage:supabase] week progress', e); return null; }
+}
+
+/**
+ * UN-412 / DI-502e — re-ask `week_submission_status()` between hydrates, so "Who's in" is not frozen at the last
+ * hydrate. The same reasoning as getWeekProgress() above: the adapter is reached from the seam and nowhere else (authtest
+ * [44h]'s allow-list names this member, deliberately), and the answer lands in the SAME derived mirror key, which
+ * getWeekProgress() then serves — so a caller refreshes here and READS through getWeekProgress(), never through the adapter.
+ *
+ * Never throws and never rejects: a refresh is an optimisation of a display, not a write, so a failure is a result
+ * ({ ok:false, reason }) the caller renders as "Last checked …" or as unknown — it is not the league's red banner.
+ *
+ * @param {{weekIds?: string[]|null}} [opts]
+ * @returns {Promise<{ok:boolean, reason?:string, refreshed:string[], failed:string[]}>}
+ */
+export async function refreshWeekProgress(opts = {}){
+  if (_backendMode !== 'supabase') return { ok: false, reason: 'not-supabase', refreshed: [], failed: [] };
+  try { return await sb.refreshWeekProgress(opts); }
+  catch(e){ console.warn('[Storage:supabase] week progress refresh', e && e.message); return { ok: false, reason: 'error', refreshed: [], failed: [] }; }
 }
 
 // ─── RESULTS ──────────────────────────────────────────────────────────────────

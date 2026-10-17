@@ -1688,6 +1688,31 @@ await new Promise((r) => eServer.listen(0, '127.0.0.1', r));
 const E_ORIGIN = `http://127.0.0.1:${eServer.address().port}`;
 const eTmp = mkdtempSync(join(tmpdir(), 'cfbp-sdt-'));
 const eSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// W-22 (2026-10-07) — a load-proof DevTools SETUP call. At load average ~145 one `Emulation.setTouchEmulationEnabled` got no answer within the
+// 30 s deadline below and the whole engine half was lost before its first assertion. The two viewport calls are IDEMPOTENT (they set state;
+// sent twice they change nothing), so ONLY they are sent once more, and ONLY on that no-answer error: a refused call (a CDP error) is never
+// retried, and an engine that is really hung misses the second deadline too and still FAILS the suite. Never used for input, evaluation or
+// anything that would act twice if sent twice.
+const NO_ANSWER_RE = /→ no answer within 30 s$/;
+async function setupOnceMore(call) {
+  try { return await call(); } catch (e) {
+    if (!NO_ANSWER_RE.test(String(e && e.message))) throw e;
+    console.log(`  (W-22: a DevTools setup call got no answer within 30 s — machine load; sent once more: ${e.message})`);
+    return call();
+  }
+}
+{
+  const noAnswer = (m) => Promise.reject(new Error(`${m} → no answer within 30 s`));
+  let n = 0;
+  const once = await setupOnceMore(() => (++n === 1 ? noAnswer('Emulation.setTouchEmulationEnabled') : Promise.resolve('answered'))).catch((e) => e);
+  assert(once === 'answered' && n === 2, `[E0c] W-22: a viewport setup call that got no answer within 30 s (machine load) is sent ONCE more and its answer used (sent ${n}x, got ${once && once.message ? once.message : once})`);
+  let m = 0;
+  const hung = await setupOnceMore(() => { m++; return noAnswer('Emulation.setTouchEmulationEnabled'); }).then(() => null, (e) => e);
+  assert(m === 2 && hung && NO_ANSWER_RE.test(hung.message), `[E0d] …ONCE only: an engine that misses the second deadline too still FAILS the suite — a real hang is never masked (sent ${m}x)`);
+  let r = 0;
+  const refused = await setupOnceMore(() => { r++; return Promise.reject(new Error('Emulation.setTouchEmulationEnabled → {"code":-32000,"message":"refused"}')); }).then(() => null, (e) => e);
+  assert(r === 1 && !!refused, `[E0e] …and a REFUSED call (a CDP error, not a missing answer) is never sent again (sent ${r}x)`);
+}
 
 function eLaunch() {
   const proc = spawn(E_BIN, ['--headless=new', '--remote-debugging-port=0', '--user-data-dir=' + join(eTmp, 'profile'), '--no-first-run', '--no-default-browser-check',
@@ -1752,8 +1777,8 @@ try {
   };
   const navigate = async () => { const loaded = pg.once('Page.loadEventFired'); await pg.send('Page.navigate', { url: E_ORIGIN + '/index.html' }); await loaded; };
   const viewport = async (w, h) => {
-    await pg.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: true });
-    await pg.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    await setupOnceMore(() => pg.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: true }));
+    await setupOnceMore(() => pg.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 }));
     for (let t = 0; t < 3000; t += 50) { if ((await evaluate('innerWidth')) === w) break; await eSleep(50); }
     await eSleep(150);
   };
@@ -2028,17 +2053,91 @@ try {
   // viewport (the density toggle collapsing, a grip wrapping a header onto a second line) and hide it; WebKit, the iOS engine, has no scroll anchoring, so
   // the fixture turns it off to measure what the phone would show. (Mutation M16: toggle display:none turns this red only with the anchoring off.)
   await evaluate(`document.documentElement.style.overflowAnchor = 'none'`);
-  for (const [tab, page, id] of TEN_ROWS) {
+  // AT2's MOVED case (W-22, 2026-10-08). The page itself records when the touch began and when the move ARRIVED: the case means what
+  // it says only if the move reached the page before the ${SECTION_LONG_PRESS_MS} ms press timer.
+  const GAP_ARM = `(() => { window.__gapOff?.(); const g = window.__gap = { start: null, move: null, end: null };
+    const s = () => { if (g.start === null) g.start = performance.now(); }; const m = () => { if (g.start !== null && g.move === null) g.move = performance.now(); };
+    const e = () => { if (g.start !== null && g.end === null) g.end = performance.now(); };
+    document.addEventListener('touchstart', s, { capture: true, passive: true }); document.addEventListener('touchmove', m, { capture: true, passive: true });
+    document.addEventListener('touchend', e, { capture: true, passive: true });
+    window.__gapOff = () => { document.removeEventListener('touchstart', s, { capture: true }); document.removeEventListener('touchmove', m, { capture: true });
+      document.removeEventListener('touchend', e, { capture: true }); window.__gapOff = null; };
+    return true; })()`;
+  const GAP_READ = `(() => { const g = window.__gap; window.__gapOff?.(); return g && g.start !== null && g.move !== null ? Math.round(g.move - g.start) : null; })()`;
+  const gapText = (g) => (g === null ? 'the move never reached the page' : `the move reached the page ${g} ms after the touch began`);
+  // AT2's SHORT case (W-22, 2026-10-08): a still hold, read at ~300 ms and lifted at once. It means what it says only if the READ and the
+  // LIFT both reached the page before the ${SECTION_LONG_PRESS_MS} ms press timer; the page records both, and the read carries its own time.
+  /** One attempt. `stallMs` holds the harness up between the rest and the read (the guard). */
+  const shortCase = async (page, id, stallMs = 0) => {
+    await scrollHeaderTo(page, id, 220);
+    const tp = await titlePoint(page, id);
+    await evaluate(GAP_ARM);
+    await touch.down(tp.x, tp.y);
+    await eSleep(300 + stallMs);
+    const st = await evaluate(`(async () => ({ ...(await ${LAYOUT(page)}), at: performance.now() - (window.__gap?.start ?? performance.now()) }))()`);
+    await touch.up();
+    await eSleep(380);
+    const end = await evaluate(`(() => { const g = window.__gap; window.__gapOff?.(); return g && g.start !== null && g.end !== null ? Math.round(g.end - g.start) : null; })()`);
+    return { st, read: Math.round(st.at), end };
+  };
+  const shortTimes = (r) => `read ${r.read} ms, ${r.end === null ? 'the lift never reached the page' : `lift ${r.end} ms`} after the touch began`;
+  /** Run the short case — the moved case's rule (below): a read or lift that came after the press timer is a HARNESS condition, said so,
+   *  the world put back and the case run ONCE more; the verdict is only read from a run whose premise held. */
+  const runShortCase = async (tab, page, id, stallFirst = 0) => {
+    const late = (r) => !(r.read < SECTION_LONG_PRESS_MS) || r.end === null || !(r.end < SECTION_LONG_PRESS_MS);
+    const first = await shortCase(page, id, stallFirst);
+    if (!late(first)) return { ...first, rerun: false, firstRead: first.read, firstEnd: first.end };
+    console.log(`  (W-22: HARNESS — AT2 ${id}'s short hold: ${shortTimes(first)}, not both before the ${SECTION_LONG_PRESS_MS} ms press timer; this run's premise did not hold — putting the world back and running the case once more)`);
+    await eSleep(400);
     await resetLayoutWorld();
+    await waitFor(`!document.getElementById('layout-edit-bar') && !document.querySelector('[data-lifted]')`, 3000);
     await goto(tab, page);
-    const short = await holdTitle(page, id, 300);        // read at ~300 ms: 200 ms of slack under the 500 ms gate (a loaded Mac's CDP round trip is not instant)
-    assert(quiet(short.st) && short.st.pressing === 1, `AT2 ${id}: a still hold read before the 500 ms mark lifts NOTHING — no claim, no edit mode, no bar — and shows only the pending tint (.section-pressing: ${short.st.pressing})`);
+    const again = await shortCase(page, id);
+    return { ...again, rerun: true, firstRead: first.read, firstEnd: first.end };
+  };
+  /** One attempt: rest 150 ms, move far past 8 px, read at ~590 ms. `stallMs` holds the harness up before the move (the guard). */
+  const movedCase = async (page, id, stallMs = 0) => {
+    await evaluate(GAP_ARM);
     const moved = await holdTitle(page, id, 150, { release: false });
+    if (stallMs) await eSleep(stallMs);
     await touch.move(moved.x + 8, moved.y + 24);          // far past 8 px (and past Chrome's own ~15 px touchmove slop): a scroll, not a press
     await eSleep(420);                                    // read at ~590 ms after the touch began: past the 500 ms mark, where a live press would have lifted
     const afterMove = await layout(page);
     await touch.up(); await eSleep(80);
-    assert(quiet(afterMove) && afterMove.pressing === 0, `AT2 ${id}: a finger that moves past 8 px before 500 ms is a scroll — it never becomes a press, even when it later rests, and the tint is withdrawn`);
+    return { afterMove, gap: await evaluate(GAP_READ) };
+  };
+  /** Run the moved case. If the move reached the page AFTER the press timer, that is a HARNESS condition (a CDP round trip stretched by
+   *  machine load: the page saw a still finger past ${SECTION_LONG_PRESS_MS} ms, and the press it then made was the app behaving correctly) —
+   *  said so, the world put back, and the case run ONCE more. This is NOT a retried assertion: the AT2 verdict is only ever read from a run
+   *  whose premise held, and a second late move fails as a HARNESS failure with its own message, never as an app result. */
+  const runMovedCase = async (tab, page, id, stallFirst = 0) => {
+    const late = (r) => r.gap === null || r.gap > SECTION_LONG_PRESS_MS;
+    const first = await movedCase(page, id, stallFirst);
+    if (!late(first)) return { ...first, rerun: false, firstGap: first.gap };
+    console.log(`  (W-22: HARNESS — AT2 ${id}: ${gapText(first.gap)}${first.gap === null ? '' : `, past the ${SECTION_LONG_PRESS_MS} ms press timer`}; this run's premise did not hold — putting the world back and running the case once more)`);
+    await eSleep(400);                                    // any settle the press started runs out
+    await resetLayoutWorld();
+    await waitFor(`!document.getElementById('layout-edit-bar') && !document.querySelector('[data-lifted]')`, 3000);
+    await goto(tab, page);
+    const again = await movedCase(page, id);
+    return { ...again, rerun: true, firstGap: first.gap };
+  };
+  for (const [tab, page, id] of TEN_ROWS) {
+    await resetLayoutWorld();
+    await goto(tab, page);
+    const short = await runShortCase(tab, page, id);     // read at ~300 ms and lifted at once: 200 ms of slack under the 500 ms gate
+    const shortPremise = short.read < SECTION_LONG_PRESS_MS && short.end !== null && short.end < SECTION_LONG_PRESS_MS;
+    assert(shortPremise && quiet(short.st) && short.st.pressing === 1, shortPremise
+      ? `AT2 ${id}: a still hold read before the 500 ms mark lifts NOTHING — no claim, no edit mode, no bar — and shows only the pending tint (.section-pressing: ${short.st.pressing}; ${shortTimes(short)}${short.rerun ? `; on a first run ${shortTimes({ read: short.firstRead, end: short.firstEnd })} — a harness condition, run once more` : ''})`
+      : `AT2 ${id}: HARNESS FAILURE, not an app result — twice the short hold's read or lift did not reach the page before the ${SECTION_LONG_PRESS_MS} ms press timer (first run: ${shortTimes({ read: short.firstRead, end: short.firstEnd })}; second: ${shortTimes(short)}): this machine could not run the case`);
+    await resetLayoutWorld();                             // W-22 — each AT2 case starts from a clean world
+    await goto(tab, page);
+    const mv = await runMovedCase(tab, page, id);
+    const afterMove = mv.afterMove;
+    const premise = mv.gap !== null && mv.gap <= SECTION_LONG_PRESS_MS;
+    assert(premise && quiet(afterMove) && afterMove.pressing === 0, premise
+      ? `AT2 ${id}: a finger that moves past 8 px before 500 ms is a scroll — it never becomes a press, even when it later rests, and the tint is withdrawn (${gapText(mv.gap)}${mv.rerun ? `; on a first run ${gapText(mv.firstGap)} — a harness condition, run once more` : ''})`
+      : `AT2 ${id}: HARNESS FAILURE, not an app result — twice the move did not reach the page before the ${SECTION_LONG_PRESS_MS} ms press timer (first run: ${gapText(mv.firstGap)}; second: ${gapText(mv.gap)}): this machine could not run the case`);
     const lift = await holdTitle(page, id, 640, { release: false });
     const after = await rectOf(page, id);
     assert(lift.st.lifted.join() === id && lift.st.claim === 'section-drag' && lift.st.editing && lift.st.bar && lift.st.grips > 0 && lift.st.pressing === 0,
@@ -2049,6 +2148,21 @@ try {
     const rel = await layout(page);
     assert(rel.claim === null && rel.lifted.length === 0 && rel.editing && rel.bar && rel.order.join() === lift.st.order.join(),
       `AT2 ${id}: released in place: the claim is given back, nothing is lifted, the mode stays on (Done ends it), the order is unchanged`);
+    if (id === 'dash-alma') {
+      // W-22 — the moved case under LOAD, made permanent: the harness held up 600 ms between the rest and the move, so the move reaches
+      // the page after the press timer (a gate-class run did exactly that on 2026-10-08: the press fired, and the next case read its edit mode).
+      await resetLayoutWorld();
+      await goto(tab, page);
+      const hv = await runMovedCase(tab, page, id, 600);
+      assert(hv.rerun && hv.firstGap > SECTION_LONG_PRESS_MS && hv.gap !== null && hv.gap <= SECTION_LONG_PRESS_MS && quiet(hv.afterMove) && hv.afterMove.pressing === 0,
+        `AT2b ${id}: with the harness held 600 ms before the move (machine load), the late move is DETECTED as a harness condition, never read as an app result (first run: ${gapText(hv.firstGap)}, past ${SECTION_LONG_PRESS_MS} ms; re-run ${hv.rerun}), and the re-run reads the real verdict (${gapText(hv.gap)}; quiet ${quiet(hv.afterMove)})`);
+      // …and the SHORT case under load: the harness held up 400 ms before the read, so read and lift come after the press timer.
+      await resetLayoutWorld();
+      await goto(tab, page);
+      const hs = await runShortCase(tab, page, id, 400);
+      assert(hs.rerun && hs.firstRead > SECTION_LONG_PRESS_MS && hs.read < SECTION_LONG_PRESS_MS && hs.end !== null && hs.end < SECTION_LONG_PRESS_MS && quiet(hs.st) && hs.st.pressing === 1,
+        `AT2c ${id}: with the harness held 400 ms before the short hold's read (machine load), the late read is DETECTED as a harness condition, never read as an app result (first run: read ${hs.firstRead} ms, lift ${hs.firstEnd} ms after the touch began; re-run ${hs.rerun}), and the re-run reads the real verdict (read ${hs.read} ms, lift ${hs.end} ms; quiet ${quiet(hs.st)}, tint ${hs.st.pressing})`);
+    }
   }
   await resetLayoutWorld();
   await evaluate(`document.documentElement.style.overflowAnchor = ''`);
@@ -2406,8 +2520,16 @@ try {
   // ═════════════════════════════════════════════════════════════════════
   console.log('\n[E8] AT8 / AT10 / AT12 / AT20 — drag across a 1500 pt neighbour with edge auto-scroll, drop: ONE write, ONE repaint, nothing else touched…');
   // ═════════════════════════════════════════════════════════════════════
-  const SAMPLE = (ms) => `new Promise((res) => { const s = []; const t0 = performance.now(); (function f() { s.push([performance.now(), scrollY]); if (performance.now() - t0 < ${ms}) requestAnimationFrame(f); else res(s); })(); })`;
-  const speedOf = (s) => ((s[s.length - 1][1] - s[0][1]) / ((s[s.length - 1][0] - s[0][0]) / 1000));
+  // W-22 (integration review N2) — every AT8 speed is read on the FRAME CLOCK the engine runs on, not the wall clock (the same measure as [E16]'s
+  // SAMPLE2): the auto-scroll moves v x dt per rAF frame, dt = the rAF timestamp step capped at 50 ms ([1e]'s AUTOSCROLL_DT_CAP_MS, written here as
+  // the MODEL's literal — read from the module, a mutant that shrank the cap would shrink this yardstick with it). Samples are rAF timestamps, the
+  // window is `ms` of capped frame time (a 10 s wall-clock bound), the speed is distance / capped frame time. Unloaded every step is ~16.7 ms, so this
+  // is the number the wall clock gave; a stall in the window no longer reads as the scroll slowing (or, for the < 5 pt/s stops, as anything at all).
+  const SAMPLE = (ms, stallMs = 0) => `new Promise((res) => { const s = []; const w0 = performance.now(); let T = 0;
+    ${stallMs ? `setTimeout(() => { const t = performance.now(); while (performance.now() - t < ${stallMs}) {} window.__stalled = Math.round(performance.now() - t); }, 100);` : ''}
+    requestAnimationFrame(function f(ts) { if (s.length) T += Math.min(ts - s[s.length - 1][0], 50); s.push([ts, scrollY, T]);
+      if (T < ${ms} && performance.now() - w0 < 10000) requestAnimationFrame(f); else res(s); }); })`;
+  const speedOf = (s) => (s[s.length - 1][1] - s[0][1]) / (s[s.length - 1][2] / 1000);
   const navTopOf = () => evaluate(`Math.round(document.querySelector('.bottom-nav').getBoundingClientRect().top)`);
   const headerBottomOf = () => evaluate(`Math.max(0, Math.round(document.querySelector('.app-header').getBoundingClientRect().bottom))`);
   const INSTRUMENT = `(() => {
@@ -2446,6 +2568,12 @@ try {
     const mid = await evaluate(SAMPLE(700));
     const vMid = speedOf(mid);
     assert(vMid > 130 && vMid < 240, `AT8: half-way into the zone the ramp gives about 180 pt/s (quadratic, no velocity step on entry) — measured ${vMid.toFixed(0)} pt/s`);
+    // W-22 — the same reading under LOAD (the injected-hitch guard): a 1.5 s main-thread stall inside the sample window. The engine is frame-driven
+    // with a 50 ms dt cap ([1e]); a stall is machine load, not the ramp changing.
+    await evaluate('window.__stalled = 0');
+    const midStalled = await evaluate(SAMPLE(700, 1500));
+    const midStallMs = await evaluate('window.__stalled');
+    assert(midStallMs >= 1500 && speedOf(midStalled) > 130 && speedOf(midStalled) < 240, `AT8, under load: with a ${midStallMs} ms main-thread stall inside the sample window, half-way into the zone still reads about 180 pt/s — measured ${speedOf(midStalled).toFixed(0)} pt/s`);
     // Leaving the zone stops it.
     await touch.move(tp.x, 420);
     await eSleep(150);
@@ -2680,6 +2808,22 @@ try {
   const ACTIVE = `(() => { const a = document.activeElement; return a ? { cls: a.className, id: a.dataset?.moveId || null, dir: a.dataset?.moveDir || null, page: a.dataset?.layoutPage || null, name: a.getAttribute('aria-label') } : null; })()`;
   const LIVE = `document.getElementById('layout-live')?.textContent || ''`;
   const TOASTS = `window.__toastLog.length`;
+  /** Press Done (in a page task of its own) and wait for its keep-in-view scroll. `stallMs` holds the main thread up inside that task, right
+   *  after the click, so the scroll it requested starts late (the injected-hitch guard).
+   *  W-22 (integration review N2) — the wait is a CONDITION, not a fixed 900 ms sleep: the browser's own `scrollend` once the page has moved.
+   *  The smooth scroll takes ~680 ms unloaded, so 900 ms left ~220 ms of margin, and a loaded --affected run on 2026-10-07 read it mid-scroll
+   *  (E16: viewport Y 339 at scrollY 1511 of 1708). The bound (4 s) only ends a wait that never sees the page move — a Done that does not scroll,
+   *  whose position check then fails exactly as before. */
+  const doneThenSettle = async (stallMs = 0) => evaluate(`new Promise((res) => {
+    const t0 = performance.now(); let y0 = null, over = false; window.__stalled = 0;
+    const end = (why) => { if (over) return; over = true; removeEventListener('scrollend', onEnd); res({ why, ms: Math.round(performance.now() - t0), stalled: window.__stalled }); };
+    const onEnd = () => { if (y0 !== null && scrollY !== y0) end('scrollend'); };
+    addEventListener('scrollend', onEnd);
+    setTimeout(() => end('timeout'), 4000);
+    setTimeout(() => { y0 = scrollY; document.querySelector('#layout-edit-bar .layout-bar-done').click();
+      ${stallMs ? `const t = performance.now(); while (performance.now() - t < ${stallMs}) {} window.__stalled = Math.round(performance.now() - t);` : ''} }, 0);
+  })`);
+  const IN_VIEW_E12 = `(() => { const s = [...document.querySelectorAll('#page-dashboard .layout-section')].find((x) => x.dataset.sectionId === 'dash-summary'); const t = s.querySelector('[data-section-header]').getBoundingClientRect().top; const nav = document.querySelector('.bottom-nav').getBoundingClientRect().top; const hb = Math.max(0, document.querySelector('.app-header').getBoundingClientRect().bottom); return { t: Math.round(t), nav: Math.round(nav), hb: Math.round(hb) }; })()`;
   {
     await resetLayoutWorld();
     await goto('dashboard', DASH);
@@ -2813,16 +2957,34 @@ try {
     // Scroll far from it so the "keep it in view" rule has work to do.
     await evaluate(`window.scrollTo({ top: 0, left: 0, behavior: 'instant' })`);
     await eSleep(250);
-    await evaluate(`document.querySelector('#layout-edit-bar .layout-bar-done').click()`);
-    await eSleep(900);
+    const settledE12 = await doneThenSettle();
     const toastText = await evaluate(`window.__toastLog[window.__toastLog.length - 1] || ''`);
-    const inView = await evaluate(`(() => { const s = [...document.querySelectorAll('#page-dashboard .layout-section')].find((x) => x.dataset.sectionId === 'dash-summary'); const t = s.querySelector('[data-section-header]').getBoundingClientRect().top; const nav = document.querySelector('.bottom-nav').getBoundingClientRect().top; const hb = Math.max(0, document.querySelector('.app-header').getBoundingClientRect().bottom); return { t: Math.round(t), nav: Math.round(nav), hb: Math.round(hb) }; })()`);
+    const inView = await evaluate(IN_VIEW_E12);
     const st = await layout(DASH);
     assert(!st.editing && !st.bar && /^Layout saved to your account\.?$/.test(toastText) && (await evaluate(TOASTS)) === toasts0 + 1,
       `AT18 (B12/C10): Done after a move ends the mode, unmounts the bar and raises ONE toast — "${toastText}"`);
-    assert(inView.t >= inView.hb + 8 && inView.t <= inView.nav - 80, `AT18 (B12): …and the section you moved STAYS IN VIEW — its title is at viewport Y ${inView.t}, between the header (${inView.hb}) + 8 and the nav (${inView.nav}) − 80: closing the 2026-09-12 "no scroll-into-view after a move" residual`);
+    assert(inView.t >= inView.hb + 8 && inView.t <= inView.nav - 80, `AT18 (B12): …and the section you moved STAYS IN VIEW — its title is at viewport Y ${inView.t}, between the header (${inView.hb}) + 8 and the nav (${inView.nav}) − 80: closing the 2026-09-12 "no scroll-into-view after a move" residual (read after ${settledE12.why}, ${settledE12.ms} ms)`);
     const live = await evaluate(LIVE);
     assert(live === 'Layout saved.', `AT18: …announced: "${live}"`);
+    await resetLayoutWorld();
+  }
+  {
+    // W-22 — the same Done under LOAD (the injected-hitch guard): the main thread held up 700 ms right after the click, so the keep-in-view
+    // scroll starts late. Machine load is not the app failing to keep the section in view.
+    await goto('dashboard', DASH);
+    await scrollHeaderTo(DASH, 'dash-summary', 300);
+    const tp = await titlePoint(DASH, 'dash-summary');
+    await touch.down(tp.x, tp.y);
+    await eSleep(640);
+    for (let i = 1; i <= 8; i++) await touch.move(tp.x, tp.y - i * 45);
+    await touch.up();
+    await eSleep(800);
+    await evaluate(`window.scrollTo({ top: 0, left: 0, behavior: 'instant' })`);
+    await eSleep(250);
+    const settled = await doneThenSettle(700);
+    const inView = await evaluate(IN_VIEW_E12);
+    assert(settled.stalled >= 700 && inView.t >= inView.hb + 8 && inView.t <= inView.nav - 80,
+      `AT18 (B12), under load: with a ${settled.stalled} ms main-thread stall right after Done, the moved section still lands in view — title at viewport Y ${inView.t}, between ${inView.hb} + 8 and ${inView.nav} − 80 (read after ${settled.why}, ${settled.ms} ms)`);
     await resetLayoutWorld();
   }
   {
@@ -3039,16 +3201,32 @@ try {
       assert(lifted.lifted.join() === 'dash-alma' && bar && bar.headerBottom < 0, `[E16-2] fixture — Alma Mater is lifted with the header scrolled away (header bottom ${bar && bar.headerBottom})`);
       assert(bar.top === 59 && bar.bottom === 111, `Safe area: with the header scrolled away the bar sits UNDER THE INSET — top ${bar.top} (not 0: it would be behind the clock and the island), bottom ${bar.bottom} = 59 + 52 (style.top: ${bar.cssTop})`);
       // The top auto-scroll zone is measured from the BAR, so it starts at 111, not 52.
-      const SAMPLE2 = (ms) => `new Promise((res) => { const s = []; const t0 = performance.now(); (function f() { s.push([performance.now(), scrollY]); if (performance.now() - t0 < ${ms}) requestAnimationFrame(f); else res(s); })(); })`;
-      const speed2 = (s) => ((s[s.length - 1][1] - s[0][1]) / ((s[s.length - 1][0] - s[0][0]) / 1000));
+      // W-22 (integration review N2) — the speed on the FRAME CLOCK the engine runs on, not the wall clock. The auto-scroll is a rAF loop that moves
+      // v x dt per frame, dt = the rAF timestamp step capped at 50 ms ([1e]'s AUTOSCROLL_DT_CAP_MS, written here as the MODEL's literal: read from the
+      // module, a mutant that shrank the cap would shrink this yardstick with it). Dividing by performance.now() made any stall inside the window —
+      // machine load, not the app — read as "barely scrolling" (-2 pt/s on a loaded --affected run). Samples are rAF timestamps, the window is
+      // `ms` of capped frame time (a 10 s wall-clock bound), the speed is distance / capped frame time. With no stall every step is ~16.7 ms, so
+      // this is the same number the wall clock gave; a frame the engine does not tick, or ticks short, still reads short here.
+      const SAMPLE2 = (ms, stallMs = 0) => `new Promise((res) => { const s = []; const w0 = performance.now(); let T = 0;
+        ${stallMs ? `setTimeout(() => { const t = performance.now(); while (performance.now() - t < ${stallMs}) {} window.__stalled = Math.round(performance.now() - t); }, 100);` : ''}
+        requestAnimationFrame(function f(ts) { if (s.length) T += Math.min(ts - s[s.length - 1][0], 50); s.push([ts, scrollY, T, Math.round(performance.now() - w0)]);
+          if (T < ${ms} && performance.now() - w0 < 10000) requestAnimationFrame(f); else res(s); }); })`;
+      const speed2 = (s) => (s[s.length - 1][1] - s[0][1]) / (s[s.length - 1][2] / 1000);
+      const over2 = (s) => `${s.length} frames, ${Math.round(s[s.length - 1][2])} ms of frame time in ${s[s.length - 1][3]} ms wall`;
       await touch.move(tp.x, 111 + 72 + 8);                       // just BELOW the zone (111-183)
       await eSleep(150);
       const below = await evaluate(SAMPLE2(350));
-      assert(Math.abs(speed2(below)) < 5, `Safe area: a finger just below the real zone (y ${111 + 72 + 8}; the zone is the 72 pt under the bar, 111-183) does not scroll (${speed2(below).toFixed(1)} pt/s)`);
+      assert(Math.abs(speed2(below)) < 5, `Safe area: a finger just below the real zone (y ${111 + 72 + 8}; the zone is the 72 pt under the bar, 111-183) does not scroll (${speed2(below).toFixed(1)} pt/s; ${over2(below)})`);
       await touch.move(tp.x, 150);                                // outside the zone a bar at the top would have (52-124), inside the real one
       await eSleep(150);
       const inside = await evaluate(SAMPLE2(400));
-      assert(speed2(inside) < -100, `Safe area: a finger at y 150 — OUTSIDE the 52-124 zone a bar at the viewport top would have, INSIDE the real 111-183 one — scrolls the page UP (${speed2(inside).toFixed(0)} pt/s)`);
+      assert(speed2(inside) < -100, `Safe area: a finger at y 150 — OUTSIDE the 52-124 zone a bar at the viewport top would have, INSIDE the real 111-183 one — scrolls the page UP (${speed2(inside).toFixed(0)} pt/s; ${over2(inside)})`);
+      // W-22 (integration review N2) — the same reading under LOAD, made permanent: a 1.5 s main-thread stall inside the sample window (a loaded
+      // --affected run once measured -2 pt/s here). The engine is frame-driven with a 50 ms dt cap ([1e]), so a stall must not read as "not scrolling".
+      await evaluate('window.__stalled = 0');
+      const stalled = await evaluate(SAMPLE2(400, 1500));
+      const stallMs = await evaluate('window.__stalled');
+      assert(stallMs >= 1500 && speed2(stalled) < -100, `Safe area, under load: with a ${stallMs} ms main-thread stall inside the sample window, the finger at y 150 still reads as scrolling the page UP (${speed2(stalled).toFixed(0)} pt/s; ${over2(stalled)})`);
       await touch.up();
       await eSleep(700);
       // At the top of the page the bar sits flush under the (taller, inset-padded) header.
@@ -3070,12 +3248,29 @@ try {
       await eSleep(800);
       await evaluate(`window.scrollTo({ top: 0, left: 0, behavior: 'instant' })`);          // the moved section's title is now far below the viewport
       await eSleep(300);
-      await evaluate(`document.querySelector('#layout-edit-bar .layout-bar-done').click()`);
-      await eSleep(900);
-      const landed = await evaluate(`(() => { const s = [...document.querySelectorAll('#page-dashboard .layout-section')].find((x) => x.dataset.sectionId === 'dash-summary'); return { t: Math.round(s.querySelector('[data-section-header]').getBoundingClientRect().top), sy: Math.round(scrollY) }; })()`);
+      const settledE16 = await doneThenSettle();
+      const LANDED = `(() => { const s = [...document.querySelectorAll('#page-dashboard .layout-section')].find((x) => x.dataset.sectionId === 'dash-summary'); return { t: Math.round(s.querySelector('[data-section-header]').getBoundingClientRect().top), sy: Math.round(scrollY) }; })()`;
+      const landed = await evaluate(LANDED);
       // (The plan measures the header where it is when Done is pressed — at scrollY 0 its bottom is 126 — so the title lands 16 pt under THAT line, 142; once the header has scrolled away
       // the visible top is the inset, 59. Either way it is in view and never under the status bar, which is the property.)
-      assert(landed.sy > 500 && landed.t >= 59 + 8 && landed.t <= 126 + 16 + 4, `Safe area: Done brings the moved section's title into view BELOW the inset, never under the status bar (viewport Y ${landed.t}, inset 59, scrollY ${landed.sy})`);
+      assert(landed.sy > 500 && landed.t >= 59 + 8 && landed.t <= 126 + 16 + 4, `Safe area: Done brings the moved section's title into view BELOW the inset, never under the status bar (viewport Y ${landed.t}, inset 59, scrollY ${landed.sy}; read after ${settledE16.why}, ${settledE16.ms} ms)`);
+      // W-22 — the same Done under LOAD (the injected-hitch guard): the main thread held up 700 ms right after the click, so the scroll starts late
+      // (the 2026-10-07 --affected red read it mid-scroll: viewport Y 339, scrollY 1511).
+      await resetLayoutWorld();
+      await goto('dashboard', DASH);
+      await scrollHeaderTo(DASH, 'dash-summary', 300);
+      const ts2 = await titlePoint(DASH, 'dash-summary');
+      await touch.down(ts2.x, ts2.y);
+      await eSleep(640);
+      for (let i = 1; i <= 8; i++) await touch.move(ts2.x, ts2.y - i * 45);
+      await touch.up();
+      await eSleep(800);
+      await evaluate(`window.scrollTo({ top: 0, left: 0, behavior: 'instant' })`);
+      await eSleep(300);
+      const settled2 = await doneThenSettle(700);
+      const landed2 = await evaluate(LANDED);
+      assert(settled2.stalled >= 700 && landed2.sy > 500 && landed2.t >= 59 + 8 && landed2.t <= 126 + 16 + 4,
+        `Safe area, under load: with a ${settled2.stalled} ms main-thread stall right after Done, the moved section's title still lands BELOW the inset (viewport Y ${landed2.t}, scrollY ${landed2.sy}; read after ${settled2.why}, ${settled2.ms} ms)`);
       await resetLayoutWorld();
     }
     await pg.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, bottom: 0, left: 0, right: 0 } }).catch(() => {});

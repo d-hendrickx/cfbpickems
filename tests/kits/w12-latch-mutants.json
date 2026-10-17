@@ -1,0 +1,611 @@
+[
+ {
+  "id": "L1 rls.test unlatched",
+  "kind": "wiring",
+  "why": "rls.test.mjs loses its latch import: an accidental run would load .env.test and the service-role key and write to DEV",
+  "file": "cfb-pickems/supabase/tests/rls.test.mjs",
+  "old": "import './_live-latch.mjs';\n",
+  "new": "",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — supabase/tests/rls.test.mjs: its FIRST statement"
+  }
+ },
+ {
+  "id": "L2 import-backup latch below an import",
+  "kind": "wiring",
+  "why": "the latch import moved below another import: that import (and anything it pulls in) is evaluated before the check",
+  "file": "cfb-pickems/supabase/import/import-backup.mjs",
+  "old": "import '../tests/_live-latch.mjs';\nimport { readFile } from 'node:fs/promises';\n",
+  "new": "import { readFile } from 'node:fs/promises';\nimport '../tests/_live-latch.mjs';\n",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — supabase/import/import-backup.mjs: its FIRST statement"
+  }
+ },
+ {
+  "id": "L3 export-sheet latch made dynamic",
+  "kind": "wiring",
+  "why": "a dynamic import runs after the whole static graph has been evaluated, so every other import goes first",
+  "file": "cfb-pickems/supabase/import/export-sheet.mjs",
+  "old": "import '../tests/_live-latch.mjs';",
+  "new": "await import('../tests/_live-latch.mjs');",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — supabase/import/export-sheet.mjs: its FIRST statement"
+  }
+ },
+ {
+  "id": "L4 projectiontest statement above the latch",
+  "kind": "wiring",
+  "why": "a statement above the latch import is not first any more (here it reads an env var before the check)",
+  "file": "cfb-pickems/projectiontest.mjs",
+  "old": "import './supabase/tests/_live-latch.mjs';",
+  "new": "const early = process.env.SUPABASE_URL;\nimport './supabase/tests/_live-latch.mjs';",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — projectiontest.mjs: its FIRST statement"
+  }
+ },
+ {
+  "id": "L5 a fifth importer",
+  "kind": "wiring",
+  "why": "an offline suite starts importing the latch: it would exit 77 in every tier, and the set of latched files is no longer the four",
+  "file": "cfb-pickems/grouptest.mjs",
+  "old": "/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "new": "import './supabase/tests/_live-latch.mjs';\n/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — the files that import _live-latch.mjs are EXACTLY the four"
+  }
+ },
+ {
+  "id": "L6 SUPABASE_LIVE_RUNBOOK bare invocation",
+  "kind": "wiring",
+  "why": "one runbook command without the flag: Drew pastes it and is refused",
+  "file": "docs/SUPABASE_LIVE_RUNBOOK.md",
+  "old": "    CFBP_LIVE_OK=1 node rls.test.mjs --expect-red=blind-guesses:B2",
+  "new": "    node rls.test.mjs --expect-red=blind-guesses:B2",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — every `node …` invocation of the four in docs/SUPABASE_LIVE_RUNBOOK.md"
+  }
+ },
+ {
+  "id": "L7 docs/runbook piped bare invocation",
+  "kind": "wiring",
+  "why": "the port's extension: a bare run piped through `2>&1 | grep -E \"S57\\.|passed|…\"` prints NOTHING (the refusal is filtered out)",
+  "file": "docs/runbook/0057_DRIFT_CANARY.md",
+  "old": "CFBP_LIVE_OK=1 node --env-file=.env.test rls.test.mjs 2>&1 | grep -E \"S57",
+  "new": "node --env-file=.env.test rls.test.mjs 2>&1 | grep -E \"S57",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — every `node …` invocation of the four in docs/runbook/*.md"
+  }
+ },
+ {
+  "id": "L8 docs/runbook bare after cd &&",
+  "kind": "wiring",
+  "why": "the `cd … && node …` shape loses its flag",
+  "file": "docs/runbook/0045_CHAT_RESERVATIONS.md",
+  "old": "tests\" && CFBP_LIVE_OK=1 node --env-file=.env.test rls.test.mjs",
+  "new": "tests\" && node --env-file=.env.test rls.test.mjs",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — every `node …` invocation of the four in docs/runbook/*.md"
+  }
+ },
+ {
+  "id": "L9 runbook latch section gone",
+  "kind": "wiring",
+  "why": "the runbook no longer explains the flag, exit 77 and that agents never set it",
+  "file": "docs/SUPABASE_LIVE_RUNBOOK.md",
+  "old": "## THE LIVE LATCH (2026-10-01)",
+  "new": "## THE LATCH (2026-10-01)",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — the runbook carries the latch section"
+  }
+ },
+ {
+  "id": "L10 latch truthiness check",
+  "kind": "latch",
+  "why": "CFBP_LIVE_OK=0 (or any non-empty value) would open the latch",
+  "file": "cfb-pickems/supabase/tests/_live-latch.mjs",
+  "old": "process.env.CFBP_LIVE_OK !== '1'",
+  "new": "!process.env.CFBP_LIVE_OK",
+  "suites": [
+   "latchtest.mjs",
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "latchtest.mjs",
+   "label": "CFBP_LIVE_OK=\"0\" in a real terminal: refused"
+  }
+ },
+ {
+  "id": "L11 latch exits 2",
+  "kind": "latch",
+  "why": "exit 2 is every guarded script's own setup refusal; projectiontest [10]/[12] would pass without the script running",
+  "file": "cfb-pickems/supabase/tests/_live-latch.mjs",
+  "old": "process.exit(77);",
+  "new": "process.exit(2);",
+  "suites": [
+   "latchtest.mjs",
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "latchtest.mjs",
+   "label": "unset: exits 77"
+  }
+ },
+ {
+  "id": "L12 latch sets exitCode instead of exiting",
+  "kind": "latch",
+  "why": "the module returns, so every later import and the body run, and only then does the process exit 77",
+  "file": "cfb-pickems/supabase/tests/_live-latch.mjs",
+  "old": "process.exit(77);",
+  "new": "process.exitCode = 77;",
+  "suites": [
+   "latchtest.mjs",
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "latchtest.mjs",
+   "label": "latched entry, no flag: NO later import"
+  }
+ },
+ {
+  "id": "L13 latch echoes argv",
+  "kind": "latch",
+  "why": "a key passed as an argument would be printed in the refusal",
+  "file": "cfb-pickems/supabase/tests/_live-latch.mjs",
+  "old": "String(process.argv[1] || '').split(/[\\\\/]/).pop()",
+  "new": "process.argv.slice(1).join(' ')",
+  "suites": [
+   "latchtest.mjs",
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "latchtest.mjs",
+   "label": "argv is never echoed"
+  }
+ },
+ {
+  "id": "L14 latch exits before its message",
+  "kind": "latch",
+  "why": "a silent exit 77: the operator sees nothing and does not know what to type",
+  "file": "cfb-pickems/supabase/tests/_live-latch.mjs",
+  "old": "  process.stderr.write(\n",
+  "new": "  process.exit(77);\n  process.stderr.write(\n",
+  "suites": [
+   "latchtest.mjs",
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "latchtest.mjs",
+   "label": "unset: the refusal names the script"
+  }
+ },
+ {
+  "id": "L15 latch back door on a runner variable",
+  "kind": "latch",
+  "why": "a second env read opens the latch under the test runner (CFBP_TESTRUN=1): latchtest cannot see it because it never sets that variable; only the static shape rule does",
+  "file": "cfb-pickems/supabase/tests/_live-latch.mjs",
+  "old": "process.env.CFBP_LIVE_OK !== '1'",
+  "new": "process.env.CFBP_LIVE_OK !== '1' && !process.env.CFBP_TESTRUN",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — _live-latch.mjs is ONE synchronous check"
+  }
+ },
+ {
+  "id": "R1 runbook C9 unscoped",
+  "kind": "runbook",
+  "why": "the runbook copy of C9 loses `and not l.pilot`: Drew would paste a delete that can reach the pilot league while the reviewed draft still reads correctly",
+  "file": "docs/runbook/DEV_CLEANUP_W36.md",
+  "old": "delete from public.leagues l\nwhere l.created_by in (select id from fx) and not l.pilot",
+  "new": "delete from public.leagues l\nwhere l.created_by in (select id from fx)",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "W-36 / DEV cleanup draft — docs/runbook/DEV_CLEANUP_W36.md carries the draft"
+  }
+ },
+ {
+  "id": "R2 draft edited, runbook not",
+  "kind": "runbook",
+  "why": "the reviewed draft changes and the runbook Drew reads does not follow (drift in the other direction)",
+  "file": "cfb-pickems/supabase/drafts/w36_dev_cleanup.sql",
+  "old": "-- Never the pilot. Expect I1's fixture_leagues.",
+  "new": "-- Never the pilot. Expect I1's fixture_leagues (about 50).",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "W-36 / DEV cleanup draft — docs/runbook/DEV_CLEANUP_W36.md carries the draft"
+  }
+ },
+ {
+  "id": "R3 runbook guard dropped from C1",
+  "kind": "runbook",
+  "why": "one paste without the LIVE guard: on a LIVE tab it would close LIVE's creation door instead of refusing",
+  "file": "docs/runbook/DEV_CLEANUP_W36.md",
+  "old": "end $cfbp_live_guard$;\nupdate public.platform_kv k set value = 'false'::jsonb",
+  "new": "update public.platform_kv k set value = 'false'::jsonb",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "W-36 / DEV cleanup draft — docs/runbook/DEV_CLEANUP_W36.md carries the draft"
+  }
+ },
+ {
+  "id": "R4 runbook step without a send-back",
+  "kind": "runbook",
+  "why": "a step that does not say what to send back breaks the one-step-per-message loop",
+  "file": "docs/runbook/DEV_CLEANUP_W36.md",
+  "old": "**Send back:** the two numbers.",
+  "new": "",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "W-36 / DEV cleanup draft — the runbook: the read-only COUNT query (I1) is first"
+  }
+ },
+ {
+  "id": "R5 runbook project check softened",
+  "kind": "runbook",
+  "why": "the editor-tab check no longer names cfbp-test",
+  "file": "docs/runbook/DEV_CLEANUP_W36.md",
+  "old": "must say `cfbp-test`",
+  "new": "should be the test project",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "W-36 / DEV cleanup draft — the runbook is DEV-only"
+  }
+ },
+ {
+  "id": "F1 N1 refusal line removed",
+  "kind": "followup",
+  "why": "review N1: without its first line the refusal has none of the words the documented grep filters show, so a refused run prints nothing",
+  "file": "cfb-pickems/supabase/tests/_live-latch.mjs",
+  "old": "    'LATCH REFUSED (exit 77): nothing ran, so nothing passed, failed or skipped.\\n' +\n",
+  "new": "",
+  "suites": [
+   "latchtest.mjs",
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "latchtest.mjs",
+   "label": "N1: the message OPENS with"
+  }
+ },
+ {
+  "id": "F2 N3 export-sheet usage hint unflagged",
+  "kind": "followup",
+  "why": "review N3: a printed Usage hint without the flag sends Drew straight into the refusal",
+  "file": "cfb-pickems/supabase/import/export-sheet.mjs",
+  "old": "console.error('Usage: CFBP_LIVE_OK=1 node export-sheet.mjs",
+  "new": "console.error('Usage: node export-sheet.mjs",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — N3: every printed command hint"
+  }
+ },
+ {
+  "id": "F3 Q3 any argv[1] named",
+  "kind": "followup",
+  "why": "security Q3: under `node -e … <ARG>` argv[1] is <ARG>; naming it unconditionally prints whatever was passed",
+  "file": "cfb-pickems/supabase/tests/_live-latch.mjs",
+  "old": "/\\.(?:mjs|cjs|js)$/.test(named) ? named : 'this script'",
+  "new": "named || 'this script'",
+  "suites": [
+   "latchtest.mjs",
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "latchtest.mjs",
+   "label": "Q3: `node -e \"await import(<latch>)\" SECRET-LOOKING-VALUE`"
+  }
+ },
+ {
+  "id": "F4a F-4 latch overstatement back",
+  "kind": "followup",
+  "why": "security F-4: \"no .env file … was loaded\" is untrue when node was given --env-file",
+  "file": "cfb-pickems/supabase/tests/_live-latch.mjs",
+  "old": "Nothing ran: this latch is the first statement, so no later import, file read or client in the script was evaluated.",
+  "new": "Nothing ran. This latch is the first statement, so no later import, no .env file and no client was loaded.",
+  "suites": [
+   "latchtest.mjs",
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "latchtest.mjs",
+   "label": "F-4: the message says a named --env-file"
+  }
+ },
+ {
+  "id": "F4b F-4 runbook overstatement back",
+  "kind": "followup",
+  "why": "security F-4: \"before it loads anything\" overstates what the latch stops",
+  "file": "docs/SUPABASE_LIVE_RUNBOOK.md",
+  "old": "exits **77** before any of its own code runs:",
+  "new": "exits **77** before it loads anything:",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — F-4: the runbook says"
+  }
+ },
+ {
+  "id": "F5 F-2 planted key reader",
+  "kind": "followup",
+  "why": "security F-2: an offline suite starts reading the service-role key from the environment without the latch",
+  "file": "cfb-pickems/grouptest.mjs",
+  "old": "/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "new": "const plantedKey = process.env.SUPABASE_SERVICE_ROLE_KEY;\n/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — F-2 (pinned): every credential-source mention in code"
+  }
+ },
+ {
+  "id": "F6a GAP-1 bare backslash-continued command",
+  "kind": "followup",
+  "why": "review N2 / GAP-1: a bare command split with a backslash-newline was invisible to the detector",
+  "file": "docs/runbook/0043_SERVER_LOCK.md",
+  "old": "CFBP_LIVE_OK=1 node --env-file=.env.test rls.test.mjs 2>&1 | grep -E \"S43\\.|passed|failed|skipped\"",
+  "new": "node --env-file=.env.test \\\n  rls.test.mjs 2>&1 | grep -E \"S43\\.|passed|failed|skipped\"",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — every `node …` invocation of the four in docs/runbook/*.md"
+  }
+ },
+ {
+  "id": "F6b GAP-2 bare --env-file with a space",
+  "kind": "followup",
+  "why": "review N2 / GAP-2: `--env-file .env.test` (value after a space) hid a bare command from the detector",
+  "file": "docs/runbook/0043_SERVER_LOCK.md",
+  "old": "CFBP_LIVE_OK=1 node --env-file=.env.test rls.test.mjs 2>&1 | grep -E \"S43\\.|passed|failed|skipped\"",
+  "new": "node --env-file .env.test rls.test.mjs 2>&1 | grep -E \"S43\\.|passed|failed|skipped\"",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — every `node …` invocation of the four in docs/runbook/*.md"
+  }
+ },
+ {
+  "id": "G1 (a) template-literal env-file name",
+  "kind": "f2gap",
+  "why": "delta review GAP-a: `supabase/tests/.env.${mode}` in a template literal was not an env-file name to the scan",
+  "file": "cfb-pickems/grouptest.mjs",
+  "old": "/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "new": "const plantedEnv = (mode) => readFileSync(`supabase/tests/.env.${mode}`, 'utf8');\n/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — F-2 (pinned): every credential-source mention in code"
+  }
+ },
+ {
+  "id": "G2 (b) a .js key reader",
+  "kind": "f2gap",
+  "why": "delta review GAP-b: .js files were outside the scan; service-worker.js is a .js outside js/ and supabase/functions/",
+  "file": "cfb-pickems/service-worker.js",
+  "old": "  // ── SEC S-6 — config.json IS NEVER CACHED ",
+  "new": "  const plantedKey = process.env.SUPABASE_SERVICE_ROLE_KEY;\n  // ── SEC S-6 — config.json IS NEVER CACHED ",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — F-2 (pinned): every credential-source mention in code"
+  }
+ },
+ {
+  "id": "G3 (c) '--env-file=.env.local' spawn",
+  "kind": "f2gap",
+  "why": "delta review GAP-c: an env-file name after `=` (no slash before .env) was not seen",
+  "file": "cfb-pickems/grouptest.mjs",
+  "old": "/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "new": "const plantedSpawn = () => spawnSync(process.execPath, ['--env-file=.env.local', 'x.mjs']);\n/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — F-2 (pinned): every credential-source mention in code"
+  }
+ },
+ {
+  "id": "G4 (d) code sets the flag",
+  "kind": "f2gap",
+  "why": "delta review GAP-d: a spawn env that sets CFBP_LIVE_OK opens the latch for what it runs",
+  "file": "cfb-pickems/grouptest.mjs",
+  "old": "/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "new": "const plantedEnvOpen = { ...process.env, CFBP_LIVE_OK: '1' };\n/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — (12) the latch flag appears only where pinned"
+  }
+ },
+ {
+  "id": "H1 (12) env as the command",
+  "kind": "pinned",
+  "why": "final round: review (12)-1 / security Q1 — `env CFBP_LIVE_OK=1 node …` through spawnSync('env', …) slipped past the shape list; under the allow-list any occurrence outside the pinned files is red",
+  "file": "cfb-pickems/grouptest.mjs",
+  "old": "/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "new": "const plantedEnvCmd = () => spawnSync('env', ['CFBP_LIVE_OK=1', process.execPath, 'supabase/tests/rls.test.mjs']);\n/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — (12) the latch flag appears only where pinned"
+  }
+ },
+ {
+  "id": "H2 F-2 pinned file gains a read",
+  "kind": "pinned",
+  "why": "final round: security P1 — an allow-listed file (tests/lib/tree.mjs) reading .env.local through join(); its mentions are pinned, so any new one is red",
+  "file": "cfb-pickems/tests/lib/tree.mjs",
+  "old": "export const skipName = n => SKIP_NAMES.has(n) || n.startsWith('.env');\n",
+  "new": "export const skipName = n => SKIP_NAMES.has(n) || n.startsWith('.env');\nexport const plantedEnvRead = (ROOT) => readFileSync(join(ROOT, 'supabase', 'tests', '.env.local'), 'utf8');\n",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — F-2 (pinned): every credential-source mention in code"
+  }
+ },
+ {
+  "id": "H3 F-2 twin aliases process.env",
+  "kind": "pinned",
+  "why": "final round: security P5 — a twin that names the key may not touch process.env at all",
+  "file": "cfb-pickems/supabase/tests/functions/cors.twin.mjs",
+  "old": "#!/usr/bin/env node\n",
+  "new": "#!/usr/bin/env node\nconst plantedE = process.env;\n",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — F-2 (pinned): every credential-source mention in code"
+  }
+ },
+ {
+  "id": "J1 F-2 code after a leading JSDoc comment",
+  "kind": "comment",
+  "why": "review J1: a line opening with a closed block comment was read as a comment, hiding the key read after it",
+  "file": "cfb-pickems/grouptest.mjs",
+  "old": "/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "new": "/** @type {string} */ const plantedKey = process.env.SUPABASE_SERVICE_ROLE_KEY;\n/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — F-2 (pinned): every credential-source mention in code"
+  }
+ },
+ {
+  "id": "J3 (12) a set after a leading JSDoc comment",
+  "kind": "comment",
+  "why": "review J3: the same blind spot hid a spawn env that sets the latch flag",
+  "file": "cfb-pickems/grouptest.mjs",
+  "old": "/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "new": "/** @type {NodeJS.ProcessEnv} */ const plantedEnv = { ...process.env, CFBP_LIVE_OK: '1' };\n/**\n * CFB Pickems — grouptest.mjs (UN-118/UN-125, v0.17.7)\n",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — (12) the latch flag appears only where pinned"
+  }
+ },
+ {
+  "id": "T2 (12) a shell shebang that sets the flag",
+  "kind": "comment",
+  "why": "security T2: a .sh line-1 `#!/usr/bin/env -S CFBP_LIVE_OK=1 …` was skipped as a # comment",
+  "file": "deploy.sh",
+  "old": "#!/bin/bash\n",
+  "new": "#!/usr/bin/env -S CFBP_LIVE_OK=1 bash\n",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — (12) the latch flag appears only where pinned"
+  }
+ },
+ {
+  "id": "K1 M-46 TTY check removed",
+  "kind": "tty",
+  "why": "M-46 (Drew, D-78): without the terminal check the flag alone opens the latch again, from an agent shell or a pipe",
+  "file": "cfb-pickems/supabase/tests/_live-latch.mjs",
+  "old": " || process.stdin.isTTY !== true",
+  "new": "",
+  "suites": [
+   "latchtest.mjs",
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "latchtest.mjs",
+   "label": "M-46: CFBP_LIVE_OK=1 with stdin a PIPE (no terminal): refused"
+  }
+ },
+ {
+  "id": "K2 M-46 a projectiontest child without the terminal",
+  "kind": "tty",
+  "why": "M-46: a latched CLI spawned with its default stdin (a pipe) is refused, so the parent suite would break in Drew's terminal",
+  "file": "cfb-pickems/projectiontest.mjs",
+  "old": "const child = spawn(process.execPath, args, { env, stdio: ['inherit', 'pipe', 'pipe'] });",
+  "new": "const child = spawn(process.execPath, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });",
+  "suites": [
+   "supabase/tests/static.check.mjs"
+  ],
+  "red": {
+   "suite": "supabase/tests/static.check.mjs",
+   "label": "LIVE-LATCH — M-46: every child process a latched script starts inherits the terminal"
+  }
+ }
+]

@@ -1,0 +1,12 @@
+{
+  "id": "competitiontest",
+  "script": "competitiontest.mjs",
+  "label": "MS-1a",
+  "summary": "loose",
+  "floor": 121,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "Multi-Sport Phase 1a (DI-220/DI-225): the competition read API, the virtual default competition, R7 liveness edges, the settings allow-list, and the unfiltered write path that keeps a save in one competition from deleting another's weeks"
+}

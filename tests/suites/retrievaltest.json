@@ -1,0 +1,11 @@
+{
+  "id": "retrievaltest",
+  "script": "retrievaltest.mjs",
+  "summary": "strict",
+  "floor": 93,
+  "tags": [
+    "smoke"
+  ],
+  "expectedMs": 100,
+  "note": "D1 Lane C DI-640/641/642: the isolated, context-free retrieval request - the sanitizer rejects (never repairs), the request carries only a static prompt, the question and the search tool, the reply is typed/capped/stripped and every url was returned by the search, pause_turn continuation, failures as closed words (security C5). Registered 2026-10-08 (Lane C 3.B)."
+}

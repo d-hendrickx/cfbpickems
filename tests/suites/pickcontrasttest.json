@@ -1,0 +1,13 @@
+{
+  "id": "pickcontrasttest",
+  "script": "pickcontrasttest.mjs",
+  "label": "112c-pick",
+  "summary": "strict-combined",
+  "floor": 262,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 1300,
+  "note": "RAISED from 111 by SP-52 THEMES (2026-10-01) (A1.7): the same roles over the 31 resolver-derived maps (the twenty sides), the Paper scope's LIGHT pair and Paper Dark's light-pair read pinned, the 'school writers' scan over Dark selectors, and 4-6 re-derived for DI-448's lifted …"
+}

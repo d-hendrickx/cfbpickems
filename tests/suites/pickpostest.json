@@ -1,0 +1,10 @@
+{
+  "id": "pickpostest",
+  "script": "pickpostest.mjs",
+  "summary": "strict",
+  "floor": 65,
+  "tags": ["quick"],
+  "deps": ["supabase/migrations/0044_pick_status_submit_line.sql", "js/chat-ui.js", "js/data-model.js", "js/chat.js", "supabase/functions/_shared/job-rules.mjs"],
+  "expectedMs": 1500,
+  "note": "W-18 / UN-413, migration 0044: every model derived from the parsed SQL text - week_label_plain parity, the name neutralizer fuzz, the body formula, no push and no badge. Registered 2026-10-07 (it was loadtest [137b])."
+}

@@ -1,0 +1,12 @@
+{
+  "id": "scribeLeagueFence.twin",
+  "script": "supabase/tests/functions/scribeLeagueFence.twin.mjs",
+  "label": "126",
+  "summary": "loose",
+  "floor": 97,
+  "tags": [
+    "smoke"
+  ],
+  "expectedMs": 200,
+  "note": "SB-04 — get_current_standings / get_player_statistics EQUAL the Standings page with a demo, hidden, live and open week (each alone with a non-vacuity proof, and together) and for a two-part week with an unfinished part; chartLeadChange / milestone verify over the same weeks with …"
+}

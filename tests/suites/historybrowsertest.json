@@ -1,0 +1,27 @@
+{
+  "id": "historybrowsertest",
+  "script": "historybrowsertest.mjs",
+  "summary": "strict",
+  "floor": 108,
+  "tags": [
+    "browser"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/compare.js",
+    "js/week-detail.js",
+    "js/sw-register.js",
+    "css/**",
+    "index.html",
+    "service-worker.js",
+    "manifest.json",
+    "config.json",
+    "icons/**",
+    "vendor/**",
+    "reveal/**",
+    "favicon.*",
+    "statsfixtures.mjs"
+  ],
+  "expectedMs": 40000,
+  "note": "D1 Lane B DI-595/596/598/600 (P-8): the history screens measured in a real engine - Standings' name and week buttons (cell-sized, 44 pt, the row does not grow, 97% press, focus ring, Reduce Motion, 400% text), the comparison (boxes, 16 pt gaps, the split bar, the Season rows, token colours, 4.5:1 contrast, 320 pt), the rival picker sheet, the week detail, the sport control, and the chat's filter label for a past game. Registered 2026-10-08."
+}

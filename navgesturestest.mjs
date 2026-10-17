@@ -808,11 +808,14 @@ console.log('\n[5j] v0.27.0 — ONE direction table on Picks AND Dashboard (Drew
     { weekId: 'w2', season: 2026, weekNumber: 2, status: 'final' },
   ];
   const WEEK_STATUS = { DRAFT: 'draft' };
-  const build = (getterBody, state) => new Function(
-    'getWeeks', 'getSession', 'getCurrentWeek', 'WEEK_STATUS', 'state', 'chronologicalWeekIds', 'getWeek',
+  // D1 (DI-520/525): the builders now read the CONTEXT week(s) of the sport on screen and the Dashboard getter asks whether the scope is All sports. A one-sport league's answers are the plain
+  // ones (every week, the current week), which is what this fixture feeds by default; `scope` lets 5j-i drive the All sports case.
+  const build = (getterBody, state, { multi = false, scope = 'cfb' } = {}) => new Function(
+    'getWeeks', 'getSession', 'getCurrentWeek', 'WEEK_STATUS', 'state', 'chronologicalWeekIds', 'getWeek', 'getContextWeeks', 'getContextWeek', 'isMultiSport', 'getDashboardScope', 'DASHBOARD_ALL',
     `${picksNavSrc}\n${picksShowingSrc}\n${dashSelSrc}\nreturn (${getterBody});`
   )(() => WEEKS.slice(), () => ({ isAdmin: false }), () => WEEKS.find(w => w.weekId === 'w4'),
-    WEEK_STATUS, state, NG.chronologicalWeekIds, (id) => WEEKS.find(w => w.weekId === id) || null);
+    WEEK_STATUS, state, NG.chronologicalWeekIds, (id) => WEEKS.find(w => w.weekId === id) || null,
+    () => WEEKS.slice(), () => WEEKS.find(w => w.weekId === 'w4'), () => multi, () => scope, 'all');
 
   const swipe = (getState, fromX, toX) => {
     const handlers = {};
@@ -883,6 +886,36 @@ console.log('\n[5j] v0.27.0 — ONE direction table on Picks AND Dashboard (Drew
   assert(dashOnNavStart > 0 && dashOnNavBody.length > 0, '5j-h-pre: fixture — the Dashboard swipe\'s onNavigate() callback body was located');
   assert(/state\.viewingWeekId\s*=\s*\(targetId === cur\?\.weekId\)\s*\?\s*null\s*:\s*targetId;/.test(dashOnNavBody),
     `5j-h: [structural] the Dashboard swipe's onNavigate() null-normalizes a target equal to the current week, same shape as the Picks swipe/arrows (body: ${JSON.stringify(dashOnNavBody.slice(0, 200))})`);
+
+  // 5j-i: D1 DI-525 rev 3 (Drew D-59) - on the Dashboard's ALL SPORTS the in-tab week swipe is INERT: the getter says so, the binder does not claim the touch, nothing is dragged, nothing
+  // bounces and nothing navigates; with ONE sport, or with a sport selected, the very same getter still swipes (the control that proves the spy is not vacuous).
+  {
+    const allGet = build(dashGetter, { viewingWeekId: 'w2' }, { multi: true, scope: 'all' });
+    const oneGet = build(dashGetter, { viewingWeekId: 'w2' }, { multi: true, scope: 'cfb' });
+    const soloAll = build(dashGetter, { viewingWeekId: 'w2' }, { multi: false, scope: 'all' });
+    assert(allGet().inert === true && allGet().weekIds.length === 0 && allGet().tab === 'dashboard', '5j-i1: the Dashboard getter reports { inert: true } in a several-sport league with All sports selected');
+    assert(oneGet().inert !== true && oneGet().weekIds.length === 4 && soloAll().inert !== true,
+      '5j-i2: ...and ONLY then: a selected sport swipes between that sport\'s weeks, and a one-sport league ignores a stale "all" scope entirely (its answer is today\'s)');
+    const drive = (getState) => {
+      const handlers = {}; const props = []; const dataset = {};
+      const root = { style: { setProperty: (k, v) => props.push([k, v]) }, dataset, addEventListener: (t, fn) => { handlers[t] = fn; }, removeEventListener() {} };
+      let navigated = null; let prevented = 0;
+      const unbind = NG.bindWeekSwipe(root, getState, (id) => { navigated = id; });
+      const ev = (x) => ({ touches: [{ clientX: x, clientY: 300 }], preventDefault() { prevented++; }, cancelable: true });
+      handlers.touchstart(ev(260)); handlers.touchmove(ev(210)); handlers.touchmove(ev(120));
+      handlers.transitionend?.({ target: root }); handlers.touchend({});
+      unbind();
+      return { navigated, props, dataset: { ...dataset }, prevented };
+    };
+    const inert = drive(allGet);
+    assert(inert.navigated === null && inert.props.every(([k, v]) => k === '--week-swipe-x' && v === '0px') && Object.keys(inert.dataset).length === 0 && inert.prevented === 0,
+      `5j-i3: an inert page: the swipe navigates nowhere, drags nothing (the only CSS write is the at-rest 0px reset every touchstart makes), sets no flag and never claims the touch with preventDefault (writes ${JSON.stringify(inert.props)}, flags ${Object.keys(inert.dataset).join(',') || 'none'}, prevented ${inert.prevented})`);
+    const live = drive(oneGet);
+    assert(live.navigated === 'w3' && live.props.some(([, v]) => v !== '0px'),
+      `5j-i4: CONTROL - the same gesture on a swipeable Dashboard navigates (to ${live.navigated}) and writes a live drag offset (${JSON.stringify(live.props.slice(-2))}), so 5j-i3's silence is the inert flag and not a dead harness`);
+    assert(/if \(isMultiSport\(\) && getDashboardScope\(\) === DASHBOARD_ALL\) return \{ inert: true,/.test(dashGetter || ''),
+      '5j-i5: [structural] the app.js getter derives inert from isMultiSport() AND the Dashboard scope - never from the sport pointer (a stale scope in a one-sport league cannot freeze the swipe)');
+  }
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -1427,6 +1460,92 @@ console.log('\n[5n] REVIEWER ROUND 2 (B2 BLOCK, coordinator ruling, 2026-09-28) 
       `5n-${sel}-at-rest: ${sel} already at scrollLeft===0 does NOT yield — unambiguous for the drawer/week-swipe`);
   }
 
+  // ── D1 Lane B Game Day, fix round 1 (reviewer B1, 2026-10-08): Game Day's pill rail is a horizontal scroller on HOME, where the drawer arms from ANYWHERE. A pan that starts on a pill of a rail that has
+  // been scrolled right must go to the rail (back to the left), never open the Control Center. These cases use the REAL selector string and a `closest` that walks up from the pill to the rail, the
+  // way a browser does (the `makeScrollerTarget` fakes above match by substring and never walk), so a missing `.gd-rail` entry cannot hide.
+  {
+    const simNode = (classes, parent = null, scrollLeft = 0) => ({
+      classes, parent, scrollLeft,
+      closest(sel) {
+        const parts = String(sel).split(',').map((s) => s.trim());
+        for (let n = this; n; n = n.parent) if (parts.some((p) => (p.startsWith('.') && n.classes.includes(p.slice(1))) || (p.startsWith('[') && n.classes.includes(p)))) return n;
+        return null;
+      },
+    });
+    const onHome = (rail) => ({ tab: 'home', clientX: 200, viewportWidthPx: 375, target: simNode(['gdp'], rail) });
+    const scrolledRail = simNode(['gd-rail', '[data-gd-rail]'], null, 160);
+    assert(isInDrawerOpenZone(onHome(scrolledRail)) === false && _isDrawerYieldTarget(onHome(scrolledRail).target) === true,
+      '5n-gd-rail: B1 — on HOME a touch on a pill of a Game Day rail scrolled right (scrollLeft 160) is the RAIL\'s pan: the drawer does not arm (the rail yields back to its start first)');
+    const restRail = simNode(['gd-rail', '[data-gd-rail]'], null, 0);
+    assert(isInDrawerOpenZone(onHome(restRail)) === true && _isDrawerYieldTarget(onHome(restRail).target) === false,
+      '5n-gd-rail-at-rest: …and on a rail at rest (scrollLeft 0, nowhere to pan back to) the drawer still opens from anywhere on Home');
+    assert(isInDrawerOpenZone({ tab: 'home', clientX: 200, viewportWidthPx: 375, target: simNode(['gdp'], null, 0) }) === true,
+      '5n-gd-pill-no-rail: …and a pill with no scrolled rail above it is not a scroller of its own');
+    // The Locker Room's sport row (W-57, merged from int 2026-10-08) is the same kind of scroller on CHAT, where the drawer also arms from anywhere; it sits BESIDE `.chat-pills-scroll`, not inside it, so
+    // it needs its own entry (the struct scan below went red on it first).
+    const onChat = (row) => ({ tab: 'chat', clientX: 200, viewportWidthPx: 375, target: simNode(['chat-pill', 'chat-sport-pill'], row) });
+    const scrolledSports = simNode(['chat-sport-pills'], null, 120);
+    assert(isInDrawerOpenZone(onChat(scrolledSports)) === false && _isDrawerYieldTarget(onChat(scrolledSports).target) === true,
+      '5n-chat-sport-pills: on CHAT a touch on a sport pill of a sport row scrolled right (scrollLeft 120) is the ROW\'s pan: the drawer does not arm');
+    const restSports = simNode(['chat-sport-pills'], null, 0);
+    assert(isInDrawerOpenZone(onChat(restSports)) === true && _isDrawerYieldTarget(onChat(restSports).target) === false,
+      '5n-chat-sport-pills-at-rest: …and on a sport row at rest the drawer still opens from anywhere on Chat');
+  }
+
+  // ── STRUCTURAL (B1): every horizontal scroller in the stylesheet is either named in DRAWER_HSCROLL_SELECTOR or carries a written reason it is exempt. The drawer arms from ANYWHERE on every tab but
+  // Picks and Dashboard, so a NEW horizontal scroller that nobody lists is the B1 defect again (the Game Day rail shipped unlisted and the whole suite was green). The scan reads the CSS, not a list
+  // somebody remembered to keep: add a scroller and this goes red until it is classified here.
+  {
+    const { readFileSync } = await import('node:fs');
+    const css = readFileSync(new URL('./css/styles.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const found = new Set();
+    for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const decls = m[2];
+      if (!/overflow(?:-x)?\s*:\s*(?:auto|scroll)/.test(decls) || /overflow-x\s*:\s*(?:hidden|visible|clip)/.test(decls)) continue;
+      for (const part of m[1].split(',')) {
+        const last = part.trim().split(/[\s>+~]+/).filter(Boolean).pop() || '';
+        if (last.startsWith('.')) found.add(last.replace(/:.*$/, ''));        // the last compound selector, without a pseudo-class
+        else found.add(`(not a class selector: ${part.trim().slice(0, 40)})`);
+      }
+    }
+    const DISPOSITION = {
+      '.dashboard-scroll': 'listed', '.batch-grid-scroll': 'listed', '.comm-tabbar': 'listed', '.chat-pills-scroll': 'listed',
+      '.gd-rail': 'listed',                       // Home: Game Day's live-game pills
+      '.gr-sat-chips': 'listed',                  // Rules: "Request a Game", the four Saturday chips
+      '.chat-sport-pills': 'listed',              // Chat: the Locker Room's sport row (W-57), beside .chat-pills-scroll
+      '.cd-table': 'exempt: drawn only inside the card detail and the week detail, pushed screens (#pushed-root), where the drawer is blocked',
+    };
+    const listed = new Set((NG.DRAWER_HSCROLL_SELECTOR || '').split(',').map((s) => s.trim()).filter(Boolean));
+    const unclassified = [...found].filter((s) => !(s in DISPOSITION));
+    assert(found.size >= 7 && unclassified.length === 0,
+      `5n-struct-1: B1 — every horizontal scroller in css/styles.css (${found.size} found) is classified in this test: ${unclassified.length ? 'UNCLASSIFIED ' + unclassified.join(', ') + ' — name it in DRAWER_HSCROLL_SELECTOR or exempt it with a reason' : 'none unclassified'}`);
+    const missing = Object.entries(DISPOSITION).filter(([, d]) => d === 'listed').map(([s]) => s).filter((s) => !listed.has(s));
+    assert(listed.size >= 6 && missing.length === 0, `5n-struct-2: …and every one classified "listed" is IN DRAWER_HSCROLL_SELECTOR (missing: ${missing.join(', ') || 'none'})`);
+    const dead = Object.keys(DISPOSITION).filter((s) => !found.has(s));
+    const stale = [...listed].filter((s) => !(s in DISPOSITION));
+    assert(dead.length === 0 && stale.length === 0, `5n-struct-3: …and the table has no dead entry and the selector names nothing this table does not know (dead: ${dead.join(', ') || 'none'}; unknown in selector: ${stale.join(', ') || 'none'})`);
+    // the exemption is a fact, not a hope: `cd-table` is drawn by card-detail.js and week-detail.js only (both pushed screens - D1 Lane B history joined the second), and the drawer's own blocking list names the pushed-screen root
+    const { readdirSync } = await import('node:fs');
+    const jsFiles = readdirSync(new URL('./js/', import.meta.url)).filter((f) => f.endsWith('.js'));
+    const users = jsFiles.filter((f) => /\bcd-table\b/.test(readFileSync(new URL(`./js/${f}`, import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')));
+    const ccSrc = readFileSync(new URL('./js/control-center.js', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert(users.join() === 'card-detail.js,week-detail.js' && /isBlockedByOtherSurface[\s\S]*?getElementById\?\.\('pushed-root'\)/.test(ccSrc),
+      `5n-struct-4: …the one exemption (.cd-table) holds: only the two pushed-screen modules draw it (${users.join() || 'nobody'}) and the drawer is blocked while #pushed-root is up`);
+    // no scroller hidden in a script: an inline style string in js/ that makes an element a horizontal scroller is invisible to the CSS scan above
+    const INLINE_OK = { 'app.js': 1 };            // app.js: the commissioner panel's crash fallback prints the error stack in a <pre style="overflow:auto"> (a diagnostic card that replaces the panel, not a feature surface)
+    const inline = {};
+    for (const f of jsFiles) {
+      const n = (readFileSync(new URL(`./js/${f}`, import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1').match(/overflow-x\s*:\s*(?:auto|scroll)|overflow\s*:\s*(?:auto|scroll)/g) || []).length;
+      if (n) inline[f] = n;
+    }
+    const unexpected = Object.entries(inline).filter(([f, n]) => n !== (INLINE_OK[f] || 0)).map(([f, n]) => `${f} x${n}`);
+    assert(unexpected.length === 0 && Object.keys(INLINE_OK).every((f) => inline[f] === INLINE_OK[f]), `5n-struct-5: …and no script writes an inline horizontal scroller beyond the one named exemption (unexpected: ${unexpected.join(', ') || 'none'}) — the CSS scan above would not see one`);
+    // canary: the scanner sees the three spellings and ignores the harmless ones
+    const scan = (c) => { const out = []; for (const m of c.matchAll(/([^{}]+)\{([^{}]*)\}/g)) if (/overflow(?:-x)?\s*:\s*(?:auto|scroll)/.test(m[2]) && !/overflow-x\s*:\s*(?:hidden|visible|clip)/.test(m[2])) out.push(m[1].trim()); return out; };
+    assert(scan('.a{overflow-x:auto}').length === 1 && scan('@media (min-width:600px){ .b{overflow-x: scroll;} }').length === 1 && scan('.c{overflow:auto}').length === 1 && scan('.d{overflow-y:auto}').length === 0 && scan('.e{overflow-x:hidden;overflow:auto}').length === 0,
+      '5n-struct-6: canary — the scanner sees `overflow-x:auto`, `overflow-x: scroll` inside a media query and the `overflow:auto` shorthand, and ignores `overflow-y:auto` and an explicit `overflow-x:hidden`');
+  }
+
   // Text fields — unconditional, no scrollLeft involved.
   assert(_isDrawerYieldTarget(makeFieldTarget('input')) === true, '5n-input: an <input> target yields');
   assert(_isDrawerYieldTarget(makeFieldTarget('textarea')) === true, '5n-textarea: a <textarea> target yields');
@@ -1901,9 +2020,10 @@ console.log('\n[5q] Reviewer notes on RG-TBD-A1 (2026-09-29) — velocity commit
       '5q-m: a live-score repaint mid-drag is PARKED, and a burst of them collapses to one per page');
     root._fire('touchmove', at(280, 5200));   // hold near 20 px
     root._fire('touchend', { touches: [], timeStamp: 5400 });
-    assert(nav === null && painted === 1 && _deferredRenderCount() === 0,
-      `5q-n: a release that springs back runs the parked repaint ONCE (painted ${painted}, parked ${_deferredRenderCount()})`);
+    const atRelease = { painted, parked: _deferredRenderCount() };
     root._fire('transitionend', { target: root });
+    assert(nav === null && atRelease.painted === 0 && atRelease.parked === 1 && painted === 1 && _deferredRenderCount() === 0,
+      `5q-n: a release that springs back holds the parked repaint while the spring slides (W-22: run at the release it rebuilt the page under the incoming week, blanking the strip) and runs it ONCE when the spring ends (at the release painted ${atRelease.painted}, parked ${atRelease.parked}; after it painted ${painted}, parked ${_deferredRenderCount()})`);
   }
   {
     let dashPaints = 0, picksPaints = 0;
@@ -1925,6 +2045,126 @@ console.log('\n[5q] Reviewer notes on RG-TBD-A1 (2026-09-29) — velocity commit
     assert(painted === 1 && touchClaimedBy() === null,
       '5q-p: a week-swipe claim left stale by a lost touchend still runs its parked repaint when the next touch clears it — nothing is dropped');
     releaseTouch('week-swipe');
+  }
+  {
+    // W-22 (app defect a) — a live repaint arriving just AFTER a cancel release
+    // (no touch owner any more, the spring still sliding) waits for the spring
+    // too, for that page only; then it runs once.
+    let painted = 0;
+    const root = makeRoot(); let nav = null;
+    bindWeekSwipe(root, () => ({ weekIds: ['w1', 'w2', 'w3'], currentWeekId: 'w2', tab: 'dashboard' }), (id) => { nav = id; });
+    root._fire('touchstart', at(300, 7000)); root._fire('touchmove', at(270, 7016)); root._fire('touchmove', at(280, 7200));
+    root._fire('touchend', { touches: [], timeStamp: 7400 });
+    const parkedNow = deferRenderWhileWeekSwiping('dashboard', () => { painted++; });
+    const otherPage = deferRenderWhileWeekSwiping('leaderboard', () => {});
+    const during = painted;
+    root._fire('transitionend', { target: root });
+    assert(nav === null && touchClaimedBy() === null && parkedNow === true && otherPage === false && during === 0 && painted === 1 && _deferredRenderCount() === 0,
+      `5q-n2: a repaint arriving just AFTER a cancel release (no owner, the spring still sliding) waits for the spring — that page only (parked ${parkedNow}; another page renders now: ${!otherPage}) — then runs once (during ${during}, after ${painted})`);
+  }
+  {
+    // W-22 (app defect b) — the spring's safety timer counts from the frame the
+    // slide starts in (the next drawn frame), not from the release: a main
+    // thread busy as the finger lifts delays that frame, and the timer must
+    // not fire mid-slide. Never fire transitionend; hold the frame back.
+    const frames = []; const savedRaf = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = (cb) => { frames.push(cb); return frames.length; };
+    const root = makeRoot();
+    bindWeekSwipe(root, () => ({ weekIds: ['w1', 'w2', 'w3'], currentWeekId: 'w2', tab: 'dashboard' }), () => {});
+    root._fire('touchstart', at(300, 8000)); root._fire('touchmove', at(270, 8016)); root._fire('touchmove', at(280, 8200));
+    root._fire('touchend', { touches: [], timeStamp: 8400 });
+    await new Promise(r => setTimeout(r, WEEK_SWIPE_BOUNCE_MS + 100));   // past a timer armed AT the release; no frame drawn yet
+    const beforeFrame = root.dataset.weekSwipeAnimating;
+    frames.splice(0).forEach(cb => cb(0));                               // the next drawn frame: the slide starts now
+    await new Promise(r => setTimeout(r, WEEK_SWIPE_BOUNCE_MS + 100));   // its own fallback (no transitionend ever arrives)
+    const afterFrame = root.dataset.weekSwipeAnimating;
+    globalThis.requestAnimationFrame = savedRaf;
+    assert(beforeFrame === 'bounce' && afterFrame === undefined,
+      `5s: the spring's fallback counts from the frame the slide STARTS in — ${WEEK_SWIPE_BOUNCE_MS + 100} ms after the release with no frame drawn it is still sliding ("${beforeFrame}"), and ${WEEK_SWIPE_BOUNCE_MS + 100} ms after that frame it has ended on its own ("${afterFrame}")`);
+  }
+  {
+    // W-22 review N1 — and if NO frame is ever drawn (a backgrounded page, a renderer that never paints), a generous wall-clock
+    // backstop armed AT the release still ends the spring and lets go of its repaint hold: duration + 60 + 500 ms.
+    const savedRaf = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = () => 0;   // frames that never come
+    const root = makeRoot();
+    const unbind = bindWeekSwipe(root, () => ({ weekIds: ['w1', 'w2', 'w3'], currentWeekId: 'w2', tab: 'dashboard' }), () => {});
+    root._fire('touchstart', at(300, 8500)); root._fire('touchmove', at(270, 8516)); root._fire('touchmove', at(280, 8700));
+    root._fire('touchend', { touches: [], timeStamp: 8900 });
+    await new Promise(r => setTimeout(r, WEEK_SWIPE_BOUNCE_MS + 60 + 500 + 120));
+    const animating = root.dataset.weekSwipeAnimating;
+    let ran = 0;
+    const parked = deferRenderWhileWeekSwiping('dashboard', () => { ran++; });
+    globalThis.requestAnimationFrame = savedRaf;
+    unbind();
+    assert(animating === undefined && parked === false,
+      `5s2: with no frame ever drawn, the wall-clock backstop (${WEEK_SWIPE_BOUNCE_MS} + 60 + 500 ms from the release) still ends the spring ("${animating}") and its repaint hold (a repaint renders now: ${!parked})`);
+  }
+  {
+    // W-22 review B1 — a NEW touch that lands while a cancel spring-back is still sliding ENDS that spring, its repaint hold
+    // included. The new touch stops the slide itself (onTouchStart puts the page at rest and drops the layers), and a CSS
+    // transition cut that way never fires transitionend — so a hold left to the spring's own end kept parking the NEW gesture's
+    // renders: the incoming week's preview came back empty, and the commit's own repaint was parked and then dropped as
+    // "redundant", leaving the old week on screen.
+    const win = { innerHeight: 800, scrollY: 0, _h: {}, addEventListener(t, fn) { (this._h[t] ||= []).push(fn); },
+      removeEventListener(t, fn) { this._h[t] = (this._h[t] || []).filter(x => x !== fn); }, _fire(t, ev) { (this._h[t] || []).slice().forEach(fn => fn(ev)); } };
+    const savedDoc = globalThis.document;
+    globalThis.window = win;
+    globalThis.document = { createElement: () => ({ style: {}, setAttribute() {}, appendChild() {}, innerHTML: '' }) };
+    const state = { week: 'w2', shown: 'w2' };
+    let previews = 0, previewsParked = 0;
+    const render = () => { if (deferRenderWhileWeekSwiping('picks', render)) return; state.shown = state.week; };
+    const root = makeRoot();
+    root.appendChild = (el) => el; root.getBoundingClientRect = () => ({ top: 0, left: 0, right: 390, width: 390, height: 800 });
+    const unbind = bindWeekSwipe(root, () => ({ weekIds: ['w1', 'w2', 'w3'], currentWeekId: state.week, tab: 'picks' }), (id) => { state.week = id; render(); },
+      { renderPreview: (id) => { previews++; if (deferRenderWhileWeekSwiping('picks', () => {})) { previewsParked++; return null; } return `<p>${id}</p>`; } });
+    // Swipe 1: 20 px, held, released — a cancel spring-back.
+    win._fire('touchstart', {}); root._fire('touchstart', at(300, 9000)); root._fire('touchmove', at(280, 9016)); root._fire('touchmove', at(280, 9200));
+    win._fire('touchend', {}); root._fire('touchend', { touches: [], timeStamp: 9400 });
+    const sprung = root.dataset.weekSwipeAnimating;
+    // Swipe 2, the spring still sliding (no transitionend has come): a fast flick to the next week.
+    win._fire('touchstart', {}); root._fire('touchstart', at(300, 9460));
+    root._fire('touchmove', at(270, 9476)); root._fire('touchmove', at(220, 9492)); root._fire('touchmove', at(160, 9508));
+    win._fire('touchend', {}); root._fire('touchend', { touches: [], timeStamp: 9516 });
+    const atCommit = { week: state.week, shown: state.shown, parked: _deferredRenderCount() };
+    await new Promise(r => setTimeout(r, 5));
+    root._fire('transitionend', { target: root }); // the commit slide ends
+    unbind();
+    assert(sprung === 'bounce' && previews === 2 && previewsParked === 0 && atCommit.week === 'w3' && atCommit.shown === 'w3' && atCommit.parked === 0,
+      `5t: a re-swipe that lands while a cancel spring still slides ends that spring and its hold — the incoming week's preview renders (one per gesture: ${previews} call(s), ${previewsParked} parked) and the commit's own repaint is neither parked nor dropped: the page shows the week it navigated to (week ${atCommit.week}, shown ${atCommit.shown}, parked ${atCommit.parked})`);
+
+    // …and what the spring HELD still runs, once, after the touch that cut it — never under that finger.
+    let held = 0;
+    const root2 = makeRoot();
+    const unbind2 = bindWeekSwipe(root2, () => ({ weekIds: ['w1', 'w2', 'w3'], currentWeekId: 'w2', tab: 'picks' }), () => {});
+    win._fire('touchstart', {}); root2._fire('touchstart', at(300, 9600)); root2._fire('touchmove', at(280, 9616)); root2._fire('touchmove', at(280, 9800));
+    win._fire('touchend', {}); root2._fire('touchend', { touches: [], timeStamp: 10000 });
+    const heldParked = deferRenderWhileWeekSwiping('picks', () => { held++; });   // a live tick while the spring slides: held
+    win._fire('touchstart', {}); root2._fire('touchstart', at(200, 10060));        // a tap lands mid-spring
+    await new Promise(r => setTimeout(r, 5));
+    const underFinger = held;
+    win._fire('touchend', {}); root2._fire('touchend', { touches: [], timeStamp: 10120 });
+    await new Promise(r => setTimeout(r, 5));
+    const afterTap = { held, parked: _deferredRenderCount() };
+    unbind2();
+    globalThis.document = savedDoc;
+    assert(heldParked === true && underFinger === 0 && afterTap.held === 1 && afterTap.parked === 0,
+      `5t2: …and the repaint the spring held is not dropped: it waits out the tap that cut the spring (painted ${underFinger}x while the finger is down) and runs once when it lifts (painted ${afterTap.held}x, parked ${afterTap.parked})`);
+    // …and the spring's own completion, cut short by that touch, never runs LATER: left armed, its fallback (here 210 ms after
+    // the release) cleared the attribute the NEXT gesture's commit slide runs on, ending that slide early.
+    const root3 = makeRoot(); let nav3 = null;
+    const unbind3 = bindWeekSwipe(root3, () => ({ weekIds: ['w1', 'w2', 'w3'], currentWeekId: 'w2', tab: 'picks' }), (id) => { nav3 = id; });
+    root3._fire('touchstart', at(300, 11000)); root3._fire('touchmove', at(280, 11016)); root3._fire('touchmove', at(280, 11200));
+    root3._fire('touchend', { touches: [], timeStamp: 11400 });                                          // a cancel spring-back
+    root3._fire('touchstart', at(300, 11460)); root3._fire('touchmove', at(270, 11476)); root3._fire('touchmove', at(220, 11492));
+    root3._fire('touchmove', at(160, 11508)); root3._fire('touchend', { touches: [], timeStamp: 11516 });   // at once, a commit
+    const committing = root3.dataset.weekSwipeAnimating;
+    await new Promise(r => setTimeout(r, WEEK_SWIPE_BOUNCE_MS + 60 + 40));   // past the spring's own fallback, inside the commit's
+    const stillCommitting = root3.dataset.weekSwipeAnimating;
+    root3._fire('transitionend', { target: root3 });
+    unbind3();
+    assert(nav3 === 'w3' && committing === 'commit' && stillCommitting === 'commit',
+      `5t3: …and the cut-short spring's own completion never runs later — the next gesture's commit slide is still running past the spring's fallback ("${committing}" → "${stillCommitting}")`);
   }
   globalThis.window = savedWindow5q;
 }
@@ -1985,9 +2225,10 @@ console.log('\n[5r] Reviewer notes on c7f8bee (2026-09-29) — the safety net: v
       `5r-f: …so the new swipe proceeds, following the finger (x ${root._props['--week-swipe-x']}), with the repaint still waiting`);
     win._fire('touchend', {}); root._fire('touchend', {});
     await tick();
-    assert(painted === 1 && _deferredRenderCount() === 0 && nav === null,
-      `5r-g: …and the parked repaint lands AFTER that touch ends, exactly once (painted ${painted})`);
+    const afterTouch = painted;
     root._fire('transitionend', { target: root });
+    assert(afterTouch === 0 && painted === 1 && _deferredRenderCount() === 0 && nav === null,
+      `5r-g: …and the parked repaint lands AFTER that touch ends — once its spring-back has slid out (W-22) — exactly once (a tick after the touch painted ${afterTouch}; after the spring ${painted})`);
     // Same, but the new touch is a vertical scroll that never becomes a swipe.
     painted = 0;
     claimTouch('week-swipe');
@@ -2836,6 +3077,12 @@ console.log('     League Page swipe-back + week wizard drag-to-dismiss, shared p
     assert(a > -1 && b > a && c > b, '11n-real-pre: fixture — the three dismiss-blocking predicates were extracted from js/app.js');
     const mod = await import('data:text/javascript,' + encodeURIComponent([
       'let document = null; export function _setDoc(d) { document = d; }',
+      // D1 (DI-554): the predicate consults two helpers that live beside the League Overview (the "own swipe" flag and "a sheet is open above the overview"); the extraction supplies them as the app defines them.
+      'let _loOwnSwipe = false; const overviewChildSheetUp = () => [\'add-sport-sheet-wrap\'].some((id) => !!document.getElementById(id));',
+      // D1 Lane B (DI-595): the rival picker sheet is one more surface on the list, with its own "OTHER surface" flag (the overview's pattern); the extraction supplies it as the app defines it.
+      'let _rivalOwnSwipe = false;',
+      // D1 Lane C (DI-672): the News "Also from" sheet's own-swipe flag, a module flag beside the sheet in app.js (false unless that sheet's own drag is asking).
+      'let _newsAlsoOwnSwipe = false;',
       appSrc.slice(a, c + 2),
       'export { _dismissBlockingSurfaceUp, isDismissGestureBlockedByOtherSurface, isWizardDismissGestureBlocked };',
     ].join('\n')));
@@ -2853,6 +3100,7 @@ console.log('     League Page swipe-back + week wizard drag-to-dismiss, shared p
       ['.modal-overlay', docWith(['week-wizard-sheet-wrap'], ['.modal-overlay'])],
       ['#chat-sheet-wrap', docWith(['week-wizard-sheet-wrap', 'chat-sheet-wrap'])],
       ['open control center', docWith(['week-wizard-sheet-wrap'], ['#control-center[data-open="true"]'])],
+      ['the News "Also from" sheet (D1 Lane C)', docWith(['week-wizard-sheet-wrap', 'news-also-sheet-wrap'])],
     ]) {
       mod._setDoc(doc);
       assert(mod.isWizardDismissGestureBlocked() === true, `11n-real-3: the wizard's predicate still blocks for ${label}`);

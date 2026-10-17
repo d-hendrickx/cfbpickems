@@ -1,0 +1,13 @@
+{
+  "id": "btnspacingtest",
+  "script": "btnspacingtest.mjs",
+  "label": "118",
+  "summary": "loose",
+  "floor": 73,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 200,
+  "note": "set 2026-09-30 at its first spawned run, SB-14: [1] fixture integrity, [2] one .btn-row group with no per-button margin, [3] the CSS primitive, [4] the layout model, OPEN + LOCKED at 375/390/430 wide x 1/1.35/2x text, [5] model calibration against the pre-fix Chrome …"
+}

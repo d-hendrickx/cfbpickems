@@ -1,0 +1,13 @@
+{
+  "id": "logovarianttest",
+  "script": "logovarianttest.mjs",
+  "label": "112c-logo",
+  "summary": "strict-combined",
+  "floor": 221,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 1000,
+  "note": "D1 Lane B (2026-10-08): [8]/[9] retargeted from the retired Live Peek chip to the Game view's team lockups (the one team-logo surface Home now opens); one assertion added (8-4a). 220 -> 221. | RAISED from 101 by SP-52 THEMES (2026-10-01) (DI-455, release condition R1): the surface -> file map across 31 theme maps (Paper Dark keeps the stored file), the session set of known-missing dark files, and [7] the real reconcileLogoVariants \u2014 preload-before-swap, stale-target \u2026"
+}

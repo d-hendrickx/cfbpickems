@@ -1,0 +1,17 @@
+{
+  "id": "pglite0053.check",
+  "script": "supabase/tests/pglite0053.check.mjs",
+  "summary": "loose",
+  "floor": 1,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "supabase/migrations/0053_news_sources_and_articles.sql",
+    "supabase/migrations/0054_news_seed_d1.sql",
+    "supabase/migrations/0043_pf1_server_lock.sql",
+    "supabase/migrations/0036_sb11_platform_kv_key_refusal.sql"
+  ],
+  "expectedMs": 6000,
+  "note": "D1 Lane C 0053 + 0054 run END TO END in PGlite, attacker-first (P-1): a member's own JWT against the table, the RPCs and the pilot gate; the levers server-side (SC-N17); the collector RPCs' integrity (SC-N6, N8, N16, N19); every CHECK; the C9 / SC-N18 gate including replica mode; the audit union that keeps 0048's audit_scrub. 107 assertions WITH PGlite (PGLITE_DIR); without it the suite prints SKIP and counts its one skip (green and hollow: it says so on its first line). Its 29 mutants are tests/kits/lane-c-news-kit.mjs `sql` (all RED, 2026-10-08)."
+}

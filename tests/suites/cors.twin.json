@@ -1,0 +1,12 @@
+{
+  "id": "cors.twin",
+  "script": "supabase/tests/functions/cors.twin.mjs",
+  "label": "81q",
+  "summary": "loose",
+  "floor": 285,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 300,
+  "note": "RG-CORS — the preflight/allow-list/response-header contract for every class-U function (push-identity-token, push-reach, scribe-ask, scribe-classify, scribe-autonomous, scribe-react, trainer, account-delete, reminders), plus the proof that the server-only functions did NOT gain …"
+}

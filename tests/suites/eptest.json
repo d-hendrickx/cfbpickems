@@ -1,0 +1,13 @@
+{
+  "id": "eptest",
+  "script": "eptest.mjs",
+  "label": "111",
+  "summary": "strict-combined",
+  "floor": 123,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 100,
+  "note": "(SP-54, 2026-10-01: RAISED from 107 — eptest [1]/[8] re-derived to the amended AD-33 wording; the earlier history follows), 2026-09-26 — FEAT-9 / UN-176 Extra Point standings tally, never affects rank). Raise the floor when the suite grows; the ratchet only tightens"
+}

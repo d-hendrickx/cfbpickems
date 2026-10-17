@@ -68,6 +68,8 @@ export const LS_COPY = Object.freeze({
   cancel: 'Cancel',
   weekWaitOne: 'You can leave after this week is final.',
   weekWaitMany: 'You can leave after these weeks are final.',
+  // DI-542 (W-21, Deployment 1): a member entered in TWO OR MORE sports is waiting on weeks of more than one competition, so the sentence does not say "this week".
+  weekWaitSports: 'You can leave after your current weeks are final.',
   leaveMessageBase: "You'll lose access right away. Your picks and results stay in the league's history.",
   leaveOpenWeekPicks: " Picks you've made for the current week won't be scored.",
   archiveLead: "You're the only member.",
@@ -92,7 +94,7 @@ export const preflightFailed = (league) => `Couldn't check ${leagueLabel(league)
 export const leaveSheetTitle = (league) => `Leave ${leagueLabel(league)}?`;
 export const leaveArchiveSheetTitle = (league) => `Leave and archive ${leagueLabel(league)}?`;
 /** Q-W (a): the sentence under a dimmed Leave row (and the copy of a server `week_in_progress`). `n` is how many of the person's own weeks are in progress. */
-export const leaveBlockedSentence = (n = 1) => (Number(n) > 1 ? LS_COPY.weekWaitMany : LS_COPY.weekWaitOne);
+export const leaveBlockedSentence = (n = 1, { sports = 1 } = {}) => (Number(sports) >= 2 ? LS_COPY.weekWaitSports : (Number(n) > 1 ? LS_COPY.weekWaitMany : LS_COPY.weekWaitOne));
 
 /**
  * The leave confirmation sheet's words. `obligationCount` is the number of the leaver's unsettled obligations (a number that can be ZERO: it is compared, never rendered through a
@@ -323,9 +325,10 @@ export function acceptingOutcomeCopy(outcome) {
 
 /**
  * `ctx.leagueName` names the league in the sentence; `ctx.weekCount` (the number of the person's own weeks in progress, from the client's own data) picks the singular or plural
- * Q-W sentence for a server `week_in_progress`.
+ * Q-W sentence for a server `week_in_progress`. `ctx.sports` (the number of sports the person is entered in, DI-542) of two or more
+ * picks the sport-neutral sentence instead.
  */
-export function leaveOutcomeCopy(outcome, { leagueName = '', weekCount = 1 } = {}) {
+export function leaveOutcomeCopy(outcome, { leagueName = '', weekCount = 1, sports = 1 } = {}) {
   const o = outcome || {};
   if (o.status === 'done') return mk(leaveToast(leagueName, o.result === 'archived'), { tone: 'success', haptic: 'success' });
   if (o.status === 'done_refresh_failed') return mk(leaveAppliedRefreshFailed(leagueName), { reload: true });
@@ -334,7 +337,7 @@ export function leaveOutcomeCopy(outcome, { leagueName = '', weekCount = 1 } = {
     switch (o.kind) {
       case 'expired': return mk(LS_COPY.sessionExpired, { retry: true });
       case 'not_a_member': return mk(leaveNotAMember(leagueName), { tone: 'note', haptic: null });
-      case 'week_in_progress': return mk(leaveBlockedSentence(weekCount), { tone: 'note', haptic: null });
+      case 'week_in_progress': return mk(leaveBlockedSentence(weekCount, { sports }), { tone: 'note', haptic: null });
       case 'headless': return mk(leaveHeadless(leagueName), { retry: false });
       case 'stale': return mk(LS_COPY.staleHandOff, { tone: 'note', haptic: null, action: 'rerun-preflight' });
       case 'archive_stale': return mk(LS_COPY.staleArchive, { tone: 'note', haptic: null, action: 'rerun-preflight-archive' });
@@ -382,9 +385,14 @@ export function leaveBlockAnchorMs(week) {
  * supply it still gets the right answer for every week that has a lock time except for the last half hour or so of the seventh day (the lock time is normally set a configurable offset BEFORE the first kickoff,
  * so the server's anchor is later than the client's): the server stays the authority and answers `week_in_progress` with the same sentence, which the leave wrapper already shows.
  *
- * KNOWN GAP (PF-1, Drew deciding; reviewer note 2026-10-01): a week stored `open` with a NULL `picksLockAt` reads as NOT in progress here, and on the server, even after its first
- * kickoff, because today only the commissioner's own device moves a week from open to locked. The two sides agree, so the refusal is consistent; it is just later than it should be.
- * PF-1 (a server-side lock at first kickoff) would close it. Nothing here depends on PF-1 and nothing here should be bent to work around it. (PF-1 redefines pick_window_open; the G-6 bound does not read it.)
+ * THE FORMER KNOWN GAP IS CLOSED (PF-1, migration 0043, 2026-10-01 — this paragraph is now a record, not a warning). A week stored `open` with a NULL picks_lock_at used to read as NOT in
+ * progress here and on the server even after its first kickoff, because only a commissioner's open app moved a week from open to locked. From 0043 pick_window_open() is false from the
+ * week's LOCK INSTANT on — picks_lock_at when set, else its own first kickoff minus the offset (computeEffectiveLockAt, js/scoring.js) — with no job involved, so leave_league refuses
+ * `week_in_progress` there too. THIS PREDICATE IS UNCHANGED, and its `picksLockAt` input is now the EFFECTIVE instant: whoever builds the weeks list for the Leave row passes each non-demo
+ * week with `picksLockAt` replaced by `computeEffectiveLockAt(week, getGames(week.weekId))` (ISO, or null when the week has no dated game), exactly as the server's guard derives it
+ * (DI-495(b)); a DEMO week is exempt from the DERIVED instant on the server (its explicit picks_lock_at clause still applies), so pass it with its own stored `picksLockAt` untouched.
+ * lockinstanttest.mjs pins the instant itself.
+ * (The G-6 bound does not read pick_window_open.)
  */
 export function isWeekInProgressForLeave(week, now = new Date()) {
   if (!week || typeof week.status !== 'string') return false;
@@ -435,6 +443,25 @@ export function weeksInProgressForMember({ weeks = [], picks = [], games = null,
     if (isWeekInProgressForLeave(wk, now)) out.push(w.weekId);
   }
   return out;
+}
+
+/**
+ * DI-542 (W-21) — HOW MANY SPORTS the person is entered in, for the Leave row's wording only (never for the rule: the server's `leave_league` decides who may leave). `entrantSports` is the
+ * list of sport keys of the competitions the person is a member of, when the client has it (the entrants table, `competition_members`); when it does not, the sports of the weeks the
+ * person has their OWN picks in stand in for it (their own picks only: the blind rule). A person who is not in a sport is never counted for it, so a CFB-only member reads the single-sport
+ * sentence. `sportOf(week)` says which sport a week is: the app hands it the week's COMPETITION (a week the client holds carries no `.sport` of its own: the projection never sets it, R1), and the
+ * default reads `week.sport` for a caller that has none. A missing sport is college football; 'college-football' and 'cfb' are the same sport.
+ */
+export function enteredSportCount({ weeks = [], picks = [], memberId = '', entrantSports = null, sportOf = null } = {}) {
+  const norm = (k) => { const s = String(k || 'cfb').trim().toLowerCase(); return s === 'college-football' ? 'cfb' : s; };
+  if (Array.isArray(entrantSports)) return new Set(entrantSports.filter(Boolean).map(norm)).size;
+  if (!memberId || !Array.isArray(weeks) || !Array.isArray(picks)) return 0;
+  const of = typeof sportOf === 'function' ? sportOf : (w) => w.sport;
+  const own = new Set();
+  for (const p of picks) if (p && p.playerId === memberId && p.weekId != null) own.add(p.weekId);
+  const out = new Set();
+  for (const w of weeks) if (w && own.has(w.weekId)) { let k = null; try { k = of(w); } catch { k = null; } out.add(norm(k)); }
+  return out.size;
 }
 
 /**

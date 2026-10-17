@@ -1,0 +1,166 @@
+{
+ "comment": "W-91 mutation kit (S-3). Run with tests/kits/w91-scribe-mutants.mjs. Each mutant is one exact-text replacement in one shipped file and names the suites that must go RED. `red` is the per-suite red count observed when the table was recorded (2026-10-16, fix/w91-scribe-schema). Recorded 2026-10-16 on b91b65cd: 10 run, 10 RED, 0 survivors, tree restored byte-identical. Re-recorded 2026-10-16 after review round 1 (8f3cf920): 13 run, 13 RED, 0 survivors.",
+ "mutants": [
+  {
+   "id": "W1",
+   "group": "schema",
+   "what": "the candidates schema goes back to minItems 3 / maxItems 3 (the shape LIVE refused with HTTP 400)",
+   "file": "supabase/functions/_shared/scribe-bestof.mjs",
+   "old": "        minItems: 1,\n",
+   "new": "        minItems: 3,\n        maxItems: 3,\n",
+   "suites": [
+    "scribeschematest.mjs",
+    "interacttest.mjs",
+    "supabase/tests/functions/scribeAutonomous.twin.mjs"
+   ],
+   "red": 4
+  },
+  {
+   "id": "W2",
+   "group": "schema",
+   "what": "the candidates schema says minItems 2 (any value other than 0 or 1 is refused)",
+   "file": "supabase/functions/_shared/scribe-bestof.mjs",
+   "old": "        minItems: 1,\n",
+   "new": "        minItems: 2,\n",
+   "suites": [
+    "scribeschematest.mjs",
+    "interacttest.mjs",
+    "supabase/tests/functions/scribeAutonomous.twin.mjs"
+   ],
+   "red": 4
+  },
+  {
+   "id": "W3",
+   "group": "schema",
+   "what": "a numeric bound (minimum) is planted in another registered schema (scribe-learn's)",
+   "file": "supabase/functions/_shared/scribeInstantLearnPrompt.js",
+   "old": "confidence: { type: 'number' },",
+   "new": "confidence: { type: 'number', minimum: 0 },",
+   "suites": [
+    "scribeschematest.mjs"
+   ],
+   "red": 1
+  },
+  {
+   "id": "W4",
+   "group": "schema",
+   "what": "a NEW, unregistered json_schema appears in a function file (the source pin must catch it)",
+   "file": "supabase/functions/_shared/callback-evidence.mjs",
+   "old": "export const CALLBACK_OUTPUT_FORMAT = Object.freeze({ type: 'json_schema',",
+   "new": "export const CALLBACK_EXTRA_FORMAT = { type: 'json_schema', schema: { type: 'object', properties: {}, additionalProperties: false } };\nexport const CALLBACK_OUTPUT_FORMAT = Object.freeze({ type: 'json_schema',",
+   "suites": [
+    "scribeschematest.mjs"
+   ],
+   "red": 1
+  },
+  {
+   "id": "W5",
+   "group": "toolloop",
+   "what": "the last tool round no longer forbids tools (the 10-14 empty_response_tool_use comes back)",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "if (round === SCRIBE_MAX_ROUNDS - 1) payload.tool_choice = { type: 'none' };",
+   "new": "/* mutant: no forced answer */",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": 3
+  },
+  {
+   "id": "W6",
+   "group": "toolloop",
+   "what": "off by one: tool_choice none is set on a round the loop never runs",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "if (round === SCRIBE_MAX_ROUNDS - 1) payload.tool_choice",
+   "new": "if (round === SCRIBE_MAX_ROUNDS) payload.tool_choice",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": 3
+  },
+  {
+   "id": "W7",
+   "group": "toolloop",
+   "what": "tools are forbidden on EVERY round (SCRIBE could never look anything up)",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "if (round === SCRIBE_MAX_ROUNDS - 1) payload.tool_choice",
+   "new": "if (round >= 0) payload.tool_choice",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": 5
+  },
+  {
+   "id": "W8",
+   "group": "judge",
+   "what": "the mention path drops the judge's reason from job_runs",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "    judgeHttpStatus, judgeApiErrorType, judgeApiErrorField,\n",
+   "new": "",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs",
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": 4
+  },
+  {
+   "id": "W9",
+   "group": "judge",
+   "what": "the mention path drops the judge's field path",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "apiErrorField: errorReason ? errorReason.field : '' };",
+   "new": "apiErrorField: '' };",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": 1
+  },
+  {
+   "id": "W10",
+   "group": "judge",
+   "what": "the unprompted path drops the judge's field path from job_runs",
+   "file": "supabase/functions/_shared/scribe-autonomous-core.mjs",
+   "old": "        judgeApiErrorField: judgeAnswered ? undefined : (judgeResult.apiErrorField || undefined) }));",
+   "new": "        }));",
+   "suites": [
+    "supabase/tests/functions/scribeAutonomous.twin.mjs"
+   ],
+   "red": 1
+  },
+  {
+   "id": "W11",
+   "group": "spread",
+   "what": "the mention envelope goes back to SPREADING the judge's reason (S6-R9 cannot read a spread's keys)",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "    judgeHttpStatus, judgeApiErrorType, judgeApiErrorField,\n",
+   "new": "    ...{ judgeHttpStatus, judgeApiErrorType, judgeApiErrorField },\n",
+   "suites": [
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": 2
+  },
+  {
+   "id": "W12",
+   "group": "spread",
+   "what": "one of push-alias-migrate's two pinned `...summary` spreads disappears (a stale pin must fail)",
+   "file": "supabase/functions/push-alias-migrate/index.js",
+   "old": "{ ...summary, refused: 1, moved: 0 }",
+   "new": "{ refused: 1, moved: 0 }",
+   "suites": [
+    "supabase/tests/functions.check.mjs"
+   ],
+   "red": 1
+  },
+  {
+   "id": "W13",
+   "group": "judge",
+   "what": "a judge WE aborted is recorded as network_error again instead of timeout",
+   "file": "supabase/functions/scribe-ask/index.js",
+   "old": "return { ok: false, text: '', usage: {}, httpStatus: 0, apiErrorType: reason.type, apiErrorField: '' };",
+   "new": "return { ok: false, text: '', usage: {}, httpStatus: 0, apiErrorType: 'network_error', apiErrorField: '' };",
+   "suites": [
+    "supabase/tests/functions/scribeAsk.twin.mjs"
+   ],
+   "red": 1
+  }
+ ]
+}

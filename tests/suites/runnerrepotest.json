@@ -1,0 +1,17 @@
+{
+  "id": "runnerrepotest",
+  "script": "runnerrepotest.mjs",
+  "label": "runner-repo",
+  "summary": "strict",
+  "floor": 96,
+  "tags": [],
+  "deps": [
+    "tests/suites/**",
+    "../deploy.sh",
+    "loadtest.mjs",
+    "testrun.mjs",
+    "tests/lib/**"
+  ],
+  "expectedMs": 12000,
+  "note": "RAISED from 95 by DESIGN_D1_E (2026-10-15): joinnudgebrowsertest is the twenty-fifth Chromium suite (browser-tagged, and inferred as browser by the runner) - both pins list it. | M-49 (Drew, 2026-10-14: \"Yes, approve 47, 48, 49\"): the runner's checks of the real repo, moved out of testruntest (denylist-real-manifests, repo-integrity, repo-depmap, repo-selftest-selection). Not held: it reads every manifest, every suite script, loadtest.mjs, deploy.sh and builds the whole dependency map, so the generated map selects it for nearly every diff, and it costs seconds."
+}

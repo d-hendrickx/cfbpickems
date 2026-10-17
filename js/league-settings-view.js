@@ -82,6 +82,10 @@ export const LSV_COPY = Object.freeze({
   reopenButton: 'Undo',
   waived: 'Obligation waived.',
   reopened: 'Obligation reopened.',
+  // the deny confirmation (R-19 follow-up, 0046): replaces window.prompt() on Deny, current season and 2K25
+  denyTitle: 'Deny this payment?',
+  denyDanger: 'Deny Payment',
+  denyReasonLabel: 'Reason (optional)',
   // the Commissioner Panel (DI-458 / DI-459 / DI-462)
   inviteClosed: "New members are turned off, so this code won't work right now. Turn it back on in League Settings.",
   leftCaption: 'Left the league. To give them their old spot back: Restore, then New Code.',
@@ -240,10 +244,10 @@ export function leaveRowHTML({ phase = 'idle', blockedWeeks = 0 } = {}, { escHtm
  * The footers under the Leave row, as markup: Q-W's reason (only when blocked) directly under the row, then the "everyone" sentence, the commissioner-only conditional sentence (absent for a
  * player, so the client never derives "sole commissioner" or "only member"), and the muted Delete Account pointer.
  */
-export function leaveFooterHTML({ leagueName = '', isCommissioner = false, blockedWeeks = 0 } = {}, { escHtml } = {}) {
+export function leaveFooterHTML({ leagueName = '', isCommissioner = false, blockedWeeks = 0, enteredSports = 1 } = {}, { escHtml } = {}) {
   requireEscHtml(escHtml, 'leaveFooterHTML');
   const f = leaveFooterCopy({ leagueName, isCommissioner });
-  const blocked = Number(blockedWeeks) > 0 ? `<div class="lc-helper ls-footer ls-footer-reason" id="ls-leave-reason">${escHtml(leaveBlockedSentence(blockedWeeks))}</div>` : '';
+  const blocked = Number(blockedWeeks) > 0 ? `<div class="lc-helper ls-footer ls-footer-reason" id="ls-leave-reason">${escHtml(leaveBlockedSentence(blockedWeeks, { sports: enteredSports }))}</div>` : '';
   const extra = f.commissionerExtra ? ` ${escHtml(f.commissionerExtra)}` : '';
   return `${blocked}<div class="lc-helper ls-footer" id="ls-leave-footer">${escHtml(f.everyone)}${extra}</div><div class="lc-helper ls-footer ls-footer-muted">${escHtml(f.muted)}</div>`;
 }
@@ -269,7 +273,7 @@ export function pausedBannerHTML(text, { escHtml, icon = noIcon } = {}) {
 /**
  * The whole League Settings view (header + body). `ctx`:
  *   leagueName, isCommissioner (the cached role: the page shows a commissioner's controls only when true; a player's DOM has NO commissioner control), paused (leagues.status),
- *   pausedText (PAUSED_LEAGUE_BANNER_TEXT), sportsLabel (comma-joined labels), accepting ({ phase, value } for the switch's first paint), blockedWeeks (Q-W: own in-progress weeks).
+ *   pausedText (PAUSED_LEAGUE_BANNER_TEXT), sportsLabel (comma-joined labels), accepting ({ phase, value } for the switch's first paint), blockedWeeks (Q-W: own in-progress weeks), enteredSports (DI-542: how many sports the person is entered in; two or more reads "your current weeks").
  * Content, top to bottom (DI-457): paused sentence (when paused), the failure-banner slot, League (name card + facts), New members (commissioner only), More (pointers), Leave.
  */
 export function settingsPageHTML(ctx = {}, { escHtml, icon = noIcon } = {}) {
@@ -294,7 +298,7 @@ export function settingsPageHTML(ctx = {}, { escHtml, icon = noIcon } = {}) {
   const more = `<div class="ls-group" data-ls-group="more"><div class="admin-section-title">${escHtml(LSV_COPY.sectionMore)}</div><div class="card ls-card">`
     + `<button type="button" class="ls-row ls-row-nav" data-ls-action="open-rules" aria-label="${escHtml(LSV_COPY.moreRules)}"><span class="ls-row-label">${escHtml(LSV_COPY.moreRules)}</span>${chev}</button>${commRow}</div></div>`;
   const leave = `<div class="ls-group" data-ls-group="leave"><div class="card ls-card" id="ls-leave-card">${leaveRowHTML({ blockedWeeks: c.blockedWeeks }, { escHtml })}</div>`
-    + `<div id="ls-leave-foot">${leaveFooterHTML({ leagueName: name, isCommissioner: isComm, blockedWeeks: c.blockedWeeks }, { escHtml })}</div></div>`;
+    + `<div id="ls-leave-foot">${leaveFooterHTML({ leagueName: name, isCommissioner: isComm, blockedWeeks: c.blockedWeeks, enteredSports: c.enteredSports }, { escHtml })}</div></div>`;
   return `<div class="league-page-header ls-header">
       <button type="button" class="league-page-back" data-ls-action="back" aria-label="${escHtml(LSV_COPY.back)}">${icon('chevronLeft')}</button>
       <h2 class="league-page-title" id="ls-title" tabindex="-1">${escHtml(LSV_COPY.title)}</h2>
@@ -348,6 +352,34 @@ export function waiveSheetHTML({ payerName = '', recipientName = '', weekLabel =
   return actionSheetHTML({
     escHtml, titleId: 'ls-waive-title', title: LSV_COPY.waiveTitle, message, scrimAction: 'cancel', actionAttr: LS_ACTION,
     danger: { label: LSV_COPY.waiveDanger, action: 'confirm-waive' }, cancel: { label: LS_COPY.cancel, action: 'cancel' },
+  });
+}
+
+/**
+ * The deny confirmation (R-19 follow-up, 0046) — the same action sheet as Waive, on the same layer: destructive "Deny
+ * Payment", bold Cancel, the scrim and Esc cancel. It replaces window.prompt(). `withReason` adds ONE optional
+ * single-line field (a reason the payer sees under the Unpaid row) with a live character count up to `max` — CHARACTERS (code points), capped by
+ * app.js, not by a UTF-16 `maxlength` (review N5: two-unit emoji stopped at "100/200"); the 2K25
+ * ledger passes false, because its record keeps a bare status and has nowhere to put a reason. Names and the prize
+ * are plain text through escHtml; the field's value is never echoed into markup.
+ */
+export function denySheetHTML({ payerName = '', recipientName = '', prize = '', withReason = true, max = 200 } = {}, { escHtml } = {}) {
+  requireEscHtml(escHtml, 'denySheetHTML');
+  const payer = leagueLabelOr(payerName, 'Someone');
+  const recipient = leagueLabelOr(recipientName, 'someone');
+  const what = String(prize == null ? '' : prize).trim();
+  const message = `${payer} says they paid ${recipient}${what ? ` (${what})` : ''}. Denying puts it back to unpaid.`;
+  const limit = Math.max(1, Math.floor(Number(max) || 200));
+  const fieldHTML = withReason
+    ? `<div class="lc-as-field">`
+      + `<label class="lc-as-field-lbl" for="ob-deny-reason">${escHtml(LSV_COPY.denyReasonLabel)}</label>`
+      + `<input type="text" id="ob-deny-reason" class="lc-as-input" data-max="${limit}" autocomplete="off" autocapitalize="sentences" enterkeyhint="done" aria-describedby="ob-deny-count">`
+      + `<div class="lc-as-count" id="ob-deny-count">0/${limit}</div>`
+      + `</div>`
+    : '';
+  return actionSheetHTML({
+    escHtml, titleId: 'ob-deny-title', title: LSV_COPY.denyTitle, message, fieldHTML, scrimAction: 'cancel', actionAttr: LS_ACTION,
+    danger: { label: LSV_COPY.denyDanger, action: 'confirm-deny' }, cancel: { label: LS_COPY.cancel, action: 'cancel' },
   });
 }
 

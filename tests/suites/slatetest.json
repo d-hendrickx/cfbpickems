@@ -1,0 +1,20 @@
+{
+  "id": "slatetest",
+  "script": "slatetest.mjs",
+  "label": "112m",
+  "summary": {
+    "regex": "(?:✅ ALL PASS — |❌ )(\\d+) passed, (\\d+) failed",
+    "flags": "",
+    "passed": 1,
+    "failed": 2,
+    "verdict": null,
+    "skipped": null
+  },
+  "floor": 151,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 600,
+  "note": "D1 W-68 / W-69 (2026-10-14): RAISED 146 -> 151: the add door and the swap path are pinned in the slate rule suite. set 2026-09-29 at its first spawned run, after the three stale 📺 expectations were re-derived to icon('tv') (D-1 icon migration) with a non-vacuity check on the glyph). Raise the floor when the suite grows; the ratchet only tightens"
+}

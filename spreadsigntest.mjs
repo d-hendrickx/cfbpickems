@@ -389,20 +389,30 @@ console.log('\n[SS] [structural] every spread-sign write in the source is favori
     'app.js:showGameModal',          // the Favorite+Margin modal — AD-03's canonical fix
     'data-provider.js:parseAndReport', // holds extractSpread()'s destructured write
     'app.js:applyWeekStatusChange',  // manual OPEN->LOCKED freeze
-    'app.js:tickAutoTransition',     // auto OPEN->LOCKED freeze — the SECOND lock path
-    // F4 (2026-09-12) — the add-to-slate payload's `spread:game.spread`
-    // carry-forward was EXTRACTED out of renderAvailableGamesList() into
-    // availAddPayloadJSON(), so the Player Requests card's "+ Add to slate"
-    // could reuse the add path byte-for-byte. The surface that WRITES a spread
-    // sign moved with it, so the required region moves with it too. This is a
-    // rename of the same write, not a relaxation: the entry still names a real
-    // region, and dropping it (or naming a region that carries no spread
-    // occurrence) still fails this assertion.
-    'app.js:availAddPayloadJSON',    // carry-forward into an add-to-slate payload
+    'app.js:tickWeekLegs',           // auto OPEN->LOCKED freeze — the SECOND lock path. D1 (DI-535 #1, 2026-10-07): the leg moved, verbatim, out of tickAutoTransition into tickWeekLegs (one call per sport's current week); the surface that writes the sign moved with it, so the required region moves with it (a rename of the same write, not a relaxation)
+    // RE-DERIVED 2026-10-14 (D1 W-69). F4 (2026-09-12) had this list name 'app.js:availAddPayloadJSON': the add-to-slate payload's hand-written `spread:game.spread` carry-forward, extracted so the
+    // Player Requests card's "+ Add to slate" could reuse the add path. That function is RETIRED with the old Available Games list. The one payload builder is now games-list.js's
+    // poolGameToSlateData(), which carries the pool game through a REST-SPREAD - there is no `spread:` write left to scan, so the entry comes off this list and the new shape is pinned BELOW instead
+    // (a behavioral proof that the sign is copied, never derived, and a scan that games-list.js has no spread write at all). This is a rename of the same surface, not a relaxation.
     'data-model.js:createGame',      // the null defaults every game starts from
     'data-model.js:DEMO_GAMES',      // the exempted, previously-wrong fixture array
     'data-model.js:HISTORICAL_DEMO_GAMES',
   ];
+  // D1 W-69: the replacement for the retired availAddPayloadJSON region - the pool game's sign reaches the new slate game verbatim, through the rest-spread, in BOTH directions
+  // (home favored = negative, away favored = positive), and games-list.js writes no `spread` / `lockedSpread` of its own.
+  {
+    const GL = await import('./js/games-list.js');
+    const homeFav = GL.poolGameToSlateData({ homeTeam: 'H', awayTeam: 'A', spread: -3.5, favorite: 'H', lockedSpread: null }, { weekId: 'w' });
+    const awayFav = GL.poolGameToSlateData({ homeTeam: 'H', awayTeam: 'A', spread: 7, favorite: 'A', lockedSpread: 7 }, { weekId: 'w' });
+    const pk = GL.poolGameToSlateData({ homeTeam: 'H', awayTeam: 'A', spread: 0, favorite: null }, { weekId: 'w' });
+    const none = GL.poolGameToSlateData({ homeTeam: 'H', awayTeam: 'A', spread: null, favorite: null }, { weekId: 'w' });
+    assert(homeFav.spread === -3.5 && homeFav.favorite === 'H' && awayFav.spread === 7 && awayFav.favorite === 'A' && awayFav.lockedSpread === 7 && pk.spread === 0 && none.spread === null,
+      'games-list.js poolGameToSlateData() carries the pool game\'s signed spread, favorite and lockedSpread VERBATIM (home favored negative, away favored positive, PK 0, none null) - it derives no sign');
+    const glSrc = await readFile(new URL('./js/games-list.js', import.meta.url), 'utf8');
+    const stripped = glSrc.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '')).join('\n');
+    assert(FIELDS.every(f => objectLiteralOccurrences(stripped, f).length === 0), 'games-list.js has NO object-literal write of spread / lockedSpread - the sign cannot be changed in the Games list module');
+    assert(!/availAddPayloadJSON/.test(appJsSrc.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '')).join('\n')), 'the retired availAddPayloadJSON() is gone from the code of app.js (no second payload builder)');
+  }
   const missing = mustReach.filter(r => !seenRegionNames.includes(r));
   assert(missing.length === 0,
     `the scan reaches every surface that has actually written a spread sign, historically or today (missing: ${missing.join(', ') || 'none'})`);

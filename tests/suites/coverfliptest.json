@@ -1,0 +1,12 @@
+{
+  "id": "coverfliptest",
+  "script": "coverfliptest.mjs",
+  "label": "88b",
+  "summary": "loose",
+  "floor": 26,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "raised 23 -> 26 by N8 / DI-439 (2026-09-29): 4-2 and 4-3 amended for definition A (the 3-to-1 fixture's turn back to HOME is L=1, G=3 and is silent — a change of expectation, not of mechanism) and [10] adds the `espnSport: null` variant (the value every ordinary ESPN college …"
+}

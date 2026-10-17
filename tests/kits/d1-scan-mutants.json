@@ -1,0 +1,672 @@
+{
+ "comment": "D1 Lane C scan / call-out mutation kit (S-3; DI-649..656, 0056). Run with tests/kits/d1-scan-mutants.mjs. `red` is the per-suite red count observed when the table was recorded; `equivalent` names a mutant that survives on purpose, with its reason. Recorded 2026-10-08 on feat/d1-scan: 42 run, 42 RED, 0 survivors; then B1 and G-completion-leaks-pick (the blind-rule visibility bypasses) added, both RED: 44 of 44 (the first run left eight survivors S2, S7, S8, S12, C1, K2, E1, E2; the scan twin's sections 7b and 12b were written to kill them). Re-recorded 2026-10-14 after reviewer BLOCK 1/2 (Q1-Q4, X1-X3, N1, D1 added): 49 run, 49 RED, every mutant outside js/scribe-callout.js (C1-C6 not run that day: the scribe agent's uncommitted edits to that file). 2026-10-14, after the scribe pools (e0a8b5f6) and the heat / sentence fixes: C1-C8 run, 8 RED, no stale target.",
+ "mutants": [
+  {
+   "id": "S1",
+   "group": "scan",
+   "what": "the scan runs without the x-cfbp-job check",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "  try { requireJobCaller(req); } catch (err) { return refusalResponse(err); }",
+   "new": "  /* mutant: no job-caller check */",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:3"
+  },
+  {
+   "id": "S2",
+   "group": "scan",
+   "what": "the per-league lease is ignored (two ticks run the same league at once)",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "  if (!lease || lease.reserved !== true) return { envelope: envelopeSkipped(runId, SKIPPED.THROTTLED, { what: 'lease' }), status: 200 };",
+   "new": "",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:2"
+  },
+  {
+   "id": "S3",
+   "group": "blind",
+   "what": "people who have FINISHED are named (the yes/no is ignored)",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "  return data.filter((r) => r && r.complete === false)",
+   "new": "  return data.filter((r) => r)",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:16"
+  },
+  {
+   "id": "S4",
+   "group": "blind",
+   "what": "guests and unlinked or inactive rows are named (real-member filter gone)",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "    .filter((m) => isRealMember(m));\n}",
+   "new": "    .filter((m) => !!m);\n}",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:9"
+  },
+  {
+   "id": "B1",
+   "group": "blind",
+   "what": "VISIBILITY BYPASS: the call-out reads picks and threads the selected teams into its body",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "    body: capMessageBody(line.body), notify: false,",
+   "new": "    body: capMessageBody(line.body + ' ' + ((((await sb.from('picks').select('selected_team').eq('league_id', leagueId).limit(2)).data) || []).map((p) => p.selected_team).join(','))), notify: false,",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:3"
+  },
+  {
+   "id": "S5",
+   "group": "scan",
+   "what": "the re-read before the insert no longer stops a post when everyone finished",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "  if (!again.length) return { outcome: 'none_remaining' };",
+   "new": "",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:1"
+  },
+  {
+   "id": "S6",
+   "group": "scan",
+   "what": "the re-read result is not applied (someone who just finished is still named)",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "    missing = again;\n    line = compose(missing);",
+   "new": "    void again;",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:1"
+  },
+  {
+   "id": "S7",
+   "group": "ceiling",
+   "what": "the per-lock occasion ceiling is ignored",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "  if (!calloutOccasionAllowed({ moment: step.moment, ceiling, priorOccasions: prior.length })) return { outcome: 'ceiling', suppressed: true };",
+   "new": "",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:2"
+  },
+  {
+   "id": "S8",
+   "group": "spacing",
+   "what": "the 20-minute gap between call-outs is ignored",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "    if (nowMs - Date.parse(last.ts) < CALLOUT_MIN_GAP_MS) return { outcome: 'spacing', suppressed: true };",
+   "new": "",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:1"
+  },
+  {
+   "id": "S9",
+   "group": "spacing",
+   "what": "a second call-out no longer waits for a human voice in between",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "    if (!Array.isArray(voices) || !voices.length) return { outcome: 'spacing', suppressed: true };",
+   "new": "",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:2"
+  },
+  {
+   "id": "S10",
+   "group": "hardline",
+   "what": "a participation hard line no longer keeps a member unnamed",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "lines.filter((r) => r && r.kind === 'hardline' && hardLineCoversParticipation(r.value))",
+   "new": "lines.filter(() => false)",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:1"
+  },
+  {
+   "id": "S11",
+   "group": "scan",
+   "what": "the call-out pushes phones (notify true)",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "    body: capMessageBody(line.body), notify: false,",
+   "new": "    body: capMessageBody(line.body), notify: true,",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:1"
+  },
+  {
+   "id": "S12",
+   "group": "p10",
+   "what": "the ceiling read drops its relayed filter (ten newer member-relayed look-alikes crowd SCRIBE's real occasion out of the limit-10 read)",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "    .eq('league_id', leagueId).eq('relayed', false).is('visible_to', null)\n    .eq('meta->>occasion', CALLOUT_OCCASION)",
+   "new": "    .eq('league_id', leagueId).is('visible_to', null)\n    .eq('meta->>occasion', CALLOUT_OCCASION)",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:1"
+  },
+  {
+   "id": "F1a",
+   "group": "p10",
+   "what": "Security F-1: the pipeline's never-two-in-a-row read drops its relayed filter (sixty newer member-relayed rows crowd SCRIBE's last post out of the window)",
+   "file": "supabase/functions/_shared/scribe-autonomous-core.mjs",
+   "old": "    .eq('league_id', leagueId)\n    .eq('relayed', false)\n    .is('visible_to', null)\n    .order('seq', { ascending: false })\n    .limit(CONSECUTIVE_SCAN_ROWS);",
+   "new": "    .eq('league_id', leagueId)\n    .is('visible_to', null)\n    .order('seq', { ascending: false })\n    .limit(CONSECUTIVE_SCAN_ROWS);",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs",
+    "supabase/tests/functions/scribeAutonomous.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:1"
+  },
+  {
+   "id": "F1b",
+   "group": "p10",
+   "what": "Security F-1: the call-out's never-two-in-a-row read drops its relayed filter (the same crowding)",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": ".eq('league_id', leagueId).eq('relayed', false).is('visible_to', null).order('seq', { ascending: false }).limit(RECENT_ROOM_ROWS);",
+   "new": ".eq('league_id', leagueId).is('visible_to', null).order('seq', { ascending: false }).limit(RECENT_ROOM_ROWS);",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:2"
+  },
+  {
+   "id": "C1",
+   "group": "callout",
+   "what": "the final moment may exceed the ceiling (< becomes <=)",
+   "file": "js/scribe-callout.js",
+   "old": "  return moment === 'final' ? used < cap : used < cap - 1;",
+   "new": "  return moment === 'final' ? used <= cap : used < cap - 1;",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:2"
+  },
+  {
+   "id": "C2",
+   "group": "callout",
+   "what": "the ten-minute cutoff before lock is gone",
+   "file": "js/scribe-callout.js",
+   "old": "  if (now >= L - CALLOUT_CUTOFF_MS) return { moment: null, reason: 'too_late' };",
+   "new": "  if (now >= L) return { moment: null, reason: 'too_late' };",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:1"
+  },
+  {
+   "id": "C3",
+   "group": "callout",
+   "what": "the post id keeps the league uuid as written (uppercase escapes 0045 reservation)",
+   "file": "js/scribe-callout.js",
+   "old": "  const league = String(leagueId || '').toLowerCase();",
+   "new": "  const league = String(leagueId || '');",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:1"
+  },
+  {
+   "id": "C4",
+   "group": "callout",
+   "what": "a guest counts as a real member",
+   "file": "js/scribe-callout.js",
+   "old": "  return !!row && row.active === true && row.tournament_only_guest !== true",
+   "new": "  return !!row && row.active === true",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:17"
+  },
+  {
+   "id": "C5",
+   "group": "callout",
+   "what": "the switch reads a truthy value (string \"true\") as on",
+   "file": "js/scribe-callout.js",
+   "old": "  return jobs.scribeCallout === true && s.scribeAutonomousEnabled !== false && s.chatEnabled !== false;",
+   "new": "  return !!jobs.scribeCallout && s.scribeAutonomousEnabled !== false && s.chatEnabled !== false;",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs",
+    "supabase/tests/functions/reminders.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:1 reminders.twin.mjs:1"
+  },
+  {
+   "id": "C6",
+   "group": "hardline",
+   "what": "a member with a participation hard line is named",
+   "file": "js/scribe-callout.js",
+   "old": "  const nameable = [...all.filter((m) => m.hardLine !== true)]",
+   "new": "  const nameable = [...all]",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:5"
+  },
+  {
+   "id": "C7",
+   "group": "heat",
+   "what": "the heat is read from the first names shown, not everyone who could be named (a capped member outside them lifts the line to No Mercy)",
+   "file": "js/scribe-callout.js",
+   "old": "  const heat = heatFor(nameable.map((m) => m.id));",
+   "new": "  const heat = heatFor(nameable.slice(0, 2).map((m) => m.id));",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:2"
+  },
+  {
+   "id": "C8",
+   "group": "callout",
+   "what": "the two-sentence budget is counted on the rendered body again (a name like \"J.R. Smith\" drops the line to count-only)",
+   "file": "js/scribe-callout.js",
+   "old": "lineSentenceCount(line.text, slots) > 2",
+   "new": "sentenceCount(body) > 2",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:1"
+  },
+  {
+   "id": "R1",
+   "group": "reminders",
+   "what": "reminders still posts its locking-soon room line while the call-out owns it",
+   "file": "supabase/functions/reminders/index.js",
+   "old": "    if (scribeOwnsRoomPost) continue;",
+   "new": "    if (false) continue;",
+   "suites": [
+    "supabase/tests/functions/reminders.twin.mjs"
+   ],
+   "red": "reminders.twin.mjs:3"
+  },
+  {
+   "id": "K1",
+   "group": "core",
+   "what": "the per-event ticket lasts 30 minutes instead of 24 hours",
+   "file": "supabase/functions/_shared/scribe-autonomous-core.mjs",
+   "old": "export const POST_TICKET_COOLDOWN_MS = 24 * 60 * 60 * 1000;",
+   "new": "export const POST_TICKET_COOLDOWN_MS = 30 * 60 * 1000;",
+   "suites": [
+    "supabase/tests/functions/scribeAutonomous.twin.mjs",
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeAutonomous.twin.mjs:2 scribeScan.twin.mjs:1"
+  },
+  {
+   "id": "K2",
+   "group": "core",
+   "what": "the pipeline no longer refuses scan-only triggers on the client path",
+   "file": "supabase/functions/_shared/scribe-autonomous-core.mjs",
+   "old": "  if (path === 'client' && SCAN_ONLY_TRIGGERS.includes(trigger)) {",
+   "new": "  if (false) {",
+   "suites": [
+    "supabase/tests/functions/scribeAutonomous.twin.mjs",
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeAutonomous.twin.mjs:0 scribeScan.twin.mjs:3"
+  },
+  {
+   "id": "K3",
+   "group": "core",
+   "what": "the handler no longer refuses scan-only triggers before its service-role work",
+   "file": "supabase/functions/scribe-autonomous/index.js",
+   "old": "  if (SCAN_ONLY_TRIGGERS.includes(trigger)) {\n    return jsonResponse(envelopeError(runId, 'scan_only_trigger'), 400);",
+   "new": "  if (false) {\n    return jsonResponse(envelopeError(runId, 'scan_only_trigger'), 400);",
+   "suites": [
+    "supabase/tests/functions/scribeAutonomous.twin.mjs"
+   ],
+   "red": "scribeAutonomous.twin.mjs:3"
+  },
+  {
+   "id": "E1",
+   "group": "p10",
+   "what": "the chat-silence verifier counts a member-relayed row as another member speaking (relayed filter gone)",
+   "file": "supabase/functions/_shared/scribe-evidence.mjs",
+   "old": "    const { data: win, error: winErr } = await sb.from('messages').select(NONPART_CHAT_SELECT)\n      .eq('league_id', leagueId).eq('author_kind', 'player').eq('relayed', false).is('visible_to', null)",
+   "new": "    const { data: win, error: winErr } = await sb.from('messages').select(NONPART_CHAT_SELECT)\n      .eq('league_id', leagueId).eq('author_kind', 'player').is('visible_to', null)",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:1"
+  },
+  {
+   "id": "E2",
+   "group": "evidence",
+   "what": "the picks-absence trigger no longer needs three hours before lock",
+   "file": "supabase/functions/_shared/scribe-evidence.mjs",
+   "old": "lockMs - now <= NONPART_PICKS_MIN_LEAD_MS) return no();",
+   "new": "lockMs - now <= 0) return no();",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:1"
+  },
+  {
+   "id": "H1",
+   "group": "ui",
+   "what": "the scan help line shows with both switches off (it would promise a scan that is not running)",
+   "file": "js/app.js",
+   "old": "  return bag.scribeScan === true || bag.scribeCallout === true;",
+   "new": "  return true;",
+   "suites": [
+    "groupdtest.mjs"
+   ],
+   "red": "groupdtest.mjs:2"
+  },
+  {
+   "id": "H2",
+   "group": "ui",
+   "what": "the help line treats a string \"true\" as on",
+   "file": "js/app.js",
+   "old": "  return bag.scribeScan === true || bag.scribeCallout === true;",
+   "new": "  return !!bag.scribeScan || !!bag.scribeCallout;",
+   "suites": [
+    "groupdtest.mjs"
+   ],
+   "red": "groupdtest.mjs:1"
+  },
+  {
+   "id": "H3",
+   "group": "ui",
+   "what": "the two rows render as \"Not built yet\" (disabled toggles)",
+   "file": "js/app.js",
+   "old": "scribeReact: true, scribeCallout: true, scribeScan: true });",
+   "new": "scribeReact: true });",
+   "suites": [
+    "bgjobscardtest.mjs"
+   ],
+   "red": "bgjobscardtest.mjs:6"
+  },
+  {
+   "id": "H4",
+   "group": "ui",
+   "what": "the scan row reads the call-out's run rows",
+   "file": "js/app.js",
+   "old": "  scribeScan: 'scribe-scan',",
+   "new": "  scribeScan: 'scribe-callout',",
+   "suites": [
+    "bgjobscardtest.mjs"
+   ],
+   "red": "bgjobscardtest.mjs:1"
+  },
+  {
+   "id": "Q1",
+   "group": "dial",
+   "what": "BLOCK 2: every verified signal in the league is scored together again (an absence rides an unrelated event over Reserved)",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "  const names = scanSignalGroup(best, verified);",
+   "new": "  const names = [...new Set(verified.map((x) => x.trigger))];",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:2"
+  },
+  {
+   "id": "Q2",
+   "group": "dial",
+   "what": "BLOCK 2: an absence combines with a signal about the same member",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "  if (SCORES_ALONE_TRIGGERS.includes(a.trigger) || SCORES_ALONE_TRIGGERS.includes(b.trigger)) return false;\n",
+   "new": "",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:2"
+  },
+  {
+   "id": "Q3",
+   "group": "dial",
+   "what": "BLOCK 2: the history callback combines with a signal about the same member, not only the same game",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "  if (a.trigger === 'historyCallback' || b.trigger === 'historyCallback') return sameGame;\n",
+   "new": "",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:1"
+  },
+  {
+   "id": "Q4",
+   "group": "dial",
+   "what": "the absence questions go last again, so a busy finalize pushes them past the 80-question cap",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "  const questions = [...np.out, ...events].slice(0, SCAN_MAX_CANDIDATES);",
+   "new": "  const questions = [...events, ...np.out].slice(0, SCAN_MAX_CANDIDATES);",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:1"
+  },
+  {
+   "id": "X1",
+   "group": "callout",
+   "what": "the FINAL call-out loses its exemption from \"never two unprompted in a row\"",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "  if (step.moment !== 'final') {",
+   "new": "  if (true) {",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:2"
+  },
+  {
+   "id": "X2",
+   "group": "callout",
+   "what": "the EARLY call-out is exempted too (no \"never two in a row\" at all)",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "  if (step.moment !== 'final') {",
+   "new": "  if (false) {",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:3"
+  },
+  {
+   "id": "X3",
+   "group": "callout",
+   "what": "two sports post two call-outs in the same tick",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "  if (postedThisTick) return { outcome: 'next_tick', suppressed: true };\n",
+   "new": "",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:2"
+  },
+  {
+   "id": "N1",
+   "group": "callout",
+   "what": "the call-out ignores the \"name non-submitters\" setting and names people anyway",
+   "file": "supabase/functions/scribe-scan/index.js",
+   "old": "hardLine: !nameNonSubmitters || covered.has(String(m.id))",
+   "new": "hardLine: covered.has(String(m.id))",
+   "suites": [
+    "supabase/tests/functions/scribeScan.twin.mjs"
+   ],
+   "red": "scribeScan.twin.mjs:3"
+  },
+  {
+   "id": "D1",
+   "group": "status",
+   "what": "0056's fallback split goes back to chat 11, analysis 2, retrieval 1 (not D-72)",
+   "file": "supabase/migrations/0056_scribe_scan_jobs.sql",
+   "old": "'{\"chat\":10,\"learn\":3,\"classify\":2,\"judge\":1,\"feed\":5,\"analysis\":1,\"retrieval\":3}'::jsonb",
+   "new": "'{\"chat\":11,\"learn\":3,\"classify\":2,\"judge\":1,\"feed\":5,\"analysis\":2,\"retrieval\":1}'::jsonb",
+   "suites": [
+    "supabase/tests/static.check.mjs",
+    "supabase/tests/pglite0056.check.mjs"
+   ],
+   "red": "static.check.mjs:1 pglite0056.check.mjs:1"
+  },
+  {
+   "id": "T1",
+   "group": "status",
+   "what": "the news collector's cron waits 60 s again (pg_net abandons a run the collector is still finishing)",
+   "file": "supabase/migrations/0056_scribe_scan_jobs.sql",
+   "old": "        timeout_milliseconds := 150000)\n      where exists (select 1 from public.platform_kv k where k.key = 'news_ingest'",
+   "new": "        timeout_milliseconds := 60000)\n      where exists (select 1 from public.platform_kv k where k.key = 'news_ingest'",
+   "suites": [
+    "supabase/tests/static.check.mjs",
+    "supabase/tests/pglite0056.check.mjs"
+   ],
+   "red": "static.check.mjs:1 pglite0056.check.mjs:1"
+  },
+  {
+   "id": "T2",
+   "group": "status",
+   "what": "content_status() drops identity_drift from its list (a drifted feed reads as \"The feed returned an error\")",
+   "file": "supabase/migrations/0056_scribe_scan_jobs.sql",
+   "old": "                                     'identity_drift', 'timeout', 'too_large', 'doctype_refused', 'no_items', 'scan_budget', 'fetch_error'];",
+   "new": "                                     'timeout', 'too_large', 'doctype_refused', 'no_items', 'scan_budget', 'fetch_error'];",
+   "suites": [
+    "supabase/tests/static.check.mjs",
+    "supabase/tests/pglite0056.check.mjs"
+   ],
+   "red": "static.check.mjs:1 pglite0056.check.mjs:1"
+  },
+  {
+   "id": "T3",
+   "group": "status",
+   "what": "the card loses its scan_budget line (the code renders as unrecognised)",
+   "file": "js/content-status-card.js",
+   "old": "  scan_budget: 'Paused after repeated failures to read the feed in time. Re-enable it after a check.',\n",
+   "new": "",
+   "suites": [
+    "supabase/tests/static.check.mjs"
+   ],
+   "red": "static.check.mjs:2"
+  },
+  {
+   "id": "G-completion-authed",
+   "group": "pglite",
+   "what": "0056 completion-authed (the BEHAVIOUR assertions alone: the file's own end-state proof removed)",
+   "pgliteSuite": "supabase/tests/pglite0056.check.mjs",
+   "pglite": "completion-authed-noproof",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G-completion-no-league-check",
+   "group": "pglite",
+   "what": "0056 completion-no-league-check (the BEHAVIOUR assertions alone: the file's own end-state proof removed)",
+   "pgliteSuite": "supabase/tests/pglite0056.check.mjs",
+   "pglite": "completion-no-league-check-noproof",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G-completion-no-competition-check",
+   "group": "pglite",
+   "what": "0056 completion-no-competition-check (the BEHAVIOUR assertions alone: the file's own end-state proof removed)",
+   "pgliteSuite": "supabase/tests/pglite0056.check.mjs",
+   "pglite": "completion-no-competition-check-noproof",
+   "red": "pglite:2"
+  },
+  {
+   "id": "G-completion-own-rule",
+   "group": "pglite",
+   "what": "0056 completion-own-rule (the BEHAVIOUR assertions alone: the file's own end-state proof removed)",
+   "pgliteSuite": "supabase/tests/pglite0056.check.mjs",
+   "pglite": "completion-own-rule-noproof",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G-completion-any-pick",
+   "group": "pglite",
+   "what": "0056 completion-any-pick (the BEHAVIOUR assertions alone: the file's own end-state proof removed)",
+   "pgliteSuite": "supabase/tests/pglite0056.check.mjs",
+   "pglite": "completion-any-pick-noproof",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G-completion-leaks-pick",
+   "group": "pglite",
+   "what": "0056 VISIBILITY BYPASS: job_week_completion smuggles the selections out inside member_id (BEHAVIOUR assertions alone)",
+   "pgliteSuite": "supabase/tests/pglite0056.check.mjs",
+   "pglite": "completion-leaks-pick-noproof",
+   "red": "pglite:3"
+  },
+  {
+   "id": "G-due-authed",
+   "group": "pglite",
+   "what": "0056 due-authed (the BEHAVIOUR assertions alone: the file's own end-state proof removed)",
+   "pgliteSuite": "supabase/tests/pglite0056.check.mjs",
+   "pglite": "due-authed-noproof",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G-due-string-true",
+   "group": "pglite",
+   "what": "0056 due-string-true (the BEHAVIOUR assertions alone: the file's own end-state proof removed)",
+   "pgliteSuite": "supabase/tests/pglite0056.check.mjs",
+   "pglite": "due-string-true-noproof",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G-due-paused",
+   "group": "pglite",
+   "what": "0056 due-paused (the BEHAVIOUR assertions alone: the file's own end-state proof removed)",
+   "pgliteSuite": "supabase/tests/pglite0056.check.mjs",
+   "pglite": "due-paused-noproof",
+   "red": "pglite:2"
+  },
+  {
+   "id": "G-status-no-gate",
+   "group": "pglite",
+   "what": "0056 status-no-gate (the BEHAVIOUR assertions alone: the file's own end-state proof removed)",
+   "pgliteSuite": "supabase/tests/pglite0056.check.mjs",
+   "pglite": "status-no-gate-noproof",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G-status-anon",
+   "group": "pglite",
+   "what": "0056 status-anon (the BEHAVIOUR assertions alone: the file's own end-state proof removed)",
+   "pgliteSuite": "supabase/tests/pglite0056.check.mjs",
+   "pglite": "status-anon-noproof",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G-status-error-leak",
+   "group": "pglite",
+   "what": "0056 status-error-leak (the BEHAVIOUR assertions alone: the file's own end-state proof removed)",
+   "pgliteSuite": "supabase/tests/pglite0056.check.mjs",
+   "pglite": "status-error-leak-noproof",
+   "red": "pglite:2"
+  },
+  {
+   "id": "G-status-league-leak",
+   "group": "pglite",
+   "what": "0056 status-league-leak (the BEHAVIOUR assertions alone: the file's own end-state proof removed)",
+   "pgliteSuite": "supabase/tests/pglite0056.check.mjs",
+   "pglite": "status-league-leak-noproof",
+   "red": "pglite:3"
+  },
+  {
+   "id": "G-cron-auth",
+   "group": "pglite",
+   "what": "0056 cron-auth (the BEHAVIOUR assertions alone: the file's own end-state proof removed)",
+   "pgliteSuite": "supabase/tests/pglite0056.check.mjs",
+   "pglite": "cron-auth-noproof",
+   "red": "pglite:1"
+  },
+  {
+   "id": "G-callout-open",
+   "group": "pglite",
+   "what": "0045's reservation no longer covers scribe_callout_<league>_ (census and behaviour alone)",
+   "pgliteSuite": "supabase/tests/pglite0045.check.mjs",
+   "pglite": "callout-open-noproof",
+   "red": "pglite:1"
+  }
+ ]
+}

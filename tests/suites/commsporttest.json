@@ -1,0 +1,10 @@
+{
+  "id": "commsporttest",
+  "script": "commsporttest.mjs",
+  "summary": "strict",
+  "floor": 96,
+  "tags": ["quick", "tz"],
+  "deps": ["js/app.js", "js/multisport-admin.js", "js/sport-seam.js", "js/week-wizard.js", "js/leagues-home.js", "js/competition.js", "css/styles.css"],
+  "expectedMs": 1500,
+  "note": "(D1 combine, 2026-10-08: RAISED from 89 to 90 - the lens forgets a stale local choice [multisporttest 9h2]; resetLensSport() is called once [commsporttest 10e]) - D1 / DI-532..534: the commissioner runs more than one sport - Comm lens + all-sports card (rendered), independent publish, the per-competition active-week pointer, Add a sport (the sheet, one add, a double press is one add), Archive, the wizard's Sport field and Step 3 controls."
+}

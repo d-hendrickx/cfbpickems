@@ -1,0 +1,12 @@
+{
+  "id": "statusbartest",
+  "script": "statusbartest.mjs",
+  "label": "112c-statusbar",
+  "summary": "loose",
+  "floor": 70,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "RAISED from 69 by SP-52 (2026-10-01) to the suite's actual 70 (it was one under); [5j]/[5k] re-derived (the :where(body) var(--maroon) alias is replaced by the per-look --chrome-bg token, A1.1), same count; set 2026-09-30 at its first spawned run). Raise the floor when the suite …"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "matrixheadertest",
+  "script": "matrixheadertest.mjs",
+  "label": "112j",
+  "summary": "loose",
+  "floor": 48,
+  "tags": [
+    "browser",
+    "tz"
+  ],
+  "expectedMs": 2700,
+  "note": "set 2026-09-28 at its first spawned run). Raise the floor when the suite grows; the ratchet only tightens"
+}

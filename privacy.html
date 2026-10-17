@@ -16,7 +16,7 @@
 </head>
 <body>
   <h1>Privacy</h1>
-  <p class="muted">Munera (irbfootball.com and the Munera iPhone app) · last updated 2026-10-02</p>
+  <p class="muted">Munera (irbfootball.com and the Munera iPhone app) · last updated 2026-10-15</p>
 
   <p>Munera, first built as IRB Pick 'Ems, is a pick'em app for private leagues of friends. Leagues are private: you see a league only if you are a member, and you become a member only when its commissioner adds you or you use a code shared from inside the league. This page says plainly what the app stores, who can see it, and who helps us run it.</p>
 
@@ -45,6 +45,7 @@
 
   <h2>AI features (SCRIBE)</h2>
   <p>SCRIBE is an AI character that posts in league chat and answers when someone mentions it. Its messages are written by an AI model from Anthropic, not by a person. To write them, the app sends Anthropic the league content SCRIBE needs: recent chat messages and who posted them (by league nickname), and league information such as nicknames, initials, alma maters, picks once they are visible to the league, results and standings, and SCRIBE's notes, including the limits players have set. The app does not send Anthropic your email address or phone number. When SCRIBE looks something up, the search runs through Anthropic's web search tool. Anthropic's commercial terms do not allow it to train its models on this content. A league's commissioner can stop SCRIBE from joining conversations on its own; it still answers when someone mentions it.</p>
+  <p>SCRIBE also writes short Home cards from public sports information, such as team records and player statistics. No league messages, picks or member information are sent for those cards. When someone asks SCRIBE a current sports question, only that question, without names or league content, is used for the web search.</p>
 
   <h2>Who helps us run the app</h2>
   <ul>
@@ -53,7 +54,8 @@
     <li><strong>OneSignal</strong> delivers push notifications. It receives the identifier we assign, your device token if you turn push on, and each notification, which can include a league's name, the sender's nickname and a short preview of a chat message. Its software also collects technical information it needs to deliver notifications and to count how many are opened.</li>
     <li><strong>Anthropic</strong> provides the AI model behind SCRIBE, as described above.</li>
     <li><strong>GitHub Pages</strong> hosts the website.</li>
-    <li><strong>ESPN</strong> provides live scores and team logos through its public scoreboard and, when News is on, sports headlines and their pictures. Your browser or phone asks ESPN for these directly, so ESPN sees your IP address as any website would; nothing about your account is sent. If the app can't reach ESPN's scoreboard or team list directly, the request may be relayed through a public relay service (allorigins, corsproxy.io or codetabs), which likewise sees your IP address and the address requested, and nothing about your account. Headlines are never relayed. Our server also fetches scores from ESPN on the league's behalf. Turning News off stops the headline requests. Tapping a headline opens ESPN's website (on iPhone, inside the app), under ESPN's own privacy policy.</li>
+    <li><strong>ESPN</strong> provides live scores and team logos through its public scoreboard. Your browser or phone asks ESPN for these directly, so ESPN sees your IP address as any website would; nothing about your account is sent. If the app can't reach ESPN's scoreboard or team list directly, the request may be relayed through a public relay service (allorigins, corsproxy.io or codetabs), which likewise sees your IP address and the address requested, and nothing about your account. Our server also fetches scores from ESPN on the league's behalf.</li>
+    <li><strong>Sports publishers</strong> — When News is on, our servers collect public headline feeds from sports publishers (ESPN, CBS Sports, Yahoo Sports, Sports Illustrated, NBC Sports, NCAA.com and Fox News) and keep each headline, link and picture address for 14 days. Nothing about you is sent in those requests. Your phone reads the headlines from our servers, not from the publishers. Pictures on a headline load directly from the publisher's own servers while the headline is on screen, so that publisher sees your device's address. Tapping a headline opens the publisher's website (on iPhone, inside the app) under that publisher's own privacy policy. Turning News off stops the headline and picture requests.</li>
   </ul>
   <p>Before September 2026, IRB Pick 'Ems kept its league data in a private Google Sheet. That Sheet is now a read-only archive and receives no new data.</p>
 

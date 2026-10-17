@@ -1,0 +1,10 @@
+{
+  "id": "pickstatustest",
+  "script": "pickstatustest.mjs",
+  "summary": "strict",
+  "floor": 299,
+  "tags": ["quick", "tz"],
+  "deps": ["js/pick-status.js", "js/app.js", "css/styles.css", "js/storage.js", "js/supabase-backend.js", "js/competition.js"],
+  "expectedMs": 4000,
+  "note": "W-18 / UN-412, DI-500..502, 506: the Who's in strip - pure model, copy, markup, patcher, throttle; every placement; the blind rule in both worlds. Registered 2026-10-07 (it was loadtest [137])."
+}

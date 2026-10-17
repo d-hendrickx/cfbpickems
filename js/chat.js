@@ -75,9 +75,11 @@ import {
   getAccountUserId, getDeviceDataOwner, IDENTITY_KEY_SEP,
   hasConfigBeenRead, getLastKnownAuthMode,
 } from './auth.js';
+// D1 (DI-553 / DI-530; security A4) — the closed set of sport tags a message may carry. A pure leaf with no imports, so it adds no edge that could cycle.
+import { validSportTag } from './sport-tag.js';
 
 // ── Device-local persistence keys (AD-12) ─────────────────────────────────────
-const K_LASTSEEN = 'cfbp_chat_lastseen2';   // { seq, byTag: { gameId: seq } }
+const K_LASTSEEN = 'cfbp_chat_lastseen2';   // { seq, byTag: { gameId: seq, 'sport:<dbCode>': seq } } — the `sport:` namespace is DI-553's, written ONLY by markSportSeen()
 const K_OUTBOX   = 'cfbp_chat_outbox2';
 const K_EPOCH_APPLIED = 'cfbp_chat_epoch_applied';   // UN-112 — device-local watermark, see initChat()
 // DI-169b — SAME precedent as the three keys above: a bare, guarded
@@ -272,6 +274,29 @@ export function backfillBlockedByEpoch() {
   return epochSeq > 0 && S.backfillLow !== null && S.backfillLow <= epochSeq;
 }
 
+/**
+ * D1 Lane B / DI-598 (review B1, 2026-10-14) — HOW FAR BACK HAS THIS DEVICE LOADED THE LOG?
+ *
+ * A device can hold only the TAIL of the room: a cache-primed boot fetches just what is newer than its cached head, and "load earlier" walks backwards from `S.backfillLow`
+ * a page at a time. A game's thread that kicked off before that point may have messages this device simply has not fetched, so a screen must never print "0" or "no one talked"
+ * for it. This is the one pure read both the history screens' "Thread" rows and the thread sheet's empty words ask. It is a TIMESTAMP so a caller resolves it once per pass
+ * and compares each game's kickoff against it (`kickoffMs >= chatLoadedFromTs()` = this device has the game's whole thread).
+ *
+ *   -Infinity  the log is held from its beginning (the first event, seq 1, is here), there is no server log to be missing, or the room is empty and this device has caught up with it
+ *   Infinity   nothing is held and the device has not caught up: nothing is known, so nothing may be claimed
+ *   otherwise  the timestamp of the OLDEST message held (everything older is unaccounted for)
+ *
+ * No write, no await, no network. `backfill()` (the control that moves this point back) refuses at the same two edges: no backend, or `S.backfillLow <= 1`.
+ */
+export function chatLoadedFromTs() {
+  if (!isBackendConfigured()) return -Infinity;
+  if (S.backfillLow === null) return S.caughtUp === true && S.head === 0 ? -Infinity : Infinity;
+  if (S.backfillLow <= 1) return -Infinity;
+  let oldest = Infinity;
+  S.items.forEach((m) => { if (m && typeof m.seq === 'number' && Number.isFinite(m.ts) && m.ts < oldest) oldest = m.ts; });
+  return oldest;
+}
+
 /** Commissioner Data-tab card: how many currently-loaded messages the active
  *  epoch is hiding. Purely informational, same shape as retentionStats()
  *  above — computing this never mutates anything. Counts only what this
@@ -388,10 +413,18 @@ function newItem(ev) {
            // cache written before this release, or PIN mode). Read by the
            // league filter on every reader below (_otherLeague()).
            leagueId: ev.leagueId ? String(ev.leagueId) : '',
-           author: ev.author, gameTag: ev.gameTag || '', body: ev.body || '',
+           author: ev.author, gameTag: ev.gameTag || '',
+           // D1 (DI-553 / DI-530; security A4) — the row's sport. The key exists ONLY for a tagged row (an untagged item is byte-identical to the pre-D1 shape), and only a closed code is
+           // carried: a cached or hand-built event with anything else is folded as untagged. Whether a tag is HONORED (it must name a live sport of this league) is messageSport()'s call.
+           ...(validSportTag(ev.sportTag) ? { sportTag: ev.sportTag } : {}),
+           body: ev.body || '',
            replyTo: ev.replyTo || '', notify: !!ev.notify, meta: ev.meta || null,
            type: ev.type, edited: false, deleted: false, pinned: false,
            reactions: {}, local: !!ev.local,
+           // D1 (W-54 / DI-680, migration 0045) — the server-set `relayed` column, carried ONLY when the wire event has a real boolean (rowToMessage maps it
+           // top-level from the row). A local send never has one (sendEvent() builds its event field by field), so an optimistic row can never present itself as
+           // server-minted; an item first folded from an older cache simply lacks the key, and every reader's `relayed === false` fails closed on it.
+           ...(typeof ev.relayed === 'boolean' ? { relayed: ev.relayed } : {}),
            // UN-159/UN-160 (E1/E2, SCRIBE pilot feedback) — `feedback` is a
            // DERIVED plain object, same shape/precedent as `reactions` above:
            // { [playerId]: { rating, rewrite, remember_this, weigh_in } },
@@ -577,6 +610,11 @@ export function ingest(events, head, delivery) {
           existing.seq = ev.seq; existing.ts = ev.ts ?? existing.ts; existing.local = false;
           settleAppend(ev.id, null, ev.seq);   // BUG-D — the append's own reply can be lost; this is the other acknowledgement
         }
+        // 0045 review (coordinator, 2026-10-08) — THE SERVER'S ROW IS THE PROOF IT WAS SENT. The outbox gives up after
+        // MAX_ATTEMPTS while chatTransport's A7 park may still be carrying the post (a `bad_state` the server lifts later),
+        // so a post can land after this device painted it "Not sent · Retry". A row WITH a server seq for that id clears
+        // the FAILED mark; an optimistic local echo (no seq) never does.
+        if (typeof ev.seq === 'number') S.failed.delete(ev.id);
       } else {
         const item = newItem(ev);
         S.items.set(ev.id, item);
@@ -605,7 +643,10 @@ export function ingest(events, head, delivery) {
 }
 
 /** Chronological list. filter: {tag:'all'|''|gameId, pinned, mentionsOf, types,
- *  respectRetention, textContains}. `respectRetention` is opt-in and defaults
+ *  respectRetention, textContains, sportFilter}. `sportFilter` (D1, DI-553) is
+ *  `{ sport, ctx }` — keep only the rows that appear under that sport's Locker Room
+ *  pill (appearsUnderSport); absent, or naming a sport the ctx does not list, it
+ *  narrows nothing. `respectRetention` is opt-in and defaults
  *  to false so existing non-display callers (the weekly digest, SCRIBE's
  *  pre-kick lookup) keep reading the full history unless they explicitly ask
  *  to be filtered — retention is a rendering preference, not a
@@ -654,11 +695,13 @@ export function getMessages(filter = {}) {
   const tag = filter.tag ?? 'all';
   const needle = filter.textContains ? String(filter.textContains).toLowerCase() : '';
   const league = _readLeague();          // SB-20 (c) — once per read
+  const sportView = sportViewOf(filter.sportFilter);   // D1 (DI-553) — null = no sport narrowing
   const out = [];
   S.items.forEach(m => {
     if (_otherLeague(m, league)) return;
     if (filter.types && !filter.types.includes(m.type)) return;
     if (tag !== 'all' && (m.gameTag || '') !== tag) return;
+    if (sportView && !appearsUnderSport(m, sportView.sport, sportView.ctx)) return;
     if (filter.pinned && !m.pinned) return;
     // UN-112 — UNCONDITIONAL, unlike respectRetention's opt-in above. No
     // reader (or any other caller of this one choke point) should ever see
@@ -683,6 +726,108 @@ export function getMessage(id) {
   return m && _otherLeague(m, _readLeague()) ? null : m;   // SB-20 (c)
 }
 
+// ══ D1 (DI-553 / DI-530; security A4) — WHICH SPORT A MESSAGE BELONGS TO, AND THE LOCKER ROOM'S SPORT PILLS ═══════════════════════════════════════════════════════════════════════════
+//
+// The Locker Room is ONE conversation in ONE log (`cfbp_comments` / the `messages` table): the sport pills are a VIEW over it. Nothing here stores, copies or shards a message; a pill
+// decides which of the folded rows to SHOW, and (for the unread dot) which to COUNT. This section is pure over (the fold, a `ctx` the caller hands in), so this module still imports
+// neither competition.js nor the games tables.
+//
+//   ctx = { sports:       the dbCodes of the NON-ARCHIVED sports of THIS league (an array or a Set),
+//           sportOfGame:  (gameId) => the dbCode of the competition the game's week belongs to, or ''  (an archived sport's code is still returned: that is how "archived" is told from "unknown"),
+//           sportOfWeek:  (weekId) => the same for a week }
+//
+// A ctx is built per render pass (js/chat-ui.js) and memoized per object here, so a pass resolves each game and week once however many messages cite it. A resolver that throws, or a
+// ctx that is missing, is "cannot resolve": the row is treated as UNTAGGED and so is never hidden (DI-553: "A failed sport lookup treats the row as untagged").
+/** The reserved read-cursor namespace for the sport pills (DI-236 reserved it, DI-553 uses it): `byTag['sport:<dbCode>']`, inside the existing device-local K_LASTSEEN. No new storage key. */
+export const SPORT_CURSOR_PREFIX = 'sport:';
+const _sportMemo = new WeakMap();
+function sportMemoOf(ctx) {
+  let memo = _sportMemo.get(ctx);
+  if (!memo) {
+    const live = new Set();
+    const src = ctx.sports;
+    for (const c of (Array.isArray(src) ? src : (src instanceof Set ? [...src] : []))) { const v = validSportTag(c); if (v) live.add(v); }
+    memo = { live, game: new Map(), week: new Map() };
+    _sportMemo.set(ctx, memo);
+  }
+  return memo;
+}
+function resolveSportVia(cache, resolver, key) {
+  if (typeof key !== 'string' || !key || typeof resolver !== 'function') return '';
+  if (cache.has(key)) return cache.get(key);
+  let code = '';
+  try { code = validSportTag(resolver(key)); } catch { code = ''; }
+  cache.set(key, code);
+  return code;
+}
+const SPORT_AGNOSTIC = Object.freeze({ kind: 'agnostic', sport: '' });
+const SPORT_ARCHIVED = Object.freeze({ kind: 'archived', sport: '' });
+
+/**
+ * The ONE classifier. Each step is a fallback for the one before it (order amended 2026-10-08, W-57 review N2 + the security hardening; DI-530: the sport is "never from the tag"):
+ *   (1) the sport of the GAME its `gameTag` resolves to (that game's week's competition). A row that names a game it can be read from is filed by THAT GAME, whatever tag it carries — so a forged
+ *       `sport_tag` on a thread row is ineffective (any member can set `sport_tag` through `chat_append`; a tag is a hint, never an authority), and legacy rows, written before the column was
+ *       read, sort correctly with no backfill. A game of an ARCHIVED sport is `archived`: no pill, shown under `All` only, and no tag can re-file it.
+ *   (2) the row's own `sportTag` — only when there is no game to read (no gameTag, or a game that is gone), and ONLY if it names a non-archived sport of THIS league: a tag naming an archived sport,
+ *       a sport this league never ran, or nothing in the closed set is simply not believed and the row falls through.
+ *   (3) the sport of the week named in its `meta.weekId` — for SYSTEM and SCRIBE rows only (a player's own `meta` is not where a week is read from).
+ *   else untagged: sport-agnostic.
+ * A week that resolves to an ARCHIVED sport is `archived` too; one that does not resolve at all falls through. The tag can still only ever FILE a row among the live sports (it never hides one from
+ * `All`) and, on the sports lane, NARROW a push — it cannot widen anything.
+ */
+export function classifyMessageSport(m, ctx) {
+  if (!m || !ctx || typeof ctx !== 'object') return SPORT_AGNOSTIC;
+  const memo = sportMemoOf(ctx);
+  const viaGame = resolveSportVia(memo.game, ctx.sportOfGame, m.gameTag || '');
+  if (viaGame) return memo.live.has(viaGame) ? { kind: 'sport', sport: viaGame } : SPORT_ARCHIVED;
+  const own = validSportTag(m.sportTag);
+  if (own && memo.live.has(own)) return { kind: 'sport', sport: own };
+  if (SYSTEM_AUTHORS.includes(String(m.author || '')) && m.meta && typeof m.meta === 'object') {
+    const viaWeek = resolveSportVia(memo.week, ctx.sportOfWeek, m.meta.weekId);
+    if (viaWeek) return memo.live.has(viaWeek) ? { kind: 'sport', sport: viaWeek } : SPORT_ARCHIVED;
+  }
+  return SPORT_AGNOSTIC;
+}
+
+/** DI-553's `messageSport(m)`: the dbCode of a live sport the row belongs to, or '' (untagged, unresolvable or archived). */
+export function messageSport(m, ctx) {
+  return classifyMessageSport(m, ctx).sport;
+}
+
+/**
+ * Does this row appear under the pill of `sport`? DI-553's table, in code:
+ *   a plain room message (untagged)            -> yes, under EVERY pill (sport-agnostic: a plain "lol" never vanishes from a view)
+ *   a row of sport X (thread, system, SCRIBE)  -> under X's pill only
+ *   a row whose sport cannot be resolved       -> yes, under every pill
+ *   a row of an ARCHIVED sport                 -> under `All` only (it has no pill, and it is not another sport's)
+ * `All` is not a pill of this function: it is "no sport narrowing" and shows every row.
+ */
+export function appearsUnderSport(m, sport, ctx) {
+  const c = classifyMessageSport(m, ctx);
+  if (c.kind === 'sport') return c.sport === sport;
+  if (c.kind === 'archived') return false;
+  return true;
+}
+
+/** `{ sport, ctx }` when a `sportFilter` can actually narrow (a live sport of the ctx, and a usable ctx); null otherwise, which is "show everything" — a stale or unknown filter never hides a row. */
+function sportViewOf(sportFilter) {
+  if (!sportFilter || typeof sportFilter !== 'object') return null;
+  const sport = validSportTag(sportFilter.sport);
+  const ctx = sportFilter.ctx;
+  if (!sport || !ctx || typeof ctx !== 'object') return null;
+  return sportMemoOf(ctx).live.has(sport) ? { sport, ctx } : null;
+}
+
+/** Is this cursor tag in the `sport:` namespace? (The namespace is DI-236's reservation; markSeen() refuses it, markSportSeen() is its one writer.) */
+export function isSportCursorTag(tag) {
+  return typeof tag === 'string' && tag.startsWith(SPORT_CURSOR_PREFIX);
+}
+/** The cursor tag of one sport's pill: `sport:<dbCode>`, or '' for anything outside the closed set. */
+export function sportCursorTag(sport) {
+  const v = validSportTag(sport);
+  return v ? SPORT_CURSOR_PREFIX + v : '';
+}
+
 // ── The cross-talk rule ───────────────────────────────────────────────────────
 /** resolveTag({replyTo, viewTag}) — reply inherits parent tag (even null);
  *  else the current view's tag; else null. */
@@ -705,7 +850,12 @@ function uuid() {
 export function sendEvent(ev) {
   const full = {
     id: ev.id || uuid(), type: ev.type || 'message', author: ev.author || 'unknown',
-    gameTag: ev.gameTag || '', body: (ev.body || '').slice(0, 1000),
+    gameTag: ev.gameTag || '',
+    // D1 (DI-553 / DI-530): a TAGGED event carries `sportTag`; an untagged one has no such key, so every event a one-sport league sends is byte-identical to what it was. Only a closed code
+    // survives (0033 CHECKs the column to the same set, and a value outside it would be refused for the whole append). In THIS tree the tag FILES the row: it decides which Locker Room sport
+    // pill shows it, and the server puts it on the push deep link as `params.sport`. Narrowing a push to a sport's entrants is DI-537 #1 on the sports lane (feat/d1-sports-server), not here.
+    ...(validSportTag(ev.sportTag) ? { sportTag: ev.sportTag } : {}),
+    body: (ev.body || '').slice(0, 1000),
     targetId: ev.targetId || '', replyTo: ev.replyTo || '',
     notify: !!ev.notify, meta: ev.meta || null,
     // ── SECURITY F-4 (EIGHTH gate) — THE LEAGUE STAMP ────────────────────────
@@ -731,9 +881,9 @@ export function sendEvent(ev) {
   return full.id;
 }
 
-export function sendMessage({ body, gameTag = '', replyTo = '', author, mentions = [], scribeReply = false }) {
+export function sendMessage({ body, gameTag = '', sportTag = '', replyTo = '', author, mentions = [], scribeReply = false }) {
   return sendEvent({
-    type: 'message', body, gameTag, replyTo, author,
+    type: 'message', body, gameTag, ...(sportTag ? { sportTag } : {}), replyTo, author,
     notify: true,
     meta: mentions.length || scribeReply ? { mentions, ...(scribeReply ? { scribeReply: true } : {}) } : (null),
   });
@@ -2108,6 +2258,45 @@ function putLastSeen(v) {
  * Guarded by loadtest §[17b].
  */
 export function markSeen(tag = 'all') {
+  // D1 (DI-553) — the `sport:` namespace has ONE writer, markSportSeen() below. A generic caller (a game id, 'all', anything a message could have carried as its gameTag) can never
+  // write or advance a sport pill's cursor, so no other call site can: refused here, structurally.
+  if (isSportCursorTag(tag)) return;
+  _advanceCursor(tag);
+}
+
+/**
+ * D1 (DI-553) — opening a sport PILL marks that pill's cursor read. A row visible under two pills (a plain room message is visible under every one) clears each pill only when THAT pill is
+ * opened, so no other pill's cursor ever moves. Monotonic like every cursor here. A sport outside the closed set writes nothing.
+ *
+ * N1 (coordinator decision, 2026-10-08, W-57 review): reading under a pill ALSO advances the ROOM cursor — the one `All`, the Locker Room pill, the Chat tab badge, the page title and the
+ * installed-app badge count against — so they stop counting rows the reader has plainly seen. It advances it "up to, and never past, the oldest unread row this pill hides": a row the pill
+ * did not show is still unread, and stays so under `All`. Game-thread cursors follow the room to the same bound. The other pills' cursors are first FIXED where they stand (a pill with no
+ * explicit cursor reads the room's, so without that its dot would fall with the room's), which keeps DI-553's "each pill clears only when opened". With no usable `ctx` (or an unknown
+ * viewer) the room cannot be bounded, so it is left alone and only the pill's cursor moves: the safe answer, never an over-clear.
+ */
+export function markSportSeen(sport, ctx = null) {
+  const tag = sportCursorTag(sport);
+  if (!tag) return;
+  _advanceCursor(tag, sportViewOf({ sport, ctx }));
+}
+
+/** The seq the room cursor may be advanced to when `view.sport`'s pill has just been read: the head, held back to just BEFORE the oldest unread row that pill hides. `null` = cannot say (no viewer). */
+function _roomBoundFor(ls, view) {
+  let self = null;
+  try { const sess = getSession(); self = (sess && sess.playerId && sess.playerVerified) ? String(sess.playerId) : null; } catch { self = null; }
+  if (!identityKnown(self)) return null;
+  const cutoff = retentionCutoff();
+  const league = _readLeague();
+  let oldestHiddenUnread = Infinity;
+  S.items.forEach(m => {
+    if (appearsUnderSport(m, view.sport, view.ctx)) return;                       // shown under this pill: read by reading it
+    if (!isUnreadFor(m, self, ls.seq, cutoff, league)) return;                    // already read (or never counts): holds nothing back
+    if (typeof m.seq === 'number' && m.seq < oldestHiddenUnread) oldestHiddenUnread = m.seq;
+  });
+  return Math.min(S.head, oldestHiddenUnread === Infinity ? S.head : oldestHiddenUnread - 1);
+}
+
+function _advanceCursor(tag, pillView = null) {
   // SB-20 sibling — the cursor is advanced to S.head, and S.head belongs to the
   // STORE's league. In the switch window (the pointer already on the new league,
   // the store not yet rescoped — js/auth.js awaits the hydrate before SWITCH_END)
@@ -2126,6 +2315,20 @@ export function markSeen(tag = 'all') {
     Object.keys(ls.byTag).forEach(t => { ls.byTag[t] = fwd(ls.byTag[t]); });
   } else {
     ls.byTag[tag] = fwd(ls.byTag[tag]);
+    if (pillView) {
+      // N1 (see markSportSeen): the room cursor follows the pill's read, bounded below the oldest unread row the pill hides.
+      const bound = _roomBoundFor(ls, pillView);
+      const before = Number(ls.seq) || 0;
+      if (bound !== null && bound > before) {
+        // Fix every OTHER live pill's cursor where it stands BEFORE the room moves (an absent one reads the room's): reading this pill must not clear another's dot.
+        for (const code of sportMemoOf(pillView.ctx).live) {
+          const k = SPORT_CURSOR_PREFIX + code;
+          if (k !== tag && !Object.prototype.hasOwnProperty.call(ls.byTag, k)) ls.byTag[k] = before;
+        }
+        ls.seq = bound;
+        Object.keys(ls.byTag).forEach(t => { if (!isSportCursorTag(t)) ls.byTag[t] = Math.max(Number(ls.byTag[t]) || 0, bound); });
+      }
+    }
   }
   putLastSeen(ls);
   notify('seen', { tag });
@@ -2153,7 +2356,9 @@ function readCursorFor(ls, tag) {
 /** Public accessor for the same cursor — chat-ui's toast gate needs the
  *  tag-aware "read through seq N" number without re-deriving it. */
 export function readThroughSeq(tag = 'all') {
-  return Number(readCursorFor(getLastSeen(), tag)) || 0;
+  // D1 (DI-553) — callers hand this a MESSAGE's gameTag, which any member can set to any string; one in the reserved `sport:` namespace is not a thread and must not read a sport pill's
+  // cursor. It is the room cursor, exactly as an unknown thread already is.
+  return Number(readCursorFor(getLastSeen(), isSportCursorTag(tag) ? 'all' : tag)) || 0;
 }
 
 /**
@@ -2372,15 +2577,23 @@ function isUnreadFor(m, selfId, afterSeq, cutoff = retentionCutoff(), league = _
          typeof m.seq === 'number' && m.seq > afterSeq && m.author !== selfId;
 }
 
-export function unreadCount(selfId, tag = 'all') {
+/**
+ * Unread NOTIFYING rows for `tag`: 'all' (the room cursor), a game id (that thread's cursor), or — D1, DI-553 — `sport:<dbCode>`, which counts the rows that APPEAR UNDER THAT PILL
+ * (appearsUnderSport) newer than THAT PILL's cursor, not authored by the viewer. A sport tag needs the `ctx` of messageSport(); without a usable one (or for a sport the ctx does not
+ * list) the question has no answer and this says 0 — unreadCountOrUnknown() is the one that says "unknown" instead of a zero.
+ */
+export function unreadCount(selfId, tag = 'all', ctx = null) {
   if (!identityKnown(selfId)) return 0;      // RG-196 — unknown identity, not "everything is unread"
+  const sportView = isSportCursorTag(tag) ? sportViewOf({ sport: tag.slice(SPORT_CURSOR_PREFIX.length), ctx }) : null;
+  if (isSportCursorTag(tag) && !sportView) return 0;
   const ls = getLastSeen();
   const after = readCursorFor(ls, tag);
   const cutoff = retentionCutoff();          // resolved once, not per message
   const league = _readLeague();              // SB-20 (c) — likewise
   let n = 0;
   S.items.forEach(m => {
-    if (tag !== 'all' && (m.gameTag || '') !== tag) return;
+    if (sportView) { if (!appearsUnderSport(m, sportView.sport, sportView.ctx)) return; }
+    else if (tag !== 'all' && (m.gameTag || '') !== tag) return;
     if (isUnreadFor(m, selfId, after, cutoff, league)) n++;
   });
   return n;
@@ -2393,9 +2606,11 @@ export function unreadCount(selfId, tag = 'all') {
  * nothing at all on the first shape and nothing-because-zero on the second —
  * the numbers are identical and the flag is the whole difference.
  */
-export function unreadCountOrUnknown(selfId, tag = 'all') {
+export function unreadCountOrUnknown(selfId, tag = 'all', ctx = null) {
   if (!identityKnown(selfId)) return { known: false, count: 0 };
-  return { known: true, count: unreadCount(selfId, tag) };
+  // D1 (DI-553) — a sport pill's count needs the sport ctx; without a usable one it is UNKNOWN (paints nothing), never a made-up zero.
+  if (isSportCursorTag(tag) && !sportViewOf({ sport: tag.slice(SPORT_CURSOR_PREFIX.length), ctx })) return { known: false, count: 0 };
+  return { known: true, count: unreadCount(selfId, tag, ctx) };
 }
 
 /**
@@ -2404,8 +2619,10 @@ export function unreadCountOrUnknown(selfId, tag = 'all') {
  * tally. Feeds the game-card bubble's attribution (item B): "who is this
  * unread FROM" rather than just "how many".
  */
-export function unreadAuthors(selfId, tag = 'all') {
+export function unreadAuthors(selfId, tag = 'all', ctx = null) {
   if (!identityKnown(selfId)) return [];     // RG-196 — nobody to attribute an unknown count to
+  const sportView = isSportCursorTag(tag) ? sportViewOf({ sport: tag.slice(SPORT_CURSOR_PREFIX.length), ctx }) : null;   // D1 (DI-553) — same predicate as unreadCount()
+  if (isSportCursorTag(tag) && !sportView) return [];
   const ls = getLastSeen();
   const after = readCursorFor(ls, tag);
   const cutoff = retentionCutoff();
@@ -2413,7 +2630,8 @@ export function unreadAuthors(selfId, tag = 'all') {
   const seen = new Set();
   const out = [];
   S.items.forEach(m => {
-    if (tag !== 'all' && (m.gameTag || '') !== tag) return;
+    if (sportView) { if (!appearsUnderSport(m, sportView.sport, sportView.ctx)) return; }
+    else if (tag !== 'all' && (m.gameTag || '') !== tag) return;
     if (!isUnreadFor(m, selfId, after, cutoff, league)) return;
     if (!seen.has(m.author)) { seen.add(m.author); out.push(m.author); }
   });
@@ -2508,7 +2726,7 @@ export function latestUnreadNotifying(selfId, floorSeq = 0) {
   let best = null;
   S.items.forEach(m => {
     if (typeof m.seq !== 'number' || m.seq <= floor) return;   // at/below the ✕ dismissal
-    if (!isUnreadFor(m, selfId, readCursorFor(ls, m.gameTag || 'all'), cutoff, league)) return;
+    if (!isUnreadFor(m, selfId, readCursorFor(ls, (m.gameTag && !isSportCursorTag(m.gameTag)) ? m.gameTag : 'all'), cutoff, league)) return;   // D1 (DI-553): a forged `sport:` gameTag reads the room cursor
     if (!best || cmpOrder(m, best) > 0) best = m;   // AD-10 — ordered pair, see cmpOrder()
   });
   return best;

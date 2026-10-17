@@ -406,7 +406,9 @@ console.log('\n[8] Q-W (a) + G-6 — the "in progress" predicate MIRRORS THE SER
 {
   // The LATEST leave_league is 0042's (0037's body + the G-6 bound); the SQL is parsed from THERE, so a change to it moves this test.
   const mig = read('./supabase/migrations/0042_sp53_release_gates.sql');
-  const rls = read('./supabase/migrations/0002_rls.sql');
+  // PF-1 / DI-497 (2026-10-01): the pin used to parse 0002's pick_window_open, which is no longer the LIVE definition. From migration 0043 the guard also closes a week at its LOCK INSTANT
+  // (picks_lock_at, else first kickoff minus the offset), so this reads the LATEST definition (0043, comments stripped first: its rollback header quotes 0002's body in prose).
+  const rls = read('./supabase/migrations/0043_pf1_server_lock.sql').split('\n').filter((l) => !/^\s*--/.test(l)).join('\n');
   const fnText = /^create or replace function public\.leave_league\([\s\S]*?end \$\$;/m.exec(mig);
   const code = (fnText ? fnText[0] : '').split('\n').filter((l) => !/^\s*--/.test(l)).join('\n').replace(/\s+/g, ' ');
   const inList = /w\.status in \(([^)]*)\) and not public\.pick_window_open\(w\.league_id, w\.id\)/.exec(code);
@@ -414,15 +416,18 @@ console.log('\n[8] Q-W (a) + G-6 — the "in progress" predicate MIRRORS THE SER
   const pwo = /function public\.pick_window_open\([\s\S]*?\$\$;/.exec(rls);
   const pwoText = pwo ? pwo[0].replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ') : '';
   const openStatus = (/w\.status = '(\w+)'/.exec(pwoText) || [])[1];
-  assert(statuses.join() === 'open,locked,live' && openStatus === 'open' && /\(w\.picks_lock_at is null or now\(\) < w\.picks_lock_at\)/.test(pwoText),
-    '[8a] the SQL it mirrors is what it is said to be: leave_league\'s predicate (0042) is status in (open, locked, live) and NOT pick_window_open, and pick_window_open is "open and (no lock time or now before it)"', JSON.stringify({ statuses, openStatus }));
+  const instantConjunct = /and \(w\.data_source_mode = 'demo' or coalesce\(now\(\) < public\.week_lock_instant\(w\.league_id, w\.id\), true\)\)/.test(pwoText);
+  assert(statuses.join() === 'open,locked,live' && openStatus === 'open' && /\(w\.picks_lock_at is null or now\(\) < w\.picks_lock_at\)/.test(pwoText) && instantConjunct,
+    '[8a] the SQL it mirrors is what it is said to be: leave_league\'s predicate (0042) is status in (open, locked, live) and NOT pick_window_open, and the LATEST pick_window_open (0043) is "open and (no explicit lock time or now before it) and (a demo week, or now before the LOCK INSTANT — a NULL instant counting as not closed)"', JSON.stringify({ statuses, openStatus, instantConjunct }));
   // G-6: the bound, PARSED from the SQL — `coalesce(now() < greatest((select min(g.kickoff) …), w.picks_lock_at) + interval 'N days', false)`
   const boundM = /coalesce\(now\(\) < greatest\(\(select min\(g\.kickoff\) from public\.games g where g\.league_id = w\.league_id and g\.week_id = w\.id\), w\.picks_lock_at\) \+ interval '(\d+) days', false\)/.exec(code);
   const DAY = 24 * 60 * 60 * 1000;
   const sqlDays = boundM ? Number(boundM[1]) : NaN;
   assert(!!boundM && sqlDays === 7 && LS.LEAVE_BLOCK_LAPSE_MS === sqlDays * DAY,
     `[8a2] G-6: the bound is parsed out of leave_league's own SQL (greatest of the first kickoff and picks_lock_at, plus ${sqlDays} days, coalesced to false) and the client constant LEAVE_BLOCK_LAPSE_MS is exactly that many days in ms`, JSON.stringify({ sqlDays, ms: LS.LEAVE_BLOCK_LAPSE_MS }));
-  // the server model, DERIVED FROM THE PARSED SQL (so a change to the SQL moves this test): greatest() skips a NULL term; neither term reads as lapsed (the coalesce)
+  // the server model, DERIVED FROM THE PARSED SQL (so a change to the SQL moves this test): greatest() skips a NULL term; neither term reads as lapsed (the coalesce).
+  // `lockAt` is the week's EFFECTIVE lock instant: the lock time the server's guard compares (picks_lock_at, else first kickoff minus the offset; null = no instant), which is what the Leave row
+  // feeds `picksLockAt` from 0043 on (DI-495(b); lockinstanttest.mjs pins the instant).
   const NOW = new Date('2026-10-04T18:00:00Z');
   const past = '2026-10-04T17:00:00Z', future = '2026-10-04T19:00:00Z';
   const ago = (d) => new Date(NOW.getTime() - d * DAY).toISOString();
@@ -501,6 +506,43 @@ console.log('\n[8] Q-W (a) + G-6 — the "in progress" predicate MIRRORS THE SER
     '[8l] the G-6 additions are PURE: no import, no storage, no clock read (Date.now) — the `now` is injected, as everywhere in this module');
 }
 
+console.log('\n[8m] DI-542 (W-21) — the Leave reason for a member entered in two or more sports…');
+{
+  const weeks = [{ weekId: 'c1', sport: 'college-football' }, { weekId: 'n1', sport: 'nfl' }, { weekId: 'c2' }];
+  const picks = [{ playerId: 'me', weekId: 'c1' }, { playerId: 'me', weekId: 'n1' }, { playerId: 'cfbonly', weekId: 'c1' }, { playerId: 'cfbonly', weekId: 'c2' }, { playerId: 'other', weekId: 'n1' }];
+  assert(LS.LS_COPY.weekWaitSports === 'You can leave after your current weeks are final.', '[8m1] the two-sport sentence is exactly the DI-542 copy');
+  assert(LS.leaveBlockedSentence(1, { sports: 2 }) === 'You can leave after your current weeks are final.' && LS.leaveBlockedSentence(3, { sports: 2 }) === 'You can leave after your current weeks are final.',
+    '[8m2] two or more sports: "your current weeks" for one blocked week AND for several (the sentence no longer says "this week")');
+  assert(LS.leaveBlockedSentence(1) === 'You can leave after this week is final.' && LS.leaveBlockedSentence(2) === 'You can leave after these weeks are final.'
+    && LS.leaveBlockedSentence(1, { sports: 1 }) === 'You can leave after this week is final.' && LS.leaveBlockedSentence(2, { sports: 0 }) === 'You can leave after these weeks are final.' && LS.leaveBlockedSentence(1, {}) === 'You can leave after this week is final.',
+    '[8m3] single-sport (and unknown) is UNCHANGED: this week / these weeks');
+  assert(LS.leaveOutcomeCopy({ status: 'refused', kind: 'week_in_progress' }, { weekCount: 1, sports: 2 }).text === 'You can leave after your current weeks are final.'
+    && LS.leaveOutcomeCopy({ status: 'refused', kind: 'week_in_progress' }, { weekCount: 1 }).text === 'You can leave after this week is final.'
+    && LS.leaveOutcomeCopy({ status: 'refused', kind: 'week_in_progress' }, { weekCount: 2, sports: 1 }).text === 'You can leave after these weeks are final.',
+    '[8m4] the server-refusal sentence follows the same rule (two sports: "your current weeks"; one: unchanged)');
+  assert(LS.enteredSportCount({ weeks, picks, memberId: 'me' }) === 2 && LS.enteredSportCount({ weeks, picks, memberId: 'cfbonly' }) === 1 && LS.enteredSportCount({ weeks, picks, memberId: 'other' }) === 1,
+    '[8m5] the count is the sports of the weeks the person has their OWN picks in: a CFB-only member is 1 even in a league that also has NFL weeks, and a week with no sport is college football');
+  assert(LS.enteredSportCount({ weeks, picks, memberId: 'nobody' }) === 0 && LS.enteredSportCount({ weeks, picks, memberId: '' }) === 0 && LS.enteredSportCount({}) === 0 && LS.enteredSportCount({ weeks: 'x', picks: 1, memberId: 'me' }) === 0,
+    '[8m6] a person with no picks, no id, or bad input counts 0 (the single-sport sentence)');
+  assert(LS.enteredSportCount({ entrantSports: ['college-football', 'NFL', 'nfl', ''], memberId: 'me' }) === 2 && LS.enteredSportCount({ entrantSports: ['nfl'], weeks, picks, memberId: 'me' }) === 1 && LS.enteredSportCount({ entrantSports: [], memberId: 'me' }) === 0,
+    '[8m7] when the client has the entrants list (competition_members) it WINS over the picks stand-in, case-folded and de-duplicated: a non-entrant is never counted for a sport they do not play');
+  const NOT_NFL_ENTRANT = LS.leaveBlockedSentence(1, { sports: LS.enteredSportCount({ entrantSports: ['college-football'], memberId: 'me' }) });
+  assert(NOT_NFL_ENTRANT === 'You can leave after this week is final.', '[8m8] "Fails when a non-entrant is told they cannot leave because of a sport they do not play": a member entered only in college football, in a league that also has an NFL competition, reads the single-sport sentence');
+  // G1 (2026-10-08): the app hands the sport of each week in through `sportOf` (a client week carries no `.sport`); the default reads `week.sport`; 'college-football', 'cfb' and a missing sport are ONE sport.
+  const bare = [{ weekId: 'a' }, { weekId: 'b' }, { weekId: 'c' }];
+  const own = [{ playerId: 'me', weekId: 'a' }, { playerId: 'me', weekId: 'b' }, { playerId: 'me', weekId: 'c' }];
+  const byComp = { a: 'cfb', b: 'nfl', c: 'nfl' };
+  assert(LS.enteredSportCount({ weeks: bare, picks: own, memberId: 'me', sportOf: (w) => byComp[w.weekId] }) === 2 && LS.enteredSportCount({ weeks: bare, picks: own, memberId: 'me' }) === 1,
+    '[8m10] sportOf decides the sport of a week that carries none: cfb + nfl = 2, while the default (week.sport) reads three bare weeks as ONE (college football)');
+  assert(LS.enteredSportCount({ weeks: bare, picks: own, memberId: 'me', sportOf: (w) => ({ a: 'college-football', b: 'cfb', c: undefined })[w.weekId] }) === 1
+    && LS.enteredSportCount({ weeks: bare, picks: own, memberId: 'me', sportOf: (w) => ({ a: 'CFB', b: 'NFL', c: ' nfl ' })[w.weekId] }) === 2,
+    '[8m11] college-football, cfb and a missing sport are one sport (case and spaces folded), so a default-less league is not double-counted');
+  assert(LS.enteredSportCount({ weeks: bare, picks: own, memberId: 'me', sportOf: () => { throw new Error('boom'); } }) === 1, '[8m12] a resolver that throws reads as the default sport (the count never throws into the Settings page)');
+  const src = read('./js/league-settings.js');
+  const fn = src.slice(src.indexOf('export function enteredSportCount'), src.indexOf("/**\n * DI-462 section A: the roster's label"));
+  assert(fn.length > 300 && !/\bimport\b|localStorage|\bload\(|\bsave\(|Date\.now\(\)|getPicks\(|getSession\(/.test(fn.replace(/\/\*[\s\S]*?\*\//g, '')), '[8m9] enteredSportCount is PURE: no storage, no clock, no session read — the caller hands it the viewer\'s own picks');
+}
+
 console.log('\n[9] "(left)" — the roster derivation and the ledger label…');
 {
   const d = LS.departedLabel;
@@ -557,7 +599,7 @@ console.log('\n[12] The exports the follow-on wiring names…');
 {
   const names = ['LS_COPY', 'REFUSAL_KINDS', 'leagueLabel', 'leaveFailed', 'leaveAppliedRefreshFailed', 'leaveUnconfirmed', 'leaveNotAMember', 'leaveHeadless', 'leaveToast', 'preflightFailed', 'leaveSheetTitle',
     'leaveArchiveSheetTitle', 'leaveBlockedSentence', 'leaveSheetCopy', 'leaveFooterCopy', 'classifyLeagueSettingsError', 'trimmedName', 'canSaveName', 'isNameDirty', 'renameLeague', 'leaveLeague',
-    'setAcceptingMembers', 'renameOutcomeCopy', 'acceptingOutcomeCopy', 'leaveOutcomeCopy', 'isWeekInProgressForLeave', 'weeksInProgressForMember', 'LEAVE_BLOCK_LAPSE_MS', 'leaveBlockAnchorMs', 'firstKickoffByWeek', 'departedLabel', 'ledgerDepartedLabel', 'landingAfterLeave'];
+    'setAcceptingMembers', 'renameOutcomeCopy', 'acceptingOutcomeCopy', 'leaveOutcomeCopy', 'isWeekInProgressForLeave', 'weeksInProgressForMember', 'enteredSportCount', 'LEAVE_BLOCK_LAPSE_MS', 'leaveBlockAnchorMs', 'firstKickoffByWeek', 'departedLabel', 'ledgerDepartedLabel', 'landingAfterLeave'];
   const missing = names.filter((n) => !(n in LS));
   assert(missing.length === 0 && Object.keys(LS).length === names.length, `[12a] exactly the ${names.length} documented exports (no stray export)`, JSON.stringify({ missing, extra: Object.keys(LS).filter((k) => !names.includes(k)) }));
 }

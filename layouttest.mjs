@@ -176,8 +176,19 @@ globalThis.document = {
   getElementById: id => els.get(id) || null,
   querySelector: () => null,
   querySelectorAll: () => [],
-  createElement: () => mkEl('tmp'),
-  body: { classList: { add() {}, remove() {}, toggle() {} }, dataset: {}, appendChild() {}, innerHTML: '' },
+  // 0046 (R-19 follow-up): a body-appended LAYER (the Deny action sheet) needs attributes, and must be findable by its id
+  // once appended and gone once removed. Only createElement()'s elements do this; the page elements above are untouched.
+  createElement: () => {
+    const e = mkEl('tmp');
+    els.delete('tmp');
+    const attrs = {};
+    e.setAttribute = (n, v) => { attrs[n] = String(v); };
+    e.getAttribute = (n) => (n in attrs ? attrs[n] : null);
+    e.removeAttribute = (n) => { delete attrs[n]; };
+    e.remove = () => { if (els.get(e.id) === e) els.delete(e.id); };
+    return e;
+  },
+  body: { classList: { add() {}, remove() {}, toggle() {} }, dataset: {}, appendChild(el) { if (el && el.id) els.set(el.id, el); }, innerHTML: '' },
   hidden: false,
 };
 globalThis.window = globalThis;
@@ -333,8 +344,10 @@ console.log('\n[2] THE SLOT — emitted by every branch, so the fallback never f
 {
   const appSrc = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
   const slotEmits = (appSrc.match(/<div id="picks-head-slot"><\/div>/g) || []).length;
-  assert(slotEmits === 5,
-    `2a: exactly five branches emit a head slot — A (historical), B (login), C (picking), D (submitted), E (locked) (found ${slotEmits})`);
+  // D1 / DI-510 (2026-10-07): a SIXTH branch, F (locked under an unsaved draft: the draft stays on screen read-only), emits the slot too — the recap and What's New must not vanish from the one
+  // view a member lands on when the week locks under him. Pinned by branch below so a seventh cannot slip in unannounced.
+  assert(slotEmits === 6 && /function renderLockedDraftView[\s\S]*?<div id="picks-head-slot"><\/div>/.test(appSrc),
+    `2a: exactly six branches emit a head slot — A (historical), B (login), C (picking), D (submitted), E (locked), F (locked under an unsaved draft) (found ${slotEmits})`);
   assert(/function fillPicksHeadSlot\(c, recapHtml\)[\s\S]{0,400}slot \? slot\.outerHTML = head : c\.insertAdjacentHTML\('beforeend', head\)/.test(
       appSrc.replace(/\s*\n\s*/g, ' ').replace(/if \(slot\) slot\.outerHTML = head; else /, 'slot ? slot.outerHTML = head : ')),
     '2b: fillPicksHeadSlot() falls back to beforeend when no slot exists — a future branch without a slot degrades to "wrong place", never to "missing"');
@@ -928,11 +941,11 @@ console.log('\n[A2] RENDERED ORDER — both pages, default and customized…');
   clearSectionOrder('dashboard'); clearSectionOrder('standings');
 
   const d = renderDash({ playerId: 'p1', verified: true });
-  assert(has(d, '📋 All Picks by Game') && has(d, 'LAYOUT HOME'),
+  assert(has(d, '>All Picks by Game</span>') && has(d, 'LAYOUT HOME'),
     "A2a-0: fixture check — the Part A week's dashboard really rendered (its slate is on the page)");
   assert(sameArr(sectionIds(d), [...DASH_DEF]),
     `A2a: the Dashboard's emitted DOM is in default order (got ${sectionIds(d).join(' > ')})`);
-  assert(at(d, 'data-section-id="dash-picks"') < at(d, '📋 All Picks by Game') &&
+  assert(at(d, 'data-section-id="dash-picks"') < at(d, '>All Picks by Game</span>') &&
          at(d, 'data-section-id="dash-alma"') < at(d, 'Alma Mater Watch'),
     'A2b: each wrapper really contains the card it claims — the ids are not decorative');
 
@@ -948,7 +961,7 @@ console.log('\n[A2] RENDERED ORDER — both pages, default and customized…');
   const d2 = renderDash({ playerId: 'p1', verified: true });
   assert(sameArr(sectionIds(d2), ['dash-tiebreaker', 'dash-alma', 'dash-picks', 'dash-summary']),
     'A2e: a saved Dashboard order is honoured in the rendered DOM, not just in the helper');
-  assert(at(d2, '🎯 Tiebreaker') < at(d2, '📋 All Picks by Game'),
+  assert(at(d2, '🎯 Tiebreaker') < at(d2, '>All Picks by Game</span>'),
     'A2f: …and the CARDS moved with the wrappers — the Tiebreaker card really is above All Picks by Game now');
 
   setSectionOrder('standings', ['stand-history', 'stand-season', 'stand-extrapoint', 'stand-alma', 'stand-2025-open', 'stand-2025-record']);
@@ -1001,7 +1014,7 @@ console.log('\n[A3] VT-22 PRESERVATION — the default order is still UN-22/RG-0
     'A3a: VT-22 — All Picks by Game is FIRST on the Dashboard for a player who has never customized (UN-22 / RG-01, unchanged since v0.11)');
   assert(ids.indexOf('dash-picks') < ids.indexOf('dash-alma') && ids.indexOf('dash-alma') < ids.indexOf('dash-summary'),
     'A3b: VT-22 — picks > alma > summary, in that order, for an uncustomized player');
-  assert(at(d, '📋 All Picks by Game') < at(d, 'Alma Mater Watch') &&
+  assert(at(d, '>All Picks by Game</span>') < at(d, 'Alma Mater Watch') &&
          at(d, 'Alma Mater Watch') < at(d, 'This Week Score Summary'),
     'A3c: VT-22 read off the CARDS rather than the ids — the wrappers cannot pass this while the content disagrees');
   assert(sameArr([...DASH_DEF], ['dash-picks', 'dash-alma', 'dash-summary', 'dash-tiebreaker']),
@@ -1383,7 +1396,8 @@ console.log('\n[A9z] DI-426 (UN-381) — ONE shared viewing week for Picks and D
   // only, reset to null at every fresh boot — never behind storage.js's
   // load()/save() seam. Structural: the state object literal itself.
   const appSrcA11 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
-  assert(/viewingWeekId:\s*null,/.test(appSrcA11),
+  // D1 DI-527: the field is now an ACCESSOR over a per-sport in-memory bucket (`_viewingBySport`, a plain module-level object that starts empty on every boot); an unset sport reads null.
+  assert(/const _viewingBySport = Object\.create\(null\);/.test(appSrcA11) && /get viewingWeekId\(\) \{ const v = _viewingBySport\[_viewingKey\(\)\]; return v === undefined \? null : v; \}/.test(appSrcA11),
     'A11e: state.viewingWeekId is seeded to null in the state object literal — the SAME "not persisted, resets on boot" contract state.picksWeekId/state.dashboardWeekId individually had before this DI');
   const storageSrcA11 = await readFile(new URL('./js/storage.js', import.meta.url), 'utf8');
   assert(!/viewingWeekId/.test(storageSrcA11),
@@ -1624,7 +1638,7 @@ console.log('\n[DI-394] the shared viewing-week card — one function, two pages
     'weekNavCardHTML() exists with the shared (viewWeek, currentWeek, weeksForOrder, {dataAttr}) signature');
   assert(/function renderPicksWeekNav\(viewWeek, currentWeek\) \{\s*return weekNavCardHTML\(viewWeek, currentWeek, picksNavWeeks\(\), \{ dataAttr: 'picks-week' \}\);/.test(appSrcD394),
     "renderPicksWeekNav() is a thin wrapper over weekNavCardHTML() — Picks' own week list (picksNavWeeks()), unchanged filter rules");
-  assert(/function renderDashboardWeekNav\(viewWeek, currentWeek\) \{/.test(appSrcD394) && /selectableDashboardWeeks\(getWeeks\(\), isCommissioner\)/.test(appSrcD394.slice(appSrcD394.indexOf('function renderDashboardWeekNav'), appSrcD394.indexOf('function renderDashboardWeekNav') + 400)),
+  assert(/function renderDashboardWeekNav\(viewWeek, currentWeek\) \{/.test(appSrcD394) && /selectableDashboardWeeks\(getContextWeeks\(\), isCommissioner\)/.test(appSrcD394.slice(appSrcD394.indexOf('function renderDashboardWeekNav'), appSrcD394.indexOf('function renderDashboardWeekNav') + 400)),
     "renderDashboardWeekNav() is a thin wrapper over the SAME weekNavCardHTML() — Dashboard's own week list (selectableDashboardWeeks()), unchanged filter rules (drafts visible to the commissioner)");
   assert(/chronologicalWeekIds\(weeksForOrder\)/.test(appSrcD394),
     "weekNavCardHTML()'s prev/next math is resolved via chronologicalWeekIds() — the SAME oldest→newest normalization RG-264's dashboard-swipe fix made the one source of truth, never each list's own raw (possibly newest-first) sort order");
@@ -1636,7 +1650,7 @@ console.log('\n[DI-394] the shared viewing-week card — one function, two pages
   // RETIRED, not merely hidden.
   assert(!/<select class="form-select" id="week-selector">/.test(appSrcD394),
     'the redundant Dashboard `<select id="week-selector">` markup is gone entirely — the shared arrow-nav card is the ONE control that decides which week Dashboard shows (the id still appears in this pass\'s own retirement comments, which is what the narrower markup-only check above rules out matching)');
-  const dashInnerSrc = appSrcD394.slice(appSrcD394.indexOf('function renderDashboardInner()'), appSrcD394.indexOf('function renderDashboardInner()') + 12000);
+  const dashInnerSrc = appSrcD394.slice(appSrcD394.indexOf('function renderDashboardInner()'), appSrcD394.indexOf('function renderDashboardInner()') + 16000);   // 12000 -> 16000, D1 / DI-516/517 (2026-10-07): the function grew by the tiebreaker value, the live notes and the provisional line; the pin still names the shared card and its binder
   assert(/renderDashboardWeekNav\(week, currentWeek\)/.test(dashInnerSrc),
     'renderDashboardInner() renders the shared card (renderDashboardWeekNav(week, currentWeek)) in place of the old <select>');
   assert(/bindDashboardWeekNav\(\);/.test(dashInnerSrc),
@@ -1771,7 +1785,7 @@ console.log('\n[SP57-d] the lifecycle\'s source pins: where the mode is cleared,
   assert(/\[tab\]\?\.\(\);\n  \}\n  \/\/ SP-57[\s\S]{0,260}\n  syncLayoutEditBar\(\);/.test(nav), 'SP57-d2: …and syncLayoutEditBar() runs right after the page dispatch, so the bar follows whichever page is showing (and a repaint into an empty state clears the mode)');
   assert(/export function renderLeaderboard\(\) \{\n[\s\S]{0,700}?if \(deferRenderWhileWeekSwiping\('leaderboard', renderLeaderboard\)\) return;\n  const c=document\.getElementById\('page-leaderboard'\)/.test(src),
     'SP57-d3: renderLeaderboard()\'s FIRST statement is the repaint deferral (C11) — the Standings half of "never by accident"');
-  assert(/renderMaintenanceBannerIfNeeded\('leaderboard'\);\n  syncLayoutEditBar\(\);/.test(src) && /renderMaintenanceBannerIfNeeded\('dashboard'\);[\s\S]{0,260}syncLayoutEditBar\(\);\n\}\n\nfunction renderDashboardInner/.test(src),
+  assert(/renderMaintenanceBannerIfNeeded\('leaderboard'\);\n  renderSportStallBannerIfNeeded\('leaderboard'\);[^\n]*\n  syncLayoutEditBar\(\);/.test(src) && /renderMaintenanceBannerIfNeeded\('dashboard'\);[\s\S]{0,1400}syncLayoutEditBar\(\);\n\}\n\nfunction renderDashboardInner/.test(src),
     'SP57-d4: both renderers end with syncLayoutEditBar() (the wrapper\'s tail covers renderDashboardInner()\'s early-return empty states)');
   const sync = (src.match(/function syncLayoutEditBar\(\) \{[\s\S]*?\n\}\n/) || [''])[0];
   assert(/function _layoutBarTopCSS\(\) \{\n  return `max\(\$\{_layoutBarTopPx\(\)\}px, env\(safe-area-inset-top, 0px\)\)`;\n\}/.test(src) && /bar\.style\.top = _layoutBarTopCSS\(\);/.test(sync) && /if \(bar\) bar\.style\.top = _layoutBarTopCSS\(\);/.test(src),
@@ -1786,8 +1800,8 @@ console.log('\n[SP57-d] the lifecycle\'s source pins: where the mode is cleared,
   assert(/onDone: \(moved\) => \{\n\s+state\.layoutEditing = null;\n\s+unmountLayoutEditBar\(\);\n\s+rerender\(\);[\s\S]{0,160}if \(moved\) layoutSavedToast\(\);/.test(bind),
     'SP57-d8: Done = clear the state, unmount the bar, ONE repaint, then the save toast only if something moved');
   const toast = (src.match(/function layoutSavedToast\(\) \{[\s\S]*?\n\}\n/) || [''])[0];
-  assert(/Layout saved to your account\./.test(toast) && /Layout saved on this device only\. Sync is off\./.test(toast) && /isBackendConfigured\(\) && banner && banner\.style\.display !== 'none'/.test(toast),
-    'SP57-d9: the save toast is HONEST (C10): "Layout saved to your account." normally, "Layout saved on this device only. Sync is off." under the same predicate submitPicks() uses for the red banner');
+  assert(/Layout saved to your account\./.test(toast) && /Layout saved on this device only\. Sync is off\./.test(toast) && /isBackendConfigured\(\) && isSyncFailureBannerUp\(\)/.test(toast) && /const syncBroken = isBackendConfigured\(\) && isSyncFailureBannerUp\(\);/.test(src.slice(src.indexOf('function submitPicks('), src.indexOf('function submitPicks(') + 1500)),
+    'SP57-d9: the save toast is HONEST (C10): "Layout saved to your account." normally, "Layout saved on this device only. Sync is off." under the same predicate submitPicks() uses for the red banner (re-derived 2026-10-07, 0046 round 3: isSyncFailureBannerUp(), a REAL sync failure — owner \'app\' — never another banner)');
   const code = [toast, bind, sync, (src.match(/function composeSections\([\s\S]*?\n\}\n/) || [''])[0], (src.match(/function resetLayoutPage\([\s\S]*?\n\}\n/) || [''])[0]]
     .join('\n').split('\n').filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join('\n');
   const lits = [...code.matchAll(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g)].map((m) => m[0]).filter((t) => /\s/.test(t));
@@ -1923,6 +1937,10 @@ const sfGroups = html => sfTable(sfHist(html), 'stand-table-history').split('<tb
 const sfWkName = g => (/class="stand-wk-name" id="stand-wk-\d+">([^<]*)</.exec(g) || [, ''])[1];
 const sfGroup = (html, name) => sfGroups(html).find(g => sfWkName(g) === name);
 const sfBtns = g => [...(g || '').matchAll(/<button\b[^>]*data-ob-action="(\w+)"/g)].map(m => m[1]);
+// D1 Lane B (DI-596, 2026-10-08): a REVEALED week's cell is a 44 pt button to its detail (class stand-wk-btn). It is not a payment control, so the payment-button invariants below look at every <button> EXCEPT that
+// one (NOT_OPENER); the opener itself is pinned in historywiringtest.mjs [1] and [4] (only revealed weeks have it, it is the same for every viewer) and by [SF4] below (an unfinished week's row carries no name or result).
+const sfOpenerRe = /<button type="button" class="stand-wk-btn"[\s\S]*?<\/button>/g;
+const NOT_OPENER = /<button(?![^>]*stand-wk-btn)/;
 
 // The Standings sections as the SIGNED-OUT visitor sees them with NOTHING in the league yet.
 const sfEmptyHtml = sfRender(SF_V.anon);
@@ -2081,7 +2099,7 @@ console.log('\n[SF2] DI-474 SF2 — payment actions live ONLY in .stand-act-row,
     const sess = { isAdmin: v[1], playerId: v[0], playerVerified: v[2] };
     const tableHtml = sfTable(sfHist(html), 'stand-table-history');
     // every <button> must sit inside a .stand-act-row (strip those out, nothing may remain) and none inside a Status cell
-    const withoutActRows = tableHtml.replace(/<div class="btn-row stand-act-row"[\s\S]*?<\/div>/g, '');
+    const withoutActRows = tableHtml.replace(/<div class="btn-row stand-act-row"[\s\S]*?<\/div>/g, '').replace(sfOpenerRe, '');   // (the week-detail opener is not a payment control: see NOT_OPENER)
     if (/<button/.test(withoutActRows)) strays.push(vname);
     for (const m of tableHtml.matchAll(/<td class="stand-st">([\s\S]*?)<\/td>/g)) if (/<button/.test(m[1])) statusButtons.push(vname);
     for (const [name, ob] of Object.entries(SF_OB)) {
@@ -2104,11 +2122,11 @@ console.log('\n[SF2] DI-474 SF2 — payment actions live ONLY in .stand-act-row,
   assert(mismatches.length === 0, `SF2c: the buttons rendered are EXACTLY the actions obligationNextStatus() allows that viewer — the UI never shows a button the machine refuses, and never hides one it grants (Undo is excluded on Standings: Amendment 1) (${mismatches.join(' ; ') || 'none'})`);
   assert(rowMism.length === 0, `SF2d: an action row (and the has-act join on the week row) exists ONLY where the viewer has an action or the payer's wait text (${rowMism.join(' ; ') || 'none'})`);
   const bystander = sfRender(SF_V.bystander), anon = sfRender(SF_V.anon);
-  assert(!/<button|stand-act/.test(sfTable(sfHist(bystander), 'stand-table-history')) && !/<button|stand-act/.test(sfTable(sfHist(anon), 'stand-table-history')),
-    'SF2e: a bystander and a signed-out visitor get no <button> and no action row anywhere in Weekly History');
+  assert(!/<button(?![^>]*stand-wk-btn)|stand-act/.test(sfTable(sfHist(bystander), 'stand-table-history')) && !/<button(?![^>]*stand-wk-btn)|stand-act/.test(sfTable(sfHist(anon), 'stand-table-history')),
+    'SF2e: a bystander and a signed-out visitor get no <button> (but the revealed-week opener, which is not a payment control) and no action row anywhere in Weekly History');
   // Amendment 1: the commissioner's PAID week is byte-identical to a bystander's.
   const adminPaid = sfGroup(sfRender(SF_V.admin), 'Week 43'), byPaid = sfGroup(bystander, 'Week 43');
-  assert(!!adminPaid && adminPaid === byPaid && !/<button|stand-act/.test(adminPaid),
+  assert(!!adminPaid && adminPaid === byPaid && !/<button(?![^>]*stand-wk-btn)|stand-act/.test(adminPaid),
     'SF2f: Amendment 1 — the commissioner\'s PAID week renders byte-identically to a bystander\'s: "Paid ✓", no Undo, no action row');
   const payerWait = sfGroup(sfRender(SF_V.payerD), 'Week 42');
   assert(/<div class="btn-row stand-act-row" role="group" aria-labelledby="stand-wk-\d+"><span class="text-muted text-xs">Waiting on Cat to confirm\.<\/span><\/div>/.test(payerWait),
@@ -2148,8 +2166,10 @@ console.log('\n[SF3] DI-474 SF3 — BOTH tallies survive: Picks is the WEIGHTED 
       && /<th scope="col" aria-label="Win percentage, every pick counted once">Win %<\/th>/.test(seasonHtml)
       && /<th scope="col" aria-label="Weeks won and lost">Weeks<\/th>/.test(seasonHtml),
     'SF3f: the three stat headers carry the accessible names that stop a screen reader fusing "37–16" next to "68%" into one ratio');
-  assert(/<p class="stand-foot">Picks count each game’s multiplier\. Win % counts every pick once\.<\/p>/.test(sfSeason(html)),
-    'SF3g: the one-line footnote is present (typographic apostrophe) — weighted vs raw, said once');
+  // D1 Lane B (DI-595): a signed-in member's footnote gains the one sentence "Tap a player to compare."; a signed-out visitor's is EXACTLY the sentence it always was (inert cells, no hint).
+  assert(/<p class="stand-foot">Picks count each game’s multiplier\. Win % counts every pick once\. Tap a player to compare\.<\/p>/.test(sfSeason(html))
+    && /<p class="stand-foot">Picks count each game’s multiplier\. Win % counts every pick once\.<\/p>/.test(sfSeason(sfRender(SF_V.anon))),
+    'SF3g: the one-line footnote is present (typographic apostrophe) — weighted vs raw, said once — with "Tap a player to compare." for a signed-in member and without it for a signed-out visitor');
   assert(rows[0].cls === 'winner-row' && rows[rows.length - 1].cls === 'loser-row' && rows.slice(1, -1).every(r => r.cls === ''),
     'SF3h: the leader row keeps .winner-row and the last-place row .loser-row (the tints are unchanged); crown/clown markers: ' + (/stand-mark">\u{1F451}/u.test(seasonHtml) && /stand-mark">\u{1F921}/u.test(seasonHtml) ? 'both present' : 'MISSING'));
   assert(!/Extra Point|extraPoint|\bEP\b|tiebreak/i.test(seasonHtml), 'SF3i: no Extra Point column and no tiebreaker value anywhere in Season Summary (AD-33; tiebreakers are never multiplied or shown here)');
@@ -2167,7 +2187,7 @@ console.log('\n[SF4] DI-474 SF4 — BLIND RULE: an unfinished week or group rend
     const g = per.bystander;
     assert(/>In progress<\/td>/.test(g) && /colspan="3"/.test(g),
       `SF4a (${name}): it reads one merged "In progress" cell (colspan 3)`);
-    assert(!/Ann|Bob|Cat|Dan|Eve/.test(g.replace(/Week \d+/g, '')) && !/by tiebreaker|class="badge|<button|stand-act|player-name-cell/.test(g),
+    assert(!/Ann|Bob|Cat|Dan|Eve/.test(g.replace(/Week \d+/g, '')) && !/by tiebreaker|class="badge|<button(?![^>]*stand-wk-btn)|stand-act|player-name-cell/.test(g),
       `SF4b (${name}): no player name, no "by tiebreaker", no badge, no button, no action row — nothing a player could not learn from the week record itself`);
     assert(per.bystander === per.payerB && per.payerB === per.admin,
       `SF4c (${name}): the <tbody> is BYTE-IDENTICAL for a bystander, a player and the commissioner`);
@@ -2203,18 +2223,18 @@ console.log('\n[SF5] DI-474 SF5 — every row of the state tables…');
     'SF5e: a FINAL week with a money record but no results: a merged colspan="2" cell (muted dash) THEN the record\'s badge — a debt never disappears from the screen');
   assert(/colspan="2">In progress<\/td><td class="stand-st"><span class="badge badge-nd"[^>]*>Pending<\/span><\/td>/.test(g52) && sfBtns(g52).sort().join() === 'confirm,deny',
     'SF5f: an UNFINISHED week with a money record: "In progress" in a colspan="2" cell, the Pending badge, and the commissioner\'s Confirm + Deny still offered');
-  assert(/<td class="stand-st"><span class="badge badge-locked">Unpaid<\/span><\/td>/.test(g53) && !/Needs review|<button|stand-act|title=/.test(g53),
+  assert(/<td class="stand-st"><span class="badge badge-locked">Unpaid<\/span><\/td>/.test(g53) && !/Needs review|<button(?![^>]*stand-wk-btn)|stand-act|title=/.test(g53),
     'SF5g: a CONFLICTED group (two active obligations) renders the plain Unpaid badge — no diagnostic text, no title, no action, even for the commissioner (UN-126/UN-135)');
-  assert(/<td class="stand-st"><span class="text-muted text-xs">—<\/span><\/td>/.test(g54) && !/<button|stand-act/.test(g54),
+  assert(/<td class="stand-st"><span class="text-muted text-xs">—<\/span><\/td>/.test(g54) && !/<button(?![^>]*stand-wk-btn)|stand-act/.test(g54),
     'SF5h: a FINAL week with results but NO obligation: both names, and a muted dash in the Status cell');
-  assert(/<td class="stand-st"><span class="badge badge-final">Waived<\/span><\/td>/.test(g44) && !/<button|stand-act/.test(g44),
+  assert(/<td class="stand-st"><span class="badge badge-final">Waived<\/span><\/td>/.test(g44) && !/<button(?![^>]*stand-wk-btn)|stand-act/.test(g44),
     'SF5i: a WAIVED week is the Waived badge and nothing else, for the commissioner too');
   assert(sfBtns(g41).join() === 'mark' && /Mark Paid<\/button>/.test(g41),
     'SF5j: an UNPAID week shows the commissioner "Mark Paid" in its own action row');
   assert(/<span class="stand-sub">by tiebreaker<\/span>/.test(sfGroup(html, 'Week 42')) && !/by tiebreaker/.test(g41) && !/\(TB\)/.test(html),
     'SF5k: "by tiebreaker" sits under the winner of a week won on the tiebreaker (wonByTiebreaker) and nowhere else; "(TB)" is gone');
   const noMoney = sfRender(SF_V.anon);
-  assert(/Week 53/.test(noMoney) && !/<button/.test(noMoney), 'SF5l: signed out — every row still renders and not one <button> exists');
+  assert(/Week 53/.test(noMoney) && !NOT_OPENER.test(noMoney), 'SF5l: signed out — every row still renders and not one <button> exists but the revealed-week opener (no payment control, no comparison button)');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -2223,11 +2243,13 @@ console.log('\n[SF6] DI-474 SF6 — the two-line week cell, one label per row, a
 {
   const html = sfRender(SF_V.bystander);
   const g41 = sfGroup(html, 'Week 41'), g42 = sfGroup(html, 'Week 42'), grp = sfGroup(html, 'Week 49 + Week 50');
-  assert(/<td class="stand-wk"><span class="stand-wk-name" id="stand-wk-\d+">Week 41<\/span><span class="stand-sub">Sep 24–26<\/span><\/td>/.test(g41),
-    'SF6a: a singleton week is the name over the compact date: <span class="stand-wk-name">Week 41</span><span class="stand-sub">Sep 24–26</span>');
+  // D1 Lane B (DI-596): a revealed week's name-over-date pair now sits inside the 44 pt opener button (the chevron after it); an Open or Locked week's cell is the plain pair it always was.
+  assert(/<td class="stand-wk"><button type="button" class="stand-wk-btn" data-wk-open="sfw41" aria-labelledby="stand-wk-\d+"><span class="stand-wk-name" id="stand-wk-\d+">Week 41<\/span><span class="stand-sub">Sep 24–26<\/span><span class="stand-wk-chev" aria-hidden="true">[\s\S]*?<\/span><\/button><\/td>/.test(g41)
+    && /<td class="stand-wk"><span class="stand-wk-name" id="stand-wk-\d+">Week 46<\/span><span class="stand-sub">Oct 29–Nov 1<\/span><\/td>/.test(sfGroup(html, 'Week 46')),
+    'SF6a: a singleton week is the name over the compact date: <span class="stand-wk-name">Week 41</span><span class="stand-sub">Sep 24–26</span> (inside the opener button once the week is revealed; the plain cell for an Open week)');
   assert(/<span class="stand-sub">Sep 30–Oct 2<\/span>/.test(g42), 'SF6b: a week spanning two months reads "Sep 30–Oct 2"');
-  assert(/<td class="stand-wk"><span class="stand-wk-name" id="stand-wk-\d+">Week 49 \+ Week 50<\/span><\/td>/.test(grp),
-    'SF6c: a multi-part group is its group name with NO date span (no empty element claiming height)');
+  assert(/<td class="stand-wk"><button type="button" class="stand-wk-btn" data-wk-open="sfw49" aria-labelledby="stand-wk-\d+"><span class="stand-wk-name" id="stand-wk-\d+">Week 49 \+ Week 50<\/span><span class="stand-wk-chev"/.test(grp),
+    'SF6c: a multi-part group is its group name with NO date span (no empty element claiming height) — the name is followed directly by the chevron, and the opener names the first revealed part');
   const singles = ['Week 41', 'Week 42', 'Week 43', 'Week 44', 'Week 45', 'Week 46', 'Week 47', 'Week 48', 'Week 51', 'Week 52', 'Week 53', 'Week 54'];
   const drift = singles.filter(n => !dm.formatWeekLabel(storage.getWeek('sfw' + n.slice(5))).startsWith(sfWkName(sfGroup(html, n))));
   assert(drift.length === 0, `SF6d: the rendered name is always the START of formatWeekLabel() for every singleton — the two can never drift apart (drifted: ${drift.join(', ') || 'none'})`);
@@ -2235,8 +2257,8 @@ console.log('\n[SF6] DI-474 SF6 — the two-line week cell, one label per row, a
   assert(onceMore.length === 0, 'SF6e: the week label is written ONCE per row — never repeated in a title or aria-label (the group uses aria-labelledby the visible name)');
   assert(sfGroups(sfRender(SF_V.admin)).every(g => !/aria-label="[^"]*Week/.test(g) && !/title="[^"]*Week/.test(g)) && /role="group" aria-labelledby="stand-wk-\d+"/.test(sfRender(SF_V.admin)),
     'SF6f: …and the action group names itself with aria-labelledby, not a second copy of the label');
-  assert(/\$\{weekCell\}\$\{cells\}<\/tr>\$\{noteRow\}\$\{hasAct/.test(sfAppSrc) && /const noteRow = noteLines\.length/.test(sfAppSrc) && /<tr class="stand-note\$\{hasAct\?' has-act':''\}"><td colspan="4">/.test(sfAppSrc),
-    'SF6g: the SP-54 note row (DI-468) is emitted AFTER the week row and BEFORE the action row, inside the same <tbody>, as a full-width tr.stand-note (colspan 4) — the seam SP-56 left is now filled (re-derived 2026-10-01; behaviour proven by [SP54-L] below)');
+  assert(/\$\{weekCell\}\$\{cells\}<\/tr>\$\{noteRow\}\$\{hasAct/.test(sfAppSrc) && /const noteRow = \(noteLines\.length \|\| deniedLine\)/.test(sfAppSrc) && /<tr class="stand-note\$\{hasAct\?' has-act':''\}"><td colspan="4">/.test(sfAppSrc),
+    'SF6g: the SP-54 note row (DI-468) is emitted AFTER the week row and BEFORE the action row, inside the same <tbody>, as a full-width tr.stand-note (colspan 4) — the seam SP-56 left is now filled (re-derived 2026-10-01; re-derived 2026-10-07 for M-30 / D-61: a denied payment\'s reason joins the SAME row, so it is emitted for a tie note OR a reason; behaviour proven by [SP54-L] and [M30] below)');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -2419,7 +2441,7 @@ console.log('\n[SF9] DI-474 SF9 — the payment tap: re-render, keep the scroll 
   const lbStart = sfAppSrc.indexOf('export function renderLeaderboard()');
   const lbBody = sfAppSrc.slice(lbStart, sfAppSrc.indexOf('export function renderAlmaMaterRankings()'))
     .split('\n').filter(l => !/^\s*(\/\/|\/\*|\*)/.test(l)).join('\n');
-  assert(/handleObligationAction\(id, act\);\s*renderLeaderboard\(\);\s*if \(typeof window\.scrollTo==='function'\) window\.scrollTo\(\{ top:y, left:0, behavior:'instant' \}\);/.test(lbBody),
+  assert(/handleObligationAction\(id, act, \{ rerender: keepScrollRenderLeaderboard \}\);\s*renderLeaderboard\(\);\s*if \(typeof window\.scrollTo==='function'\) window\.scrollTo\(\{ top:y, left:0, behavior:'instant' \}\);/.test(lbBody),
     'SF9a: structural — the handler re-renders, THEN restores window.scrollY with behavior:\'instant\' (html{scroll-behavior:smooth} would otherwise turn it into a visible slide)');
   assert((lbBody.match(/haptic\(/g) || []).length === 1 && /if \(\(act==='mark'\|\|act==='confirm'\) && obStatus\(id\)!==before\) haptic\('medium'\);/.test(lbBody),
     'SF9b: structural — haptic() is called exactly ONCE in renderLeaderboard, only for mark/confirm, and only when the status actually changed (never deny, never undo, never a refused action)');
@@ -2455,19 +2477,29 @@ console.log('\n[SF9] DI-474 SF9 — the payment tap: re-render, keep the scroll 
     button(SF_V.creditorC, 'sfo61', 'confirm').click();
     assert(status('sfo61') === 'paid' && buzz.length === 2, `SF9h: native — Confirm on a pending debt is the second medium impact (status ${status('sfo61')}, ${buzz.length} impacts)`);
 
-    // 3) NATIVE: Deny — no haptic, whether the prompt is cancelled or answered.
-    globalThis.prompt = () => null;
+    // 3) NATIVE: Deny — no haptic, whether the confirm sheet is cancelled or confirmed. 0046 (R-19 follow-up): Deny opens the
+    //    destructive-confirm ACTION SHEET (window.prompt is gone — it now throws here, so a regression is loud).
+    globalThis.prompt = () => { throw new Error('window.prompt() was called — Deny must use the confirm sheet (0046)'); };
+    const layer = () => els.get('ls-action-layer') || null;
+    const tapLayer = (action) => layer()._fire('click', { target: { closest: () => ({ getAttribute: () => action }) } });
     button(SF_V.creditorC, 'sfo62', 'deny').click();
-    assert(status('sfo62') === 'pending' && buzz.length === 2, 'SF9i: Deny with the prompt CANCELLED changes nothing and buzzes nothing');
-    globalThis.prompt = () => 'not this week';
+    assert(!!layer() && /Deny this payment\?/.test(layer()._html) && /id="ob-deny-reason"/.test(layer()._html) && status('sfo62') === 'pending' && buzz.length === 3 && buzz[2].style === 'LIGHT',
+      'SF9i-0: Deny on Standings opens the confirm sheet (with the optional reason field) and changes nothing yet; its ONE haptic is the sheet\'s warning (the LIGHT fallback here — this fake has no notification), never a MEDIUM');
+    tapLayer('cancel');
+    assert(!layer() && status('sfo62') === 'pending' && buzz.length === 3, 'SF9i: Deny CANCELLED on the sheet changes nothing and buzzes nothing more');
     button(SF_V.creditorC, 'sfo63', 'deny').click();
-    assert(status('sfo63') === 'unpaid' && buzz.length === 2, 'SF9j: Deny that SUCCEEDS (pending → unpaid) still buzzes nothing — haptics are for the primary action only');
+    els.set('ob-deny-reason', { value: '  not this week  ' });
+    tapLayer('confirm-deny');
+    els.delete('ob-deny-reason');
+    const ob63 = storage.getObligations().find(o => o.obligationId === 'sfo63');
+    assert(!layer() && status('sfo63') === 'unpaid' && ob63.deniedReason === 'not this week' && buzz.length === 4,
+      'SF9j: Deny CONFIRMED (pending → unpaid) saves the trimmed reason and buzzes nothing beyond the sheet\'s own warning — the medium impact is for the primary action only (T8)');
 
     // 4) NATIVE: a REFUSED action. The button was rendered for the payer; the session changes before the tap (a DOM-injected / stale button).
     const stale = button(SF_V.payerB, 'sfo64', 'mark');
     setSession('sf_e', false, true);                      // a bystander now
     stale.click();
-    assert(status('sfo64') === 'unpaid' && buzz.length === 2, 'SF9k: a REFUSED action ("You don\'t have permission") changes nothing and buzzes nothing — the haptic follows the status change, not the tap');
+    assert(status('sfo64') === 'unpaid' && buzz.length === 4, 'SF9k: a REFUSED action ("You don\'t have permission") changes nothing and buzzes nothing — the haptic follows the status change, not the tap');
 
     // 5) WEB: no Capacitor bridge at all — the same successful tap restores scroll and re-renders, with ZERO haptics.
     delete globalThis.Capacitor;
@@ -2635,6 +2667,43 @@ console.log('\n[SP54-L] DI-468 — the Weekly History note row: placement, colum
   assert(sfBtns(g1).length >= 1 && sfBtns(sfGroup(by, 'Week 71')).length === 0, 'SP54-L7b: the payment action row is still the payer\'s alone, and it is still LAST in the group');
   // the 44pt payment row is untouched by the note
   assert(/\.stand-act-row \.btn\{min-height:44px/.test(sfCssSrc) && /\.stand-table \.stand-note td\{height:auto;padding:0 8px 8px;text-align:left\}/.test(sfCssSrc), 'SP54-L8: the 44 pt payment button rule is untouched and the note cell rule is in the stylesheet');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// [M30] M-30 (Drew D-61, 2026-10-07) — a denied payment's reason is VISIBLE under the Unpaid row in Weekly History, to everyone who can
+// see the row: a muted "Denied: <reason>" line in the same full-width note row the tie note uses (after the week row, before the action
+// row). Plain text through escHtml; no line when there is no reason or the row is not Unpaid. Through the REAL renderLeaderboard().
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[M30] M-30 — the denied reason under an Unpaid row in Weekly History: placement, escaping, only when Unpaid with a reason…');
+{
+  const HOSTILE = 'No funds & "late" <img src=x onerror=alert(1)>';
+  sfWeek(80, { startDate: '2027-02-01', endDate: '2027-02-01' });
+  sfWeek(81, { startDate: '2027-02-08', endDate: '2027-02-08' });
+  sfWeek(82, { startDate: '2027-02-15', endDate: '2027-02-15' });
+  storage.saveObligation(SFO('m30a', 'sfw80', 'sf_b', 'sf_a', 'unpaid', { deniedReason: HOSTILE }));
+  storage.saveObligation(SFO('m30b', 'sfw81', 'sf_b', 'sf_a', 'pending', { deniedReason: 'an old reason' }));
+  storage.saveObligation(SFO('m30c', 'sfw82', 'sf_b', 'sf_a', 'unpaid'));
+  const payerHtml = sfRender(SF_V.payerB);
+  const g80 = sfGroup(payerHtml, 'Week 80') || '';
+  const line = '<div class="ob-denied-line">Denied: No funds &amp; &quot;late&quot; &lt;img src=x onerror=alert(1)&gt;</div>';
+  assert(g80.includes(line) && !/<img\b/.test(g80),
+    `M30a: the Unpaid row's reason renders as ONE muted line, "Denied: …", every character escaped — no element is made of it (${(/<div class="ob-denied-line">[^<]*<\/div>/.exec(g80) || ['none'])[0]})`);
+  const iRow = g80.indexOf('<tr class="stand-row'), iNote = g80.indexOf('<tr class="stand-note'), iLine = g80.indexOf('ob-denied-line'), iAct = g80.indexOf('<tr class="stand-act"');
+  assert(iRow >= 0 && iRow < iNote && iNote < iLine && iAct > iLine && /<tr class="stand-note has-act"><td colspan="4">/.test(g80) && sfBtns(g80).join() === 'mark',
+    `M30b: it sits in the full-width note row (colspan 4) AFTER the week row and BEFORE the payer's Mark Paid row (${[iRow, iNote, iLine, iAct].join(' < ')})`);
+  assert(['bystander', 'admin', 'anon', 'creditorA'].every((v) => (sfGroup(sfRender(SF_V[v]), 'Week 80') || '').includes(line)),
+    'M30c: everyone who can see the row sees the line — the creditor, a bystander, the commissioner and a signed-out visitor');
+  assert(!/ob-denied-line/.test(sfGroup(payerHtml, 'Week 81') || 'x') && !/an old reason/.test(sfGroup(payerHtml, 'Week 81') || 'x'),
+    'M30d: NO line on a row that is not Unpaid (a Pending row carrying an old reason shows none)');
+  const g82 = sfGroup(payerHtml, 'Week 82') || 'x';
+  assert(!/ob-denied-line/.test(g82) && !/stand-note/.test(g82), 'M30e: NO line, and no empty note row, when an Unpaid row has no reason');
+  assert(/class="badge [^"]*" title="Denied: No funds &amp; &quot;late&quot; &lt;img src=x onerror=alert\(1\)&gt;"/.test(g80),
+    'M30f: the hover title stays as well (a desktop hover), escaped the same way');
+  const CSS_M30 = await readFile(new URL('./css/styles.css', import.meta.url), 'utf8');
+  const rule = (/\.ob-denied-line\{([^}]*)\}/.exec(CSS_M30) || [, ''])[1];
+  assert(/color:var\(--text-secondary\)/.test(rule) && /overflow-wrap:anywhere/.test(rule) && /white-space:normal/.test(rule) && /font-size:\.75rem/.test(rule)
+    && !/margin/.test(rule) && !/#[0-9a-f]{3,6}\b|rgb\(/i.test(rule),
+    `M30g: .ob-denied-line is muted by TOKEN (no hardcoded colour), sized in rem so it follows the largest text size, wraps at any width, and spaces itself with padding, never a margin (${rule})`);
 }
 
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);

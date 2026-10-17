@@ -1,0 +1,19 @@
+{
+  "id": "wizardfinalizetest",
+  "script": "wizardfinalizetest.mjs",
+  "summary": "strict",
+  "floor": 180,
+  "forbid": [
+    {
+      "regex": "ERR_MODULE_NOT_FOUND",
+      "flags": "",
+      "label": "wizardfinalizetest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)"
+    }
+  ],
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 1500,
+  "note": "W-22 review BLOCK (2026-10-14): RAISED 179 -> 180 (5f-1f: from the success until the reload the red banner never goes down while cfbp_weeks is still refused, checked at every write that takes it down, so a hand-hide one microtask or one timer hop after the success is red). W-22 (2026-10-08): RAISED 177 -> 179 (5f-1b reads the state the success leaves, captured at the success haptic in a microtask, not after a wall-clock tick budget the adapter's own 800 ms flush could overtake; 5f-1d the loaded pass's fixture, 5f-1e the guard: with the wait load put before the read, 5f-1b's values still hold). Review follow-up (2026-10-08): RAISED 176 -> 177 ([5g] a clean finalize on the real adapter never reloads, past the reload delay; 5f-1 expects \"Week 6 is final. Refreshing…\"). Review follow-ups (2026-10-08): RAISED 171 -> 176 (5f driven through the sheet: an N2 success that still holds a refused week write reloads after the toast, 5f-1/5f-1b/5f-1c, 5f-1 changed; the success haptic once on each success path, 2-27b, 2-46b2, 2-46c2, 2-46d; the pending row's own id #wiz-fin-pending). Review notes N2/N6 (2026-10-08): RAISED 163 -> 171 (N2: a week the server holds final is a success at the answer, on a failed ask and at Reload app, 2-46b/c/d and [5f] on the real adapter; N6: the pending row is amber role=status with Retry the one control, 2-36b, 2-37, 2-37c, 2-44b, 5a-2). PF-416 / FB-026 follow-ups (W-46, thread 100726-D1, 2026-10-07): RAISED 140 -> 163 ([5] real adapter, incl. [5e] the drop rule: announcements wait for the server's confirmation and go out once; a refused finalize is terminal; a committed finalize re-enters at Step 4; [3b] DI-404 fresh mount; 2-37b, 2-43..2-46 rewritten for the terminal refused row). D1 integration batch 3a (2026-10-07): RAISED 139 -> 140 (C2b 2-4c, the as-you-type chip). D1 integration (2026-10-07): RAISED 107 -> 139 ([C1]: every Finalize entry x {alma, NFL designated game} stores the complete calculated tiebreaker through Step 2, 32 checks); 106 -> 107 (2-4b, Step 2 says Calculated, never Auto-Calc); Review round 1 (2026-10-07): RAISED 81 -> 106 (B1 Retry re-sends, never re-finalizes, incl. [4] against the real adapter; R3 Detect; N5); FB-027 (W-46, 2026-10-07): the Week Wizard finalizes through the guided flow with the tiebreaker and longest field goal (DI-518/519), and a next-week draft never hides the live week's Finalize (the DI-518 amendment), driven through the real app.js on minidom; 81"
+}

@@ -1,0 +1,12 @@
+{
+  "id": "cachetest",
+  "script": "cachetest.mjs",
+  "label": "78",
+  "summary": "strict",
+  "floor": 20,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 8000,
+  "note": "— a near-zero count would mean the guard is vacuous)"
+}

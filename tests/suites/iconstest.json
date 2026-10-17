@@ -1,0 +1,12 @@
+{
+  "id": "iconstest",
+  "script": "iconstest.mjs",
+  "label": "103",
+  "summary": "strict",
+  "floor": 564,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 200,
+  "note": "RAISED to 564, the Game Day merge of int/v0.30.0 (2026-10-08): measured on the merged tree. | RAISED from 543 by D1 Lane B Game Day (2026-10-08): the `sort` glyph joins the family ([1b6] count 44, [1b22] its shape). | RAISED from 503 by the v0.29.0 Home wiring window (2026-10-01): ICONS gains home and menu (40 -> 42), [1b18..22], and the per-icon family loops scan them (+26 measured on the merged tree); before that, floor 503 \u2014 set to the measured merged count at the v0.29.0 batch-5b \u2026"
+}

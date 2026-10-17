@@ -39,7 +39,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -284,12 +284,37 @@ console.log('\n[4] Golden: identity + ESPN endpoints equal the legacy constants�
   const m = ep.match(/const SUMMARY_ROOT\s*=\s*'([^']+)'/);
   assert(!!m, 'anchor: found `const SUMMARY_ROOT = ...` in js/extra-point.js');
   assert(m && m[1] === `${API_ROOT}/${CFB_PROFILE.espn.summaryPath}`, `cfb.espn.summaryPath === extra-point.js SUMMARY_ROOT (${m && m[1]})`);
-  assert(NFL_PROFILE.espn.summaryPath === null, 'nfl.espn.summaryPath is null (extra-point.js summary root is CFB-only today)');
+  // D1 (DI-533 #7, D-31): the NFL root exists in extra-point.js now, so the NFL profile names it (pinned to the file's text like the CFB one).
+  const mn = ep.match(/const NFL_SUMMARY_ROOT\s*=\s*'([^']+)'/);
+  assert(!!mn && mn[1] === `${API_ROOT}/${NFL_PROFILE.espn.summaryPath}` && NFL_PROFILE.espn.summaryPath === 'football/nfl/summary',
+    `nfl.espn.summaryPath === extra-point.js NFL_SUMMARY_ROOT (${mn && mn[1]})`);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
 // [5] Golden equality — rankings, through the real parse path
 // ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[4b] S9: an NFL team is not drawn with its mascot twice…');
+{
+  assert(dm.formatTeamName('Detroit Lions', 'Lions') === 'Detroit Lions' && dm.formatTeamName('Green Bay Packers', 'Packers') === 'Green Bay Packers', 'a full NFL name that already ends in its mascot is shown once');
+  assert(dm.getTeamDisplay({ homeTeam: 'New York Jets', homeMascot: 'Jets', awayTeam: 'New York Giants', awayMascot: 'Giants' }, 'home') === 'New York Jets' && dm.getTeamDisplay({ homeTeam: 'New York Jets', homeMascot: 'Jets', awayTeam: 'New York Giants', awayMascot: 'Giants' }, 'away') === 'New York Giants', 'both sides of a Jets-Giants game read once (games stored before the fix still do)');
+  assert(dm.formatTeamName('Texas A&M', 'Aggies') === 'Texas A&M (Aggies)' && dm.formatTeamName('Oklahoma') === 'Oklahoma (Sooners)' && dm.formatTeamName('Unknown School') === 'Unknown School' && dm.formatTeamName('Utah State', 'Aggies') === 'Utah State (Aggies)' && dm.formatTeamName('Miami (OH)', 'RedHawks') === 'Miami (OH) (RedHawks)',
+    'college football is untouched: school (mascot) as ever, including a school that merely shares a word with its mascot');
+  assert(dm.formatTeamName('Penn State Nittany Lions', 'Nittany Lions') === 'Penn State Nittany Lions' && dm.formatTeamName('Lions Gate', 'Lions') === 'Lions Gate (Lions)' && dm.formatTeamName('Prides', 'ides') === 'Prides (ides)', 'only a WHOLE trailing word counts as the mascot repeated ("Lions Gate" and "Prides" keep theirs)');
+  const events = [{
+    id: '7001', date: '2026-10-11T17:00:00Z', status: { type: { name: 'STATUS_SCHEDULED', detail: '1:00 PM ET' } },
+    competitions: [{ id: '7001', neutralSite: false, competitors: [
+      { homeAway: 'home', team: { location: 'Green Bay', name: 'Packers', displayName: 'Green Bay Packers', abbreviation: 'GB' }, score: null },
+      { homeAway: 'away', team: { location: 'Detroit', name: 'Lions', displayName: 'Detroit Lions', abbreviation: 'DET' }, score: null }], odds: [] }],
+  }];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ events }) });
+  let r;
+  try { r = await dp.fetchByDateRange({ startDate: '2026-10-11', endDate: '2026-10-11', sport: 'nfl' }); } finally { globalThis.fetch = realFetch; }
+  const g = r.games && r.games[0];
+  assert(g && g.homeTeam === 'Green Bay Packers' && g.awayTeam === 'Detroit Lions' && g.homeMascot === '' && g.awayMascot === '' && g.espnSport === 'nfl', `an NFL game parsed from ESPN stores the full name and NO separate mascot, stamped nfl (got ${JSON.stringify(g && [g.homeTeam, g.homeMascot, g.espnSport])})`);
+  assert(dm.getTeamDisplay(g, 'away') === 'Detroit Lions', 'and it displays as "Detroit Lions", once');
+}
+
 console.log('\n[5] Golden: cfb.rankings agrees with the ranks fetchByDateRange() really parses…');
 {
   const raws = [1, 2, 10, 24, 25, 26, 99, 100, 0, -1, '7', '25', '26', '0', 'abc', '', null, undefined, 3.9, 25.9, NaN];
@@ -350,7 +375,15 @@ console.log('\n[6] Golden: markets / tiebreaker / slate / affinity / abbreviatio
   assert(tb.question === w.tiebreakerQuestion, 'cfb.tiebreakerDefault.question === createWeek().tiebreakerQuestion');
   assert(tb.calcMode === w.tiebreakerCalculationMode, `cfb.tiebreakerDefault.calcMode === createWeek().tiebreakerCalculationMode ("${tb.calcMode}")`);
   assert(tb.type === 'almaMaterTotal' && tb.calcMode === 'selectedSlateOnly', 'cfb tiebreaker literals: almaMaterTotal / selectedSlateOnly');
-  assert(NFL_PROFILE.tiebreakerDefault === null, 'nfl.tiebreakerDefault is null (DI-228: MNF total; today an NFL week gets createWeek()\'s default)');
+  // D1 (DI-536, D-31): the NFL's tiebreaker is the Monday-night game's total points. type custom / calcMode manual are existing CHECK values (0001), so no schema change.
+  assert(eq(NFL_PROFILE.tiebreakerDefault, { type: 'custom', question: 'What is the total combined points scored in {game}?', calcMode: 'manual' }),
+    'nfl.tiebreakerDefault = custom / manual / the {game} total-points question (D-31)');
+  assert(NFL_PROFILE.tiebreakerDefault.type === dm.TIEBREAKER_TYPE.CUSTOM && NFL_PROFILE.tiebreakerDefault.calcMode === dm.TIEBREAKER_CALC_MODE.MANUAL
+    && NFL_PROFILE.tiebreakerDefault.type !== w.tiebreakerType, 'nfl tiebreaker values are the data-model constants, and differ from createWeek()\'s alma-mater default');
+  // D1 (DI-536): the NFL slate - eight to ten games, Sunday and Monday, default 10; a college slate is untouched.
+  assert(eq(NFL_PROFILE.slate, { size: 10, minSize: 8, maxSize: 10, candidateSize: 16, weights: null, anchorDays: ['sun', 'mon'], timeWindow: null }),
+    'nfl.slate = size 10, 8..10, 16 candidates, Sunday and Monday (D-31)');
+  assert(NFL_PROFILE.slate.size >= NFL_PROFILE.slate.minSize && NFL_PROFILE.slate.size <= NFL_PROFILE.slate.maxSize, 'nfl.slate.size is inside its own 8..10 range');
 
   // slate.size <- buildSuggestedSlate()'s default targetCount, and app.js's TARGET_SLATE_SIZE
   const scored = [];
@@ -363,9 +396,14 @@ console.log('\n[6] Golden: markets / tiebreaker / slate / affinity / abbreviatio
   const dflt = dp.buildSuggestedSlate(scored).slate.length;
   assert(dflt === CFB_PROFILE.slate.size, `cfb.slate.size (${CFB_PROFILE.slate.size}) === buildSuggestedSlate() default slate length (${dflt})`);
   assert(dp.buildSuggestedSlate(scored, 7).slate.length === 7, 'anchor: buildSuggestedSlate honors an explicit count, so 10 above is the DEFAULT, not a coincidence');
+  // RE-DERIVED 2026-10-14 (D1 W-68 / W-69): app.js's hard-coded `const TARGET_SLATE_SIZE = 10` lived in renderSuggestedSlatePreview(), which the ONE Games list retired - and with it the "(n/10 games)" heading. The Games
+  // tab now READS the slate's size from the week's sport profile (slate-add.js slateTargetOf), so the profile IS the source: the pin becomes "the app's slate size for a college week is the profile's slate.size",
+  // and "no second, hard-coded 10 is left in app.js".
   const appSrc = await readFile(join(HERE, 'js/app.js'), 'utf8');
-  const ts = appSrc.match(/const TARGET_SLATE_SIZE\s*=\s*(\d+)/);
-  assert(!!ts && Number(ts[1]) === CFB_PROFILE.slate.size, `cfb.slate.size === app.js TARGET_SLATE_SIZE (${ts && ts[1]})`);
+  const slateAdd = await import(pathToFileURL(join(HERE, 'js/slate-add.js')).href);
+  assert(slateAdd.slateTargetOf(CFB_PROFILE) === CFB_PROFILE.slate.size && slateAdd.slateAddDecision({ count: CFB_PROFILE.slate.size, profile: CFB_PROFILE }).prompt === true && slateAdd.slateAddDecision({ count: CFB_PROFILE.slate.size - 1, profile: CFB_PROFILE }).prompt === false,
+    `the Games tab's slate size for a college week IS cfb.slate.size (${CFB_PROFILE.slate.size}): the add rule asks exactly at it, not below`);
+  assert(!/\bTARGET_SLATE_SIZE\b/.test(appSrc.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '')).join('\n')), 'app.js keeps no hard-coded TARGET_SLATE_SIZE: the profile is the one source of the slate size');
 
   // affinity
   const a = CFB_PROFILE.affinity;
@@ -378,12 +416,36 @@ console.log('\n[6] Golden: markets / tiebreaker / slate / affinity / abbreviatio
   assert(a.kind === 'alma_mater' && eq(a.allowedKinds, ['alma_mater']), "cfb.affinity kind/allowedKinds = alma_mater (CFB's group is fixed, no picker)");
   assert(a.watch === 'straightUp', "cfb.affinity.watch is 'straightUp' (Alma Mater Watch is NEVER ATS)");
   assert(/Alma Mater Watch<\/span>/.test(appSrc) && a.watchTitle === 'Alma Mater Watch', "cfb.affinity.watchTitle === the title app.js renders ('Alma Mater Watch')");
-  assert(NFL_PROFILE.affinity === null, 'nfl.affinity is null (DI-226/228 supplies favorite team / hometown)');
+  assert(NFL_PROFILE.affinity === null, 'nfl.affinity is null (D-31: no alma-mater rule for the NFL; Alma Mater Watch does not render)');
 
   // teamAbbr <- TEAM_ABBR
   assert(eq(CFB_PROFILE.teamAbbr, dm.TEAM_ABBR), `cfb.teamAbbr deep-equals TEAM_ABBR (${Object.keys(dm.TEAM_ABBR).length} entries)`);
   assert(Object.keys(dm.TEAM_ABBR).length > 100, 'anchor: TEAM_ABBR is non-trivial, so the deep-equal above is not vacuous');
-  assert(NFL_PROFILE.teamAbbr === null, 'nfl.teamAbbr is null');
+  // D1 (DI-536): the 32 ESPN abbreviations, keyed by the stored team name (displayName); buildAbbrMap() reads them before the smart-truncate fallback.
+  const nflAbbr = NFL_PROFILE.teamAbbr;
+  assert(eq(nflAbbr, dm.NFL_TEAM_ABBR) && Object.keys(nflAbbr).length === 32 && new Set(Object.values(nflAbbr)).size === 32, 'nfl.teamAbbr deep-equals NFL_TEAM_ABBR: 32 teams, 32 distinct abbreviations');
+  assert(Object.keys(nflAbbr).every((k) => !Object.prototype.hasOwnProperty.call(dm.TEAM_ABBR, k)), 'no NFL team name collides with a college school name in TEAM_ABBR');
+  const abbrMap = dm.buildAbbrMap([{ homeTeam: 'New York Jets', awayTeam: 'New York Giants' }, { homeTeam: 'Los Angeles Rams', awayTeam: 'Los Angeles Chargers' }, { homeTeam: 'Detroit Lions', awayTeam: 'Green Bay Packers' }]);
+  assert(abbrMap.get('New York Jets') === 'NYJ' && abbrMap.get('New York Giants') === 'NYG' && abbrMap.get('Los Angeles Rams') === 'LAR' && abbrMap.get('Los Angeles Chargers') === 'LAC'
+    && abbrMap.get('Detroit Lions') === 'DET' && abbrMap.get('Green Bay Packers') === 'GB', 'buildAbbrMap reads the NFL abbreviations: a Jets-Giants and a Rams-Chargers game stay distinct (the case ESPN\'s `location` cannot tell apart)');
+  assert(dm.buildAbbrMap([{ homeTeam: 'Texas A&M', awayTeam: 'Notre Dame' }]).get('Texas A&M') === dm.TEAM_ABBR['Texas A&M'], 'a college game is untouched by the NFL table');
+  // D1 third pass (item 5, reviewer nits): ONE lookup for both shorthands. The single-team teamAbbr(name) used to read only the college table, so an NFL team got its initials ("Detroit Lions" -> "DL");
+  // and the NFL table is consulted FIRST (its keys are full "City Mascot" names, the more specific), so even a future collision with a college key could not give an NFL team a college code.
+  const nflWrong = Object.entries(dm.NFL_TEAM_ABBR).filter(([n, code]) => dm.teamAbbr(n) !== code).map(([n]) => `${n}=${dm.teamAbbr(n)}`);
+  assert(nflWrong.length === 0, `[ab-1] teamAbbr(name) gives every one of the 32 NFL teams its ESPN code ("Detroit Lions" -> DET), not its initials (wrong: ${nflWrong.slice(0, 4).join(', ') || 'none'})`);
+  assert(dm.teamAbbr('Southern California') === 'USC' && dm.teamAbbr('Texas A&M') === dm.TEAM_ABBR['Texas A&M'] && dm.teamAbbr('Nowhere Tech') === 'NT' && dm.teamAbbr('') === '', '[ab-2] ...and a college name, an unknown name and an empty one read exactly as before');
+  const disagree = [...Object.keys(dm.TEAM_ABBR), ...Object.keys(dm.NFL_TEAM_ABBR), 'Nowhere Tech', 'Plainville'].filter((n) => dm.buildAbbrMap([{ homeTeam: n }]).get(n) !== dm.teamAbbr(n));
+  assert(disagree.length === 0, `[ab-3] teamAbbr(name) and buildAbbrMap agree for every single team in both tables (one lookup, two callers; disagree: ${disagree.slice(0, 4).join(', ') || 'none'})`);
+  dm.TEAM_ABBR['Detroit Lions'] = 'XCOL';              // a collision injected into the (deliberately mutable) legacy college table, and removed below
+  let collided;
+  try { collided = { map: dm.buildAbbrMap([{ homeTeam: 'Detroit Lions', awayTeam: 'Green Bay Packers' }]).get('Detroit Lions'), one: dm.teamAbbr('Detroit Lions') }; } finally { delete dm.TEAM_ABBR['Detroit Lions']; }
+  assert(collided.map === 'DET' && collided.one === 'DET' && !('Detroit Lions' in dm.TEAM_ABBR), `[ab-4] the NFL table is read FIRST: with a college key colliding with an NFL name, both shorthands still give the NFL code (map ${collided.map}, one ${collided.one})`);
+  // the sideContest: optional, the longest made field goal
+  assert(eq(NFL_PROFILE.sideContest, { stat: 'longestFieldGoal', label: 'Longest field goal', unit: 'yards', prompt: 'Guess the longest made field goal this week (yards).', optional: true, source: 'espnSummaryScoringPlays', sanity: { min: 15, max: 75 } }),
+    'nfl.sideContest = the optional longest made field goal (D-31, DI-229)');
+  // the sanity window equals the parse's own (extra-point.js: yards < 15 || yards > 75 is rejected)
+  assert(/yards < 15 \|\| yards > 75/.test(await readFile(join(HERE, 'js/extra-point.js'), 'utf8')) && NFL_PROFILE.sideContest.sanity.min === 15 && NFL_PROFILE.sideContest.sanity.max === 75,
+    'nfl.sideContest.sanity equals the parse\'s own window in extra-point.js (15..75)');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -396,9 +458,10 @@ console.log('\n[7] Slots with no legacy constant are null (R6: groupings stays n
     'affinity.isAffinityGame', 'affinity.tiebreakerTotal', 'groupings', 'slate.candidateSize', 'slate.weights',
     'slate.anchorDays', 'slate.timeWindow', 'sideContest', 'liveDecorators', 'scribeVocab', 'deepLink',
     'primaryMarkets', 'periodQuestion'];
-  const NFL_NULL = ['copy', 'feed.fetchSlate', 'feed.fetchScores', 'feed.fetchSummary', 'espn.summaryPath', 'espn.teamsUrl', 'espn.groups',
-    'markets.rotate', 'affinity', 'groupings', 'rankings', 'slate', 'sideContest', 'tiebreakerDefault',
-    'liveDecorators', 'teamAbbr', 'scribeVocab', 'deepLink', 'primaryMarkets', 'periodQuestion'];
+  // D1 (D-31) filled summaryPath, slate, sideContest, tiebreakerDefault and teamAbbr (goldens in [4] and [6]); affinity stays null BY RULING (no alma-mater rule).
+  const NFL_NULL = ['copy', 'feed.fetchSlate', 'feed.fetchScores', 'feed.fetchSummary', 'espn.teamsUrl', 'espn.groups',
+    'markets.rotate', 'affinity', 'groupings', 'rankings', 'slate.weights', 'slate.timeWindow',
+    'liveDecorators', 'scribeVocab', 'deepLink', 'primaryMarkets', 'periodQuestion'];
   for (const path of CFB_NULL) assert(get(CFB_PROFILE, path) === null, `cfb.${path} is null`);
   for (const path of NFL_NULL) assert(get(NFL_PROFILE, path) === null, `nfl.${path} is null`);
   assert(CFB_PROFILE.groupings === null && NFL_PROFILE.groupings === null, 'R6: groupings is null on every profile');

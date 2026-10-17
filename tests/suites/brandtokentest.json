@@ -1,0 +1,12 @@
+{
+  "id": "brandtokentest",
+  "script": "brandtokentest.mjs",
+  "label": "104",
+  "summary": "strict",
+  "floor": 122,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 100,
+  "note": "RAISED from 109 by SP-52 THEMES (2026-10-01): the night-mode extractors re-derived onto the enumerated Block A / B-munera (per block, both triggers: [2c-a2]), and [2c-d] OVERTURNED by Drew's school-Dark amendment — every school is IN Block A's list and has its own B-school pair …"
+}

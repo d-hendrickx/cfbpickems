@@ -1,0 +1,11 @@
+{
+  "id": "latchtest",
+  "script": "latchtest.mjs",
+  "summary": "strict",
+  "floor": 58,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 3000,
+  "note": "Raised 48 -> 58 (2026-10-14, fix/d1-latch-tty, M-46): real pseudo-terminal (script -q /dev/null) cases: flag + pipe or /dev/null refused, flag + TTY opens, TTY alone refused, no env/argument escape hatch, the residual under a TTY, children inherit stdin. Raised 40 -> 48 (2026-10-14, fix/d1-latch-followups): N1 first line + a real /bin/sh grep of the documented filter + its control, F-4 wording, N3 pointer, Q3 node -e shapes (3). W-12 / PM-212 (ported 2026-10-14 from eccb121, where it was loadtest [140], floor 40): the live latch at runtime. Spawns ONLY supabase/tests/_live-latch.mjs and scratch copies of it, never one of the four credential scripts; that they import it first is static.check's LIVE-LATCH section."
+}

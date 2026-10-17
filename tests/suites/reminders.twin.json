@@ -1,0 +1,12 @@
+{
+  "id": "reminders.twin",
+  "script": "supabase/tests/functions/reminders.twin.mjs",
+  "label": "81e",
+  "summary": "loose",
+  "floor": 307,
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 200,
+  "note": "MERGE int/v0.30.0 into feat/d1-creation-integrity (2026-10-08): floor re-measured on the merged tree = 300. D1 Lane A (2026-10-08, DI-548/549/545/546): RAISED 239 -> 262 to the measured count. Before that: DI-T6.2 — reminders, end to end (raised from 62 to 71 at the v0.24.0 + native-push rebase, 2026-09-24: the DI-240 send-format assertions; the floor had been left at 62 by the merge — the reviewer note on 27d6d3e) against a fake transport: the auth/switch/secret orderings, the … MERGE OF int/v0.30.0 (2026-10-08): DI-T6.2 — reminders, end to end (raised from 62 to 71 at the v0.24.0 + native-push rebase, 2026-09-24: the DI-240 send-format assertions; the floor had been left at 62 by the merge — the reviewer note on 27d6d3e) against a fake transport: the auth/switch/secret orderings, the …"
+}

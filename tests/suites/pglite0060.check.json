@@ -1,0 +1,18 @@
+{
+  "id": "pglite0060.check",
+  "script": "supabase/tests/pglite0060.check.mjs",
+  "summary": "loose",
+  "floor": 1,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "supabase/migrations/0060_odds_lookup_daily_cap.sql",
+    "supabase/migrations/0043_pf1_server_lock.sql",
+    "supabase/migrations/0049_push_readiness_marker.sql",
+    "supabase/tests/pglite-common.mjs",
+    "supabase/tests/fixtures/odds-cap-cases.mjs"
+  ],
+  "expectedMs": 4000,
+  "note": "W-71 DI-W71.10 (Drew D-80, 2026-10-14): migration 0060 (the odds lookup's per-league DAILY limit) run END TO END in an in-process Postgres (PGlite) over stubs with the REAL 0043 key CHECK and validator and 0049's setter: PART 0 refusals (key not admitted, partial and whole re-paste, no leagues), the paste with and without a league (the proof's own bookings rolled back), the structure and grants, P-1 attacker-shaped negatives (the league's own commissioner, a member, anon, a PUBLIC-only role; the service role cannot write the counter directly), the cap and its refusal, two leagues, a forged uuid and NULL, the UTC day in two far zones and the rollover, every CAP_CASES value against the real odds_lookup_cap() AND the twin's model (P-7), cap 100 as the ceiling, two reservations at cap - 1 (PGlite serializes: the real race is rls.test S60.race), ON DELETE CASCADE, and 0043/0049's objects unmoved. --mutate=<name> [--noproof] (22 named mutants, each red with and without the migration's own proof; tests/kits/w71-oddscap-mutants.mjs runs them). PGlite is not a repo dependency: without PGLITE_DIR it prints SKIP and counts one (green and hollow), so the floor is 1; with it, 52 assertions."
+}

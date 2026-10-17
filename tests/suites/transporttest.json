@@ -1,0 +1,12 @@
+{
+  "id": "transporttest",
+  "script": "transporttest.mjs",
+  "label": "73f",
+  "summary": "loose",
+  "floor": 221,
+  "tags": [
+    "smoke"
+  ],
+  "expectedMs": 1200,
+  "note": "(D1 0045, 2026-10-08: RAISED from 198 to 202 - the thirteen-column select with relayed, and [10b]: relayed rides the page read AND a Realtime payload, top-level, absent when the column is absent) - raised from 175 on 2026-09-24 by v0.25.1 (§[8](e) N4: an outage-class refusal breaks the run loop, one RPC not three; §[8](f)/§[17](g) N2: the narrowed local brakes hold back only the id they name and the refusal carries `assigned` for the run that landed — a mutation that …"
+}

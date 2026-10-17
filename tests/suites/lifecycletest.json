@@ -1,0 +1,13 @@
+{
+  "id": "lifecycletest",
+  "script": "lifecycletest.mjs",
+  "label": "112",
+  "summary": "strict-combined",
+  "floor": 67,
+  "tags": [
+    "smoke",
+    "tz"
+  ],
+  "expectedMs": 100,
+  "note": "2026-09-26 — N1 / FEAT-11 / UN-204 lifecycle notices in chat). Raise the floor when the suite grows; the ratchet only tightens"
+}

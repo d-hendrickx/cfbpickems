@@ -1,0 +1,18 @@
+{
+  "id": "weeklocktest",
+  "script": "weeklocktest.mjs",
+  "summary": "loose",
+  "floor": 113,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 1500,
+  "deps": [
+    "js/week-lock.js",
+    "js/home.js",
+    "js/data-model.js",
+    "css/styles.css"
+  ],
+  "note": "D1 integration (2026-10-07): RAISED 112 -> 113 ([5v], reviewer M29: the foreground re-check on Home / Rules / Standings flips the header badge). D1 / FB-001 / UN-414, PF-414 / DI-509, 510, 511, 512, 514: the ONE week-lock state and every surface that reads it (badge, header badge, countdown, timing line, submit, Edit My Picks, Manage line, Home Now card) flipping together at the lock instant under a pinned clock; the flip timer; the draft kept on screen when the week locks under it; the Rules sentence and its render-time legacy table; the source scan for new status-open edit gates; three mutation canaries. Registered 2026-10-07."
+}

@@ -1,0 +1,19 @@
+{
+  "id": "homenavtest",
+  "script": "homenavtest.mjs",
+  "label": "135",
+  "summary": "strict",
+  "floor": 123,
+  "forbid": [
+    {
+      "regex": "ERR_MODULE_NOT_FOUND",
+      "flags": "",
+      "label": "homenavtest.mjs resolves its whole module graph (no ERR_MODULE_NOT_FOUND)"
+    }
+  ],
+  "tags": [
+    "quick"
+  ],
+  "expectedMs": 300,
+  "note": "RAISED from 113 by the Chat lift (Drew M-11 Q2, 2026-10-02): [2] gains the chatLift and chatKeyboardGap clauses with a mutant each (+2); before that, floor 113 — RAISED from 108 by the Home wiring review fixes (2026-10-02): 6-9b is now a real assertion (it was `|| true`, N1) …"
+}

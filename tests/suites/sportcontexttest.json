@@ -1,0 +1,9 @@
+{
+  "id": "sportcontexttest",
+  "script": "sportcontexttest.mjs",
+  "summary": "strict",
+  "floor": 109,
+  "tags": ["quick"],
+  "expectedMs": 400,
+  "note": "(D1 combine, 2026-10-08: RAISED from 105 to 109 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - D1 (v0.30.0) DI-520/531/555, security A3/A4/A5/C1: the sport context model in js/competition.js — the single-sport rule, playersForCompetition and the joined-before-lock rule, the validated device-local pointer and Dashboard scope, two accounts on one handset, the context week, and the storage seam"
+}

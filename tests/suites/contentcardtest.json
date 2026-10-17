@@ -1,0 +1,17 @@
+{
+  "id": "contentcardtest",
+  "script": "contentcardtest.mjs",
+  "summary": "strict",
+  "floor": 88,
+  "tags": [
+    "quick"
+  ],
+  "deps": [
+    "js/content-card.js",
+    "js/icons.js",
+    "js/newsCard.js",
+    "js/app.js"
+  ],
+  "expectedMs": 500,
+  "note": "D1 Lane C (DI-660…662, DI-664…666, DI-669; 2026-10-08): the Home content cards (the feed card's shell, the kind label and icon, the honest caption that names SCRIBE only when a model wrote it, stale, the closed reason pill), SC-N14 vectors in every sink of the cards and the detail with double-quoted attributes, the detail's sections in order with 'isn't available right now' for a missing one and its actions by kind, what leaves the device (the 'Talk about it' line and the spotlight share text carry no private reason), the dispatcher (an id is a request; a forged id opens nothing), and [7] app.js's detail screen and its ONE action dispatcher driven from the real source extracted from js/app.js (paint from the card, repaint / gone / failed reads, the allow-list against the current row, Talk about it with the draft kept and 'Already shared.', Open game by ESPN event id, Share… as the house pair with a silent cancel, Back, and the year-ago detail's \"SCRIBE's read\" splice), and [8] the Background jobs card's \"Home cards\" switch through its real change handler (serverJobs.feedBuild exactly true / false). KIT_MUTANTS: 27 (tests/kits/lane-c-news-kit.mjs client; 13 of them on js/app.js). Review round 2026-10-14: B1 sources kept, N1 stale caption keeps its author at 7 h, N2 the player's zone, N4 chat-off actions, N6 the pilot lock."
+}

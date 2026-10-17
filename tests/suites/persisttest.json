@@ -1,0 +1,23 @@
+{
+  "id": "persisttest",
+  "script": "persisttest.mjs",
+  "label": "73c",
+  "summary": {
+    "regex": "(✅ ALL PASS|❌ \\d+ FAILED) — (\\d+) passed, (\\d+) failed",
+    "flags": "",
+    "passed": 2,
+    "failed": 3,
+    "verdict": {
+      "group": 1,
+      "equals": "✅ ALL PASS",
+      "combined": false
+    },
+    "skipped": null
+  },
+  "floor": 52,
+  "tags": [
+    "smoke"
+  ],
+  "expectedMs": 300,
+  "note": ")"
+}

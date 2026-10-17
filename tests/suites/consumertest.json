@@ -1,0 +1,10 @@
+{
+  "id": "consumertest",
+  "script": "consumertest.mjs",
+  "summary": "strict",
+  "floor": 24,
+  "tags": ["quick"],
+  "deps": ["js/*.js"],
+  "expectedMs": 400,
+  "note": "(D1 combine, 2026-10-08: RAISED from 20 to 21 - Game Day's derived-lock fix to the card detail's Edit My Picks gate ported: carddetailtest 2s-b..f) - D1 / DI-540: deadline, reveal and completion are the same everywhere - no module outside app.js keeps a private stored-status gate (a per-file allow-list with reasons and a dead-entry check; app.js is weeklocktest [10]'s), and the leaf modules import and call no pick reader; canaries prove both scanners."
+}

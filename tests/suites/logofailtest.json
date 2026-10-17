@@ -1,0 +1,18 @@
+{
+  "id": "logofailtest",
+  "script": "logofailtest.mjs",
+  "summary": "strict",
+  "floor": 50,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "deps": [
+    "js/app.js",
+    "js/data-provider.js",
+    "index.html",
+    "minidom.mjs",
+    "css/styles.css"
+  ],
+  "note": "D1 batch L follow-up (reviewer, FB-024 area): a logo file that FAILED is remembered for the page's life; the emit side writes no src for it, the repaint step applies the same fallback with no request; offline is not broken; capped; parse-time logoOk untouched. Mutation-proven on a scratch copy of app.js. Registered 2026-10-07."
+}

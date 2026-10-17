@@ -446,43 +446,40 @@ console.log('\n[6] claimedAlmaMaters() — dedupe, active-only, unclaimed absent
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-console.log('\n[7] Integration — the REAL #auto-calc-tb-btn handler…');
+console.log('\n[7] Integration — the REAL Comm tiebreaker card (D1 / DI-516: no Auto-Calc button; the value is computed live)…');
 {
-  // Proves the WIRING, not just the math function in isolation: the actual
-  // bound click handler in app.js must call claimedAlmaMaters() — a passing
-  // §1-§6 above would NOT catch a caller that hardcoded some other list
-  // (the catalog, an empty array, a stale closure, etc).
+  // Proves the WIRING, not just the math function in isolation: the Comm card and the effective-value helper must read claimedAlmaMaters() — a passing §1-§6 above would NOT catch a
+  // caller that hardcoded some other list (the catalog, an empty array, a stale closure, etc). Until D1 this section clicked the Auto-Calc button and read the value it typed into
+  // #tb-actual; the button is gone (FB-002: "calculates automatically without having to press button"), so the same wiring is proven through what replaced it.
   localStorage.clear();
   resetDom();
 
-  // Neither player claims Oklahoma via a "configured roster" — there is no
-  // such thing anymore. Reviewer claims Clemson (not in the ALMA_MATERS
-  // catalog at all); Brayden claims Oklahoma (catalog). If the wiring ever
-  // regressed to reading the ALMA_MATERS catalog directly instead of actual
-  // claims, Clemson would silently drop out (it's not a catalog entry) and
-  // the total would come up short.
+  // Neither player claims Oklahoma via a "configured roster" — there is no such thing anymore. Reviewer claims Clemson (not in the ALMA_MATERS catalog at all); Brayden claims Oklahoma
+  // (catalog). If the wiring ever regressed to reading the ALMA_MATERS catalog directly instead of actual claims, Clemson would silently drop out (it's not a catalog entry) and the
+  // total would come up short.
   addPlayer(P({ playerId: 'ig1', displayName: 'Reviewer', almaMater: 'Clemson', active: true }));
   addPlayer(P({ playerId: 'ig2', displayName: 'Brayden', almaMater: 'Oklahoma', active: true }));
 
-  const week = freshWeek({ weekId: 'ig_w1', tiebreakerCalculationMode: 'allAlmaMaterGames' });
+  const week = freshWeek({ weekId: 'ig_w1', status: WEEK_STATUS.LIVE, tiebreakerCalculationMode: 'allAlmaMaterGames' });
   saveWeek(week);
   const game = G({ weekId: 'ig_w1', homeTeam: 'Oklahoma', awayTeam: 'Clemson', status: GAME_STATUS.FINAL, homeScore: 28, awayScore: 31, isAlmaMaterGame: true });
   saveAllGamesForWeek('ig_w1', [game]);
 
-  el('toast-container');
-  el('auto-calc-tb-btn');
-  el('tb-actual');
-  bindCommEventListeners(week, getGames('ig_w1'), [], [], getSettings(), [week], []);
-  el('auto-calc-tb-btn')._fire('click');
-
-  assert(el('tb-actual').value === '59' || el('tb-actual').value === 59,
-    `clicking the REAL #auto-calc-tb-btn handler writes 59 into #tb-actual (Clemson 31 + Oklahoma 28, via claimedAlmaMaters()) — got ${JSON.stringify(el('tb-actual').value)}`);
-  assert(lastToasts.some(t => t.includes('59')), 'fixture check: a confirming toast with the value actually fired (not vacuous)');
-
-  // Negative control — if the wiring regressed to reading the ALMA_MATERS
-  // catalog directly (which does not carry Clemson), the total would be
-  // Oklahoma alone (28) — assert explicitly that we did NOT get that answer.
-  assert(el('tb-actual').value !== '28', 'explicit: the written value is NOT 28 (the catalog-only, wrong-per-Drew\'s-ruling answer)');
+  const eff = app.effectiveTiebreakerActualForWeek(storage.getWeek('ig_w1'));
+  assert(eff.value === 59 && eff.source === 'calculated' && eff.provisional === false,
+    `the effective value is 59 (Clemson 31 + Oklahoma 28, via claimedAlmaMaters()), calculated, and COMPLETE (every alma game is final) — got ${JSON.stringify({ v: eff.value, s: eff.source, p: eff.provisional })}`);
+  const card = app.commTiebreakerCardHTML(storage.getWeek('ig_w1'), []);
+  assert(/id="tb-actual"[^>]*value="59"/.test(card) && /data-initial="59"/.test(card) && /Calculated/.test(card) && !/auto-calc-tb-btn/.test(card) && !/Auto-Calc/.test(card),
+    'the REAL Comm card shows 59 with the Calculated chip and no Auto-Calc button anywhere');
+  // Negative control — if the wiring regressed to reading the ALMA_MATERS catalog directly (which does not carry Clemson), the total would be Oklahoma alone (28) — assert explicitly that
+  // we did NOT get that answer.
+  assert(eff.value !== 28 && !/value="28"/.test(card), 'explicit: the value is NOT 28 (the catalog-only, wrong-per-Drew\'s-ruling answer)');
+  // A stored override wins and is labelled; it does not matter that the live total differs.
+  saveWeek({ ...storage.getWeek('ig_w1'), actualTiebreakerValue: 61 });
+  const over = app.effectiveTiebreakerActualForWeek(storage.getWeek('ig_w1'));
+  assert(over.value === 61 && over.source === 'manual' && over.calculated.finalValue === 59, 'a stored actual (61) wins; the calculated total (59) stays available to Step 2 as the suggestion');
+  assert(/Commissioner-set/.test(app.commTiebreakerCardHTML(storage.getWeek('ig_w1'), [])) && /id="tb-use-calculated-btn"/.test(app.commTiebreakerCardHTML(storage.getWeek('ig_w1'), [])),
+    'an override is labelled Commissioner-set and offers Use calculated value');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -871,10 +868,12 @@ console.log('\n[10] Structural call-site scans…');
   }
 
   // ── 10c. Suggestion-reason chips are escHtml()'d ───────────────────────────
-  console.log('  [10c] renderSuggestedGameRow() — suggestion-reason chips are escHtml()\'d…');
+  console.log('  [10c] the Games row — suggestion-reason chips are escHtml()\'d…');
   {
+    // RE-DERIVED 2026-10-14 (D1 W-69): the chip moved out of app.js's renderSuggestedGameRow() into games-list.js's gameRowHTML() (the ONE Games row), where it reads `row.reasons`. The detector
+    // takes either source shape - the old `(game.suggestionReasons||[]).map(r=>...)` and the row's `row.reasons.map((r) => ...)` - so its synthetic fixtures below still prove what they proved.
     function suggestionReasonMapExpr(src) {
-      const m = /\(game\.suggestionReasons\s*\|\|\s*\[\]\)\.map\((\w+)\s*=>\s*`([\s\S]*?)`\)/.exec(src);
+      const m = /(?:\(game\.suggestionReasons\s*\|\|\s*\[\]\)|row\.reasons)\.map\(\s*\(?(\w+)\)?\s*=>\s*`([\s\S]*?)`\s*\)/.exec(src);
       return m ? { param: m[1], template: m[2] } : null;
     }
     function chipIsEscaped(src) {
@@ -904,10 +903,15 @@ console.log('\n[10] Structural call-site scans…');
     assert(renamedResult && renamedResult.escaped === true, 'detector correctly tracks a renamed map parameter, not just the literal name "r"');
 
     // …and now the real file.
-    const real = chipIsEscaped(appJsSrc);
-    assert(real !== null, 'fixture check: the real renderSuggestedGameRow() suggestion-reason .map() expression was found in js/app.js — guards a rewritten render path silently going unscanned');
+    const gamesListSrc = await readFile(new URL('./js/games-list.js', import.meta.url), 'utf8');
+    const real = chipIsEscaped(gamesListSrc);
+    assert(real !== null, 'fixture check: the real gameRowHTML() suggestion-reason .map() expression was found in js/games-list.js — guards a rewritten render path silently going unscanned');
     assert(real.escaped === true && real.bareUnescaped === false,
-      'renderSuggestedGameRow() escapes each suggestion-reason chip through escHtml() — no bare, unescaped interpolation of commissioner-controlled reason text');
+      'gameRowHTML() escapes each suggestion-reason chip through escHtml() — no bare, unescaped interpolation of commissioner-controlled reason text');
+    assert(chipIsEscaped(appJsSrc) === null, 'and app.js no longer carries a second copy of the chip (one row renderer, one chip site)');
+    const renamed = gamesListSrc.replace('row.reasons.map((r) => `<span class="candidate-reason">${escHtml(r)}</span>`)', 'row.reasons.map((r) => `<span class="candidate-reason">${r}</span>`)');
+    const mutated = chipIsEscaped(renamed);
+    assert(renamed !== gamesListSrc && mutated && mutated.bareUnescaped === true && mutated.escaped === false, 'mutation proof: removing the escHtml() from the chip in games-list.js is caught by this very detector');
   }
 }
 

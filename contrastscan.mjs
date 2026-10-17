@@ -608,6 +608,10 @@ if (isMain) {
       '.google-g-mark',   // Google's OAuth SVG mark, no text, governed by Google's own branding rules
       '.cc-row-switch::after', // a toggle switch's circular knob pseudo-element, no text
       '.cc-row-switch[data-on="true"]::after', // the same knob in its ON state (SP-52: now painted --on-accent so it stays visible on Graphite Dark's near-white track) — no text
+      '.gd-dot', // D1 Game Day: the 8 pt live dot sits on the card's own maroon gradient (a linear-gradient this scanner skips, so it reads the dot against the page card); it is painted --on-accent, the colour the card's TEXT uses, so it is as visible as the label beside it (gamedaytest [CS] measures the pairs against the real gradient in every look) — no text of its own
+      // D1 (v0.30.0, 2026-10-08) — two 8px DOTS that paint a fill and carry no text at all, so a text-contrast reading of them is a scanner artifact (the `.live-dot` precedent): the sport
+      // switcher's "picks are due" dot (its meaning is ALSO in the segment's accessible name, never colour alone) and the header pill's leading due dot (the same fact is in the pill's aria-label).
+      '.sport-seg-dot', '.league-pill-badge',
     ]);
     for (const f of newDarkOnly) {
       const onList = KNOWN_NON_ISSUES.has(f.selector);
@@ -633,7 +637,7 @@ if (isMain) {
       // NON-TEXT artifacts this rule-at-a-time scanner reads as failures only where a look's accent fill is NEAR-WHITE or its bar is NEAR-BLACK: the rule
       // paints a fill but carries no text of its own (a 7px dot, a step dot, a switch track, the status strip, a hover state that inherits its base rule's
       // --on-accent label, and the tab-bar container whose children set their own colours — themetest [T4] measures the tab icons themselves).
-      const ACCENT_FILL_NON_TEXT = ['.live-dot', '.week-wizard-step-dot', '.cc-row-switch', 'body.native-shell::before', '.btn-primary:hover', '.bottom-nav', '.lc-tick-on'];
+      const ACCENT_FILL_NON_TEXT = ['.live-dot', '.week-wizard-step-dot', '.cc-row-switch', 'body.native-shell::before', '.btn-primary:hover', '.bottom-nav', '.lc-tick-on', '.sport-seg-thumb', '.sport-seg-dot', '.league-pill-badge'];   // D1: the switcher's thumb is a fill (its label is the button's own rule, which reads --on-accent) and the two dots carry no text
       const base = runScan(cssSrc, 'neutral');
       const key = (f) => f.mode + '|' + f.selector;
       const baseSet = new Set(base.failures.map(key));

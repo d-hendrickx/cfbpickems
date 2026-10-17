@@ -97,13 +97,19 @@ console.log('\n[0] Structure — the DI\'s API; reads never write; three storage
   const src = await readFile(join(HERE, 'js', 'competition.js'), 'utf8');
   const noComments = src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
   const imports = [...noComments.matchAll(/from '([^']+)'/g)].map((m) => m[1]).sort();
-  assert(eq(imports, ['./auth.js', './data-model.js', './sports/index.js', './storage.js']),
-    `[0a] imports exactly storage.js, auth.js, data-model.js and sports/index.js (got ${JSON.stringify(imports)}) — never app.js, chat, scoring`);
+  // D1 (v0.30.0, DI-531 C1): ONE import is added, js/week-lock.js — the leaf that owns "when does this week lock", so the joined-before-lock rule reads the same instant every lock surface does.
+  // The pin is still EXACT: any other module (app.js, chat, scoring, home) fails it.
+  assert(eq(imports, ['./auth.js', './data-model.js', './sports/index.js', './storage.js', './week-lock.js']),
+    `[0a] imports exactly storage.js, auth.js, data-model.js, sports/index.js and (D1) week-lock.js (got ${JSON.stringify(imports)}) — never app.js, chat, scoring`);
   const exported = [...noComments.matchAll(/^export (?:function|const) (\w+)/gm)].map((m) => m[1]).sort();
-  assert(eq(exported, ['COMPETITION_OVERRIDABLE_KEYS', 'LIVE_SPORT_LOOKAHEAD_DAYS', 'SETTING_SOURCES', 'competitionForWeek', 'getAllCurrentWeeks',
-    'getCompetition', 'getCompetitions', 'getCurrentWeekFor', 'getDefaultCompetition', 'getEffectiveSetting', 'getLiveSports',
-    'getWeeksForCompetition', 'profileForWeek', 'saveCompetition']),
-    `[0b] the exported API is exactly Revision 5's client API (+ the three constants) — got ${JSON.stringify(exported)}`);
+  // D1 (v0.30.0): Revision 5's fourteen names are unchanged; the other seventeen are DI-520 / DI-528 / DI-531 / DI-555's participation, sport-context and Home-feed-context API (sportcontexttest.mjs proves each).
+  // RE-DERIVED 2026-10-08 (merge): ONE name is added, `picksOfRoster` - the picks filter that matches playersForWeek (the client's `entrantPicks` and Lane A's `picksOfRoster` were the same A3 fix written twice; this
+  // is the survivor, moved here so the roster and its picks filter live in one module). The list is still EXACT.
+  assert(eq(exported, ['COMPETITION_OVERRIDABLE_KEYS', 'DASHBOARD_ALL', 'LIVE_SPORT_LOOKAHEAD_DAYS', 'SETTING_SOURCES', 'clearSportContextExcept', 'competitionForSport', 'competitionForWeek',
+    'getActiveSportKey', 'getAllCurrentWeeks', 'getCompetition', 'getCompetitions', 'getContextCompetition', 'getContextWeek', 'getContextWeeks', 'getCurrentWeekFor',
+    'getDashboardScope', 'getDefaultCompetition', 'getEffectiveSetting', 'getLiveSports', 'getWeeksForCompetition', 'homeFeedContexts', 'isMultiSport', 'leagueSports', 'picksOfRoster', 'playedSports',
+    'playersForCompetition', 'playersForWeek', 'profileForWeek', 'saveCompetition', 'setActiveSportKey', 'setDashboardScope', 'viewerMemberId', 'viewerPlaysCompetition']),
+    `[0b] the exported API is exactly Revision 5's client API plus D1's participation and sport-context API (and, 2026-10-08, picksOfRoster) — got ${JSON.stringify(exported)}`);
   // Every write in this module is the ONE exported saveCompetition delegating to the storage seam.
   const withoutSave = noComments.replace(/export function saveCompetition\([^)]*\) \{[\s\S]*?\n\}\n/, '');
   assert(withoutSave !== noComments && !/\bsave[A-Za-z]*\(|\bdelete[A-Z][A-Za-z]*\(|localStorage|setItem|removeItem/.test(withoutSave),

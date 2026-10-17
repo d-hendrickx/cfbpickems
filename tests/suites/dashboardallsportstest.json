@@ -1,0 +1,12 @@
+{
+  "id": "dashboardallsportstest",
+  "script": "dashboardallsportstest.mjs",
+  "summary": "strict",
+  "floor": 84,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 6000,
+  "note": "(D1 combine, 2026-10-08: RAISED from 76 to 84 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - D1 (v0.30.0) DI-525 rev 3 (Drew D-59), security C2 / C4 / C7 / A5: the Dashboard's All sports through the real app.js - who may have it, the union and kickoff order, the C2 matrix (every row gated on its OWN week, 7 week-state pairs, blind and revealed rows each proven), the per-sport gate, a non-entrant named nowhere, hidden draft / demo weeks, the static This week page and the inert week swipe, the scope never moving the sport pointer, and five in-memory mutants of app.js (first-sport reveal, any-sport reveal, no gate, draft shown, active roster)"
+}

@@ -1,0 +1,12 @@
+{
+  "id": "lockclienttest",
+  "script": "lockclienttest.mjs",
+  "summary": "loose",
+  "floor": 187,
+  "tags": [
+    "quick",
+    "tz"
+  ],
+  "expectedMs": 1500,
+  "note": "D1 integration 18 (2026-10-08): 187 measured on the merged tree (int 151 + feat/d1-sports 185 over base 149). PF-416 / FB-026 follow-up item 5 (2026-10-07): RAISED 149 -> 151 by [2m2]/[2m3] (the lock notice is not a sync failure; the feedback refusal toast does not blame sync). D1 third pass item 1 (2026-10-08): RAISED 170 -> 185 - the held-refusal words checked against a guard-modelling fake: [2t-2]/[2t-2c] the copy rules and no success haptic, [2t-6] the open week's pick gone after a reopen with the words that said so, [2t-7] remaking it lands, [2u] x3 the other pairings reach the server. (D1 combine, 2026-10-08: RAISED from 167 to 170 - measured on the merged sports tree (client + server, Part 1 re-derivations and Part 2 fixes)) - PF-1 client half (DI-494/495/496, Amendment 1 late entry; integrated as W-17 / DI-513): canPlayerSubmitPicks closes at the server's instant, the 'This week is locked.' refusal banner, the unfrozen-spread notice, Re-open Picks after the instant (sheet + two-step write). Registered 2026-10-07."
+}
