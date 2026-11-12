@@ -44,7 +44,7 @@ import { getNewsPrefs, setNewsPrefs, seedNewsTeamsOnce, getSettings, getSession,
 import { getIdentityEpoch, getActiveLeagueId } from './auth.js';
 import { fetchNews as transportFetchNews, fetchContent as transportFetchContent, isNewsAvailable, clearNewsCache, NEWS_FEATURE_ENABLED, slateKeysFor } from './newsTransport.js';
 import { rankNews, ownPickTeamNames } from './newsRank.js';
-import { renderNewsCard, renderStorylineCard, bindNewsCardEvents } from './newsCard.js';
+import { renderNewsCard, renderStorylineCard, bindNewsCardEvents, makeDateFormatter } from './newsCard.js';   // D2 DI-1092 (W-160): makeDateFormatter is feed-time.js's builder, re-exported by the card module this file already imports
 import { normTeam } from './team-match.js';
 import { TIME_ZONES, formatGameTime } from './data-model.js';
 import { eligibleCards, CONTENT_KINDS } from './feed-relevance.js';                                     // D1 Lane C (DI-668): the content cards' private relevance
@@ -281,6 +281,9 @@ export function createHomeNews(deps = {}) {
   }
   const tzKey = () => { try { return read.timezone(); } catch { return 'PT'; } };
   const ianaOf = (key) => (TIME_ZONES.find((z) => z.key === key) || TIME_ZONES[0]).iana;
+  /** D2 DI-1092 (W-160, review N2): the PLAYER's zone for a news card's written time and its "Updated" date, the same builder Home's own cards use (one per zone, built once). */
+  const dateFormatters = new Map();
+  const formatDateFor = () => { const iana = ianaOf(tzKey()); if (!dateFormatters.has(iana)) dateFormatters.set(iana, makeDateFormatter(iana)); return dateFormatters.get(iana); };
 
   /**
    * D1 Lane C (DI-660 / DI-668): the CONTENT leg, beside the news. It asks the server for public cards with NO pick, team or league argument, and applies the viewer's
@@ -361,14 +364,14 @@ export function createHomeNews(deps = {}) {
   return {
     fetchNews,
     renderNewsCard: (item) => {
-      if (item && item.cardKind === 'storyline') return renderStorylineCard(item);
+      if (item && item.cardKind === 'storyline') return renderStorylineCard(item, { formatDate: formatDateFor() });
       if (item && item.cardKind === 'content-error') return renderContentErrorNote();
       if (item && item.cardKind === 'news-error') return '';                          // Home paints its own news-error note for the marker (review B3)
       if (item && CONTENT_KINDS.indexOf(item.cardKind) >= 0) {
         const key = tzKey();
         return renderContentCard(item, { now: now(), timeZone: ianaOf(key), formatTime: (iso) => formatGameTime(iso, key) });   // review N2: the player's zone
       }
-      return renderNewsCard(item);
+      return renderNewsCard(item, { formatDate: formatDateFor() });
     },
     /** One delegated binding on Home's container (the same element Home paints into). Re-binding replaces the earlier one. The news and the content cards each have their
      *  own dispatcher (a news card is a link to the publisher; a content card opens its detail): neither reacts to the other's markup. */

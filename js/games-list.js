@@ -121,13 +121,14 @@ export function rowsForSegment(rows, seg) {
 }
 
 /** The action buttons of a row, by name, in order (DI-W69.2, table 4.3): Lock / Unlock appear only past Draft, where they have an effect. */
-function slateRowActionNames({ pastDraft = false, unlocked = false } = {}) {
-  return ['edit', ...(pastDraft ? [unlocked ? 'lock' : 'unlock'] : []), 'remove'];
+function slateRowActionNames({ pastDraft = false, unlocked = false, voidAction = null } = {}) {
+  // D2 lane 2 (DI-896): "Void game" (a game nobody played: picks kept, scores nobody) or, once voided, "Undo void" (until the slate is final), beside Edit; absent by default - today's rows are unchanged.
+  return ['edit', ...(voidAction === 'void' ? ['void'] : voidAction === 'undo' ? ['undo-void'] : []), ...(pastDraft ? [unlocked ? 'lock' : 'unlock'] : []), 'remove'];
 }
-export function rowActionNames(row, { pastDraft = false, unlocked = false, findSpread = false } = {}) {
+export function rowActionNames(row, { pastDraft = false, unlocked = false, findSpread = false, voidAction = null } = {}) {
   if (!row.onSlate) return row.suggested === 'suggested' ? ['add', 'dismiss'] : ['add'];
   // W-71 (DI-W71.2): a slate game with no spread, in a week that can still take one, offers "Find spread" first (ahead of Edit: it is the likely next move). Off by default - today's rows are unchanged.
-  const names = slateRowActionNames({ pastDraft, unlocked });
+  const names = slateRowActionNames({ pastDraft, unlocked, voidAction });
   return findSpread ? ['find-spread', ...names] : names;
 }
 
@@ -177,7 +178,10 @@ export function gameRowHTML(row, ctx) {
     `<div class="game-readiness game-readiness-${escHtml(readiness.level)}">${readiness.level === 'incomplete' ? 'Incomplete — hidden from players' : 'Pending confirmation'}: ${readiness.issues.map(escHtml).join(' · ')}</div>`;
   const venue = ctx.venue ? ctx.venue(g) : '';
   const espnId = String((slateGame && slateGame.espnEventId) || g.espnEventId || '');   // the commissioner's id chip (the old cards showed it on both kinds of row)
-  const status = g.status && g.status !== GAME_STATUS_SCHEDULED ? `<span class="badge badge-${escHtml(g.status)}">${escHtml(g.status)}</span>` : '';
+  const status = g.voided === true && g.status === 'final'
+    ? '<span class="badge badge-final games-voided-mark">Voided</span>'
+    : (g.status && g.status !== GAME_STATUS_SCHEDULED ? `<span class="badge badge-${escHtml(g.status)}">${escHtml(g.status)}</span>` : '');
+  const noteChip = typeof ctx.noteChip === 'function' ? ctx.noteChip(g) : '';
   const score = g.status === 'final' && g.homeScore != null && g.awayScore != null ? `<span>FINAL ${ctx.num(g.awayScore)}–${ctx.num(g.homeScore)}</span>` : '';
   const unlockedNow = row.onSlate && ctx.isUnlocked ? !!ctx.isUnlocked(slateGame.gameId) : false;
   const unlockedBadge = unlockedNow ? `<span class="badge badge-open games-unlocked-mark">${ctx.icon('unlock')} Unlocked</span>` : '';
@@ -186,11 +190,14 @@ export function gameRowHTML(row, ctx) {
     : '';
   const btn = (action, label, cls, inner = null) => `<button type="button" class="btn btn-sm games-row-btn ${cls}" data-action="${action}" aria-label="${escHtml(`${label} ${name}`)}">${inner == null ? escHtml(label) : inner}</button>`;
   const wantsFind = !!(row.onSlate && slateGame && typeof ctx.findSpread === 'function' && ctx.findSpread(slateGame));
-  const buttons = rowActionNames(row, { pastDraft: !!ctx.pastDraft, unlocked: unlockedNow, findSpread: wantsFind }).map((a) => {
+  const voidAction = row.onSlate && slateGame && typeof ctx.voidAction === 'function' ? ctx.voidAction(slateGame) : null;
+  const buttons = rowActionNames(row, { pastDraft: !!ctx.pastDraft, unlocked: unlockedNow, findSpread: wantsFind, voidAction }).map((a) => {
     if (a === 'find-spread') return btn('row-find-spread', SPREAD_COPY.FIND_ONE, 'btn-ghost');
     if (a === 'add') return btn('row-add', 'Add', 'btn-primary');
     if (a === 'dismiss') return btn('row-dismiss', 'Dismiss', 'btn-ghost');
     if (a === 'edit') return btn('row-edit', 'Edit', 'btn-ghost');
+    if (a === 'void') return btn('row-void', 'Void game', 'btn-ghost');
+    if (a === 'undo-void') return btn('row-undo-void', 'Undo void', 'btn-ghost');
     if (a === 'lock') return btn('row-lock', 'Lock', 'btn-ghost', `${ctx.icon('lock')} Lock`);
     if (a === 'unlock') return btn('row-lock', 'Unlock', 'btn-ghost', `${ctx.icon('unlock')} Unlock`);
     return btn('row-remove', 'Remove', 'btn-ghost games-row-btn--danger');
@@ -214,7 +221,7 @@ export function gameRowHTML(row, ctx) {
         ${row.onSlate ? `<span class="badge badge-open games-row-mark">${ctx.icon('check')} ${escHtml(GAMES_COPY.onSlateMark)}</span>` : ''}
       </div>
       <div class="games-row-meta">
-        <span>${escHtml(ctx.timeText(g))}</span>${spreadBit}${status}${score}${unlockedBadge}${venue ? `<span class="text-muted text-xs">${escHtml(venue)}</span>` : ''}${espnId ? `<code class="games-row-espn">ESPN:${escHtml(espnId)}</code>` : ''}
+        <span>${escHtml(ctx.timeText(g))}</span>${spreadBit}${status}${noteChip}${score}${unlockedBadge}${venue ? `<span class="text-muted text-xs">${escHtml(venue)}</span>` : ''}${espnId ? `<code class="games-row-espn">ESPN:${escHtml(espnId)}</code>` : ''}
       </div>
       ${chips}
       <div class="games-row-actions">${buttons}</div>

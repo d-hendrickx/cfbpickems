@@ -143,6 +143,9 @@
  * exempt.
  */
 
+// D2 lane 2 (DI-912): the pure format leaf (the ONE writer of a game's graded line, and the pick-the-winner test).
+import { applyFormatToGame, isPickTheWinner } from './formats.js';
+
 // ── Step metadata (§2.3's ASCII diagram) ────────────────────────────────────
 export const WIZARD_STEPS = Object.freeze([
   { step: 1, id: 'create', title: 'Create' },
@@ -181,12 +184,12 @@ export const WIZARD_COPY = Object.freeze({
   // action the way an unsent announcement draft was. (Was: 'You can send an
   // announcement anytime from the Week tab — skip for now?')
   // D1 (DI-533): `sport` ('NFL') prefixes the line in a multi-sport league; '' (every one-sport league) is today's exact string.
-  OPEN_SUCCESS: (weekNumber, sport = '') => `${sport ? sport + ' ' : ''}Week ${weekNumber} is open — picks unlock now.`,
+  OPEN_SUCCESS: (weekNumber, sport = '', slate = '') => `${sport ? sport + ' ' : ''}${slate || `Week ${weekNumber}`} is open — picks unlock now.`,   // D2 lane 2 (Q-C3): a game night is named by its label ("Thu, Oct 22"), never "Week n"
   EVERYONE_PICKED: "Everyone's picked — nothing to nudge.",
   // DI-358 — the three-way open-mode control at Step 6.
   SCHEDULE_MISSING_DATETIME: 'Pick a date and time, or choose Open now.',
   SCHEDULE_PAST_DATETIME: 'That time has passed. Choose Open now or a later time.',
-  SCHEDULE_SUCCESS: (weekNumber) => `Week ${weekNumber} will open automatically at the scheduled time.`,
+  SCHEDULE_SUCCESS: (weekNumber, slate = '') => `${slate || `Week ${weekNumber}`} will open automatically at the scheduled time.`,
   // DI-359 — the guided Finalize Week flow's inline tie warning, replacing
   // the manual status button's browser confirm() (`weekHasUnresolvedTie`'s
   // own text, reworded for this flow's step names rather than "Cancel/OK" —
@@ -257,15 +260,16 @@ export function tiebreakerCalcModeCaption(mode) {
  *                      the SAME function scoring.js and reminder-rules.js
  *                      already use, non-null).
  */
-export function gatingChecklist({ gamesCount = 0, missingSpreadCount = 0, timingConfigured = false } = {}) {
+export function gatingChecklist({ gamesCount = 0, missingSpreadCount = 0, timingConfigured = false, pickTheWinner = false } = {}) {
   const gamesOk = gamesCount > 0;
-  const spreadsOk = gamesOk && missingSpreadCount === 0;
+  // D2 lane 2 (DI-887 / DI-927 #14): a pick-the-winner slate has no line to set: the line is the fixed 0 (applyFormatToGame), so the checklist says "Pick the winner. No lines needed." and never counts a spread as missing.
+  const spreadsOk = gamesOk && (pickTheWinner || missingSpreadCount === 0);
   const timingOk = !!timingConfigured;
   return {
     gamesOk,
     gamesLabel: gamesOk ? `${gamesCount} games on slate` : 'No games on slate yet',
     spreadsOk,
-    spreadsLabel: spreadsOk ? 'All spreads set' : WIZARD_COPY.MISSING_SPREADS(missingSpreadCount || gamesCount),
+    spreadsLabel: pickTheWinner ? 'Pick the winner. No lines needed.' : (spreadsOk ? 'All spreads set' : WIZARD_COPY.MISSING_SPREADS(missingSpreadCount || gamesCount)),
     timingOk,
     timingLabel: timingOk ? 'Timing configured' : 'Timing not yet configured',
     // The SINGLE gate §2.3's diagram names: `(disabled until ✓ x3)`.
@@ -509,13 +513,16 @@ export function createWeekFromWizard({ fields, deps, existingWeek = null }) {
   // otherwise an existing week KEEPS its own mode (nothing to fix, nothing
   // was asked to change); only a brand-new week with no `existingWeek` and
   // no `fields.dataSourceMode` falls all the way to the 'espn_live' default.
-  const { season, weekNumber, roundLabel = '', startDate = '', endDate = '', dataSourceMode: fieldsDataSourceMode, competitionId = null, profile = null } = fields;
+  const { season, weekNumber, roundLabel = '', startDate = '', endDate = '', dataSourceMode: fieldsDataSourceMode, competitionId = null, profile = null, slateLabel = null, format = null, rules = null, designatedTiebreaker = false } = fields;
   const dataSourceMode = fieldsDataSourceMode ?? existingWeek?.dataSourceMode ?? 'espn_live';
   // D1 (DI-533 #2): `competitionId` (null for the league's default competition) and the sport `profile` go to createWeek() ONLY for a brand-new week; re-saving Step 1 on an
   // existing draft keeps the competition it was created in. With neither (every one-sport league), createWeek() is called exactly as before.
+  // D2 lane 2 (DI-886 / DI-903 / DI-905 / DI-911): a slate label, the pick format, the rule-set stamp and the designated-tiebreaker default ride createWeek's options ONLY when passed, so a week built the old way
+  // (every football week) is byte-identical. Re-saving Step 1 on an existing draft keeps its stamps and updates only a changed slate label.
+  const d2 = { ...(slateLabel ? { slateLabel } : {}), ...(format ? { format } : {}), ...(rules ? { rules } : {}), ...(designatedTiebreaker ? { designatedTiebreaker: true } : {}) };
   const week = existingWeek
-    ? { ...existingWeek, season, weekNumber, roundLabel, startDate, endDate, dataSourceMode }
-    : { ...createWeek(season, weekNumber, startDate, endDate, ...(competitionId || profile ? [{ competitionId, profile }] : [])), dataSourceMode, roundLabel };
+    ? { ...existingWeek, season, weekNumber, roundLabel, startDate, endDate, dataSourceMode, ...(slateLabel ? { slateLabel } : {}) }
+    : { ...createWeek(season, weekNumber, startDate, endDate, ...(competitionId || profile || Object.keys(d2).length ? [{ competitionId, profile, ...d2 }] : [])), dataSourceMode, roundLabel };
   saveWeek(week);
   setActiveWeekId(week.weekId);
   return week;
@@ -586,7 +593,8 @@ export async function fetchAndApplySuggestedSlate({ week, deps }) {
     const already = getGames(week.weekId).some((g) => g.homeTeam === game.homeTeam && g.awayTeam === game.awayTeam);
     if (already) continue;
     if (getGames(week.weekId).length >= limit) { held += 1; continue; }
-    saveGame(createGame(week.weekId, { ...game, weekId: week.weekId })); added += 1;
+    // D2 lane 2 (DI-912): a pick-the-winner week's games take the fixed line 0 through the ONE writer; any other week adds exactly as before.
+    saveGame(createGame(week.weekId, { ...game, ...(isPickTheWinner(week.format) ? applyFormatToGame(game, week.format) : {}), weekId: week.weekId })); added += 1;
   }
   return {
     ok: true, added, held, target: Number.isFinite(targetRaw) && targetRaw > 0 ? Math.floor(targetRaw) : null, fetched: result.games.length, suggested: built.slate.length,
@@ -602,9 +610,11 @@ export async function fetchAndApplySuggestedSlate({ week, deps }) {
  * existing LIGHT haptic (`nativeHapticImpact`, native only, behind
  * `isNativeShell()`) on success, matching §2.3's own line.
  */
-export function openForPicksFromWizard({ week, gamesCount, missingSpreadCount, timingConfigured, deps }) {
-  const gate = gatingChecklist({ gamesCount, missingSpreadCount, timingConfigured });
+export function openForPicksFromWizard({ week, gamesCount, missingSpreadCount, timingConfigured, deps, openBlockSentence = null }) {
+  const gate = gatingChecklist({ gamesCount, missingSpreadCount, timingConfigured, pickTheWinner: isPickTheWinner(week && week.format) });
   if (!gate.canOpen) return { ok: false, gate };
+  // D2 lane 2 (DI-886, RPF-C3): one slate is pickable at a time per sport; the caller computes the refusal sentence (js/night-slate.js openBlock) and Open is refused with it, writing nothing.
+  if (openBlockSentence) return { ok: false, reason: 'another_slate_open', message: openBlockSentence, gate };
   // DI-404 (UN-388) — the weekly blurb is the fourth requirement, kept OUT of
   // gatingChecklist() on purpose (that function's three items and shape are
   // pinned; dueForScheduledOpen() adds the blurb beside it). Same refusal shape
@@ -613,7 +623,7 @@ export function openForPicksFromWizard({ week, gamesCount, missingSpreadCount, t
   if (blurbRefusal) return { ...blurbRefusal, gate };
   const { applyWeekStatusChange, showToast, nativeHapticImpact, isNativeShell, sportLabelFor } = deps;
   const updated = applyWeekStatusChange(week, 'open');
-  if (showToast) showToast(WIZARD_COPY.OPEN_SUCCESS(week.weekNumber, sportLabelFor ? sportLabelFor(week) : ''), 'success');
+  if (showToast) showToast(WIZARD_COPY.OPEN_SUCCESS(week.weekNumber, sportLabelFor ? sportLabelFor(week) : '', week.slateLabel || ''), 'success');
   if (isNativeShell && isNativeShell() && nativeHapticImpact) nativeHapticImpact('LIGHT');
   return { ok: true, week: updated, gate };
 }
@@ -758,7 +768,7 @@ export function finishWeekSetupFromWizard({ week, mode, scheduledAt, now = Date.
     const { saveWeek, showToast } = deps;
     const updated = { ...week, picksOpenAt: at.toISOString() };
     saveWeek(updated);
-    if (showToast) showToast(WIZARD_COPY.SCHEDULE_SUCCESS(week.weekNumber), 'success');
+    if (showToast) showToast(WIZARD_COPY.SCHEDULE_SUCCESS(week.weekNumber, week.slateLabel || ''), 'success');
     return { ok: true, mode, week: updated, gate };
   }
   return { ok: false, mode, reason: 'unknown_mode' };
@@ -959,10 +969,10 @@ export const FINALIZE_COPY = Object.freeze({
   REFUSED: "Couldn't finalize. The server didn't accept it, so the week is still live for everyone.",
   RETRY: 'Retry',
   RELOAD: 'Reload app',
-  SUCCESS: (weekNumber) => `Week ${weekNumber} is final.`,
+  SUCCESS: (weekNumber, slate = '') => `${slate || `Week ${weekNumber}`} is final.`,
   // PF-416 review follow-up (coordinator decision, 2026-10-08) — the success that reloads the app (the adapter still holds a refused week write)
   // says so, so the reload does not look like a crash. Every other success keeps SUCCESS.
-  SUCCESS_REFRESHING: (weekNumber) => `Week ${weekNumber} is final. Refreshing…`,
+  SUCCESS_REFRESHING: (weekNumber, slate = '') => `${slate || `Week ${weekNumber}`} is final. Refreshing…`,
 });
 
 /**
@@ -1005,11 +1015,11 @@ export function finalizeEntryState({ committed = false, refused = false } = {}) 
  * the status row is built from). Every game final ⇒ "Finalize Week" plus the all-final banner; otherwise "Review & finalize" (Step 1 names what blocks).
  * In a multi-sport league the label names the sport and week ("Finalize NFL Week 6"). Never keyed to `pendingFinalization`.
  */
-export function finalizeEntry({ status, games, sportCode = null, weekNumber = null, multiSport = false } = {}) {
+export function finalizeEntry({ status, games, sportCode = null, weekNumber = null, multiSport = false, slate = '' } = {}) {
   const list = games || [];
   const show = status === 'live';
   const allFinal = show && list.length > 0 && list.every((g) => g && g.status === 'final');
-  const named = multiSport && sportCode && weekNumber != null ? ` ${sportCode} Week ${weekNumber}` : '';
+  const named = multiSport && sportCode && weekNumber != null ? ` ${sportCode} ${slate || `Week ${weekNumber}`}` : '';
   const label = allFinal
     ? (named ? `Finalize${named}` : FINALIZE_COPY.ENTRY_FINALIZE)
     : `${FINALIZE_COPY.ENTRY_REVIEW}${named}`;
@@ -1031,8 +1041,9 @@ export function liveWeekBehindDraft({ draft, weeks, statusOf = (w) => w && w.sta
   return hits[0] || null;
 }
 /** DI-518 amendment — the draft view's row: "Week N is live" and its button, "Finalize Week N" ("Finalize NFL Week N" in a multi-sport league). */
-export function liveWeekRowCopy({ weekNumber, sportCode = null, multiSport = false } = {}) {
-  return { text: `Week ${weekNumber} is live`, button: `Finalize ${multiSport && sportCode ? `${sportCode} ` : ''}Week ${weekNumber}` };
+export function liveWeekRowCopy({ weekNumber, sportCode = null, multiSport = false, slate = '' } = {}) {
+  const name = slate || `Week ${weekNumber}`;   // D2 lane 2 (Q-C3): a game night is named by its label
+  return { text: `${name} is live`, button: `Finalize ${multiSport && sportCode ? `${sportCode} ` : ''}${name}` };
 }
 
 /** DI-518 — the visible steps: Step 3 only when the week runs the longest-field-goal contest (`extraPointEnabled`, opt-out: `!== false`, extra-point.js). */

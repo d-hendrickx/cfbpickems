@@ -8,13 +8,16 @@
  *
  *   written   "Just now" · "12m ago" · "2h ago" · "Yesterday" · "3d ago" · "Oct 9" (· "Oct 9, 2025" in another year)
  *   spoken    "just now" · "12 minutes ago" · "2 hours ago" · "yesterday" · "3 days ago" · "October 9" (singular "1 minute" / "1 hour")
- *   buckets   under 60 s · under 60 min · under 24 h · 24 to 48 h · 2 to 6 whole days · 7 days or more (a date in the VIEWER's zone)
+ *   buckets   under 60 s · under 60 min · then by CALENDAR DAY in the viewer's zone: earlier today (hours) · yesterday · 2 to 6 days back ·
+ *             7 days back or more (a date). T-39 / W-101 (2026-10-18): these were 24-hour spans (DI-W92-7), so a card from Saturday 10 PM
+ *             read "10h ago" on Sunday morning; PF-502's own example is "Yesterday", the way the iPhone dates things.
  * A future instant (clock skew) reads "Just now". UNKNOWN BEATS WRONG: a missing, unparsable or epoch-sentinel instant (anything before
  * 2000-01-01, which includes the 1970 value feed-cards' isoAt() writes for an invalid time) is not a known instant: nothing is rendered,
  * and the card is not dropped.
  *
  * The date is formatted by an injected `formatDate(ms, { month: 'short'|'long', now })` so it is the viewer's day (the player's time-zone
- * preference, CONVENTIONS #19); `makeDateFormatter(iana)` builds one. With none injected the device's zone is used (newsCard's default).
+ * preference, CONVENTIONS #19); `makeDateFormatter(iana)` builds one, and carries its zone as `.timeZone` so the calendar-day buckets use
+ * the same day. With none injected (or a formatter without `.timeZone`) the device's zone is used (newsCard's default).
  * iOS 15.0 safe (no Object.hasOwn, no .at()).
  */
 
@@ -44,14 +47,33 @@ function yearIn(ms, timeZone) {
  * zone) is not the current one.
  */
 export function makeDateFormatter(timeZone = null) {
-  return (ms, { month = 'short', now = Date.now() } = {}) => {
+  const fmt = (ms, { month = 'short', now = Date.now() } = {}) => {
     const opts = { month: month === 'long' ? 'long' : 'short', day: 'numeric' };
     if (yearIn(ms, timeZone) !== yearIn(now, timeZone)) opts.year = 'numeric';
     try { return new Date(ms).toLocaleDateString('en-US', timeZone ? { ...opts, timeZone } : opts); }
     catch { try { return new Date(ms).toLocaleDateString('en-US', opts); } catch { return ''; } }
   };
+  fmt.timeZone = timeZone || null;
+  return fmt;
 }
 const DEVICE_DATE = makeDateFormatter(null);
+
+/** The calendar day an instant falls on in a zone (null = the device's), as a day number; NaN if the zone cannot be read. */
+const DAY_PARTS = new Map();
+function dayNumber(ms, timeZone) {
+  const key = timeZone || '';
+  try {
+    if (!DAY_PARTS.has(key)) DAY_PARTS.set(key, new Intl.DateTimeFormat('en-US', timeZone ? { timeZone, year: 'numeric', month: 'numeric', day: 'numeric' } : { year: 'numeric', month: 'numeric', day: 'numeric' }));
+    const p = {};
+    for (const x of DAY_PARTS.get(key).formatToParts(new Date(ms))) p[x.type] = x.value;
+    return Math.round(Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day)) / DAY);
+  } catch { return NaN; }
+}
+/** How many calendar days back `ms` is from `at` in the zone (0 = the same day). Falls back to whole 24-hour spans if the zone cannot be read. */
+function daysBack(ms, at, timeZone) {
+  const d = dayNumber(at, timeZone) - dayNumber(ms, timeZone);
+  return Number.isFinite(d) ? Math.max(0, d) : Math.floor(Math.max(0, at - ms) / DAY);
+}
 
 /** Both forms at once, or null for an unknown instant. `iso` is the normalised instant (what a <time datetime> carries). */
 function parts(v, now, formatDate) {
@@ -61,12 +83,14 @@ function parts(v, now, formatDate) {
   const diff = Math.max(0, at - ms);                                         // a future instant (clock skew) is "just now", never a negative
   const fmt = typeof formatDate === 'function' ? formatDate : DEVICE_DATE;
   const plural = (n, unit) => `${n} ${unit}${n === 1 ? '' : 's'} ago`;
+  // Past the first hour: calendar days in the viewer's zone (the formatter's own zone, so the day and the date always agree).
+  const days = diff < HOUR ? 0 : daysBack(ms, at, fmt.timeZone || null);
   let written, spoken;
   if (diff < MIN) { written = 'Just now'; spoken = 'just now'; }
   else if (diff < HOUR) { const n = Math.floor(diff / MIN); written = `${n}m ago`; spoken = plural(n, 'minute'); }
-  else if (diff < DAY) { const n = Math.floor(diff / HOUR); written = `${n}h ago`; spoken = plural(n, 'hour'); }
-  else if (diff < 2 * DAY) { written = 'Yesterday'; spoken = 'yesterday'; }
-  else if (diff < 7 * DAY) { const n = Math.floor(diff / DAY); written = `${n}d ago`; spoken = plural(n, 'day'); }
+  else if (days === 0) { const n = Math.floor(diff / HOUR); written = `${n}h ago`; spoken = plural(n, 'hour'); }
+  else if (days === 1) { written = 'Yesterday'; spoken = 'yesterday'; }
+  else if (days < 7) { written = `${days}d ago`; spoken = plural(days, 'day'); }
   else {
     let short = '', long = '';
     try { short = String(fmt(ms, { month: 'short', now: at }) || ''); long = String(fmt(ms, { month: 'long', now: at }) || ''); } catch { short = ''; long = ''; }

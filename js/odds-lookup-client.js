@@ -11,10 +11,11 @@
  *   vendor_error    the other source did not answer sensibly (or this call failed in transit, or the function itself returned a failure)
  *   timeout         the other source took too long
  *   daily_limit     this league has used today's lookups (DI-W71.10, Drew D-80: every league has its own daily limit, default 6 vendor calls a UTC day; migration 0060)
+ *   platform_limit  every league together has used today's shared allowance (DI-926, W-79: a platform-wide daily cap, default 12; migration 0063)
  */
 import { getSupabaseClient, getActiveLeagueId } from './auth.js';
 
-const REASONS = ['not_configured', 'paused', 'unsupported', 'vendor_error', 'timeout', 'daily_limit'];
+const REASONS = ['not_configured', 'paused', 'unsupported', 'vendor_error', 'timeout', 'daily_limit', 'platform_limit'];
 
 // Test seam (the `_xForTest` convention; no production caller): a browser or node suite answers the lookup itself, so the whole screen can be driven through the real dispatcher without a
 // Supabase project. Null (the default) means the real call below.

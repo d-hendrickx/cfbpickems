@@ -249,7 +249,7 @@ export const CARD_OPERABILITY = Object.freeze({
   // Settings
   'auto-refresh':                       { scope: 'commissioner' },
   'randomize-picks-shortcut':            { scope: 'commissioner' },
-  'security-settings':                    { scope: 'commissioner' },
+  // D2 lane 6 (DI-759, D-108): 'security-settings' removed. Its contact email is a Commissioner-panel League-tab card, gated by the panel's own commissioner gate, not an Admin-panel card.
   // SCRIBE Caps & Limits — named limitation (DI-320): no admin-scoped write RPC exists this
   // release; it only works today because Drew is also IRB's commissioner. Encoded as
   // 'commissioner', matching the table's own text, not silently upgraded to 'admin'.

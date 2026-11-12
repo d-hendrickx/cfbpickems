@@ -680,6 +680,11 @@ function classifySupabaseError(action, error) {
   if (/bad_author/i.test(server)) {
     return mk('permanent', 'That message was refused: it is not attributed to you.');
   }
+  // D2 lane 7 review (0062, DI-934): a shared reference the server will not accept in THIS league (another league's card, game or week, or pilot-only content outside the pilot) is an
+  // answer about that share, final for it — never an outage. The copy is chat-share.js SHARE_COPY.failed, verbatim (transporttest pins the two equal; this module imports no UI copy).
+  if (/bad_share_ref/i.test(server)) {
+    return mk('permanent', "Couldn't share. Try again.");
+  }
   if (/bad_state/i.test(server)) {
     // CLASSIFIED PERMANENT HERE, AND HANDLED AS TRANSIENT BY THE CALLER — and the split is the
     // point. The server's answer IS final for the state it saw; what makes `bad_state` different
@@ -841,7 +846,11 @@ function sbPlanBatches(events) {
     const kind = isSystemAuthored(ev) ? 'system' : 'player';
     const cap = kind === 'system' ? SB_SYSTEM_BATCH_MAX : SB_PLAYER_BATCH_MAX;
     const last = runs[runs.length - 1];
-    if (last && last.kind === kind && last.events.length < cap) last.events.push(ev);
+    // D2 (0062, DI-934): a SHARE (meta.ref) travels in a run of its own. An RPC is refused whole, so a share the server refuses (bad_share_ref, permanent) would otherwise take every
+    // message queued beside it down with it — "a refusal is an answer about the events it names, and about no others" (v0.25.0's rule, below).
+    const share = !!(ev && ev.meta && typeof ev.meta === 'object' && ev.meta.ref);
+    if (share) { runs.push({ kind, events: [ev], solo: true }); continue; }
+    if (last && !last.solo && last.kind === kind && last.events.length < cap) last.events.push(ev);
     else runs.push({ kind, events: [ev] });
   }
   return runs;

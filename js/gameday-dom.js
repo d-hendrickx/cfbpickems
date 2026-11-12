@@ -230,6 +230,18 @@ export function reconcileKeyed(container, prevKids, nextKids, ctx = {}) {
   return ctx;
 }
 
+/**
+ * D2 DI-826 (lane 3, 2026-10-19): a pill that ENTERS the rail (another league's games arriving from the Peek, or the pill that replaces one after a rank change) fades in where it lands over
+ * 150 ms — beside the leaving pill's own 150 ms fade, a rank change is a crossfade in place. Nothing moves and no haptic fires. Reduce Motion, or no timer: it simply appears.
+ */
+function railEnterer(env) {
+  return (node) => {
+    if (!env || env.reduced === true || typeof env.setTimer !== 'function' || !node || typeof node.setAttribute !== 'function') return;
+    node.setAttribute('data-entering', 'true');
+    env.setTimer(() => { try { node.removeAttribute('data-entering'); } catch { /* gone */ } }, LEAVE_MS + 30);
+  };
+}
+
 /** The rail's leaving rule (DI-604): a pill whose game is no longer live is marked for its 150 ms fade and removed when it is over. False (removed at once) under Reduce Motion or with no timer. */
 function railLeaver(env, fallbackFocus) {
   if (!env || env.reduced === true || typeof env.setTimer !== 'function') return null;
@@ -266,6 +278,15 @@ export function patchGameDay(holder, html, env = {}) {
   const ch = cur.querySelector('.gd-head'), nh = next.querySelector('.gd-head'), ph = prev.querySelector('.gd-head');
   if (!ch || !nh || !ph || ch.tagName !== nh.tagName || ph.tagName !== nh.tagName) return null;
   if (ph.outerHTML !== nh.outerHTML) { patchNode(ch, ph, nh, {}); out.head = true; }
+  // D2 DI-820 (lane 3): the cross-league card's summary line (or its reserved skeleton) — patched in place when it is on both sides; one that appears or goes swaps the whole card (a one-league card has none)
+  {
+    const cs = cur.querySelector('.gd-sum'), ns = next.querySelector('.gd-sum'), ps = prev.querySelector('.gd-sum');
+    if (cs || ns) {
+      if (!cs || !ns || !ps || cs.tagName !== ns.tagName || ps.tagName !== ns.tagName) return null;
+      // DI-826: a summary-line text change CROSSFADES in place over 150 ms (the Game view's own crossFadePart: a ghost of the old line fades out over the new one); Reduce Motion: none
+      if (ps.outerHTML !== ns.outerHTML) { crossFadePart(cs, () => { patchNode(cs, ps, ns, {}); }, env); out.summary = true; }
+    }
+  }
   // the body: a rail, a message or the open body — it must be the same region on both sides
   const sel = ['.gd-rail', '.gd-msg', '.gd-x'].find(s => cur.querySelector(s) || next.querySelector(s));
   if (!sel) return out;
@@ -273,7 +294,7 @@ export function patchGameDay(holder, html, env = {}) {
   if (!cb || !nb || !pb) return null;
   if (sel === '.gd-rail') {
     // pills by key: the rail node (and its scrollLeft) stays, an unchanged pill is not touched, a changed one is patched in place, a pill whose game ended fades out where it is
-    out.rail = reconcileKeyed(cb, elementsOf(pb), elementsOf(nb), { leave: railLeaver(env, ch), fallbackFocus: ch });
+    out.rail = reconcileKeyed(cb, elementsOf(pb), elementsOf(nb), { leave: railLeaver(env, ch), fallbackFocus: ch, onInsert: railEnterer(env) });
   } else if (sel === '.gd-x') {
     for (const part of ['.gd-sub', '.gd-stats', '.gd-foot']) {
       const a = cb.querySelector(part), b = nb.querySelector(part), pa = pb.querySelector(part);

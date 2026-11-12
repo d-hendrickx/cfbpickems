@@ -67,6 +67,8 @@ import { getActiveLeagueId, getAccountUserId, getAuthMode } from './auth.js';
 import { DEFAULT_SETTINGS } from './data-model.js';
 import { getProfile, listProfiles } from './sports/index.js';
 import { weekLockState } from './week-lock.js';
+import { resolveFormat, marketsShown } from './formats.js';
+import { currentWeekOfRows } from './league-source.js';   // D2 DI-802: a source's current week (the pure twin of storage.js getCurrentWeek(), a leaf with no imports)
 
 /** R7's N — the "starting soon" window, in days. A competition with a week whose `startDate` falls within
  *  [now, now + N days] is live even before that week opens. Coordinator's choice, ratified at STOP #2. */
@@ -74,27 +76,70 @@ export const LIVE_SPORT_LOOKAHEAD_DAYS = 3;
 
 const LIVE_STATUSES = Object.freeze(['open', 'locked', 'live']);
 
+// ─── D2 DI-802 — THE `source` PARAMETER (one league's rows, from the mirror or from the read-only Peek store) ───────────────────
+// Every read below goes through a READER. Omitted (`source` null or undefined), the reader is SEAM: the storage seam and the active league, call for call what each
+// function read before DI-802, so a caller that passes no source gets exactly v0.30.2's answer. Given a `source` — a plain object for ONE league,
+// `{ leagueId, competitions(), weeks(), games(), picks(), players(), settings(), competitionMembers(), activeWeekId(), viewerMemberId() }` (js/league-source.js builds
+// and validates them) — every read comes from that object and NEVER from the seam: a function handed a source names no storage getter (competitiontest [10], an
+// allow-list of the exact lines in this file that do, P-11). A source that is not a valid object reads as an EMPTY league (fail closed): it can never fall back to
+// the seam, which would paint the ACTIVE league's rows under another league's name (DI-802's "fails when").
+const SEAM = Object.freeze({
+  leagueId: () => getActiveLeagueId(),
+  competitions: () => getStoredCompetitions(),
+  weeks: () => getWeeks(),
+  week: (id) => getWeek(id),
+  games: (weekId) => getGames(weekId),
+  players: () => getPlayers(),
+  competitionMembers: () => getStoredCompetitionMembers(),
+  currentWeek: () => getCurrentWeek(),
+  activeWeekId: () => getActiveWeekId(),
+  session: () => getSession(),
+});
+const SRC_ARR = (v) => (Array.isArray(v) ? v : []);
+const srcCall = (src, name) => { try { return typeof src[name] === 'function' ? src[name]() : null; } catch { return null; } };
+function sourceReader(src) {
+  const ok = !!src && typeof src === 'object' && typeof src.leagueId === 'string' && src.leagueId !== '';
+  const L = ok ? src.leagueId : '';
+  const list = (name) => (ok ? SRC_ARR(srcCall(src, name)) : []);
+  return {
+    leagueId: () => L,
+    competitions: () => list('competitions'),
+    weeks: () => list('weeks'),
+    week: (id) => list('weeks').find((w) => w && w.weekId === id) || null,
+    games: (weekId) => { const g = list('games'); return weekId ? g.filter((x) => x.weekId === weekId) : g; },
+    players: () => list('players'),
+    competitionMembers: () => list('competitionMembers'),
+    currentWeek: () => currentWeekOfRows(list('weeks'), ok ? srcCall(src, 'activeWeekId') : null),
+    activeWeekId: () => (ok ? srcCall(src, 'activeWeekId') : null),
+    session: () => { const id = ok ? srcCall(src, 'viewerMemberId') : null; return { playerId: typeof id === 'string' && id ? id : null, playerVerified: typeof id === 'string' && id !== '', isAdmin: false }; },
+  };
+}
+/** The reader for a call: SEAM when no source was given (null / undefined), else that source's own reader (an invalid one reads as an empty league). */
+function readerOf(source) { return source === null || source === undefined ? SEAM : sourceReader(source); }
+
 // ─── competitions (DI-220 §2) ────────────────────────────────────────────────
 
 /** The league's competitions, DEFAULT FIRST then `createdAt` ascending — a NEW array. The mirror holds
  *  exactly one league's rows, so a `leagueId` that is not the active league answers []. */
-export function getCompetitions(leagueId = getActiveLeagueId()) {
-  if (leagueId && leagueId !== getActiveLeagueId()) return [];
+export function getCompetitions(leagueId, { source = null } = {}) {
+  const r = readerOf(source);
+  const lid = leagueId === undefined ? r.leagueId() : leagueId;
+  if (lid && lid !== r.leagueId()) return [];
   const t = (c) => { const n = Date.parse(c && c.createdAt); return Number.isFinite(n) ? n : 0; };
-  return getStoredCompetitions()
+  return r.competitions()
     .filter((c) => c && c.id)
     .sort((a, b) => (b.isDefault === true) - (a.isDefault === true) || t(a) - t(b));
 }
 
 /** One competition by id, or null. */
-export function getCompetition(leagueId, id) {
+export function getCompetition(leagueId, id, { source = null } = {}) {
   if (!id) return null;
-  return getCompetitions(leagueId).find((c) => c.id === id) || null;
+  return getCompetitions(leagueId, { source }).find((c) => c.id === id) || null;
 }
 
 /** Read-only: the one `isDefault` row, or NULL pre-backfill. Never creates the row. */
-export function getDefaultCompetition(leagueId = getActiveLeagueId()) {
-  return getCompetitions(leagueId).find((c) => c.isDefault === true) || null;
+export function getDefaultCompetition(leagueId, { source = null } = {}) {
+  return getCompetitions(leagueId, { source }).find((c) => c.isDefault === true) || null;
 }
 
 /** The commissioner-privileged write path (an upsert by `id`, the saveWeek() shape). Never called from
@@ -112,9 +157,9 @@ export function saveCompetition(c) {
  * in the mirror (a dangling or not-yet-hydrated reference) answers null — never the default, which would
  * silently relabel another sport's week as the league's own.
  */
-export function competitionForWeek(week) {
-  const leagueId = getActiveLeagueId();
-  return week?.competitionId ? getCompetition(leagueId, week.competitionId) : getDefaultCompetition(leagueId);
+export function competitionForWeek(week, { source = null } = {}) {
+  const leagueId = readerOf(source).leagueId();
+  return week?.competitionId ? getCompetition(leagueId, week.competitionId, { source }) : getDefaultCompetition(leagueId, { source });
 }
 
 /**
@@ -126,8 +171,8 @@ export function competitionForWeek(week) {
  * It lives HERE and not in js/sports/index.js on purpose: the registry must stay importable by an Edge
  * Function (R6), and competition.js imports storage/auth.
  */
-export function profileForWeek(week) {
-  const comp = competitionForWeek(week);
+export function profileForWeek(week, { source = null } = {}) {
+  const comp = competitionForWeek(week, { source });
   return getProfile(comp?.sport || 'cfb');
 }
 
@@ -138,12 +183,35 @@ export function profileForWeek(week) {
  * Always a NEW array (the DI returns getWeeks() itself pre-backfill; a copy is the same answer without
  * handing a caller the mirror's own array to mutate).
  */
-export function getWeeksForCompetition(competitionId = null) {
-  const leagueId = getActiveLeagueId();
-  if (getCompetitions(leagueId).length === 0) return competitionId ? [] : getWeeks().slice();
-  const c = competitionId ? getCompetition(leagueId, competitionId) : getDefaultCompetition(leagueId);
+export function getWeeksForCompetition(competitionId = null, { source = null } = {}) {
+  const r = readerOf(source);
+  const leagueId = r.leagueId();
+  if (getCompetitions(leagueId, { source }).length === 0) return competitionId ? [] : r.weeks().slice();
+  const c = competitionId ? getCompetition(leagueId, competitionId, { source }) : getDefaultCompetition(leagueId, { source });
   if (!c) return [];
-  return getWeeks().filter((w) => competitionForWeek(w)?.id === c.id);
+  return r.weeks().filter((w) => competitionForWeek(w, { source })?.id === c.id);
+}
+
+/**
+ * D2 DI-876 (lane 3, UN/PF-518, 2026-10-19) — THE READ PATH FOR AN ARCHIVED SPORT'S HISTORY, separate on purpose: every ACTIVE path keeps excluding an archived sport (playersForCompetition
+ * answers nobody for one; liveCompetitions, leagueSports and the pointer drop it), and this is the one reader that answers for it — read-only, for the Archived sports list and its history view.
+ * `{ competition, weeks, players }` for an ARCHIVED competition of this league, or null (no such competition, or it is not archived). `weeks` are its weeks, oldest first; `players` who was in it:
+ * every active member for enrollment 'all' (the shipped rule), the competition's own entries for 'opt_in' (no cutoff: a record of what was).
+ */
+export function getArchivedHistory(competitionId, { source = null } = {}) {
+  const rd = readerOf(source);
+  const leagueId = rd.leagueId();
+  const c = competitionId ? getCompetition(leagueId, competitionId, { source }) : null;
+  if (!c || !c.archivedAt) return null;
+  const weeks = rd.weeks().filter((w) => w && w.competitionId === c.id).slice().sort((a, b) => (Number(a.weekNumber) || 0) - (Number(b.weekNumber) || 0));
+  const active = rd.players().filter((p) => p && p.active);
+  let players;
+  if (c.enrollment !== 'opt_in') players = active.filter((p) => p.tournamentOnlyGuest !== true);
+  else {
+    const entered = new Set(rd.competitionMembers().filter((r) => r && r.competitionId === c.id && r.memberId).map((r) => String(r.memberId)));
+    players = active.filter((p) => entered.has(String(p.playerId)));
+  }
+  return { competition: c, weeks, players };
 }
 
 // ─── liveness (R7 — DERIVED, never stored) ───────────────────────────────────
@@ -156,12 +224,13 @@ export function getWeeksForCompetition(competitionId = null) {
  * its dbCode (the unknown-sport banner is DI-224's, raised at the fetch call site, not here).
  * `now` is epoch milliseconds.
  */
-export function getLiveSports(leagueId = getActiveLeagueId(), now = Date.now()) {
+export function getLiveSports(leagueId, now = Date.now(), { source = null } = {}) {
+  const lid = leagueId === undefined ? readerOf(source).leagueId() : leagueId;
   const soonMs = LIVE_SPORT_LOOKAHEAD_DAYS * 86400000;
   const startsSoon = (w) => { const t = Date.parse(w.startDate); return Number.isFinite(t) && t - now >= 0 && t - now <= soonMs; };
-  return getCompetitions(leagueId)
+  return getCompetitions(lid, { source })
     .filter((c) => !c.archivedAt)
-    .filter((c) => getWeeksForCompetition(c.id).some((w) => LIVE_STATUSES.includes(w.status) || startsSoon(w)))
+    .filter((c) => getWeeksForCompetition(c.id, { source }).some((w) => LIVE_STATUSES.includes(w.status) || startsSoon(w)))
     .map((c) => {
       const p = listProfiles().find((x) => x.key === c.sport);
       return { dbCode: c.sport, label: p ? p.label : c.sport, competitionId: c.id };
@@ -178,13 +247,14 @@ export function getLiveSports(leagueId = getActiveLeagueId(), now = Date.now()) 
  * (never a silent fall-through to the default's week); a pointer at ANOTHER competition's week is refused,
  * not followed. Pre-backfill: `null` -> getCurrentWeek(), an explicit id -> null.
  */
-export function getCurrentWeekFor(competitionId = null) {
-  const leagueId = getActiveLeagueId();
-  if (getCompetitions(leagueId).length === 0) return competitionId ? null : getCurrentWeek();
-  const c = competitionId ? getCompetition(leagueId, competitionId) : getDefaultCompetition(leagueId);
+export function getCurrentWeekFor(competitionId = null, { source = null } = {}) {
+  const r = readerOf(source);
+  const leagueId = r.leagueId();
+  if (getCompetitions(leagueId, { source }).length === 0) return competitionId ? null : r.currentWeek();
+  const c = competitionId ? getCompetition(leagueId, competitionId, { source }) : getDefaultCompetition(leagueId, { source });
   if (!c) return null;
-  const weeks = getWeeksForCompetition(c.id);
-  const pointerId = c.isDefault ? getActiveWeekId() : c.activeWeekId;
+  const weeks = getWeeksForCompetition(c.id, { source });
+  const pointerId = c.isDefault ? r.activeWeekId() : c.activeWeekId;
   if (pointerId) { const f = weeks.find((w) => w.weekId === pointerId); if (f) return f; }
   const active = weeks.find((w) => LIVE_STATUSES.includes(w.status));
   if (active) return active;
@@ -196,13 +266,15 @@ export function getCurrentWeekFor(competitionId = null) {
  * single-sport behaviour, offseason included), every other competition only while live (R7); archived ones
  * never. Default first, then createdAt ascending. Pre-backfill: exactly today's single week.
  */
-export function getAllCurrentWeeks(leagueId = getActiveLeagueId(), now = Date.now()) {
-  const comps = getCompetitions(leagueId);
-  if (comps.length === 0) { const w = getCurrentWeek(); return w ? [w] : []; }
-  const liveIds = new Set(getLiveSports(leagueId, now).map((s) => s.competitionId));
+export function getAllCurrentWeeks(leagueId, now = Date.now(), { source = null } = {}) {
+  const r = readerOf(source);
+  const lid = leagueId === undefined ? r.leagueId() : leagueId;
+  const comps = getCompetitions(lid, { source });
+  if (comps.length === 0) { const w = r.currentWeek(); return w ? [w] : []; }
+  const liveIds = new Set(getLiveSports(lid, now, { source }).map((s) => s.competitionId));
   return comps
     .filter((c) => !c.archivedAt && (c.isDefault || liveIds.has(c.id)))
-    .map((c) => getCurrentWeekFor(c.id))
+    .map((c) => getCurrentWeekFor(c.id, { source }))
     .filter(Boolean);
 }
 
@@ -212,24 +284,25 @@ export function getAllCurrentWeeks(leagueId = getActiveLeagueId(), now = Date.no
  * streak or a "N/M in" count is computed among the people who play THAT sport. A league with one sport (or none) has NO contexts: `null`, and Home runs exactly as it did in v0.29.0.
  * Pure over the mirror; carries no pick and no result.
  */
-export function homeFeedContexts({ leagueId = getActiveLeagueId(), now = Date.now() } = {}) {
-  if (!isMultiSport(leagueId)) return null;
-  const liveIds = new Set(getLiveSports(leagueId, now).map((s) => s.competitionId));
-  return liveCompetitions(leagueId)
+export function homeFeedContexts({ leagueId, now = Date.now(), source = null } = {}) {
+  const lid = leagueId === undefined ? readerOf(source).leagueId() : leagueId;
+  if (!isMultiSport(lid, { source })) return null;
+  const liveIds = new Set(getLiveSports(lid, now, { source }).map((s) => s.competitionId));
+  return liveCompetitions(lid, readerOf(source), source)
     .filter((c) => c.isDefault === true || liveIds.has(c.id))
     .map((c) => {
-      const cur = getCurrentWeekFor(c.id);
-      const weekIds = getWeeksForCompetition(c.id).map((w) => w.weekId);
+      const cur = getCurrentWeekFor(c.id, { source });
+      const weekIds = getWeeksForCompetition(c.id, { source }).map((w) => w.weekId);
       // security N1 (Part 2 item 10, 2026-10-08): EACH WEEK'S entrants. `playerIds` is the roster as of NOW (a member who joined after an earlier week locked is on it - he counts from his next week), so
       // a pick row he holds in that earlier week must be judged against THAT week's roster (C1: joined before ITS lock). `weekEntrants[weekId]` is exactly playersForWeek's answer for that week.
       const weekEntrants = {};
-      for (const id of weekIds) weekEntrants[id] = playersForCompetition(c.id, { weekId: id }).map((p) => String(p.playerId));
+      for (const id of weekIds) weekEntrants[id] = playersForCompetition(c.id, { weekId: id, source }).map((p) => String(p.playerId));
       return {
         competitionId: c.id,
         dbCode: c.sport,
         code: profileFacts(c.sport).code,
         weekIds,
-        playerIds: playersForCompetition(c.id).map((p) => String(p.playerId)),
+        playerIds: playersForCompetition(c.id, { source }).map((p) => String(p.playerId)),
         weekEntrants,
         currentWeekId: cur ? cur.weekId : null,
       };
@@ -241,12 +314,17 @@ export function homeFeedContexts({ leagueId = getActiveLeagueId(), now = Date.no
 /**
  * The keys a competition may override — an ALLOW-LIST, and real enforcement (a key not named here never
  * consults `competitions.settings` at all, even if a stray value sits there). Only the five UI-facing
- * fields. `serverJobs.*`, auth, chat/SCRIBE knobs and `reminderCadence` stay league-only: no server job
+ * fields (and, from D2 lane 1, `obligationsEnabled`). `serverJobs.*`, auth, chat/SCRIBE knobs and `reminderCadence` stay league-only: no server job
  * applies a competition-tier merge today, so a per-competition override of anything a server reads would
  * silently do nothing while the commissioner believes it took effect.
  */
 export const COMPETITION_OVERRIDABLE_KEYS = Object.freeze([
   'weeklyGameCount', 'candidateGameCount', 'weeklyPrize', 'seasonPrize', 'season',
+  // D2 lane 2 (DI-911 / DI-918): the sport's pick format and the markets its Picks page shows. Both are client-only settings (no server job reads either), which is exactly what this
+  // allow-list admits: the format is stamped on each week at creation, and the lines are display only.
+  'format', 'markets',
+  // D2 lane 1 (UN-541, DI-1015): a sport can play for fun while another keeps its prizes. Read only through obligationsOn() below.
+  'obligationsEnabled',
 ]);
 
 /** R2's source enum, the one place it is spelled. */
@@ -284,6 +362,47 @@ export function getEffectiveSetting(key, { competitionId = null, weekId = null }
   return { value: has(DEFAULT_SETTINGS, key) ? DEFAULT_SETTINGS[key] : undefined, source: 'default' };
 }
 
+/**
+ * D2 lane 2 (DI-911): the pick format a week is graded and presented in: the week's own stamp, then its competition's `settings.format`, then the sport's default (js/formats.js).
+ * A week with no stamp in a league that never set a format is `ats` for football (existing leagues untouched). Never throws: an unknown sport reads as `ats`, the pre-D2 behaviour.
+ */
+export function formatForWeek(week) {
+  let profile = null;
+  try { profile = profileForWeek(week); } catch { profile = null; }
+  return resolveFormat({ profile, competition: competitionForWeek(week), week }).format;
+}
+
+/** The markets to show on Picks for a week (DI-918), from its competition's `settings.markets` and its format. */
+export function marketsShownForWeek(week) {
+  let profile = null;
+  try { profile = profileForWeek(week); } catch { profile = null; }
+  const comp = competitionForWeek(week);
+  const format = resolveFormat({ profile, competition: comp, week }).format;
+  return marketsShown({ profile, format, stored: comp && comp.settings ? comp.settings.markets : undefined });
+}
+
+/**
+ * D2 lane 1 (UN-541 / PF-541, DI-1015) — OBLIGATIONS ON OR OFF, resolved: competition tier (`competitions.settings.obligationsEnabled`), then the league's stored blob, then the default (true). THE ONLY
+ * reader of the raw value: every obligation surface (the finalize call, Weekly History's status column, the Obligations card and mark-paid, the digest, the CSV, the 2K25 outstanding, the Rules
+ * text) asks this and nothing else. Only an explicit `false` is off (the default-when-missing story, CONVENTIONS #10): a league that never stored the key, a competition that carries none, a stray
+ * string or `null` is ON, exactly the app as it was. `competitionId` null is the league default.
+ */
+export function obligationsOn(competitionId = null) {
+  return getEffectiveSetting('obligationsEnabled', { competitionId }).value !== false;
+}
+
+/** Which tier answered `obligationsOn(competitionId)`: 'competition' | 'league' | 'default' (the Obligations switch's confirmation counts only what its own tier controls). */
+export function obligationsSetBy(competitionId = null) {
+  return getEffectiveSetting('obligationsEnabled', { competitionId }).source;
+}
+
+/** Whether ANY of the league's live sports (or, with no competition rows, the league default) has obligations on: what a league-wide surface (the Rules page's Debts & Bylaws, the 2K25 outstanding) asks. */
+export function anyObligationsOn() {
+  const comps = liveCompetitions();
+  if (!comps.length) return obligationsOn(null);
+  return comps.some((c) => obligationsOn(c.id));
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════
 // D1 (v0.30.0) — PARTICIPATION (DI-531) AND THE SPORT CONTEXT (DI-520, DI-555)
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -292,16 +411,17 @@ export function getEffectiveSetting(key, { competitionId = null, weekId = null }
 export const DASHBOARD_ALL = 'all';
 
 /** The league's NON-ARCHIVED competitions, default first. An archived sport is gone from every surface (DI-520). */
-function liveCompetitions(leagueId = getActiveLeagueId()) {
-  return getCompetitions(leagueId).filter((c) => !c.archivedAt);
+function liveCompetitions(leagueId, r = SEAM, source = null) {
+  const lid = leagueId === undefined ? r.leagueId() : leagueId;
+  return getCompetitions(lid, { source }).filter((c) => !c.archivedAt);
 }
 
 /**
  * True when the league has TWO OR MORE non-archived competitions (DI-520, Amendment D: a just-added sport counts at once). The single-sport rule hangs off this one
  * predicate: false means every function below answers exactly as v0.29.0 did.
  */
-export function isMultiSport(leagueId = getActiveLeagueId()) {
-  return liveCompetitions(leagueId).length >= 2;
+export function isMultiSport(leagueId, { source = null } = {}) {
+  return liveCompetitions(leagueId, readerOf(source), source).length >= 2;
 }
 
 /** A sport's member-facing label and code from its registered profile ("College Football" / "CFB"); an unregistered sport is labelled by its dbCode, never dropped. */
@@ -313,9 +433,9 @@ function profileFacts(dbCode) {
 const sportEntry = (c) => ({ dbCode: c.sport, competitionId: c.id, competition: c, ...profileFacts(c.sport) });
 
 /** The viewer's league-member id, or null: the SAME "signed in and verified" test the Picks page applies (`playerVerified && playerId`). */
-export function viewerMemberId() {
+export function viewerMemberId({ source = null } = {}) {
   let s = null;
-  try { s = getSession(); } catch { s = null; }
+  try { s = readerOf(source).session(); } catch { s = null; }
   return s && s.playerVerified && s.playerId ? String(s.playerId) : null;
 }
 
@@ -323,12 +443,12 @@ export function viewerMemberId() {
  * The instant before which a member must have joined to count for a week (C1): the week's lock instant (the ONE week-lock state), else the stored `lockedAt` of a week the
  * commissioner locked by hand with no dated games, else null (the week has no lock yet, so nobody is late). Never throws.
  */
-function entryCutoffMs(weekId) {
-  const week = weekId ? getWeek(weekId) : null;
+function entryCutoffMs(weekId, r = SEAM) {
+  const week = weekId ? r.week(weekId) : null;
   if (!week) return null;
   let ms = null;
   try {
-    const st = weekLockState({ week, games: getGames(weekId) });
+    const st = weekLockState({ week, games: r.games(weekId) });
     ms = st && Number.isFinite(st.lockAtMs) ? st.lockAtMs : null;
   } catch { ms = null; }
   if (ms === null) {
@@ -351,17 +471,18 @@ function entryCutoffMs(weekId) {
  *
  * `competitionId` null means the league's default competition. The result is a NEW array of the stored player objects, in `getPlayers()` order.
  */
-export function playersForCompetition(competitionId = null, { weekId = null } = {}) {
-  const leagueId = getActiveLeagueId();
-  const active = getPlayers().filter((p) => p && p.active);
-  const comps = liveCompetitions(leagueId);
+export function playersForCompetition(competitionId = null, { weekId = null, source = null } = {}) {
+  const rd = readerOf(source);
+  const leagueId = rd.leagueId();
+  const active = rd.players().filter((p) => p && p.active);
+  const comps = liveCompetitions(leagueId, rd, source);
   if (comps.length <= 1) return active;
-  const c = competitionId ? getCompetition(leagueId, competitionId) : getDefaultCompetition(leagueId);
+  const c = competitionId ? getCompetition(leagueId, competitionId, { source }) : getDefaultCompetition(leagueId, { source });
   if (!c || c.archivedAt) return [];
   if (c.enrollment !== 'opt_in') return active.filter((p) => p.tournamentOnlyGuest !== true);
-  const cutoff = weekId ? entryCutoffMs(weekId) : null;
+  const cutoff = weekId ? entryCutoffMs(weekId, rd) : null;
   const entered = new Set();
-  for (const r of getStoredCompetitionMembers()) {
+  for (const r of rd.competitionMembers()) {
     if (!r || r.competitionId !== c.id || !r.memberId) continue;
     if (cutoff !== null) {
       const joined = Date.parse(r.joinedAt);
@@ -379,11 +500,11 @@ export function playersForCompetition(competitionId = null, { weekId = null } = 
  * league that runs two or more: the members who joined the week's sport BEFORE it locked; a member who is not in that sport, and one who joined after the lock, are not in it, so they are absent from
  * the results, the ranks, the winner and loser and the obligation between them. A week whose competition reference dangles (not hydrated yet) has nobody: fail closed.
  */
-export function playersForWeek(week) {
-  if (!week || !isMultiSport()) return getPlayers().filter((p) => p && p.active);   // the single-sport rule FIRST (merge 2026-10-08): in a one-sport league no week is ever "dangling" - every active player, as before
-  const c = competitionForWeek(week);
+export function playersForWeek(week, { source = null } = {}) {
+  if (!week || !isMultiSport(undefined, { source })) return readerOf(source).players().filter((p) => p && p.active);   // the single-sport rule FIRST (merge 2026-10-08): in a one-sport league no week is ever "dangling" - every active player, as before
+  const c = competitionForWeek(week, { source });
   if (week.competitionId && !c) return [];
-  return playersForCompetition(c ? c.id : null, { weekId: week.weekId });
+  return playersForCompetition(c ? c.id : null, { weekId: week.weekId, source });
 }
 
 /**
@@ -410,7 +531,7 @@ export function viewerPlaysCompetition(competitionId, { weekId = null } = {}) {
  * `playedSports().length >= 2` is the ONE rule that shows the sport switcher (DI-555) and the Dashboard's All sports.
  */
 export function playedSports(leagueId = getActiveLeagueId()) {
-  const comps = liveCompetitions(leagueId);
+  const comps = liveCompetitions(leagueId);   // the ACTIVE league's (the pointer and "plays" are the signed-in viewer's on this device): no source
   if (comps.length < 2) return comps.map(sportEntry);
   const seen = new Set();
   const out = [];
@@ -424,10 +545,10 @@ export function playedSports(leagueId = getActiveLeagueId()) {
 }
 
 /** Every non-archived sport of the league (one entry per sport, competition order), played or not: what the league overview lists. */
-export function leagueSports(leagueId = getActiveLeagueId()) {
+export function leagueSports(leagueId, { source = null } = {}) {
   const seen = new Set();
   const out = [];
-  for (const c of liveCompetitions(leagueId)) {
+  for (const c of liveCompetitions(leagueId, readerOf(source), source)) {
     if (seen.has(c.sport)) continue;
     seen.add(c.sport);
     out.push(sportEntry(c));

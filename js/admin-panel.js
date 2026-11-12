@@ -123,8 +123,9 @@ import { departedLabel } from './league-settings.js';
 export const ADMIN_TABS = Object.freeze([
   { key: 'week', label: 'Week', icon: 'calendarWeek' },
   { key: 'games', label: 'Games', icon: 'sportFootball' },
-  { key: 'players', label: 'Players', icon: 'playersGroup' },
-  { key: 'settings', label: 'Settings', icon: 'settings' },
+  // D2 lane 6 (UN/PF-528, DI-760): LABELS only (Players becomes Members, Settings becomes System). The keys and every data-admin-tab value are unchanged.
+  { key: 'players', label: 'Members', icon: 'playersGroup' },
+  { key: 'settings', label: 'System', icon: 'settings' },
   { key: 'data', label: 'Data', icon: 'cloudData' },
 ]);
 
@@ -162,8 +163,7 @@ export const ADMIN_CARD_TAB = Object.freeze({
   'platform-admins': 'players',
   // Settings (league-scoped where noted)
   'auto-refresh': 'settings',
-  'randomize-picks-shortcut': 'settings',
-  'security-settings': 'settings',
+  // D2 lane 6 (DI-759): 'randomize-picks-shortcut' moved to the Commissioner panel's League tab (js/comm-panel-layout.js COMM_CARD_TAB).
   'scribe-caps-limits': 'settings',
   // AMENDMENT 2026-09-25, item 2: SCRIBE Model moves here from Commissioner
   // → SCRIBE. That amendment moved PLACEMENT only —
@@ -175,15 +175,10 @@ export const ADMIN_CARD_TAB = Object.freeze({
   // retitled `scribe-model`), Admin → Settings. Read: platform admins; write: Super Admin only (js/scribe-routes-card.js, js/roles.js CARD_OPERABILITY).
   'scribe-routes': 'settings',
   'pilot-league-flag': 'settings',
-  // Data (league-scoped where noted, all relocated whole)
+  // Data (league-scoped where noted). D2 lane 6 (DI-759): data-management, chat-retention, chat-history, recalculate-finalized-weeks and obligation-corrections moved to the Commissioner panel's League > Advanced.
   // D1 Lane C (DI-637, UN-482) — the content and AI status card, FIRST on the Data tab: what stopped, most severe first (js/content-status-card.js). Platform admins, read-only.
   'content-ai-status': 'data',
   'export-data': 'data',
-  'data-management': 'data',
-  'chat-retention': 'data',
-  'chat-history': 'data',
-  'recalculate-finalized-weeks': 'data',
-  'obligation-corrections': 'data',
   'scribe-training': 'data',
   'background-jobs': 'data',
   'feedback-bug-reports': 'data',
@@ -219,8 +214,6 @@ const ADMIN_CARD_TITLE = Object.freeze({
   'users-across-leagues': 'Users Across Leagues',
   'platform-admins': 'Platform Admins',
   'auto-refresh': 'Auto-Refresh',
-  'randomize-picks-shortcut': 'Randomize Picks Shortcut',
-  'security-settings': 'Security & Settings',
   'scribe-caps-limits': 'SCRIBE Caps & Limits',
   // D1 Lane C (DI-634) — retitled, no behavior change: it is the LEAGUE's chat model; the new card beside it is the PLATFORM's routing.
   'scribe-model': 'Chat model for this league',
@@ -228,11 +221,6 @@ const ADMIN_CARD_TITLE = Object.freeze({
   'content-ai-status': 'Content & AI status',
   'pilot-league-flag': 'Pilot League Flag',
   'export-data': 'Export Data',
-  'data-management': 'Data Management',
-  'chat-retention': 'Chat Retention',
-  'chat-history': 'Chat History',
-  'recalculate-finalized-weeks': 'Recalculate Finalized Weeks',
-  'obligation-corrections': 'Obligation Corrections',
   'scribe-training': 'SCRIBE Training',
   'background-jobs': 'Background Jobs',
   'feedback-bug-reports': 'Feedback & Bug Reports',

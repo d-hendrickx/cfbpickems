@@ -20,6 +20,8 @@
  *
  * Pure: plain data in, plain data out. No imports, no storage, no clock (the caller passes `now`).
  */
+import { slateFact, startVerb } from './slate-name.js';
+
 
 const asArray = (v) => (Array.isArray(v) ? v : []);
 const isStr = (v) => typeof v === 'string' && v !== '';
@@ -76,7 +78,7 @@ export function nextOpportunity(input = {}) {
     if (entered && editable && !done) kind = 'picks-due';
     else if (entered && done && (st === 'open' || st === 'locked') && !live) kind = 'picks-in';
     else kind = 'follow';
-    cands.push({ kind, weekId: w.weekId, weekN: w.weekNumber ?? null, sport, sportLabel: labelOf(sport), entered, lockAt, firstKickoff: first, editable: kind === 'picks-in' ? editable : kind === 'picks-due', live, rank: { 'picks-due': 0, 'picks-in': 1, follow: 2 }[kind] });
+    cands.push({ kind, weekId: w.weekId, weekN: w.weekNumber ?? null, ...slateFact(w), sport, sportLabel: labelOf(sport), entered, lockAt, firstKickoff: first, editable: kind === 'picks-in' ? editable : kind === 'picks-due', live, rank: { 'picks-due': 0, 'picks-in': 1, follow: 2 }[kind] });
   }
   if (!cands.length) return none;
   // the highest priority first; inside one, the soonest moment (the lock for picks-due, the first kickoff otherwise); a week id as the last tie-break (deterministic)
@@ -93,14 +95,14 @@ const at = (fmt, ms) => (fmt && typeof fmt.time === 'function' ? fmt.time(ms) : 
 /** The What's next sentence (DI-599 copy, exact where it gives one). `fmt.time(ms)` is the viewer's own "Sun 12:30 PM". */
 export function nextLine(next, fmt, { showSport = false } = {}) {
   const n = next && typeof next === 'object' ? next : { kind: 'none' };
-  const wk = `${sp(n, showSport)}Week ${n.weekN ?? ''}`.trim();
+  const wk = `${sp(n, showSport)}${n.slate ? n.slate : `Week ${n.weekN ?? ''}`}`.trim();   // D2 lane 2: a game night is named by its label
   switch (n.kind) {
     case 'picks-due': return `Next up: ${wk} — picks lock ${at(fmt, n.lockAt)}.`;
-    case 'picks-in': return n.editable && n.lockAt !== null ? `You're in for ${wk}. Picks lock ${at(fmt, n.lockAt)}.` : `You're in for ${wk}. It kicks off ${at(fmt, n.firstKickoff)}.`;
+    case 'picks-in': return n.editable && n.lockAt !== null ? `You're in for ${wk}. Picks lock ${at(fmt, n.lockAt)}.` : `You're in for ${wk}. It ${startVerb(n.sport)} ${at(fmt, n.firstKickoff)}.`;
     case 'follow': {
       const notIn = n.entered === false ? " You're not entered —" : '';
       if (n.live || n.firstKickoff === null) return notIn ? `${wk} is under way.${notIn} follow along in Game Day and the chat.` : `${wk} is under way — follow along in Game Day and the chat.`;
-      return notIn ? `${wk} kicks off ${at(fmt, n.firstKickoff)}.${notIn} follow along in Game Day and the chat.` : `${wk} kicks off ${at(fmt, n.firstKickoff)} — follow along in Game Day and the chat.`;
+      return notIn ? `${wk} ${startVerb(n.sport)} ${at(fmt, n.firstKickoff)}.${notIn} follow along in Game Day and the chat.` : `${wk} ${startVerb(n.sport)} ${at(fmt, n.firstKickoff)} — follow along in Game Day and the chat.`;
     }
     default: return 'Nothing else is scheduled yet. When the commissioner publishes the next slate, it shows up here.';
   }
@@ -109,11 +111,11 @@ export function nextLine(next, fmt, { showSport = false } = {}) {
 /** The Final card's compact form, after "You went 7–3 · ". '' when there is nothing to come. */
 export function nextShort(next, fmt, { showSport = false } = {}) {
   const n = next && typeof next === 'object' ? next : { kind: 'none' };
-  const wk = `${sp(n, showSport)}Week ${n.weekN ?? ''}`.trim();
+  const wk = `${sp(n, showSport)}${n.slate ? n.slate : `Week ${n.weekN ?? ''}`}`.trim();   // D2 lane 2: a game night is named by its label
   switch (n.kind) {
     case 'picks-due': return `Next: ${wk} picks lock ${at(fmt, n.lockAt)}`;
     case 'picks-in': return `Next: you're in for ${wk}`;
-    case 'follow': return n.live || n.firstKickoff === null ? `Next: ${wk} is under way` : `Next: ${wk} kicks off ${at(fmt, n.firstKickoff)}`;
+    case 'follow': return n.live || n.firstKickoff === null ? `Next: ${wk} is under way` : `Next: ${wk} ${startVerb(n.sport)} ${at(fmt, n.firstKickoff)}`;
     default: return '';
   }
 }

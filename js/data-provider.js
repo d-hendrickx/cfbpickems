@@ -38,7 +38,10 @@
  *  - Multi-day fetchByDateRange merging
  */
 
-import { getAlmaMaters, TIME_WINDOW, GAME_STATUS, DATA_QUALITY, DATA_SOURCE_MODE, createGame, getAlmaMaterMatch, ESPN_SPORT_ENDPOINTS, espnSportPath } from './data-model.js';
+import { getAlmaMaters, TIME_WINDOW, GAME_STATUS, DATA_QUALITY, DATA_SOURCE_MODE, createGame, getAlmaMaterMatch, ESPN_SPORT_ENDPOINTS, espnSportPath, unknownSportError } from './data-model.js';
+// D2 lane 2 (DI-883 / DI-884): the two shared Edge-importable leaves - the status mapping and the structured-only market reader.
+import { normalizeEspnStatus, footballStatusFromName } from './espn-status.js';
+import { extractMarkets, marketRecordFromComp } from './markets.js';
 
 const ESPN_API_ROOT = 'https://site.api.espn.com/apis/site/v2/sports';
 const ESPN_CFB = `${ESPN_API_ROOT}/football/college-football/scoreboard`;
@@ -110,9 +113,13 @@ const _state = {
  * Shown in Commissioner panel for transparency.
  */
 export function buildEspnUrl(params = {}) {
-  const { sport = 'college-football', ...rest } = params;
-  const path = espnSportPath(sport);
-  const isCfb = sport === 'college-football';
+  // W-77 (T-36, 2026-10-18): an ABSENT sport is college football, as before; a dbCode ('cfb', 'nfl') or an ESPN key resolves through espnKeyForSport() (the
+  // registry the sport profiles are built from); ANYTHING ELSE THROWS UnknownSportError. It used to fall back to the college football scoreboard.
+  const { sport, ...rest } = params;
+  const key = sport === undefined || sport === null || sport === '' ? 'college-football' : espnKeyForSport(sport);
+  if (!key) throw unknownSportError(sport);
+  const path = espnSportPath(key);
+  const isCfb = key === 'college-football';
   const p = { ...(isCfb ? { groups: '80' } : {}), limit: '200', ...rest };
   const qs = new URLSearchParams(p).toString();
   return `${ESPN_API_ROOT}/${path}/scoreboard${qs ? '?' + qs : ''}`;
@@ -123,7 +130,7 @@ export function buildEspnUrl(params = {}) {
  * neither. Own-property lookups only ('constructor' / '__proto__' are unknown), and nothing here defaults: the caller that wants
  * "college football when absent" says so itself.
  */
-const DB_CODE_TO_ESPN_KEY = Object.freeze({ cfb: 'college-football', nfl: 'nfl' });
+const DB_CODE_TO_ESPN_KEY = Object.freeze({ cfb: 'college-football', nfl: 'nfl', nhl: 'nhl' });
 export function espnKeyForSport(sport) {
   if (typeof sport !== 'string') return null;
   const v = sport.trim();
@@ -132,9 +139,13 @@ export function espnKeyForSport(sport) {
   return null;
 }
 
-/** D1 - which ESPN sport a scoreboard URL is for ('nfl' or 'college-football'), from its path. */
+/** D1 - which ESPN sport a scoreboard URL is for ('nfl', 'nhl' or 'college-football'), from its path. D2 lane 2 (DI-882): `/hockey/nhl/` is the NHL; today any URL this does not know is still read as
+ *  college football (the silent-fallback class DI-924 guards for every other site), so an NHL scoreboard must be recognised HERE or its games parse as college football and are stamped with no `espnSport`. */
 function espnKeyFromUrl(url) {
-  return /\/football\/nfl\//.test(String(url || '')) ? 'nfl' : 'college-football';
+  const u = String(url || '');
+  if (/\/football\/nfl\//.test(u)) return 'nfl';
+  if (/\/hockey\/nhl\//.test(u)) return 'nhl';
+  return 'college-football';
 }
 
 /**
@@ -144,7 +155,8 @@ function espnKeyFromUrl(url) {
  * The abbreviation map (`teamAbbr` in js/sports/nfl.js) is keyed by these names.
  */
 function teamNameFor(sportKey, team) {
-  if (sportKey === 'nfl') return team?.displayName || team?.name || team?.location || team?.shortDisplayName || '';
+  // D2 lane 2 (DI-882): the NHL stores `displayName` too ("New York Rangers" / "New York Islanders": `location` is "New York" for both).
+  if (sportKey === 'nfl' || sportKey === 'nhl') return team?.displayName || team?.name || team?.location || team?.shortDisplayName || '';
   return team?.location || team?.shortDisplayName || team?.displayName || team?.name || '';
 }
 
@@ -287,15 +299,24 @@ export async function refreshScoresByEventIds(espnEventIds = [], storedGames = [
   // across leagues). Every browser call site passes no cache, so `cache` is undefined and this is byte-identical to before.
   const cache = fetchOptions && fetchOptions.scoreboardCache instanceof Map ? fetchOptions.scoreboardCache : null;
   const fetches = [...bySport.keys()].map(async sport => {
-    const url = buildEspnUrl({ sport });
-    let pending = cache ? cache.get(url) : null;
-    if (!pending) {
-      // N1 (coordinator ruling 2026-09-30) — an EXPLICIT empty roster: this path merges scores, status, kickoff and logos into stored games and never reads the alma-mater flag
-      // it would compute, and the fetched scoreboard is shared across leagues (the cache above), so no league's school list belongs in it — least of all the pilot's six.
-      pending = resilientFetch(url, [], fetchOptions);
-      if (cache) cache.set(url, pending);
-    }
-    const result = await pending;
+    // W-77 (T-36): a bucket whose tag is not a registered sport is NOT fetched (it used to poll the college football scoreboard and could match a CFB event by id).
+    // D2 lane 2 (DI-885): college football's URL is byte-identical to before (no `dates`: the default board). A non-college sport asks for each distinct US Eastern date among the bucket's
+    // UNFINISHED games (at most two requests), because a game that started at 10 pm Eastern is still live after midnight and ESPN's default board is "today". No usable kickoff -> the default board.
+    // int/v0.31.0: lane 2's URL list is built inside bug C's UnknownSportError catch (every URL comes from buildEspnUrl, which throws for an unregistered sport); the F-1 due window stays inside scoreboardUrlsFor.
+    let urls;
+    try { urls = scoreboardUrlsFor(sport, bySport.get(sport)); }
+    catch (e) { if (e && e.name === 'UnknownSportError') return { sport, unknown: e }; throw e; }
+    const results = await Promise.all(urls.map(async (url) => {
+      let pending = cache ? cache.get(url) : null;
+      if (!pending) {
+        // N1 (coordinator ruling 2026-09-30) — an EXPLICIT empty roster: this path merges scores, status, kickoff and logos into stored games and never reads the alma-mater flag
+        // it would compute, and the fetched scoreboard is shared across leagues (the cache above), so no league's school list belongs in it — least of all the pilot's six.
+        pending = resilientFetch(url, [], fetchOptions);
+        if (cache) cache.set(url, pending);
+      }
+      return pending;
+    }));
+    const result = results.length === 1 ? results[0] : mergeBucketResults(results);
     return { sport, result };
   });
   const settled = await Promise.all(fetches);
@@ -307,11 +328,14 @@ export async function refreshScoresByEventIds(espnEventIds = [], storedGames = [
   // attached to an `updated` entry itself (that entry's shape is spread
   // toward saveGame()'s allow-list in app.js; see the comment there).
   const liveStatusByEventId = new Map();
+  // D2 lane 2 (DI-897): the structured lines and prices per ESPN event id (SIBLING only, never on an `updated` entry): what the server job appends to the price record.
+  const marketsByEventId = new Map();
   // D1 (DI-557 / DI-535 #4) - what each ESPN bucket's fetch REACHED, as a SIBLING of `updated` and `errors` (nothing about them changes): 'ok' (events came back), 'empty' (ESPN answered with a
   // scoreboard of zero events - reached, so a success for the stall banner even though `errors` lists it) or 'failed' (nothing usable came back: HTTP error, timeout, every proxy down). A bucket
   // this call never fetched has no entry. `rawEventCount` is set only on a response that reached ESPN (finalise()), so a total failure is told from an empty board without reading a message.
   const bucketOutcomes = new Map();
-  for (const { sport, result } of settled) {
+  for (const { sport, result, unknown } of settled) {
+    if (unknown) { bucketOutcomes.set(sport, 'failed'); errors.push(`${unknown.sport}: ${unknown.message}`); continue; }
     bucketOutcomes.set(sport, result.error ? (result.rawEventCount === 0 ? 'empty' : 'failed') : 'ok');
     if (result.error) { errors.push(`${sport}: ${result.error}`); continue; }
     if (!result.games?.length) continue;
@@ -319,6 +343,9 @@ export async function refreshScoresByEventIds(espnEventIds = [], storedGames = [
       for (const [eventId, status] of result._liveStatusByEventId) {
         liveStatusByEventId.set(eventId, status);
       }
+    }
+    if (result._marketsByEventId) {
+      for (const [eventId, m] of result._marketsByEventId) marketsByEventId.set(eventId, m);
     }
     const gamesInSport = bySport.get(sport) || [];
     for (const liveGame of result.games) {
@@ -384,7 +411,45 @@ export async function refreshScoresByEventIds(espnEventIds = [], storedGames = [
     }
   }
   _state.lastScoreRefresh = new Date().toISOString();
-  return { updated, errors, timestamp: _state.lastScoreRefresh, liveStatusByEventId, bucketOutcomes };
+  return { updated, errors, timestamp: _state.lastScoreRefresh, liveStatusByEventId, bucketOutcomes, marketsByEventId };
+}
+
+/** D2 lane 2 (DI-885): the US Eastern calendar date ('YYYYMMDD', ESPN's `dates=` shape) of a kickoff instant, or null. ESPN dates a hockey game by its US Eastern date. */
+export function easternEspnDate(iso) {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return null;
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(ms));
+  const get = (t) => parts.find((p) => p.type === t)?.value;
+  return get('year') && get('month') && get('day') ? `${get('year')}${get('month')}${get('day')}` : null;
+}
+
+/**
+ * The scoreboard URLs one sport bucket asks for. College football: `[buildEspnUrl({ sport })]`, byte-identical to before. NFL: unchanged too (its default board). Any other sport (the
+ * NHL): one dated URL per distinct US Eastern date among the bucket's unfinished games whose kickoff is inside the due window (now - 6 h .. now + 45 min), at most TWO, else the default board.
+ */
+export function scoreboardUrlsFor(sport, games = [], nowMs = Date.now()) {
+  if (sport === 'college-football' || sport === 'nfl') return [buildEspnUrl({ sport })];
+  // F-1 (security, 2026-10-19): only a game inside the DUE window (6 hours back to 45 minutes ahead, the score job's own window) names a date. A stale-dated or far-future scheduled game
+  // (commissioner-written) would otherwise give each league its own URL and break the shared per-tick cache; with the window every league lands on yesterday / today / tomorrow Eastern.
+  const inWindow = (g) => { const t = Date.parse(g && g.kickoff); return Number.isFinite(t) && t >= nowMs - 6 * 3600000 && t <= nowMs + 45 * 60000; };
+  const dates = [...new Set((games || [])
+    .filter((g) => g && g.status !== 'final' && inWindow(g))
+    .map((g) => easternEspnDate(g.kickoff))
+    .filter(Boolean))].sort().slice(0, 2);
+  return dates.length ? dates.map((d) => buildEspnUrl({ sport, dates: d })) : [buildEspnUrl({ sport })];
+}
+
+/** One bucket answered by several dated requests: success when ANY reached ESPN (its games and live map merged), else the first failure. */
+function mergeBucketResults(results) {
+  const ok = results.filter((r) => r && !r.error);
+  if (!ok.length) return results.find((r) => r && r.rawEventCount === 0) || results[0];
+  const games = []; const live = new Map(); const mk = new Map(); const seen = new Set();
+  for (const r of ok) {
+    for (const g of (r.games || [])) { const k = g.espnEventId == null ? null : String(g.espnEventId); if (k && seen.has(k)) continue; if (k) seen.add(k); games.push(g); }
+    if (r._liveStatusByEventId) for (const [k, v] of r._liveStatusByEventId) live.set(k, v);
+    if (r._marketsByEventId) for (const [k, v] of r._marketsByEventId) mk.set(k, v);
+  }
+  return { ...ok[0], games, _liveStatusByEventId: live, _marketsByEventId: mk, rawEventCount: ok.reduce((n, r) => n + (r.rawEventCount || 0), 0) };
 }
 
 export function getProviderState() { return { ..._state }; }
@@ -564,10 +629,10 @@ function finalise(result, espnUrl, method, almaMaters = getAlmaMaters()) {
   }
 
   // For multi-day fetches we return raw events for merging upstream
-  const { games, report, liveStatusByEventId } = parseAndReport(events, espnUrl, method, null, null, almaMaters);
+  const { games, report, liveStatusByEventId, marketsByEventId } = parseAndReport(events, espnUrl, method, null, null, almaMaters);
   _state.lastParsedCount   = games.length;
   _state.lastQualityReport = report;
-  return { games, error: null, usingDemo: false, espnUrl, rawEventCount: events.length, _rawEvents: events, qualityReport: report, fetchMethod: method, _liveStatusByEventId: liveStatusByEventId };
+  return { games, error: null, usingDemo: false, espnUrl, rawEventCount: events.length, _rawEvents: events, qualityReport: report, fetchMethod: method, _liveStatusByEventId: liveStatusByEventId, _marketsByEventId: marketsByEventId };
 }
 
 // ─── PARSE + QUALITY REPORT ───────────────────────────────────────────────────
@@ -627,6 +692,7 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
   // attached to a game object; see the comment at the bottom of the
   // events.map() loop below for why).
   const liveStatusByEventId = new Map();
+  const marketsByEventId = new Map();
 
   const rangeStart = startDate ? new Date(startDate + 'T00:00:00') : null;
   const rangeEnd   = endDate   ? new Date(endDate   + 'T23:59:59') : (rangeStart ? new Date(startDate + 'T23:59:59') : null);
@@ -651,8 +717,9 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
     const awaySchool = teamNameFor(sportKey, away.team);
     // The NFL stores the team's FULL name ("Detroit Lions", teamNameFor above), which already ends in the mascot: a stored "Lions" mascot would draw it twice ("Detroit Lions (Lions)", S9). College football
     // keeps the school + mascot pair exactly as before.
-    const homeMascot = sportKey === 'nfl' ? '' : (home.team?.name || '');
-    const awayMascot = sportKey === 'nfl' ? '' : (away.team?.name || '');
+    // D2 lane 2 (DI-882): the NHL stores the full name too, so its mascot is blank for the same reason (never "Boston Bruins (Bruins)").
+    const homeMascot = sportKey !== 'college-football' ? '' : (home.team?.name || '');
+    const awayMascot = sportKey !== 'college-football' ? '' : (away.team?.name || '');
 
     const homeTeam = homeSchool;
     const awayTeam = awaySchool;
@@ -733,9 +800,15 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
       }
     }
 
-    const status    = normalizeStatus(statusName);
+    // D2 lane 2 (DI-884): football keeps the exact name mapping; the NHL reads ESPN's structured state ('pre' / 'in' / 'post') and `completed`, so an overtime, a shootout or a name this
+    // build has never seen still lands safely (an unknown post-game name is UNPLAYED with a transient note, never final).
+    const statusInfo = normalizeEspnStatus(event.status?.type, sportKey);
+    let status      = statusInfo.status;
     const homeScore = parseScore(home.score);
     const awayScore = parseScore(away.score);
+    // D2 lane 2 (DI-925): a TIED final in a sport where a tie is impossible (hockey) is a data error: it is never stored as final (the game stays live, the transient note says so, and the commissioner
+    // sees "ESPN shows a tied final. Check the score."). The server write gate refuses it too (job-rules.mjs `tied_final`).
+    if (sportKey === 'nhl' && status === GAME_STATUS.FINAL && homeScore !== null && homeScore === awayScore) { status = GAME_STATUS.LIVE; statusInfo.note = 'tied_final'; }
     if (status === GAME_STATUS.FINAL && homeScore !== null) withFinalScores++;
 
     const homeRank = safeRank(home.curatedRank?.current);
@@ -743,7 +816,12 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
     const homeConf = extractConf(home.team);
     const awayConf = extractConf(away.team);
 
-    const { spread, favorite, spreadSource, oddsProvider } = extractSpread(comp, homeTeam, awayTeam);
+    // D2 lane 2 (DI-883): `extractSpread` is FOOTBALL'S and is never called for hockey: ESPN writes the favourite's MONEYLINE into `odds[0].details` for an NHL game ("MIN -192"), and
+    // extractSpread would store a spread of 192. A hockey game's line comes ONLY from `extractMarkets`' structured fields (the puck line `odds[0].spread`, home-perspective, favourite
+    // derived from its sign). Football additionally fills `game.markets` for display (DI-919); its spread path is unchanged.
+    const lineMax = sportKey === 'nhl' ? 3.5 : null;     // the NHL profile's markets.lineMax (nhlprofiletest pins the two equal); football keeps its shipped behaviour
+    const mk = extractMarkets(comp, sportKey, { lineMax });
+    const { spread, favorite, spreadSource, oddsProvider } = sportKey === 'nhl' ? hockeyLine(mk, homeTeam, awayTeam) : extractSpread(comp, homeTeam, awayTeam);
     if (spread !== null) withSpread++; else withoutSpread++;
 
     const isAlmaMater = !!(getAlmaMaterMatch(homeTeam, almaMaters) || getAlmaMaterMatch(awayTeam, almaMaters));
@@ -778,7 +856,7 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
       venueDisplay = venueCity;
     }
 
-    const dq = spread !== null ? DATA_QUALITY.CONFIRMED : DATA_QUALITY.PARTIAL;
+    const dq = spread !== null || (sportKey === 'nhl' && mk.markets) ? DATA_QUALITY.CONFIRMED : DATA_QUALITY.PARTIAL;
 
     // XSS-HARDEN round 2, C5 (2026-09-12) — SHAPE-CHECK THE EVENT ID.
     //
@@ -846,7 +924,10 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
       // D1 (DI-533 #3) - LOAD-BEARING: data-provider.js refreshScoresByEventIds() and the server's job-rules.mjs treat a game with no
       // `espnSport` as college football, so an unstamped NFL game would be looked up on the college scoreboard and its scores would
       // never refresh, silently. A college-football game keeps the null it has always had.
-      ...(sportKey === 'nfl' ? { espnSport: 'nfl' } : {}),
+      // D2 lane 2 (DI-882): and an NHL game is stamped 'nhl' for the same reason (the client refresh and the server job both bucket on it).
+      ...(sportKey !== 'college-football' ? { espnSport: sportKey } : {}),
+      // D2 lane 2 (DI-883 / DI-919): the structured markets, for display only; absent when ESPN carried none (never an empty object, never a default).
+      ...(mk.markets ? { markets: mk.markets } : {}),
     });
 
     // Item 2 (in-game quarter+clock), Pass A/B remediation — ESPN's raw
@@ -931,7 +1012,16 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
       period:      Number.isFinite(event.status?.period) ? event.status.period : null,
       isRedZone:   typeof situation?.isRedZone === 'boolean' ? situation.isRedZone : null,
       possessionSide,
+      // D2 lane 2 (DI-884): ESPN says the game was not played ('postponed' | 'cancelled' | 'suspended' | 'delayed' | 'unknown'), or null. Transient, like everything on this entry.
+      note:        statusInfo.note,
+      // An 18-minute hockey intermission does not pulse, exactly as halftime does not (liveStatusDisplay reads this).
+      intermission: statusInfo.intermission === true,
     });
+    // D2 lane 2 (DI-897): the structured lines and prices for the append-only record (the server job writes it; a client never does). Transient and sibling-only, like the live map.
+    if (event.id != null && espnEventId) {
+      const rec = marketRecordFromComp(comp, sportKey, { lineMax });
+      if (rec) marketsByEventId.set(espnEventId, { sport: sportKey, provider: rec.provider, payload: rec.payload, status: status });
+    }
     return parsedGame;
   }).filter(Boolean);
 
@@ -958,7 +1048,7 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
     })),
   };
 
-  return { games, report, liveStatusByEventId };
+  return { games, report, liveStatusByEventId, marketsByEventId };
 }
 
 function buildFailReport(espnUrl, error) {
@@ -981,10 +1071,8 @@ function safeRank(raw) {
 // `get_current_score` kept its own copy of this map, which had drifted (no END_PERIOD), so SCRIBE read
 // ESPN's between-quarters status as "scheduled". One map, imported, never re-typed.
 export function normalizeStatus(name) {
-  if (!name) return GAME_STATUS.SCHEDULED;
-  if (name.includes('FINAL')) return GAME_STATUS.FINAL;
-  if (name === 'STATUS_IN_PROGRESS' || name.includes('HALFTIME') || name.includes('END_PERIOD')) return GAME_STATUS.LIVE;
-  return GAME_STATUS.SCHEDULED;
+  // D2 lane 2 (DI-884): the body moved to js/espn-status.js (`footballStatusFromName`, the same mapping character for character) so the server twin reads one table.
+  return footballStatusFromName(name);
 }
 
 // ESPN conference ID → human name. The lightweight scoreboard payload doesn't
@@ -1061,7 +1149,19 @@ function hasMarqueeNotes(comp) {
   catch { return false; }
 }
 
-function extractSpread(comp, homeTeam, awayTeam) {
+/** D2 lane 2 (DI-883): a HOCKEY game's line, from `extractMarkets`' structured puck line only: the favourite is the team on the sign's side (negative = home, AD-03), the bookmaker's name is never stored on a game. */
+function hockeyLine(mk, homeTeam, awayTeam) {
+  return {
+    spread: mk.spread,
+    favorite: mk.favoriteSide === 'home' ? homeTeam : (mk.favoriteSide === 'away' ? awayTeam : null),
+    spreadSource: mk.spreadSource,
+    oddsProvider: null,
+  };
+}
+
+/** FOOTBALL'S spread reader (it parses the trailing number of ESPN's `odds[0].details`). EXPORTED ONLY so nhlprofiletest can show the hazard DI-883 names: for an NHL game `details` is the favourite's
+ *  MONEYLINE ("NYR -142"), and this function would read it as a spread of 142. parseAndReport never calls it for a hockey game. */
+export function extractSpread(comp, homeTeam, awayTeam) {
   const odds        = comp.odds?.[0];
   const oddsProvider = odds?.provider?.name || null;
   if (!odds?.details || odds.details === 'Pick' || !odds.details.trim())

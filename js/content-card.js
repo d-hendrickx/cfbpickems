@@ -106,7 +106,8 @@ export function renderContentCard(item, { now = Date.now(), timeZone = null, for
     // Unknown beats wrong: no known instant, no time. The "as of" caption below stays: it says when the FACTS were true, a different thing.
     const when = timeLabels(item.publishedAt, now, { formatDate: makeDateFormatter(timeZone || null) });
     const timeHtml = when ? `<time class="feed-card-time" datetime="${esc(when.iso)}" data-feed-time="${esc(when.iso)}" aria-label="${esc(when.spoken)}">${esc(when.written)}</time>` : '';
-    const eyebrow = `<div class="feed-card-eyebrow"><span class="feed-card-icon" aria-hidden="true">${icon(meta.icon)}</span><span class="content-card-kind">${esc(meta.label)}</span>${reason}<span class="feed-card-trail">${timeHtml}<span class="feed-card-chev" aria-hidden="true">${icon('chevronRight')}</span></span></div>`;
+    // D2 DI-852 / DI-855 (lane 3, 2026-10-19): an External card has NO leading glyph (League cards keep theirs); the kind label leads; the trailing chevron stays (it opens the in-app detail).
+    const eyebrow = `<div class="feed-card-eyebrow"><span class="content-card-kind">${esc(meta.label)}</span>${reason}<span class="feed-card-trail">${timeHtml}<span class="feed-card-chev" aria-hidden="true">${icon('chevronRight')}</span></span></div>`;
     const sub = subLine(item, { timeZone, formatTime });
     const parts = [eyebrow, `<h3 class="feed-card-title">${esc(head)}</h3>`, sub ? `<p class="content-card-sub">${esc(sub)}</p>` : ''];
     const ok = item.synthesisStatus === 'ok' && str(item.summary);
@@ -134,8 +135,11 @@ export function renderContentCard(item, { now = Date.now(), timeZone = null, for
     const cap = contentCaption(item, now, { timeZone });
     parts.push(`<p class="feed-card-caption content-card-caption${cap.stale ? ' content-card-caption--stale' : ''}">${esc(cap.text)}</p>`);
     const kindClass = item.cardKind === 'matchup.preview' ? 'matchup' : item.cardKind === 'player.preview' ? 'player' : 'spotlight';
-    const label = `${contentSpokenLabel(item, { timeZone })}.`;           // W-92 (DI-W92-8's form): "{label}. {spoken time}. Opens details."; data-feed-label lets Home refresh it in place
-    return `<article class="card feed-card feed-card--tap content-card content-card--${kindClass}" role="button" tabindex="0" data-content-id="${esc(id)}" data-feed-label="${esc(label)}" aria-label="${esc(tapLabel(label, when ? when.spoken : ''))}">${parts.join('')}</article>`;
+    // D2 DI-1072 (amendment d): a card about a team the member FOLLOWS is League Intelligence on this device — the League edge (fam-lg) and "For your team." first; its reason pill is
+    // the private "Your alma mater" / "Your team" Home set; no league chip (the content is public and global). Otherwise the External family, as shipped.
+    const followed = item.family === 'league' && (item.reason === 'Your alma mater' || item.reason === 'Your team');
+    const label = `${followed ? 'For your team' : item.cardKind === 'spotlight' ? 'Sports spotlight' : 'Sports preview'}. ${contentSpokenLabel(item, { timeZone })}.`;   // D2 DI-852 (4): the External family is heard first           // W-92 (DI-W92-8's form): "{label}. {spoken time}. Opens details."; data-feed-label lets Home refresh it in place
+    return `<article class="card feed-card feed-card--tap content-card content-card--${kindClass} ${followed ? 'fam-lg' : 'fam-ext'}" role="button" tabindex="0" data-content-id="${esc(id)}" data-feed-label="${esc(label)}" aria-label="${esc(tapLabel(label, when ? when.spoken : ''))}">${parts.join('')}</article>`;
   } catch { return ''; }
 }
 

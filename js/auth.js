@@ -88,7 +88,9 @@ export class AuthUnavailableError extends Error {
 }
 
 // ── Config (DI-180f) ─────────────────────────────────────────────────────────
-let _cfg = { authMode: 'pins', dataMode: 'sheets', supabaseUrl: '', supabaseAnonKey: '' };
+// D2 lane 6 (D-108): two modes only. 'local' is the credential-free substrate for offline development and the offline suites; it is the PRE-config default of a PAGE, never a
+// device decision (boot() resolves the real mode from config.json, and an unreadable config HOLDS instead of becoming this).
+let _cfg = { authMode: 'local', dataMode: 'sheets', supabaseUrl: '', supabaseAnonKey: '' };
 
 /**
  * SEC F1 (CRITICAL) — THE INTERLOCK SEAM.
@@ -238,15 +240,15 @@ export function isSupabaseWriteWithheld() {
 }
 
 function _normalizeAuthMode(raw) {
-  return (raw === 'supabase' || raw === 'prelink') ? raw : 'pins';
+  return raw === 'supabase' ? 'supabase' : 'local';
 }
 
 /**
  * DI §1.4 — `dataMode` is the SECOND flag, and the four combinations are a
  * table, not a matrix of guesses:
  *
- *   pins/prelink + sheets     today, byte-identical. The world every device is in.
- *   pins/prelink + supabase   REFUSED at boot and normalized back to 'sheets'.
+ *   local + sheets           the credential-free local mode (D2 lane 6, D-108: the PIN modes are gone).
+ *   local + supabase          REFUSED at boot and normalized back to 'sheets'.
  *                             A Supabase data layer with no Supabase identity has
  *                             no auth.uid(), so every RLS policy sees an anon
  *                             caller and the hydrate returns nothing — which
@@ -509,7 +511,7 @@ export function setLastKnownAuthMode(mode) {
  *  ("this device has no last-known mode"), NOT as 'pins' — the whole point of
  *  the key is to tell "never established" apart from "established as pins". */
 function _normalizeAuthModeOrEmpty(raw) {
-  return (raw === 'supabase' || raw === 'prelink' || raw === 'pins') ? raw : '';
+  return raw === 'supabase' ? 'supabase' : '';
 }
 
 let _client = null;
@@ -2534,7 +2536,8 @@ export async function joinLeague(code, { activate = true } = {}) {
   // diffing old/new membership lists.
   // N1 (DI-430) — `join_league` only does `upper(trim())`, so a code copied as "K7QX 9M2P" or "k7qx-9m2p" would be `invalid_code`. Spaces and hyphens are removed HERE
   // (the ONE place every join path — landing, pill sheet, invite link — passes through); the server still decides whether the result is a real code.
-  const { data: memberId, error } = await client.rpc('join_league', { p_code: String(code || '').replace(/[\s-]+/g, '') });
+  // DI-726 (D2 lane 1): neither 0 nor 1 can occur in a code (A-Z and 2-9), so a typed 0 is an O and a typed 1 is an I; the same fold the invite preview applies (js/league-create.js normalizeInviteCode).
+  const { data: memberId, error } = await client.rpc('join_league', { p_code: String(code || '').toUpperCase().replace(/[\s-]+/g, '').replace(/0/g, 'O').replace(/1/g, 'I') });
   if (error) throw error;
   // REVIEWER F-1/F-2 (third pass) — THE POINTER IS NOT WRITTEN HERE ANY MORE.
   //
@@ -2570,6 +2573,50 @@ export async function joinLeague(code, { activate = true } = {}) {
   const holdLeagueId = activate === false ? getActiveLeagueId() : null;
   const list = await refreshMembershipsAndSession(holdLeagueId ? { preferLeagueId: holdLeagueId } : { preferMemberId: memberId });
   return (list || []).find(m => m.memberId === memberId) || null;
+}
+
+/**
+ * A lookup that could not be answered at all (no client, no connection): typed so the caller says "No connection. Try again when you're back online." instead of "that code is wrong".
+ * `kind` is 'offline'. A server that ANSWERED (even with an error) never becomes this.
+ */
+export class InviteLookupError extends Error {
+  constructor(message, kind = 'offline') {
+    super(message || 'The invite could not be looked up.');
+    this.name = 'InviteLookupError';
+    this.kind = kind;
+  }
+}
+
+/**
+ * D2 lane 1 (UN-506 / DI-724, DI-725) — what an invitee sees BEFORE they join: `invite_preview(p_code)` (migration 0065), a signed-in definer RPC that returns the league's name and sports and nothing else
+ * (no member names, counts or ids; for a caller who is ALREADY a member it also returns that league's id, which they hold). The answer is mapped here once:
+ *   { ok: true, leagueName, sports: [codes], alreadyMember, leagueId }         a real, open league
+ *   { ok: false, error: 'invalid_code' }                                        unknown, replaced AND closed: one answer, nothing says which (no enumeration)
+ *   { ok: false, error: 'invite_throttled' }                                    too many lookups from this account
+ *   { ok: true, unavailable: true, leagueName: '', sports: [], ... }            migration 0065 is not applied yet (PGRST202): the preview is tolerated missing and the join confirmation
+ *                                                                               says "Join this league?" - joining itself is unchanged, so a web deploy that lands before the paste breaks nothing
+ * Throws InviteLookupError when the server could not be asked. The caller NEVER calls join_league from here: joining takes the person's own tap on the confirmation.
+ */
+export async function previewInvite(code) {
+  const client = ensureClient();
+  if (!client) throw new InviteLookupError('Supabase client is not configured.', 'offline');
+  const sent = String(code || '').toUpperCase().replace(/[\s-]+/g, '').replace(/0/g, 'O').replace(/1/g, 'I');
+  let res;
+  try { res = await client.rpc('invite_preview', { p_code: sent }); }
+  catch (e) { throw new InviteLookupError(String((e && e.message) || e), 'offline'); }
+  const { data, error } = res || {};
+  if (error) {
+    const raw = `${error.code || ''} ${error.message || ''}`;
+    if (/PGRST202|42883|could not find the function|does not exist/i.test(raw)) return { ok: true, unavailable: true, leagueName: '', sports: [], alreadyMember: false, leagueId: '' };
+    if (/failed to fetch|networkerror|load failed|network request failed|fetch/i.test(raw) && !error.code) throw new InviteLookupError(raw, 'offline');
+    throw new InviteLookupError(raw, 'failed');
+  }
+  if (!data || typeof data !== 'object') throw new InviteLookupError('invite_preview answered nothing', 'failed');
+  if (data.ok === true) {
+    return { ok: true, leagueName: typeof data.league_name === 'string' ? data.league_name : '', sports: Array.isArray(data.sports) ? data.sports.filter((x) => typeof x === 'string') : [],
+      alreadyMember: data.already_member === true, leagueId: data.already_member === true && typeof data.league_id === 'string' ? data.league_id : '' };
+  }
+  return { ok: false, error: data.error === 'invite_throttled' ? 'invite_throttled' : 'invalid_code' };
 }
 
 /**
@@ -3060,7 +3107,7 @@ export async function getPlatformKv() {
     pushAliasModeLive: aliasRaw === true,
     pushNonpilotAliasOnly: nonpilotRaw === true,   // review (2026-10-08): 0049's second marker; either one satisfies the door interlock
     // DI-550 (RP-1, 2026-10-08) - who may create a league: 'everyone' ONLY when the row is exactly the string 'everyone'; a missing, unread or malformed row reads 'admins' (the fail-closed direction).
-    leagueCreationScope: scopeRaw === 'everyone' ? 'everyone' : 'admins',
+    leagueCreationScope: scopeRaw === 'everyone' || scopeRaw === 'approved' ? scopeRaw : 'admins',   // D2 lane 1 (DI-717): the third value; anything else reads 'admins'
   };
 }
 
@@ -3140,6 +3187,10 @@ let _leagueCreationOpenCache = false;
 let _leagueCreationScopeCache = 'admins';
 // The R1 codes the New League picker may offer (`platform_kv.offered_sports`). Unread means [] (offer nothing), the same fail-closed direction.
 let _offeredSportsCache = [];
+// D2 lane 1 (UN-505 / DI-718) - the SERVER's answer to "may THIS account create a league" (`can_create_league()`, migration 0065: the super admin, scope 'everyone', or scope 'approved' with the account's verified e-mail on the
+// list). Per account, so an identity change clears it. 'unknown' (not read yet) and 'failed' are NEVER an answer: the app treats them as "no" (never a false "approved"); 'missing' (0065 not applied) lets the caller fall back
+// to the rule that applied before the function existed.
+let _canCreateCache = { status: 'unknown', value: false };
 
 /** Synchronous, cached — never a network call. Empty string = no banner,
  *  which is also the correct answer before the first read ever lands
@@ -3166,6 +3217,33 @@ export function getCachedLeagueCreationScope() {
 /** N1 (DI-431 §1) — the R1 codes the picker may offer; `[]` before the first read. A COPY, so a caller cannot mutate the cache. */
 export function getCachedOfferedSports() {
   return [..._offeredSportsCache];
+}
+/** D2 lane 1 (DI-718) - synchronous, cached, never a network call: `{ status: 'unknown' | 'ready' | 'missing' | 'failed', value }`. `value` is true ONLY when status is 'ready' and the server said true. */
+export function getCachedCanCreateLeague() {
+  return { status: _canCreateCache.status, value: _canCreateCache.status === 'ready' && _canCreateCache.value === true };
+}
+/**
+ * D2 lane 1 (UN-505 / DI-718) - asks the server once: `can_create_league()` returns a boolean and nothing else (no table is exposed). Signed in with Supabase mode and a client, else nothing is asked and the cache is
+ * left as it was. The answer is dropped when the account changed while it was in flight. A missing function (0065 not applied: PGRST202 / 42883) is 'missing'; any other failure is 'failed' and is logged: neither is
+ * ever read as "approved". Never throws. Returns the cache.
+ */
+export async function refreshCanCreateLeague() {
+  if (getAuthMode() !== 'supabase') return getCachedCanCreateLeague();
+  const client = ensureClient();
+  const uid = _accountUserId;
+  if (!client || !uid) return getCachedCanCreateLeague();
+  let next;
+  try {
+    const { data, error } = await client.rpc('can_create_league');
+    if (error) {
+      const code = String(error.code || '');
+      next = (code === 'PGRST202' || code === '42883' || /could not find the function|does not exist/i.test(String(error.message || ''))) ? { status: 'missing', value: false } : { status: 'failed', value: false };
+      if (next.status === 'failed') console.warn('[auth] can_create_league lookup failed - the creation control stays absent', error);
+    } else next = { status: 'ready', value: data === true };
+  } catch (e) { console.warn('[auth] can_create_league lookup failed - the creation control stays absent', e); next = { status: 'failed', value: false }; }
+  if (_accountUserId !== uid) return getCachedCanCreateLeague();   // the account changed mid-flight: this answer is not for the person now signed in
+  _canCreateCache = next;
+  return getCachedCanCreateLeague();
 }
 
 /**
@@ -3259,7 +3337,7 @@ export async function refreshMaintenanceBannerCache() {
     _maintenanceBannerCache = kv.maintenanceBanner || '';
     _signupsOpenCache = kv.signupsOpen !== false;
     _leagueCreationOpenCache = kv.leagueCreationOpen === true;
-    _leagueCreationScopeCache = kv.leagueCreationScope === 'everyone' ? 'everyone' : 'admins';
+    _leagueCreationScopeCache = kv.leagueCreationScope === 'everyone' || kv.leagueCreationScope === 'approved' ? kv.leagueCreationScope : 'admins';
     _offeredSportsCache = Array.isArray(kv.offeredSports) ? [...kv.offeredSports] : [];
   } catch (e) {
     console.warn('[auth] maintenance banner read failed — keeping the last-known value', e);
@@ -3278,6 +3356,7 @@ export function _resetMaintenanceBannerCacheForTest() {
   _leagueCreationOpenCache = false;
   _leagueCreationScopeCache = 'admins';
   _offeredSportsCache = [];
+  _canCreateCache = { status: 'unknown', value: false };
   _maintenanceBannerLoading = false;
   _maintenanceBannerAttempted = false;
 }
@@ -3307,6 +3386,7 @@ export function clearMaintenanceBannerCacheOnIdentityChange() {
   _leagueCreationOpenCache = false;   // N1 — an identity change re-arms the CLOSED default, never leaves the previous account's open door showing
   _leagueCreationScopeCache = 'admins';   // DI-550 - and the narrow scope, so a previous account's 'everyone' never shows the card to the next one
   _offeredSportsCache = [];
+  _canCreateCache = { status: 'unknown', value: false };   // D2 lane 1 (DI-718): the previous account's answer never shows the next one a creation control
   _maintenanceBannerAttempted = false;
 }
 
@@ -4026,9 +4106,17 @@ export class AccountDeleteRefusedError extends Error {
  * render as DI-340's one loud "couldn't delete" copy — never a silent
  * success.
  */
+let _beforeAccountDelete = null;
+/**
+ * D2 lane 1 (DI-775): one hook that runs BEFORE the account-deletion Edge Function. The profile photo is a Storage object, and a SQL cascade does not delete a Storage object, so the client removes it
+ * (and clears the path) first. app.js registers it; it is best effort (it never throws and never holds the deletion for longer than its own timeout), so a Storage hiccup cannot stop a deletion.
+ */
+export function onBeforeAccountDelete(fn) { _beforeAccountDelete = typeof fn === 'function' ? fn : null; }
+
 export async function deleteOwnAccount() {
   const client = ensureClient();
   if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  if (_beforeAccountDelete) { try { await _beforeAccountDelete(); } catch (e) { console.warn('[auth] the pre-deletion hook failed', e); } }
   const { data, error } = await client.functions.invoke('account-delete');
   if (error) {
     // F-6 — the Edge Function's own named refusal reasons (e.g.
@@ -4342,11 +4430,6 @@ export const _removeLocalKeysWithPrefixForTest = _removeLocalKeysWithPrefix;
  * change either.)
  *
  * WHAT IS KEPT, AND WHY EACH ONE:
- *   • `cfbp_site_unlocked` — the SITE PIN gate. It records that this DEVICE got
- *     through the front door, not who is behind it; it holds no league content
- *     and identifies nobody. Sweeping it would make every handover and every
- *     Sign Out re-prompt for a PIN the new player is about to be given anyway,
- *     for no privacy gain.
  *   • `cfbp_auth_mode_last_known` — SEC F1-R1's fail-CLOSED memory of the last
  *     authMode a successful config read established. Its entire job is to be
  *     readable when the network is not; clearing it is what would make a failed
@@ -4380,7 +4463,6 @@ export const _removeLocalKeysWithPrefixForTest = _removeLocalKeysWithPrefix;
  */
 const DEVICE_CLEAR_PREFIX = 'cfbp_';
 const _CLEAR_KEEP_KEYS = Object.freeze([
-  'cfbp_site_unlocked',            // js/storage.js KEYS.SITE_UNLOCK — the device got through the front door; identifies nobody
   'cfbp_auth_mode_last_known',     // js/auth.js LAST_AUTH_MODE_KEY — the fail-CLOSED mode memory; must survive to do its job
   'cfbp_backend_config',           // js/backend.js — repo-shipped url/token, identical on every device (AD-05)
   'cfbp_supabase_active_league',   // js/auth.js ACTIVE_LEAGUE_KEY — A9's exemption; signOut() clears it separately
@@ -4666,8 +4748,6 @@ export function clearDeviceLocalSessionData({ mode = 'handover' } = {}) {
   // unmentioned. The authoritative list is `_CLEAR_KEEP_KEYS` above, each entry
   // justified beside itself; what follows is the same list in prose plus the two
   // non-localStorage exemptions, and nothing else survives:
-  //   • `cfbp_site_unlocked` — the device got through the front door; it holds
-  //     no content and identifies nobody.
   //   • `cfbp_auth_mode_last_known` — the fail-CLOSED mode memory (SEC F1-R1);
   //     clearing it is what would let a failed config read select 'pins'.
   //   • `cfbp_backend_config` — repo-shipped, identical on every device (AD-05);
@@ -5160,7 +5240,7 @@ export function _resetAuthForTest() {
   _lastNotifiedIdentity = null;
   _identityBatchDepth = 0;
   _identityBatchPending = false;
-  _cfg = { authMode: 'pins', supabaseUrl: '', supabaseAnonKey: '' };
+  _cfg = { authMode: 'local', supabaseUrl: '', supabaseAnonKey: '' };
   _configReadLanded = false;              // SECURITY A-1-R — per-PAGE, so per-scenario
   try { localStorage.removeItem(AUTH_STORAGE_KEY); } catch {}
   try { localStorage.removeItem(LAST_AUTH_MODE_KEY); } catch {}

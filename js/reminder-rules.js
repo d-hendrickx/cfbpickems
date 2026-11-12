@@ -62,6 +62,7 @@
  */
 
 import { buildCopy } from './notify-copy.js';
+import { slateFact } from './slate-name.js';
 
 // -- Constants -- MUST match backend/notifyServer.mjs (and, through it,
 // backend/Code.gs) verbatim. notifytest.mjs [30] pins this. --
@@ -231,7 +232,7 @@ export function computeReminderPlan({
         const remaining = totalGames - (completedByPlayer[p.playerId] || 0);
         if (remaining <= 0) continue;   // a player with zero remaining never receives this
         const dedupKey = `PICKS_REMINDER|${week.weekId}|${th.key}|${p.playerId}`;
-        const cp = buildCopy('PICKS_REMINDER', { remainingPicks: remaining, weekN: week.weekNumber, timeUntilLock: th.key }, dedupKey);
+        const cp = buildCopy('PICKS_REMINDER', { remainingPicks: remaining, weekN: week.weekNumber, ...slateFact(week), timeUntilLock: th.key }, dedupKey);
         remindersPlan.push({
           playerId: p.playerId,
           dedupKey,
@@ -263,13 +264,13 @@ export function computeReminderPlan({
       let copyEvent, meta;
       if (!nonSubmitterNames.length) {
         copyEvent = 'PICKS_LOCKING_SOON_ALL_IN';
-        meta = { weekN: week.weekNumber, totalPlayers: active.length };
+        meta = { weekN: week.weekNumber, ...slateFact(week), totalPlayers: active.length };
       } else if (nameNonSubmitters) {
         copyEvent = 'PICKS_LOCKING_SOON';
-        meta = { weekN: week.weekNumber, timeUntilLock: '1h', namedNonSubmitters: nonSubmitterNames.join(', '), submittedCount, totalPlayers: active.length };
+        meta = { weekN: week.weekNumber, ...slateFact(week), timeUntilLock: '1h', namedNonSubmitters: nonSubmitterNames.join(', '), submittedCount, totalPlayers: active.length };
       } else {
         copyEvent = 'PICKS_LOCKING_SOON_COUNT_ONLY';
-        meta = { weekN: week.weekNumber, timeUntilLock: '1h', submittedCount, totalPlayers: active.length };
+        meta = { weekN: week.weekNumber, ...slateFact(week), timeUntilLock: '1h', submittedCount, totalPlayers: active.length };
       }
       const cp = buildCopy(copyEvent, meta, lockingSoonDedupBase);
       lockingSoonPlan = {
@@ -299,7 +300,7 @@ export function computeReminderPlan({
     for (const p of nonSubmitters) {
       const remaining = totalGames - (completedByPlayer[p.playerId] || 0);
       const dedupKey = `PICKS_REMINDER_MANUAL|${week.weekId}|${runId}|${p.playerId}`;
-      const cp = buildCopy('PICKS_REMINDER', { remainingPicks: remaining, weekN: week.weekNumber, timeUntilLock: 'now' }, dedupKey);
+      const cp = buildCopy('PICKS_REMINDER', { remainingPicks: remaining, weekN: week.weekNumber, ...slateFact(week), timeUntilLock: 'now' }, dedupKey);
       remindersPlan.push({
         playerId: p.playerId, dedupKey, threshold: 'manual', remaining,
         category: 'pickReminders', title: cp.title, body: cp.body,
@@ -310,8 +311,8 @@ export function computeReminderPlan({
     const manualDedup = `PICKS_REMINDER_MANUAL|${week.weekId}|${runId}|post`;
     const manualEvent = nameNonSubmitters ? 'PICKS_REMINDER_MANUAL' : 'PICKS_REMINDER_MANUAL_COUNT_ONLY';
     const manualMeta = nameNonSubmitters
-      ? { weekN: week.weekNumber, namedNonSubmitters: names.join(', '), submittedCount, totalPlayers: active.length }
-      : { weekN: week.weekNumber, submittedCount, totalPlayers: active.length };
+      ? { weekN: week.weekNumber, ...slateFact(week), namedNonSubmitters: names.join(', '), submittedCount, totalPlayers: active.length }
+      : { weekN: week.weekNumber, ...slateFact(week), submittedCount, totalPlayers: active.length };
     const cp = buildCopy(manualEvent, manualMeta, manualDedup);
     manualPost = {
       id: `sys_manual_PICKS_REMINDER_MANUAL_${week.weekId}_${runId}`,
@@ -451,7 +452,7 @@ export function cadenceReminderEntries({
     const remaining = totalGames - (completedByPlayer[p.playerId] || 0);
     if (remaining <= 0) continue;
     const dedupKey = `PICKS_REMINDER_CADENCE|${week.weekId}|${c}_${bucket}|${p.playerId}`;
-    const cp = buildCopy('PICKS_REMINDER', { remainingPicks: remaining, weekN: week.weekNumber, timeUntilLock: 'today' }, dedupKey);
+    const cp = buildCopy('PICKS_REMINDER', { remainingPicks: remaining, weekN: week.weekNumber, ...slateFact(week), timeUntilLock: 'today' }, dedupKey);
     entries.push({ playerId: p.playerId, dedupKey, threshold: `cadence:${c}`, remaining, category: 'pickReminders', title: cp.title, body: cp.body });
   }
   return entries;
@@ -622,8 +623,9 @@ export function liveNotFinalizedDue({ week, now = Date.now() }) {
  *  so the assembler and notify-copy.js's ALLOWED_META_KEYS agree by
  *  construction rather than by two authors remembering the same list. */
 function commissionerOpsMeta(category, item) {
-  if (category === 'SLATE_NOT_BUILT') return { weekN: item.weekN, n: item.n };
-  return { weekN: item.weekN };
+  const slate = item.slate ? { slate: item.slate } : {};   // D2 lane 2 (item 7): a game night is named by its label
+  if (category === 'SLATE_NOT_BUILT') return { weekN: item.weekN, ...slate, n: item.n };
+  return { weekN: item.weekN, ...slate };
 }
 
 /**
@@ -725,11 +727,11 @@ export function computeCommissionerOpsPlan({ weeks, games, now = Date.now(), act
   for (const week of scoped) {
     if (!week || week.dataSourceMode === 'demo') continue;
     const slate = slateNotBuiltDue({ week, now, weeksHistory });
-    if (slate) items.push({ category: 'SLATE_NOT_BUILT', weekId: week.weekId, weekN: week.weekNumber, n: slate.n, dayBucket: slate.dayBucket });
+    if (slate) items.push({ category: 'SLATE_NOT_BUILT', weekId: week.weekId, weekN: week.weekNumber, ...slateFact(week), n: slate.n, dayBucket: slate.dayBucket });
     const draftPast = draftPastOpenDue({ week, now, weeksHistory });
-    if (draftPast) items.push({ category: 'DRAFT_PAST_OPEN', weekId: week.weekId, weekN: week.weekNumber, dayBucket: draftPast.dayBucket });
+    if (draftPast) items.push({ category: 'DRAFT_PAST_OPEN', weekId: week.weekId, weekN: week.weekNumber, ...slateFact(week), dayBucket: draftPast.dayBucket });
     const noLock = openNoLockTimeDue({ week, games, now });
-    if (noLock) items.push({ category: 'OPEN_NO_LOCK_TIME', weekId: week.weekId, weekN: week.weekNumber, dayBucket: noLock.dayBucket });
+    if (noLock) items.push({ category: 'OPEN_NO_LOCK_TIME', weekId: week.weekId, weekN: week.weekNumber, ...slateFact(week), dayBucket: noLock.dayBucket });
   }
   // LIST 2 — UNBOUNDED, this detector only. See the exemption's reasoning
   // in this function's header: the finalize nudge's subject is always an
@@ -737,7 +739,7 @@ export function computeCommissionerOpsPlan({ weeks, games, now = Date.now(), act
   for (const week of weeksHistory) {
     if (!week || week.dataSourceMode === 'demo') continue;
     const liveNF = liveNotFinalizedDue({ week, now });
-    if (liveNF) items.push({ category: 'LIVE_NOT_FINALIZED', weekId: week.weekId, weekN: week.weekNumber, dayBucket: liveNF.dayBucket });
+    if (liveNF) items.push({ category: 'LIVE_NOT_FINALIZED', weekId: week.weekId, weekN: week.weekNumber, ...slateFact(week), dayBucket: liveNF.dayBucket });
   }
   return items.map((it) => {
     const dedupKey = `${it.category}|${it.weekId}|${it.dayBucket}`;

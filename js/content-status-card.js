@@ -56,6 +56,7 @@ export const STATUS_COPY = Object.freeze({
   RETRY: 'Retry',
   REFRESH: 'Refresh',
   NEAR_CAP: 'Nearing the monthly cap.',
+  PICTURES_NONE: 'No story has had a picture in 24 hours.',   // D2 DI-1097 (W-111): the warning state's second sentence
   groups: Object.freeze({
     news: 'News publishers', sports: 'Sports data', feed: 'Home-card synthesis', routes: 'SCRIBE routes', lookup: 'Source lookup', callouts: 'Deadline callouts', scan: 'Moment scan',
   }),
@@ -111,6 +112,39 @@ export function agoWord(iso, nowMs) {
   if (m < 90) return `${m} min ago`;
   if (m < 48 * 60) return `${Math.round(m / 60)} h ago`;
   return `${Math.round(m / 1440)} d ago`;
+}
+
+// ─── D2 DI-1097 (W-111, RG-362's observability gap): "Pictures: 31 of 40 stories in the last 24 hours." ─────────────────────────────────────────────────────────────────────
+// One quiet line under the news rows (platform admins' read-only card, Admin > Data; never Home). The count is made ON THE DEVICE from a read of `news_articles` (id, image_url,
+// published_at, the newest 500; RLS already narrows it to stories that are not hidden and whose source is on the registry's enabled list): m = stories published in the last 24 hours, n = those
+// with a picture address. content_status() is unchanged and there is no migration. A read that fails or returns nothing, or a window with no story, shows NO line: never an error, never a made-up count.
+export const PICTURES_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** From this many stories in the window, none of them pictured is a warning rather than a number. */
+export const PICTURES_WARN_MIN_STORIES = 10;
+/** `{ n, m }` from the rows of the read, or null when there is nothing honest to say. Pure; `nowMs` is the caller's clock. A story from the future (clock skew) or older than 24 hours is not in the window. */
+export function countNewsPictures(rows, nowMs) {
+  if (!Array.isArray(rows) || !Number.isFinite(nowMs)) return null;
+  let m = 0, n = 0;
+  for (const r of rows) {
+    if (!r || typeof r !== 'object') continue;
+    const t = typeof r.published_at === 'string' ? Date.parse(r.published_at) : NaN;
+    if (!Number.isFinite(t) || t > nowMs || nowMs - t > PICTURES_WINDOW_MS) continue;
+    m++;
+    if (typeof r.image_url === 'string' && r.image_url.indexOf('https://') === 0) n++;
+  }
+  return m > 0 ? { n, m } : null;
+}
+/** The line's HTML, or '' for nothing to say. Numbers cross `numHtml`, text crosses `escHtml`; nothing from a story is displayed. */
+export function picturesLineHTML(counts, { escHtml, numHtml: numHtmlIn } = {}) {
+  if (!counts || !Number.isFinite(counts.n) || !Number.isFinite(counts.m) || counts.m <= 0) return '';
+  const esc = typeof escHtml === 'function' ? escHtml : String;
+  const numHtml = typeof numHtmlIn === 'function' ? numHtmlIn : (v) => String(Number(v));   // named numHtml so the XSS sweep reads every number as coerced (xsstest [9c-1g])
+  const warn = counts.m >= PICTURES_WARN_MIN_STORIES && counts.n === 0;
+  return join([
+    `<p class="content-status-pictures${warn ? ' content-status-pictures--warn' : ''}" id="content-status-pictures" data-pictures-n="${numHtml(counts.n)}" data-pictures-m="${numHtml(counts.m)}">`,
+    warn ? join(['Pictures: ', numHtml(counts.n), ' of ', numHtml(counts.m), '. ', esc(STATUS_COPY.PICTURES_NONE)]) : join(['Pictures: ', numHtml(counts.n), ' of ', numHtml(counts.m), counts.m === 1 ? ' story' : ' stories', ' in the last 24 hours.']),
+    '</p>',
+  ]);
 }
 
 /** The meaning shown for a code (never the raw string). */
@@ -172,7 +206,7 @@ export function renderStatusRow(r, { escHtml, nowMs, icon } = {}) {
  * The card body. `state`: { data (the RAW rpc answer or null), loaded, loading, error ('unavailable' | 'failed' | null), attempted }, `nowMs` the caller's clock.
  * Loading with nothing cached is a skeleton (no spinner); a refresh keeps the cached rows and repaints when the answer lands.
  */
-export function renderContentStatusBody({ state = {}, escHtml, icon, nowMs = Date.now() } = {}) {
+export function renderContentStatusBody({ state = {}, escHtml, icon, nowMs = Date.now(), numHtml } = {}) {
   const esc = typeof escHtml === 'function' ? escHtml : String;
   const norm = state.loaded ? normalizeContentStatus(state.data) : { ok: false, rows: [] };
   if (state.error && !state.loaded) {
@@ -193,7 +227,12 @@ export function renderContentStatusBody({ state = {}, escHtml, icon, nowMs = Dat
   }
   if (!norm.rows.length) return `<p class="text-muted text-sm">${esc(STATUS_COPY.EMPTY)}</p>`;
   const stale = state.error ? `<p class="text-xs mb-sm admin-ai-loss" role="alert">${esc(STATUS_COPY.UNREADABLE)}</p>` : '';
-  return `${stale}<div class="scribe-route-list" id="content-status-list">${norm.rows.map((r) => renderStatusRow(r, { escHtml: esc, nowMs, icon })).join('')}</div>
+  // D2 DI-1097: the pictures line sits straight under the LAST news row (rows are sorted by severity, so the news rows are not always together); no news row, or nothing honest to say, no line
+  const pics = picturesLineHTML(countNewsPictures(state.pictureRows, nowMs), { escHtml: esc, numHtml });
+  let lastNews = -1;
+  norm.rows.forEach((r, i) => { if (r.group === 'news') lastNews = i; });
+  const rowsHtml = norm.rows.map((r, i) => renderStatusRow(r, { escHtml: esc, nowMs, icon }) + (pics && i === lastNews ? pics : '')).join('');
+  return `${stale}<div class="scribe-route-list" id="content-status-list">${rowsHtml}</div>
     <div class="scribe-route-actions"><button type="button" class="btn btn-ghost btn-sm" id="content-status-refresh-btn">${esc(STATUS_COPY.REFRESH)}</button></div>`;
 }
 

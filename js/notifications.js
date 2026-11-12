@@ -293,6 +293,8 @@ export const SERVER_JOB_NAMES = Object.freeze([
   // readers stay the same decision (notifytest [28-9] compares the lists element for element).
   'scribeCallout',
   'scribeScan',
+  // D2 lane 4 batch 2 (DI-1078) - the team-facts collector. No client relay to suppress; on this list so the Background Jobs card renders its switch (notifytest compares the lists in order).
+  'teamFacts',
 ]);
 
 /** The pure decision, over a settings blob that has already been read. Exported

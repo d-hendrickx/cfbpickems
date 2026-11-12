@@ -304,7 +304,8 @@ export function renderLeaguesHome({
     <div class="league-card-list">
       ${cards}
       ${renderCreateLeagueStubCard({ escHtml, icon, open: createOpen === true })}
-    </div>`;
+    </div>
+    <button type="button" class="btn btn-ghost btn-block league-join-code-btn" data-action="league-join-with-code">Join with a code</button>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -419,7 +420,7 @@ export function makeShowComingSoonToast(showToastFn) {
 // render a second, unlabeled "cfb" card beside "College Football". Unknown
 // codes pass through unchanged (their label falls back to the raw key, as
 // before) rather than being dropped.
-const DB_SPORT_TO_ESPN_KEY = Object.freeze({ cfb: 'college-football', nfl: 'nfl' });
+const DB_SPORT_TO_ESPN_KEY = Object.freeze({ cfb: 'college-football', nfl: 'nfl', nhl: 'nhl' });
 // DI-417 (UN-372, 2026-09-28) — EXPORTED. The header league pill needs the
 // exact same db-code -> ESPN-key normalization (`getCurrentWeek()?.sport`
 // carries the short DB code, e.g. 'cfb') so it can look up

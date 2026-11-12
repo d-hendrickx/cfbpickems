@@ -173,6 +173,7 @@
      2.63:1 on Marble; now 6.20 and 4.89). */
   --bg-game:#FFFFFF;
   --border:#D3CBBB;--border-strong:#C3BAA5;
+  --scrim:rgba(0,0,0,.45);   /* the dim behind a centred dialog (D2 lane 1: the school picker's web layout); a constant, no theme repoints it */
   --text-primary:#14110E;--text-secondary:#4A3F35;--text-muted:#6B5F53;
   --win:#1A7A3F;--win-bg:#EBF7F0;
   --loss:#B91C1C;--loss-bg:#FEF2F2;
@@ -200,8 +201,13 @@
      treatment directly, not via an indirection token, in the original DI-360
      Phase 1 pass — nd/push/live are the ones Phase 1 explicitly deferred). */
   --nd-text:var(--nd);
-  --push-text:var(--push);
-  --live-text:var(--live);
+  /* D2 sweep, DI-1098 (W-117, UN-396): the two faint TEXT colours made readable. The fills, borders and the live pulse keep --push / --live (the live-versus-final visual
+     language does not change); only the text roles move. Light mode, measured: --live-text #C81E1E on --live-bg #FEF2F2 5.24:1 (was #DC2626, 4.41), on white 5.74, on the page
+     #E8E4DC 4.52; --push-text #7A5A12 on --push-bg #FDF8EC 6.01:1 (was #C09B3A, 2.48), on white 6.37, on the page 5.02. Dark blocks below are untouched (5.12 and 5.4 already). */
+  --push-text:#7A5A12;
+  --live-text:#C81E1E;
+  /* D2 sweep polish (reviewer note): the unread badge red as ONE token (was a hardcoded #D62828 in three rules). No theme overrides the unread badges, so it is the same value everywhere. */
+  --unread:#D62828;
   /* SB-06 (2026-09-30, bugfixer) — the live TRAILING pick's text colour, the
      one live/final text colour Phase 2 missed: it was a hardcoded `#9a3030`
      on .pick-cell.pick-live-trailing and .dc-chip-live-trailing, never
@@ -501,6 +507,10 @@ body.theme-neutral {
    cards still lift; one muted text value (#5A4F44, J2) that clears AA on the page AND on the cards. */
 body.theme-paper {
   --bg:#DDD7CA;
+  /* D2 sweep, DI-1098: Paper's page is darker than Munera Light's (#DDD7CA vs #E8E4DC), so the two semantic TEXT colours need one step more on it: --live-text #B01919
+     (4.88:1 on the page, 6.40 on its fill, 7.00 on white) and --push-text #6F5210 (5.07 / 6.86 / 7.27). The root values would read 4.00:1 and 4.44:1 here. */
+  --live-text:#B01919;
+  --push-text:#6F5210;
   --border:#CFC6B4;
   --border-strong:#B9AF99;
   --text-muted:#5A4F44;
@@ -950,7 +960,7 @@ body.theme-graphite {
     --nd-bg:#F5F0EA;
     --nd-text:#6E5F50;
     --push-bg:#FDF8EC;
-    --push-text:#C09B3A;
+    --push-text:#7A5A12;
     --live-bg:#FEF2F2;
     --live-text:#C81E1E;
     --warning-text:#7A6000;
@@ -1323,7 +1333,7 @@ body.theme-paper[data-color-scheme="dark"] {
   --nd-bg:#F5F0EA;
   --nd-text:#6E5F50;
   --push-bg:#FDF8EC;
-  --push-text:#C09B3A;
+  --push-text:#7A5A12;
   --live-bg:#FEF2F2;
   --live-text:#C81E1E;
   --warning-text:#7A6000;
@@ -2008,7 +2018,9 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(calc(100% + var(--nav-pi
 /* Pick buttons */
 .pick-buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
 .pick-btn{padding:14px 10px;border-radius:var(--btn-radius);border:2px solid var(--border);background:var(--bg-card-alt);color:var(--text-secondary);font-family:'Oswald',sans-serif;font-size:.92rem;font-weight:600;cursor:pointer;transition:all var(--transition);text-align:center;line-height:1.25;min-height:56px;-webkit-tap-highlight-color:transparent;word-break:break-word}
-.pick-btn:active:not(:disabled){transform:scale(.97)}
+/* D2 sweep, DI-1095 (W-163, T-05's rule: Drew 2026-10-19 "cards should stay the same unless you're engaging into them") — this control sits in scrolling content, so on a touch screen its press is js/nav-gestures.js bindPressState()'s [data-pressed] (a finger at rest, or a tap), never :active, which WebKit holds from touch-down through a scroll; :active keeps the press only where the primary pointer hovers. */
+@media (hover:hover){.pick-btn:active:not(:disabled){transform:scale(.97)}}
+.pick-btn[data-pressed="true"]:not(:disabled){transform:scale(.97)}
 .pick-btn.selected{border-color:var(--maroon);background:var(--maroon-pale);color:var(--maroon-text)}
 .pick-btn.locked-win{border-color:var(--win);background:var(--win-bg);color:var(--win)}
 .pick-btn.locked-loss{border-color:var(--loss);background:var(--loss-bg);color:var(--loss)}
@@ -2100,7 +2112,6 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(calc(100% + var(--nav-pi
    hardcoded #F5F3EE that left the "—" dash light-on-light in every Dark look)
    instead of adding a new hardcoded color (CONVENTIONS #13). No animation — chat surfaces use the static variant
    (locked, v0.17.2, same rule that keeps thread-header colors static). */
-.badge-beta{background:var(--bg-input);color:var(--text-muted);border:1px solid var(--border)}
 /* D1 third pass (P-8, sportgeometrytest [7]): the three borders below were LITERALS (CONVENTIONS #13) on the D1 surfaces that show these badges (the league overview's cards, the Comm All
    sports card). Each keeps its literal as the fallback for an engine without color-mix() and then takes its colour FROM ITS OWN TOKEN at the same 30%: in Light it is the same rgba
    (--win #1A7A3F, --live #DC2626), and in Dark it now follows the Dark token instead of staying a light-theme green / red on a dark card. */
@@ -3159,8 +3170,8 @@ label[for="week-show-history"],label:has(#week-show-history){
    by-hand WCAG 1.4.11 (non-text/graphical-object contrast, 3.0:1 floor —
    the correct criterion for an ICON, not 1.4.3's 4.5:1 text floor) audit,
    spelled out so the next edit here doesn't have to re-derive it:
-     - `--live`/`--live-text` (#DC2626 in light mode) on #8C1515 measures
-       ~1.95:1 — a genuine fail, a trap this file's usual "reuse the
+     - `--live` (#DC2626 in light mode; `--live-text` is #C81E1E since DI-1098,
+       about the same here) on #8C1515 measures ~1.95:1 — a genuine fail, a trap this file's usual "reuse the
        semantic token" reflex would walk straight into on THIS background.
      - `rgba(255,255,255,.75)` (matches `.header-meta`'s own existing,
        already-shipped dim-white-on-this-exact-maroon convention) ≈ 5.81:1.
@@ -4023,6 +4034,49 @@ body.theme-graphite .dc-status.dc-live-detail{color:var(--loss)}
 }
 @keyframes cc-tab-panel-in { from { opacity: 0 } to { opacity: 1 } }
 
+/* ════════════════════════════════════════════════════════════════════════
+   D2 lane 6 (UN/PF-528, DI-758 / DI-763, approved mockup d2-admin-ia.html) — THE COMMISSIONER LEAGUE TAB. The tab (key `rules`) is one card of 52 pt rows; each row opens a PAGE inside
+   the tab with a back chevron. Every card of the tab carries data-comm-tab="rules" (RG-10) and data-league-page; the panel's data-league-view says which page shows, so a page is a state
+   flip, not a re-render: typed text, collapsed cards and focus survive. TOKENS ONLY; motion reads the shared --motion-* / --ease-native tokens (press 97% at --motion-fast, a page
+   push at --motion-nav); Reduce Motion drops the slide and keeps nothing. BREATHING ROOM: 16 pt from the screen edge (the panel's own padding), 8 pt inside a group, 24 pt between groups.
+   ════════════════════════════════════════════════════════════════════════ */
+#page-commissioner[data-comm-active="rules"] .admin-section[data-league-page] { display: none; }
+#page-commissioner[data-comm-active="rules"][data-league-view="list"]          .admin-section[data-league-page="list"],
+#page-commissioner[data-comm-active="rules"][data-league-view="rules"]         .admin-section[data-league-page="rules"],
+#page-commissioner[data-comm-active="rules"][data-league-view="sports"]        .admin-section[data-league-page="sports"],
+#page-commissioner[data-comm-active="rules"][data-league-view="alma"]          .admin-section[data-league-page="alma"],
+#page-commissioner[data-comm-active="rules"][data-league-view="notifications"] .admin-section[data-league-page="notifications"],
+#page-commissioner[data-comm-active="rules"][data-league-view="advanced"]      .admin-section[data-league-page="advanced"] { display: block; }
+#page-commissioner[data-comm-active="rules"]:not([data-league-view="list"]) .admin-section[data-league-page]:not([data-league-page="list"]) { animation: comm-league-push var(--motion-nav) var(--ease-native); }
+#page-commissioner[data-comm-active="rules"][data-league-view="list"] .admin-section.comm-league-bar { display: none; }
+@keyframes comm-league-push { from { opacity: 0; transform: translateX(24px) } to { opacity: 1; transform: none } }
+@media (prefers-reduced-motion: reduce) {
+  /* the SAME selector as the push rule above (a :not() counts for its argument), or the slide would win the cascade and Reduce Motion would be ignored */
+  #page-commissioner[data-comm-active="rules"]:not([data-league-view="list"]) .admin-section[data-league-page]:not([data-league-page="list"]) { animation: none; }
+}
+/* the rows card is the grouped-list card the League Settings page already defines (.ls-card: padding 0, the rows carry the 16 pt inset themselves) */
+.cl-row, .cl-static-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px 16px; font: inherit; color: var(--text-primary); text-align: left; }
+.cl-row { background: none; border: none; cursor: pointer; -webkit-tap-highlight-color: transparent; transition: transform var(--motion-fast) ease-out; }
+.cl-row:active { transform: scale(.97); }
+.cl-row + .cl-row, .cl-static-row + .cl-static-row { border-top: 1px solid var(--border); }
+.cl-row-label { flex: 1; min-width: 0; font-weight: 600; font-size: .96rem; overflow-wrap: anywhere; }
+.cl-row-value { max-width: 50%; font-size: .875rem; color: var(--text-muted); text-align: right; overflow-wrap: anywhere; }
+.cl-row-chevron { display: flex; align-items: center; color: var(--text-muted); }
+.cl-row-chevron svg { width: 16px; height: 16px; }
+.cl-fact-row { display: flex; align-items: center; gap: 12px; min-height: 44px; }
+.cl-fact-row + .cl-fact-row { border-top: 1px solid var(--border); }
+.cl-fact-icon { display: flex; align-items: center; color: var(--win); }
+.cl-fact-icon svg { width: 16px; height: 16px; }
+.admin-section.comm-league-bar { margin-bottom: 16px; }
+.comm-league-bar-row { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.comm-league-back { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; min-height: 44px; min-width: 44px; padding: 0 12px 0 0; background: none; border: none; color: var(--maroon-text); font: inherit; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; transition: transform var(--motion-fast) ease-out; position: relative; z-index: 1; }
+.comm-league-back:active { transform: scale(.97); }
+.comm-league-back-glyph { display: flex; align-items: center; }
+.comm-league-back-glyph svg { width: 20px; height: 20px; }
+/* the title FLOWS after the back button (never over it) and truncates: at 375 pt and at large text "Alma maters & home teams" cannot reach the "‹ League" target */
+.comm-league-bar-title { flex: 1; min-width: 0; margin: 0; padding: 0 8px; text-align: center; font-size: 1.05rem; font-weight: 700; outline: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (prefers-reduced-motion: reduce) { .cl-row, .comm-league-back { transition: none; } }
+
 /* DI-320/344/345 (T-12/T-35), UX Revamp wiring pass 2 (2026-09-25) — the
    Admin panel's own tab visibility, same shape as the Commissioner panel's
    rule immediately above (WIRING_CHECKLIST_B_092526.md §2's own spec).
@@ -4298,6 +4352,16 @@ body.native-shell .picks-week-nav{justify-content:center}
    matched-duration fallback timer), two motion-system buckets — not three
    ad-hoc durations. */
 #page-picks,#page-dashboard,#page-commissioner,#week-wizard-pager{transform:translateX(var(--week-swipe-x,0px))}
+/* T-02 / FB-042 (Drew, 2026-10-17, TestFlight build 4: "The swiping between weeks on ios between picks and dashboard is very choppy and not smooth, same with pulling control
+   center from the left") — the per-move cost of the two finger-tracked drags. (1) `--week-swipe-x` (here) and `--cc-drag-progress` (#control-center) were INHERITED custom
+   properties, as every unregistered one is: each touchmove's write restyled the element's whole subtree (engine trace: every element of the Picks page, about 110 of the
+   drawer's, per move). Both are read only by the element they are written on, so they are registered non-inherited and a move restyles one element. (2) A transform written
+   by script on an element with no layer of its own is repainted on every move; for exactly the span of the drag and its slide the element is promoted (will-change), and it
+   lets the layer go at rest (no permanent GPU memory). Engine-measured in iosgesturetest [T02]; frame times on an iPhone are a device check. */
+@property --week-swipe-x{syntax:'*';inherits:false}
+@property --cc-drag-progress{syntax:'*';inherits:false}
+#page-picks[data-week-swipe-dragging="true"],#page-dashboard[data-week-swipe-dragging="true"],#page-commissioner[data-week-swipe-dragging="true"],#week-wizard-pager[data-week-swipe-dragging="true"],
+#page-picks[data-week-swipe-animating],#page-dashboard[data-week-swipe-animating],#page-commissioner[data-week-swipe-animating],#week-wizard-pager[data-week-swipe-animating]{will-change:transform}
 /* SB-23 (Drew, 2026-10-01: "it looks jumpy because you can still scroll
    vertically… vertical should stay static") — the week swipe's axis lock was
    visual only: its listeners are passive (RG-TBD-A4), so locking horizontal
@@ -4315,6 +4379,13 @@ body.native-shell .picks-week-nav{justify-content:center}
       has already begun panning. Engine-measured in weekpagertest.mjs; the
       iPhone's own scroll view is a device check. */
 #page-picks,#page-dashboard,#page-commissioner,#week-wizard-pager{touch-action:pan-y pinch-zoom}
+/* T-01 / FB-037 (Drew, 2026-10-17, TestFlight build 4: "When you swipe left to open control center you shouldnt be able to scroll up and down on the underlying page it
+   should remain static") — the same rule 1, for the tabs where the control center opens from ANYWHERE (DRAWER_ZONE_TABS in js/nav-gestures.js names the other three). SB-05's
+   lock below lands only once the drawer claims the drag (8 px of travel), and the engine starts its own scroll on its own thread in that same instant: on these four pages the
+   thumb's vertical drift scrolled the page before the lock (engine-measured 10 px; more on a phone, where the lock reaches the native scroll view later). Here a drag that
+   BEGINS horizontally is never a scroll, at the browser's own layer, from the first pixel; a vertical drag scrolls natively and sideways scrollers inside re-enable their own
+   panning, exactly as on Picks. iosgesturetest [T01]. */
+#page-home,#page-leaderboard,#page-rules,#page-admin{touch-action:pan-y pinch-zoom}
 html:has(#page-picks[data-week-swipe-dragging="true"]),html:has(#page-dashboard[data-week-swipe-dragging="true"]),html:has(#page-commissioner[data-week-swipe-dragging="true"]){overflow:hidden}
 html:has(#page-picks[data-week-swipe-dragging="true"]),html:has(#page-dashboard[data-week-swipe-dragging="true"]),html:has(#page-commissioner[data-week-swipe-dragging="true"]),
 html:has(#page-picks[data-week-swipe-dragging="true"]) body,html:has(#page-dashboard[data-week-swipe-dragging="true"]) body,html:has(#page-commissioner[data-week-swipe-dragging="true"]) body{overscroll-behavior:none}
@@ -4369,13 +4440,18 @@ html:has(#page-picks[data-week-swipe-dragging="true"]) body,html:has(#page-dashb
 .spread-card-q{font-weight:600;color:var(--text-primary)}
 .spread-card-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
 .spread-card-btn{min-height:44px;flex:1 1 120px;transition:transform var(--motion-fast) var(--ease-native)}
-.spread-card-btn:active{transform:scale(.97)}
-.spread-find-btn:active:not(:disabled){transform:scale(.97)}
+@media (hover:hover){.spread-card-btn:active{transform:scale(.97)}}
+.spread-card-btn[data-pressed="true"]{transform:scale(.97)}   /* DI-1095: see .pick-btn */
+@media (hover:hover){.spread-find-btn:active:not(:disabled){transform:scale(.97)}}
+.spread-find-btn[data-pressed="true"]:not(:disabled){transform:scale(.97)}
 /* Review N-3 (2026-10-14): the error note's "Try again" is a tap target like the others - 44 pt tall, on its own line under the sentence (8 pt below it), centred, with the shared press. */
 .spread-find-note .spread-try-btn{display:block;margin:8px auto 0;min-height:44px;transition:transform var(--motion-fast) var(--ease-native)}
-.spread-find-note .spread-try-btn:active{transform:scale(.97)}
+@media (hover:hover){.spread-find-note .spread-try-btn:active{transform:scale(.97)}}
+.spread-find-note .spread-try-btn[data-pressed="true"]{transform:scale(.97)}
+/* These three also carry .btn, whose own `.btn:active:not(:disabled)` 97% would still shrink them under a scrolling thumb: on a touch screen :active alone does nothing to them (only a press, [data-pressed], scales them). */
+@media (hover:none){.btn.spread-card-btn:active:not([data-pressed="true"]),.btn.spread-find-btn:active:not(:disabled):not([data-pressed="true"]),.btn.spread-try-btn:active:not([data-pressed="true"]){transform:none}}
 /* The block's 16 pt bottom margin is the gap to whatever follows it: the Step 3 list, and the Games list's segmented control (the summary entry, DI-W71.2, sits under the summary line - not in a card). */
-@media (prefers-reduced-motion:reduce){.spread-card{transition:none}.spread-card-btn,.spread-find-btn,.spread-find-note .spread-try-btn{transition:none}.spread-card-btn:active,.spread-find-btn:active:not(:disabled),.spread-find-note .spread-try-btn:active{transform:none}}
+@media (prefers-reduced-motion:reduce){.spread-card{transition:none}.spread-card-btn,.spread-find-btn,.spread-find-note .spread-try-btn{transition:none}.spread-card-btn:active,.spread-find-btn:active:not(:disabled),.spread-find-note .spread-try-btn:active,.spread-card-btn[data-pressed="true"],.spread-find-btn[data-pressed="true"]:not(:disabled),.spread-find-note .spread-try-btn[data-pressed="true"]{transform:none}}
 
 /* ── Historical read-only week view ── */
 .hist-game-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid var(--bg-input);flex-wrap:wrap}
@@ -4498,7 +4574,7 @@ html:has(#page-picks[data-week-swipe-dragging="true"]) body,html:has(#page-dashb
    needed for descendant content that paints past that curve, and nothing
    here does (`.nav-item`'s own background is `none`, so there is no
    square-cornered child fill to clip at the pill's rounded edges). */
-.nav-unread{position:absolute;top:-3px;left:calc(50% + 4px);background:#D62828;color:#fff;font-size:.6rem;font-weight:700;border-radius:9px;min-width:16px;height:16px;display:flex;align-items:center;justify-content:center;padding:0 4px;line-height:1}
+.nav-unread{position:absolute;top:-3px;left:calc(50% + 4px);background:var(--unread);color:#fff;font-size:.6rem;font-weight:700;border-radius:9px;min-width:16px;height:16px;display:flex;align-items:center;justify-content:center;padding:0 4px;line-height:1}
 
 /* ── Chat page ── */
 /* The Chat page's 16 pt screen-edge inset (W-57 review N4) is now the app-wide phone inset: see the `--page-pad` note on the <= 480 block (W-57 Part 2). No Chat-only rule remains. */
@@ -4511,23 +4587,47 @@ html:has(#page-picks[data-week-swipe-dragging="true"]) body,html:has(#page-dashb
    sized buttons is worse than the original problem. */
 .chat-pill{flex:0 0 auto;border:1px solid var(--bg-input);background:var(--bg-card);border-radius:999px;padding:6px 12px;min-height:44px;box-sizing:border-box;font-size:.78rem;font-weight:600;color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;gap:6px;transition:transform var(--motion-fast) var(--ease-native)}
 .chat-pill.active{background:var(--maroon);border-color:var(--maroon);color:var(--on-accent)}
-.chat-unread-dot{background:#D62828;color:#fff;font-size:.6rem;font-weight:700;border-radius:9px;min-width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;padding:0 4px}
+.chat-unread-dot{background:var(--unread);color:#fff;font-size:.6rem;font-weight:700;border-radius:9px;min-width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;padding:0 4px}
 .chat-pill.active .chat-unread-dot{background:var(--on-accent);color:var(--maroon)}
 /* D1 (DI-553, W-57; Drew D-48) — the Locker Room's SPORT FILTER PILLS and the Chat touched-screen audit that rides with them.
    • 44 pt: `.chat-pill` was min-height:40px (the CONVENTIONS #17 floor); the sport row is 44 pt and every existing pill (Locker Room, Records, game pills) is raised to match in the same change, so
      the two rows read as one family. The 8 pt gap between pills is unchanged.
    • Touch feedback: every pill now compresses to 97% on press and returns over --motion-fast (Interaction Principles, Button Behavior); Reduce Motion turns the movement off.
-   • `.chat-sport-pills` is the sport row: the same horizontal scroller as `.chat-pills-scroll` (momentum kept, no scrollbar, scrolls past the edge at the largest text size) with 8 pt ABOVE it, so it
-     never touches the header's divider (Breathing Room: >= 8 pt from a divider) and 8 pt below it before the next row. It exists only in a league that runs two or more sports.
+   • (the sport row, `.chat-sport-pills`, was REPLACED by the scope button's menu in D2 sweep W-128: see `.chat-topbar` and `.chat-scope-*` below)
    • `.chat-scroll-fade`: the list's 150 ms fade-in after a sport-pill tap (--motion-fast, the small-feedback range); Reduce Motion has no animation to run. */
-.chat-sport-pills{display:flex;gap:8px;overflow-x:auto;padding:8px 0 8px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
-.chat-sport-pills::-webkit-scrollbar{display:none}
 .chat-sport-glyph{display:inline-flex;align-items:center;flex:0 0 auto;width:1.25em;height:1.25em}   /* em, not px: the glyph grows with Dynamic Type exactly as the label beside it does (16 px at the default pill size) */
+/* D2 sweep W-128 (DI-793): the SCOPE BUTTON ("{league} · {sport}") and its anchored menu. The button is a 44 pt target holding a 36 pt pill; the league name ellipsizes (the whole pill is 140 pt at most) and the sport suffix never does,
+   so an ellipsis can never empty the label. A dot (8 pt, the unread colour) says there is unread in a sport it is not showing. The menu opens under the row, on the page's own surface, 8 pt in every group, rows 44 pt with the
+   check on the selected one; it is inserted in place straight after the row and positioned at its own static spot (absolute, no offsets: it takes no room, so nothing under it moves) and fades in over --motion-fast (none under Reduce Motion). The press is [data-pressed] (DI-1095's rule), never :active alone. */
+.chat-scope-btn{flex:0 1 auto;min-width:0;max-width:140px;min-height:44px;padding:0;border:0;background:none;font:inherit;color:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;display:inline-flex;align-items:center;transition:transform var(--motion-fast) var(--ease-native)}
+.chat-scope-pill{display:inline-flex;align-items:center;gap:0;min-width:0;max-width:100%;height:36px;box-sizing:border-box;padding:0 12px;border:1px solid var(--border-strong);border-radius:999px;background:var(--bg-card);font-size:.78rem;font-weight:600;color:var(--text-primary);position:relative}
+.chat-scope-league{min-width:2ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-scope-sport{flex:0 0 auto;white-space:pre;color:var(--text-secondary)}
+.chat-scope-caret{flex:0 0 auto;margin-left:8px;font-size:.7em;color:var(--text-secondary)}
+.chat-scope-dot{position:absolute;top:-2px;right:-2px;width:8px;height:8px;border-radius:50%;background:var(--unread);border:1.5px solid var(--bg)}
+.chat-scope-btn[aria-expanded="true"] .chat-scope-pill{border-color:var(--maroon-text)}
+@media (hover:hover){.chat-scope-btn:active{transform:scale(.97)}}
+.chat-scope-btn[data-pressed="true"]{transform:scale(.97)}   /* DI-1095: see .pick-btn */
+.chat-scope-menu{position:absolute;z-index:70;min-width:224px;max-width:min(320px,100%);box-sizing:border-box;padding:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow-card);animation:chat-scope-in var(--motion-fast) var(--ease-native)}
+@keyframes chat-scope-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.chat-scope-section+.chat-scope-section{margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
+.chat-scope-heading{padding:0 8px 4px;font-size:.7rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--text-secondary)}
+.chat-scope-opt{display:flex;align-items:center;gap:8px;width:100%;min-height:44px;box-sizing:border-box;padding:0 8px;border:0;border-radius:10px;background:none;font:inherit;font-size:.9rem;color:var(--text-primary);text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:transform var(--motion-fast) var(--ease-native)}
+.chat-scope-opt.is-selected{font-weight:700}
+.chat-scope-opt-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-scope-check,.chat-scope-chevron{flex:0 0 auto;display:inline-flex;width:18px;height:18px;color:var(--maroon-text)}
+.chat-scope-chevron{color:var(--text-secondary)}
+.chat-scope-check svg,.chat-scope-chevron svg{width:100%;height:100%}
+@media (hover:hover){.chat-scope-opt:active{transform:scale(.97)}}
+.chat-scope-opt[data-pressed="true"]{transform:scale(.97)}   /* DI-1095: see .pick-btn */
+@media (prefers-reduced-motion:reduce){.chat-scope-btn,.chat-scope-opt{transition:none}.chat-scope-btn:active,.chat-scope-btn[data-pressed="true"],.chat-scope-opt:active,.chat-scope-opt[data-pressed="true"]{transform:none}.chat-scope-menu{animation:none}}
+#chat-search-btn svg{width:20px;height:20px}
 .chat-sport-glyph svg{width:100%;height:100%}
-.chat-pill:active{transform:scale(.97)}
+@media (hover:hover){.chat-pill:active{transform:scale(.97)}}
+.chat-pill[data-pressed="true"]{transform:scale(.97)}   /* DI-1095: see .pick-btn */
 @keyframes chatSportFade{from{opacity:0}to{opacity:1}}
 .chat-scroll-fade{animation:chatSportFade var(--motion-fast) var(--ease-native)}
-@media (prefers-reduced-motion:reduce){.chat-pill{transition:none}.chat-pill:active{transform:none}.chat-scroll-fade{animation:none}}
+@media (prefers-reduced-motion:reduce){.chat-pill{transition:none}.chat-pill:active,.chat-pill[data-pressed="true"]{transform:none}.chat-scroll-fade{animation:none}}
 /* UN-110 (batch 4, v0.17.5) — REVERSES UN-104's SAME-DAY "keep the header,
    make it unobtrusive" answer. Authoritative; do not re-litigate (see the
    ledger's UN-110 row). Drew: chat should take up the majority of the visible
@@ -4910,7 +5010,8 @@ body[data-tab="chat"] .page-wrapper{min-height:100dvh}
 @keyframes chatQuickReactPop{from{opacity:0;transform:translateY(4px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
 @media (prefers-reduced-motion:reduce){.chat-quick-react-row{animation:none}}
 .chat-quick-react-btn{font-size:1rem;transition:transform var(--motion-fast,150ms) ease-out}
-.chat-quick-react-btn:active{transform:scale(.97)}
+@media (hover:hover){.chat-quick-react-btn:active{transform:scale(.97)}}
+.chat-quick-react-btn[data-pressed="true"]{transform:scale(.97)}   /* DI-1095: see .pick-btn */
 /* CONVENTIONS #17 — was padding:2px 4px, well under the 40px tap-target
    floor. Bumped now that this row is reachable by touch at all. */
 .chat-act{background:none;color:var(--text-primary);border:none;font-size:.85rem;cursor:pointer;border-radius:8px;padding:0;min-width:40px;min-height:40px;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box}
@@ -5240,8 +5341,15 @@ body.native-shell #add-sport-sheet .chat-sheet-header{position:relative;padding-
    the global maroon header right above it. It's ONE compact, quiet line now:
    smaller type, tighter padding, no subtitle. It lives inside
    .chat-sticky-stack below, so it docks with the pills/view-header as a unit. */
-.chat-header-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0 6px;border-bottom:1px solid var(--border)}
-.chat-header-row h2{font-size:1.05rem;color:var(--maroon-text);margin:0;display:flex;align-items:center;gap:8px}
+/* D2 sweep W-128 (UN-533 / PF-533, DI-792…795; Drew FB-046: "More room for the Locker Room conversation"). The title row ("Chat" + BETA, 44 pt), the sport row (44 pt) and the thread row (44 pt) were
+   three stacked pieces above the thread, about 150 pt at 375 pt wide. They are now ONE row, 60 pt with its 8 pt above and 8 below: the sync chip (only on a
+   sync error: the loud-fail rule keeps its place), the scope button (league and sport), the thread pills, or the search bar in the same slot, and the search button. 8 pt between the pieces,
+   16 pt from the screen edge (the page's own inset), every target 44 pt. There is no divider under the row (Breathing Room: a line never rests on the card below it); the thread card's own edge separates the row from the thread. */
+.chat-topbar{display:flex;align-items:center;gap:8px;padding:8px 0;min-width:0}
+.chat-topbar>*{flex:0 0 auto}
+.chat-topbar .chat-pills-scroll{flex:1 1 auto;min-width:0;padding:0}
+.chat-topbar .chat-search-row{flex:1 1 auto;min-width:0;padding:0}
+.chat-topbar.is-searching #chat-search-btn{display:none}   /* the search bar's own close (the cross) is the way out while it is open; the toggle stays in the markup */
 .chat-pending{font-size:.7rem}
 /* UN-104: the compact header row + filter pills + optional per-game view
    header dock TOGETHER as one unit at the top of the page.
@@ -5253,7 +5361,7 @@ body.native-shell #add-sport-sheet .chat-sheet-header{position:relative;padding-
    column (see that block, above) — flex order does the stacking, no offset
    math needed. #page-chat ONLY: .page-wrapper/.main-content are shared by
    every other tab. */
-#page-chat .chat-sticky-stack{background:var(--bg);padding-bottom:2px}
+#page-chat .chat-sticky-stack{background:var(--bg);padding-bottom:0}   /* D2 sweep polish: the row itself now has its own 8 pt below (was 6 + this 2), so the stack still totals 60 pt */
 /* Offline banner + retention notice render ABOVE the sticky stack in normal
    flow (Drew's spec) — they push it down rather than floating separately.
    Retention notice (UN-8x) — above the sticky stack, in normal flow.
@@ -5672,7 +5780,7 @@ body.native-shell #chat-thread-sheet .chat-sheet-header{position:relative;paddin
    34px, under the 40px tap-target floor. These three are icon/short-label
    buttons a player taps directly (search toggle, clear, close), so they get
    an explicit floor rather than inheriting the smaller default. */
-#chat-search-btn{min-height:40px;min-width:40px}
+#chat-search-btn{min-height:44px;min-width:44px}   /* D2 sweep W-128 (DI-794): it lives in the one 44 pt row now, so it takes the row's 44 (was 40) */
 #chat-search-close, #chat-search-clear{min-height:44px;min-width:44px}   /* W-57 audit (2026-10-08): the two buttons that live in the search row take the row's 44 pt; the header's 🔍 keeps its 40 */
 
 /* ── DI-168 — manual chat refresh button + status text ────────────────────
@@ -6281,6 +6389,9 @@ body.native-shell #chat-thread-sheet .chat-sheet-header{position:relative;paddin
   background:var(--bg-card-alt);color:var(--text-secondary)}
 .gr-status-onSlate{border-color:var(--win);background:var(--win-bg);color:var(--win)}
 .gr-status-withdrawn{color:var(--text-muted)}
+/* D2 lane 2 (DI-923): a request for a sport this build does not know reads as muted text, never an action; the sport code leads the commissioner's row when the league has two or more sports. */
+.gr-status-unrecognized{color:var(--text-muted);border-style:dashed}
+.gr-sport-code{display:inline-block;margin-right:4px;font-size:.68rem;font-weight:700;letter-spacing:.04em;color:var(--text-muted)}
 .gr-league{margin-top:10px;border-top:1px solid var(--border)}
 .gr-league-summary,.gr-comm-summary{display:flex;align-items:center;min-height:44px;cursor:pointer;
   font-family:'Oswald',sans-serif;font-size:.8rem;font-weight:600;letter-spacing:.03em;color:var(--maroon-text)}
@@ -6407,6 +6518,29 @@ body.native-shell::before{
   background:linear-gradient(to bottom,color-mix(in srgb,var(--bg) 78%,transparent) 0%,color-mix(in srgb,var(--bg) 62%,transparent) 55%,transparent 100%);
   z-index:90;pointer-events:none;
 }
+/* W-172 (2026-10-21, Drew's iPhone, TestFlight build 4) — the native header PINS and owns the band under the clock.
+   "the top banner where the time, floating island and wifi symbol live is black and should be a continuous color with the
+   header and then the screen should scroll behind them when scrolling". Root cause: on the native shell the header was held
+   at position:relative (RG-188, above: pinning it was "Drew's call to make"), so it scrolled away and left the band to the
+   SB-08 soft edge just above — the PAGE colour at 78-62%, which on every Night look is Ink #14110E: a black bar cut off from
+   the header, with the page barely visible through it. Drew's report is that call: the header stays at the top on the
+   native shell, its colour fills the band at every scroll offset, and the page scrolls behind both, the way a first-party
+   navigation bar behaves. Native only (body.native-shell is never set on the web; the web keeps the RG-188 hold).
+     - sticky, top 0: the header's own env(safe-area-inset-top) padding is the band; z-index 100 keeps it above the page,
+       the soft edge (90, which now only shows where the header is hidden: Chat) and .comm-tabbar (50, which scrolls under it);
+     - ::before: the header's colour continues one viewport ABOVE its top edge, so the rubber-band pull at the top of a page
+       (the shell turns WKWebView bounce back on) shows the header's colour under the clock, never --bg;
+     - the header's height, calc(inset + the 44pt row and its 10px padding + the chrome rule), clears the two things the
+       pinned header could otherwise cover: the Home "new posts" pill's sticky offset, and a scroll-margin on the page's
+       content so scrollIntoView() lands a section below the header, not behind it (not on Chat, which hides the header and
+       scrolls its thread in its own box). Written out in both rules rather than
+       as a token: a custom property declared on body.native-shell would sit outside the theme model (schoolthemetest
+       [F3]), and html:has() is reserved for page locks (overlayscrolltest G-css-1). statusbandtest [T1] pins both to the
+       measured header on every look. */
+body.native-shell .app-header{position:sticky;top:0}
+body.native-shell .app-header::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:100vh;background:var(--chrome-bg);pointer-events:none}
+body.native-shell .home-pill-slot{top:calc(env(safe-area-inset-top,0px) + 64px + var(--chrome-rule-w) + 8px)}
+body.native-shell:not([data-tab="chat"]) .main-content *{scroll-margin-top:calc(env(safe-area-inset-top,0px) + 64px + var(--chrome-rule-w))}
 /* SB-08 — the chrome token. SB-08 shipped a MINIMAL ALIAS here (:where(body){--chrome-bg:var(--maroon)}) "until SP-52 lands";
    SP-52 (DI-448 Table 1 / DI-454, Amendment A1.1) has landed and REPLACED that one line: --chrome-bg is now a real per-look token —
    a literal on :root (the Munera default, R1), set by each look's own block and by each school's Light block (the school's
@@ -6741,7 +6875,8 @@ body.native-shell .pick-chip{-webkit-touch-callout:none}
 .league-card-list{display:flex;flex-direction:column;gap:var(--gap)}
 .league-card{width:100%;text-align:left;cursor:pointer;font:inherit;color:inherit;
   transition:transform var(--motion-fast,150ms) ease-out}
-.league-card:active{transform:scale(.98)}
+@media (hover:hover){.league-card:active{transform:scale(.98)}}
+.league-card[data-pressed="true"]{transform:scale(.98)}   /* DI-1095: see .pick-btn */
 .league-card-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
 .league-card-name{font-family:'Oswald',sans-serif;font-size:1rem;font-weight:600;color:var(--text-primary)}
 .league-card-bottom{display:flex;align-items:center;justify-content:space-between;gap:8px}
@@ -6781,7 +6916,8 @@ body.native-shell .pick-chip{-webkit-touch-callout:none}
 .sport-card{width:100%;text-align:left;cursor:pointer;font:inherit;color:inherit;
   display:flex;align-items:center;justify-content:space-between;gap:10px;
   transition:transform var(--motion-fast,150ms) ease-out}
-.sport-card:active{transform:scale(.98)}
+@media (hover:hover){.sport-card:active{transform:scale(.98)}}
+.sport-card[data-pressed="true"]{transform:scale(.98)}
 .sport-card-label{display:flex;align-items:center;gap:8px;font-family:'Oswald',sans-serif;
   font-size:.95rem;font-weight:600;color:var(--text-primary)}
 .sport-card-icon{display:flex;align-items:center;color:var(--maroon-text)}
@@ -6795,7 +6931,8 @@ body.native-shell .pick-chip{-webkit-touch-callout:none}
   color:var(--text-primary);background:var(--bg-card);border:1px solid var(--border);
   border-radius:var(--card-radius);padding:12px 16px;display:flex;align-items:center;
   justify-content:space-between;gap:10px;transition:transform var(--motion-fast,150ms) ease-out}
-.league-standings-row:active{transform:scale(.98)}
+@media (hover:hover){.league-standings-row:active{transform:scale(.98)}}
+.league-standings-row[data-pressed="true"]{transform:scale(.98)}
 .league-standings-row svg{width:18px;height:18px;color:var(--text-muted)}
 
 /* DI-315 — League Standings (single-sport) view. */
@@ -7058,6 +7195,7 @@ body.native-shell .pick-chip{-webkit-touch-callout:none}
 /* Fix round 1, finding 8 — a live drag must never fight a CSS transition;
    the JS drag binder sets [data-dragging="true"] for the duration. */
 #control-center[data-dragging="true"]{transition:none}
+#control-center[data-dragging="true"],#control-center[data-phase="opening"],#control-center[data-phase="closing"]{will-change:transform}   /* T-02 / FB-042: on its own layer for the drag and the slide only (see --week-swipe-x's note) */
 @media (prefers-reduced-motion:reduce){
   #control-center{transition:none}
 }
@@ -7522,6 +7660,18 @@ body.native-shell #league-create-sheet .chat-sheet-header{position:relative;padd
 .lc-on-row:last-child{border-bottom:none}
 .lc-on-ic{display:flex;color:var(--win)}
 .lc-on-ic svg{width:18px;height:18px}
+.lc-on-row-todo{color:var(--text-muted)}
+.lc-on-tick{flex:none;width:18px;height:18px;border-radius:50%;border:1.5px solid var(--border-strong)}
+/* The zero-league landing for an approved creator (D2 lane 1, UN-505 / DI-718; mockup d2-invite-join frame 7): the hero, one primary, "or", two code rows. 16 pt at the edge, 16 pt between groups, 8 pt inside a group. */
+.lc-approved{display:flex;flex-direction:column;gap:16px;padding:16px 0}
+.lc-approved .lc-hero{padding:0 8px}
+.lc-approved-cta{display:flex;flex-direction:column;gap:8px}
+.lc-approved-closed{margin:0;padding:0 16px;font-size:.78rem;line-height:1.5;text-align:center;color:var(--text-muted)}
+.lc-approved-or{text-align:center;font-size:.8125rem;color:var(--text-muted)}
+.lc-approved .ls-card{display:flex;flex-direction:column}
+.lc-approved-row{display:flex;align-items:center;justify-content:center;width:100%;min-height:48px;padding:0 16px;background:none;border:0;border-bottom:1px solid var(--border);font:inherit;font-size:.9375rem;font-weight:600;color:var(--maroon-text);cursor:pointer;transition:background var(--motion-fast) ease-out}
+.lc-approved-row:last-child{border-bottom:0}
+.lc-approved-row:active{background:var(--bg-input)}
 
 /* Invite (frame 5) */
 .lc-codecard{text-align:center;padding:18px 12px;margin-bottom:12px;background:var(--bg-card);border:1px solid var(--border);
@@ -7892,6 +8042,295 @@ body.native-shell #ls-sheet .chat-sheet-header{position:relative;padding-top:14p
   #ls-sheet{animation:lc-fade var(--motion-fast) ease-out}
 }
 /* ── end SP-53 LEAGUE SETTINGS (leaguesettingsuitest [6t] slices the block between its opening banner and this line, so a neighbouring block never lands in its token scan) ── */
+/* ── SUBMISSION STATES — D2 lane 1 (UN-531 / PF-531, DI-781..788) ═══════════════════════════════════════════════════════════════════════════════════════
+   One language for every save: idle -> Saving… (16 pt spinner, disabled) -> Saved (check, greyed, disabled) | Try Again + the sentence under it. Tokens only; the 8 pt grid; no layout jump
+   (the status line takes space only when it has a sentence). Disabled buttons never animate (.btn:active:not(:disabled) already excludes them). */
+.ss-btn{gap:8px}
+.ss-spin{width:16px;height:16px;flex:0 0 auto;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:ss-spin .8s linear infinite}
+@keyframes ss-spin{to{transform:rotate(360deg)}}
+.ss-ic{display:inline-flex;width:16px;height:16px;flex:0 0 auto}
+.ss-ic svg{width:16px;height:16px}
+.ss-btn[data-ss-state="pending"]:disabled{opacity:.85}
+.ss-btn[data-ss-state="saved"]:disabled{opacity:1;background:var(--bg-card-alt);color:var(--text-secondary);box-shadow:inset 0 0 0 1px var(--border)}
+.ss-status{display:block}
+.ss-msg{display:flex;align-items:flex-start;gap:8px;margin-top:8px;font-size:.8125rem;line-height:1.35;color:var(--text-secondary)}
+.ss-msg:empty{display:none}
+.ss-msg[data-ss-state="failed"]{color:var(--loss)}
+.ss-msg[data-ss-state="saved"]{color:var(--win)}
+.ss-msg-ic{display:inline-flex;width:16px;height:16px;flex:0 0 auto;margin-top:1px}
+.ss-msg-ic svg{width:16px;height:16px}
+.ss-msg .ss-spin{margin-top:1px}
+.ss-msg .ss-ic{margin-top:1px}
+.ss-msg-text{min-width:0;overflow-wrap:anywhere}
+.ss-retry{min-height:44px;padding:0 8px;background:none;border:0;color:var(--maroon-text);font:inherit;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast, .15s) ease}
+.ss-retry:active{transform:scale(.97)}
+@media (prefers-reduced-motion:reduce){
+  .ss-spin{animation:none;border-right-color:currentColor;opacity:.7}
+  .ss-retry{transition:none}
+  .ss-retry:active{transform:none}
+}
+.chat-prefs .chat-prefs-row.chat-prefs-ss[hidden]{display:none}
+.chat-prefs .chat-prefs-ss .ss-status{width:100%}
+.chat-prefs .chat-prefs-ss .ss-msg{margin-top:0}
+.ss-fb-status{min-height:24px;padding:0 8px}
+.ss-fb-status .ss-msg{margin-top:0}
+/* ═══ end SUBMISSION STATES ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+/* ── SCHOOL PICKER + COLLEGE FOOTBALL TEAMS — D2 lane 1 (UN-530 DI-779; UN-507A DI-1011..1014) ═══════════════════════════════════════════════════════════════
+   A school field is a 48 pt row (the school, a chevron) that pushes ONE sheet: nav bar, search at the top (16 pt+ text: WKWebView never zooms on focus), 48 pt rows, None first, the current school
+   checked. Phones: a full-screen level that slides in from the right (--motion-nav, --ease-native); >= 600 px: a centred modal that fades. Reduce Motion: no slide. Tokens only; 8-pt grid. */
+.school-field{display:block}
+.school-field-btn{width:100%;display:flex;align-items:center;gap:8px;min-height:48px;padding:0 16px;background:var(--bg-input);border:1.5px solid var(--border);border-radius:var(--btn-radius);color:var(--text-primary);font-family:'Inter',sans-serif;font-size:.95rem;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:transform var(--motion-fast) ease-out,border-color var(--transition)}
+.school-field-btn:active:not(:disabled){transform:scale(.97)}
+.school-field-btn:disabled{opacity:.55;cursor:not-allowed}
+.school-field-v,.school-field-ph{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.school-field-ph{color:var(--text-muted)}
+.school-field-chev{display:inline-flex;width:16px;height:16px;flex:none;color:var(--text-muted)}
+.school-field-chev svg{width:16px;height:16px}
+.cfb-teams{display:flex;flex-direction:column;gap:16px}   /* groups 16 pt apart, a flex gap and not a margin on one child (Breathing Room) */
+.cfb-teams .form-group{margin-bottom:0}
+.cfb-desig[hidden]{display:none}
+.cfb-notes{display:flex;flex-direction:column;gap:8px}
+.cfb-helper,.cfb-guard{margin:0}
+.chat-prefs .chat-prefs-row.chat-prefs-row-block{display:block}
+.chat-prefs .chat-prefs-row-block .form-group:last-of-type{margin-bottom:0}
+.school-picker{position:fixed;inset:0;z-index:8200;display:flex;flex-direction:column;background:var(--bg);transform:translateX(calc(var(--sp-drag,0) * 100%));transition:transform var(--motion-nav) var(--ease-native)}
+.school-picker.is-entering,.school-picker.is-leaving{transform:translateX(100%)}
+.sp-panel{display:flex;flex-direction:column;flex:1;min-height:0;padding-top:env(safe-area-inset-top,0px);background:var(--bg)}
+.sp-nav{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;min-height:48px;padding:0 8px;background:var(--bg-card);border-bottom:1px solid var(--border)}
+.sp-cancel{justify-self:start;min-height:44px;padding:0 8px;border:0;background:none;color:var(--maroon-text);font-family:'Inter',sans-serif;font-size:1rem;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:transform var(--motion-fast) ease-out}
+.sp-cancel:active{transform:scale(.97)}
+.sp-title{margin:0;font-family:'Inter',sans-serif;font-size:1rem;font-weight:700;text-align:center;color:var(--text-primary)}
+.sp-search{display:flex;align-items:center;gap:8px;margin:8px 16px;padding:0 4px 0 12px;min-height:44px;background:var(--bg-input);border:1.5px solid var(--border);border-radius:var(--btn-radius)}
+.sp-search:focus-within{border-color:var(--maroon)}
+.sp-search-ic{display:inline-flex;width:16px;height:16px;flex:none;color:var(--text-muted)}
+.sp-search-ic svg{width:16px;height:16px}
+.sp-input{flex:1;min-width:0;min-height:44px;border:0;background:transparent;color:var(--text-primary);font-family:'Inter',sans-serif;font-size:1rem;outline:none;-webkit-appearance:none;appearance:none}
+.sp-clear{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;flex:none;border:0;background:none;color:var(--text-muted);cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.sp-clear[hidden]{display:none}
+.sp-clear svg{width:18px;height:18px}
+.sp-list{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--border)}
+.sp-row{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:48px;padding:0 16px;border:0;border-bottom:1px solid var(--border);background:var(--bg-card);color:var(--text-primary);font-family:'Inter',sans-serif;font-size:1rem;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.sp-row:active{background:var(--bg-card-alt)}
+.sp-row.is-selected{font-weight:700}
+.sp-row-label{min-width:0;overflow-wrap:anywhere}
+.sp-row-current{font-weight:400;color:var(--text-muted)}
+.sp-ck{display:inline-flex;width:20px;height:20px;flex:none;color:var(--maroon-text)}
+.sp-ck svg{width:20px;height:20px}
+.sp-note{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 16px;font-size:.8125rem;line-height:1.35;color:var(--text-secondary);background:var(--bg-card-alt);border-bottom:1px solid var(--border)}
+.sp-retry-link{min-height:44px;padding:0 8px;border:0;background:none;color:var(--maroon-text);font:inherit;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.sp-more{padding:16px;font-size:.8125rem;color:var(--text-muted);text-align:center}
+.sp-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:32px 24px;text-align:center;color:var(--text-primary)}
+.sp-empty h3{margin:0;font-size:1rem}
+.sp-empty p{margin:0;font-size:.875rem;color:var(--text-secondary)}
+.sp-empty .btn{width:auto;padding:0 24px}
+.sp-empty-ic{display:inline-flex;width:32px;height:32px;color:var(--text-muted)}
+.sp-empty-ic svg{width:32px;height:32px}
+.sp-skel-row{display:flex;align-items:center;min-height:48px;padding:0 16px;border-bottom:1px solid var(--border);background:var(--bg-card)}
+.sp-skel-row .feed-skel-line{flex:1;max-width:60%}
+@media (min-width:600px){
+  .school-picker{align-items:center;justify-content:center;background:var(--scrim);transform:none;opacity:1;transition:opacity var(--motion-nav) var(--ease-native)}
+  .school-picker.is-entering,.school-picker.is-leaving{transform:none;opacity:0}
+  .sp-panel{flex:none;width:420px;max-width:calc(100vw - 32px);max-height:min(640px,86vh);padding-top:0;border-radius:16px;overflow:hidden;box-shadow:var(--shadow-card)}
+}
+@media (prefers-reduced-motion:reduce){
+  .school-picker{transition:none}
+  .school-field-btn,.sp-cancel{transition:none}
+  .school-field-btn:active:not(:disabled),.sp-cancel:active{transform:none}
+}
+/* ═══ end SCHOOL PICKER ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* ── PROFILE PHOTOS — D2 lane 1 (UN-530 / PF-530, DI-773..778) ════════════════════════════════════════════════════════════════════════════════════════════════
+   One avatar renderer (js/avatar.js) draws every person-avatar. With no photo it draws exactly what each call site drew before; with a photo it adds `.av` (positioned, clipped to the wrapper's own
+   round shape) and an <img> over the initials, so the initials show while the picture loads and on any failure. The Profile pane's 72 pt avatar is a button (Edit); the preview is a circle in the
+   shared action-sheet shell. Tokens only; 8-pt grid; the press is the ~97% compress; Reduce Motion drops it. */
+.av{position:relative;overflow:hidden}
+.av-img{position:absolute;top:0;right:0;bottom:0;left:0;width:100%;height:100%;object-fit:cover;border-radius:inherit;background:var(--bg-input);display:block}
+.cc-photo-row{display:flex;align-items:center;gap:16px;margin:0 0 16px}
+.cc-photo-btn{display:flex;flex-direction:column;align-items:center;gap:8px;min-width:72px;min-height:44px;padding:0;border:0;background:none;color:var(--maroon-text);font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.cc-photo-btn:active{transform:scale(.97)}
+.cc-photo-av{width:72px;height:72px;border-radius:50%;background:var(--gold);color:var(--on-gold);display:flex;align-items:center;justify-content:center;font-family:'Oswald',sans-serif;font-weight:700;font-size:1.5rem;flex:none}
+.cc-photo-edit{font-size:.875rem;font-weight:600}
+.cc-photo-note{flex:1;min-width:0;font-size:.8125rem;line-height:1.35;min-height:1.35em}
+.fb-report-link{display:inline-flex;align-items:center;min-height:44px;padding:0;border:0;background:none;color:var(--maroon-text);font:inherit;font-size:.78rem;font-weight:600;text-decoration:underline;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.av-file-input{position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none}
+.av-prev-grp{display:flex;flex-direction:column;align-items:stretch;gap:8px;padding-bottom:8px}
+.av-prev-circle{width:160px;height:160px;border-radius:50%;overflow:hidden;margin:8px auto 8px;background:var(--bg-input);flex:none}
+.av-prev-grp .ss-btn{width:auto;margin:0 16px}
+.av-prev-grp .ss-status{margin:0 16px}
+.av-prev-circle img{width:100%;height:100%;object-fit:cover;display:block}
+@media (prefers-reduced-motion:reduce){
+  .cc-photo-btn{transition:none}
+  .cc-photo-btn:active{transform:none}
+}
+/* ═══ end PROFILE PHOTOS ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════�
+
+/* ── INVITE AND JOIN — D2 lane 1 (UN-506 / PF-506, DI-724..731) ═══════════════════════════════════════════════════════════════════════════════════════════
+   The approved mockup d2-invite-join.html, frame by frame: a SHEET with a grab handle and a nav bar ("Cancel | Join League", "Invite Friends | Done"), then a body of cards, a hero, banners and helpers, and a
+   footer of buttons. It rides the shared action-sheet layer (.lc-scrim + .lc-actionsheet: the shell's entrance and scrim); this block gives .ij-sheet the mockup's sheet geometry (a bottom sheet from the screen
+   edge on a phone; from 600 px a centred 480 pt dialog) and styles what it holds. Breathing Room: 16 pt at the body's edges and inside a card row, 8 pt between its groups (a flex GAP, never a margin on one
+   child). Tokens only. Targets are 44 pt (the nav buttons, Paste, the row buttons) or 50 pt (the primary buttons). */
+.lc-actionsheet.ij-sheet{left:0;right:0;bottom:0;display:flex;flex-direction:column;max-height:92vh;max-height:92dvh;padding-bottom:env(safe-area-inset-bottom,0px);background:var(--bg);color:var(--text-primary);border-radius:16px 16px 0 0;overflow:hidden}
+.ij-formlayer{position:fixed;inset:0;z-index:8100}
+.ij-grab{flex:none;width:38px;height:5px;margin:8px auto 0;border-radius:3px;background:var(--border)}
+/* the grab handle works (reviewer BLOCK 1; Interaction Principles, Sheets): the sheet follows the finger (--ij-drag-y, 0..1, set on the layer by ijBindSheetSwipe in app.js) and settles back on the native
+   curve; the scrim lightens as it goes; a dismissed sheet's ghost (.ij-leaving: no id, click-through) slides off, or crossfades under Reduce Motion. The handle and the nav bar own the vertical drag. */
+.lc-actionsheet.ij-sheet{transform:translateY(calc(100% * var(--ij-drag-y,0)));transition:transform var(--motion-modal) var(--ease-native)}
+.lc-actionsheet.ij-sheet[data-dragging="true"]{transition:none}
+.ij-sheet .ij-grab,.ij-sheet .ij-nav{touch-action:none}
+[data-ij-swipe]>.lc-scrim{opacity:calc(1 - var(--ij-drag-y,0));transition:opacity var(--motion-nav) var(--ease-native)}
+[data-ij-swipe][data-dragging="true"]>.lc-scrim{transition:none}
+.ij-leaving{position:fixed;inset:0;z-index:8100;pointer-events:none}
+.ij-leaving[data-closing="fade"]{opacity:0;transition:opacity var(--motion-fast) linear}
+html:has(.ij-formlayer:not(.ij-leaving)){overflow:hidden}
+.ij-nav{position:relative;flex:none;display:flex;align-items:center;justify-content:space-between;min-height:56px;padding:0 8px;border-bottom:1px solid var(--border)}
+.ij-nav-t{position:absolute;left:72px;right:72px;text-align:center;font-size:1rem;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none;outline:none}
+.ij-nav-l,.ij-nav-r{position:relative;z-index:1;display:flex;min-width:44px}
+.ij-nav-r{justify-content:flex-end}
+.ij-nav-btn{display:flex;align-items:center;min-height:44px;min-width:44px;padding:0 8px;background:none;border:0;font:inherit;font-size:1rem;color:var(--maroon-text);cursor:pointer;transition:transform var(--motion-fast) ease-out,opacity var(--motion-fast) ease-out}
+.ij-nav-btn--r{justify-content:flex-end;font-weight:700}
+.ij-nav-btn:active{transform:scale(.97);opacity:.7}
+.ij-sheet .ij-body{display:flex;flex-direction:column;gap:8px;padding:16px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;min-height:0}
+.ij-sheet .ij-footer{display:flex;flex-direction:column;gap:8px;padding:8px 16px 16px;flex:none}
+.ij-sheet .ij-body .ij-footer{padding:8px 0 0}
+.ij-sheet .btn.btn-block{margin:0}
+.ij-text{border-color:transparent;background:none;color:var(--maroon-text);font-weight:600;min-height:44px}
+.ij-hero{display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px 0;text-align:center}
+.ij-seal{display:flex;align-items:center;justify-content:center;width:64px;height:64px;border-radius:50%}
+.ij-seal svg{width:32px;height:32px}
+.ij-seal--gold{background:var(--push-bg);color:var(--maroon-text)}
+.ij-seal--win{background:var(--win-bg);color:var(--win)}
+.ij-hero-t{margin:0;font-size:1.375rem;line-height:1.25;font-weight:700;color:var(--text-primary);overflow-wrap:anywhere;outline:none}
+.ij-hero-t .ij-skel{display:block;margin:0 auto}
+.ij-hero-s{margin:0;font-size:.875rem;color:var(--text-muted);overflow-wrap:anywhere}
+.ij-hero-s[hidden]{display:none}
+.ij-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--card-radius,14px);overflow:hidden}
+.ij-row{display:flex;align-items:center;gap:8px;width:100%;min-height:52px;padding:0 16px;border:0;border-bottom:1px solid var(--border);background:none;font:inherit;font-size:.9375rem;color:var(--text-primary);text-align:left}
+.ij-row:last-child{border-bottom:0}
+.ij-row-n{flex:1;min-width:0;font-weight:500}
+.ij-row-v{color:var(--text-muted);font-size:.875rem;overflow-wrap:anywhere}
+.ij-rotate-row{justify-content:center;color:var(--maroon-text);font-weight:600;cursor:pointer;transition:background var(--motion-fast) ease-out}
+.ij-rotate-row:active{background:var(--bg-input)}
+.ij-rotate-row:disabled{opacity:.4;cursor:default}
+.ij-accept{border-bottom:1px solid var(--border)}
+.ij-codecard{padding:16px;text-align:center}
+.ij-code-lab{font-size:.6875rem;text-transform:uppercase;letter-spacing:.12em;color:var(--gold-text);font-weight:700}
+.ij-code-v,.ij-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:700;letter-spacing:.14em;color:var(--text-primary)}
+.ij-code{margin:8px 0 16px;font-size:1.875rem;user-select:all;-webkit-user-select:all}
+.ij-code .ij-skel{display:block;width:60%;margin:8px auto}
+.ij-codebtns{display:flex;gap:8px;justify-content:center}
+.ij-codebtns .btn{width:auto;min-height:44px;padding:0 16px;display:inline-flex;align-items:center;gap:8px}
+.ij-ic{display:inline-flex;flex:none}
+.ij-ic svg{width:18px;height:18px}
+.ij-banner{display:flex;align-items:flex-start;gap:8px;padding:16px;border-radius:12px;font-size:.8125rem;line-height:1.5;outline:none}
+.ij-banner--err{background:var(--loss-bg);border:1px solid var(--loss);color:var(--loss);font-weight:600}
+.ij-banner--info{background:var(--push-bg);border:1px solid var(--push);color:var(--text-secondary)}
+.ij-helper{margin:0;font-size:.75rem;line-height:1.5;color:var(--text-muted);overflow-wrap:anywhere}
+.ij-error{color:var(--loss)}
+.ij-ready{margin:0;text-align:center;font-size:.875rem;font-weight:600;color:var(--win)}
+.ij-ready[hidden],.ij-helper[hidden]{display:none}
+.ij-field{display:flex;flex-direction:column;gap:8px}
+.ij-field-l{font-size:.8125rem;font-weight:600}
+.ij-input{display:flex;align-items:center;gap:8px;min-height:50px;padding:0 8px 0 16px;background:var(--bg-card);border:1.5px solid var(--border);border-radius:12px}
+.ij-input:focus-within{border-color:var(--gold)}
+.ij-input.is-error{border-color:var(--loss)}
+.ij-input-el{flex:1;min-width:0;align-self:stretch;min-height:44px;border:0;background:transparent;outline:none;font:inherit;font-size:1.0625rem;color:var(--text-primary);text-transform:uppercase}
+.ij-input-el::placeholder{text-transform:none;color:var(--text-muted)}
+.ij-paste{flex:none;min-height:44px;padding:0 8px;background:none;border:0;font:inherit;font-weight:600;color:var(--maroon-text);cursor:pointer;transition:transform var(--motion-fast) ease-out}
+.ij-paste:active{transform:scale(.97)}
+.ij-linkcode{margin:0;padding:8px 0;font-size:.875rem;color:var(--text-secondary)}
+.ij-sheet .btn.btn-sm{min-height:44px;padding:0 16px}
+.league-join-code-btn{margin-top:16px}
+.cc-teams-scope{margin:0 0 8px;font-size:.75rem;line-height:1.45;color:var(--text-muted);overflow-wrap:anywhere}   /* DI-1014: which league the college football teams apply to (8 pt above the control, a gap not a margin on the control) */
+@media (min-width:600px){
+  .lc-actionsheet.ij-sheet{left:50%;right:auto;top:50%;bottom:auto;width:min(480px,92vw);max-height:86vh;border-radius:14px;transform:translate(-50%,-50%);animation:lc-dialog-in var(--motion-modal) var(--ease-native)}
+  .ij-grab{display:none}
+}
+@media (min-width:600px) and (prefers-reduced-motion:reduce){ .lc-actionsheet.ij-sheet{animation:none} }
+@media (prefers-reduced-motion:reduce){ .lc-actionsheet.ij-sheet{transition:none} [data-ij-swipe]>.lc-scrim{transition:none} }
+/* ═══ end INVITE AND JOIN ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+/* ── ONBOARDING, ABOUT YOU, TIPS AND GETTING STARTED — D2 lane 1 (UN-507 / UN-507A, DI-732..756, DI-800, DI-1001..1010, DI-1031..1040) ═══════════════════════════════════════════════════════
+   One inline notice card for a tip (never an overlay), the Getting started card on Home, the onboarding sheet (the invite and join sheet's chrome: .ij-grab / .ij-nav / .ij-body / .ij-footer), the About you
+   fields and the Tips & Help pane. Breathing Room: 16 pt at every edge and inside a card, 8 pt between the members of one group (a flex GAP, never a margin on one child), groups 16 pt apart. Targets are
+   44 pt or more (Got it, Hide, a chip, a row). Press feels like every button (about 97%, 120 ms), the dismiss is 200 ms height-and-fade and a plain removal under Reduce Motion. Tokens only. */
+.tip-host:not(:empty){padding-top:16px}
+.tip-card{display:flex;align-items:flex-start;gap:8px;padding:16px;overflow:hidden;transition:opacity 200ms var(--ease-native),max-height 200ms var(--ease-native),padding 200ms var(--ease-native),margin 200ms var(--ease-native)}
+.tip-card .ob-ic{margin-top:2px;color:var(--gold-text)}
+.tip-copy{flex:1;min-width:0;margin:0;font-size:.875rem;line-height:1.5;color:var(--text-primary);overflow-wrap:anywhere}
+.tip-got{flex:none;min-width:44px;min-height:44px;margin:-8px -8px -8px 0;padding:0 8px;background:none;border:0;font:inherit;font-size:.875rem;font-weight:600;color:var(--maroon-text);cursor:pointer;transition:transform 120ms var(--ease-native)}
+.tip-got:active{transform:scale(.97)}
+.tip-card.is-leaving{opacity:0;max-height:0!important;padding-top:0;padding-bottom:0}
+.ob-ic{display:inline-flex;flex:none}
+.ob-ic svg{width:18px;height:18px}
+.gs-card{padding:0;overflow:hidden}
+.gs-head{display:flex;align-items:center;gap:8px;min-height:52px;padding:0 8px 0 16px}
+.gs-title{flex:1;min-width:0;margin:0;font-size:.9375rem;font-weight:700;color:var(--text-primary);overflow-wrap:anywhere}
+.gs-prog{flex:none;font-size:.8125rem;color:var(--text-muted)}
+.gs-hide{flex:none;min-width:44px;min-height:44px;padding:0 8px;background:none;border:0;font:inherit;font-size:.8125rem;font-weight:600;color:var(--maroon-text);cursor:pointer;transition:transform 120ms var(--ease-native)}
+.gs-hide:active{transform:scale(.97)}
+.gs-row{display:flex;align-items:center;gap:8px;width:100%;min-height:52px;padding:0 16px;border:0;border-top:1px solid var(--border);background:none;font:inherit;text-align:left;color:var(--text-primary);cursor:pointer;transition:background var(--motion-fast) var(--ease-native)}
+.gs-row:active{background:var(--bg-input)}
+.gs-row.is-done,.gs-row.is-waiting{color:var(--text-muted)}
+.gs-row[aria-disabled="true"]{cursor:default}
+.gs-row[aria-disabled="true"]:active{background:none}
+.gs-tick{flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;border:1.5px solid var(--border);color:var(--on-accent)}
+.gs-tick.is-on{background:var(--maroon);border-color:var(--maroon);color:var(--on-accent)}
+.gs-tick svg{width:14px;height:14px}
+.gs-main{flex:1;min-width:0;display:flex;flex-direction:column}
+.gs-label{font-size:.9375rem;font-weight:500;overflow-wrap:anywhere}
+.gs-sub{font-size:.75rem;color:var(--text-muted);overflow-wrap:anywhere}
+.gs-go{flex:none;font-size:.8125rem;font-weight:600;color:var(--maroon-text)}
+.gs-wait{flex:none;max-width:40%;font-size:.75rem;text-align:right;color:var(--text-muted)}
+.gs-collapsed{display:flex;align-items:center;gap:8px;width:100%;min-height:52px;padding:0 16px;background:none;border:0;font:inherit;color:var(--text-primary);text-align:left;cursor:pointer;transition:background var(--motion-fast) var(--ease-native)}
+.gs-collapsed:active{background:var(--bg-input)}
+.gs-collapsed-t{flex:1;min-width:0;font-size:.9375rem;font-weight:700;overflow-wrap:anywhere}
+.gs-collapsed-p{flex:none;font-size:.8125rem;color:var(--text-muted)}
+.gs-chev{display:inline-flex;flex:none;color:var(--text-muted)}
+.gs-chev svg{width:16px;height:16px}
+.ob-intro{margin:0;font-size:.875rem;line-height:1.5;color:var(--text-secondary)}
+#ob-form{display:flex;flex-direction:column;gap:16px}
+.ob-q{display:flex;flex-direction:column;gap:8px}
+.ob-q-h{display:flex;align-items:center;gap:8px;min-height:24px}
+.ob-q-t{margin:0;font-size:1rem;font-weight:700;color:var(--text-primary)}
+.ob-opt{flex:none;padding:0 8px;border:1px solid var(--border);border-radius:10px;font-size:.625rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)}
+.ob-why{margin:0;font-size:.75rem;line-height:1.5;color:var(--text-muted);overflow-wrap:anywhere}
+.ob-chips{display:flex;flex-wrap:wrap;gap:8px}
+.ob-chip{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 16px;border:1px solid var(--border);border-radius:22px;background:var(--bg-card);color:var(--text-primary);font:inherit;font-size:.8125rem;cursor:pointer;transition:transform 120ms var(--ease-native),background var(--motion-fast) var(--ease-native)}
+.ob-chip:active{transform:scale(.97)}
+.ob-chip.is-on{background:var(--maroon);border-color:var(--maroon);color:var(--on-accent)}
+.ob-chip .ob-ic svg{width:14px;height:14px}
+.ob-chip--team{padding:0 0 0 16px;cursor:default}
+.ob-chip--team:active{transform:none}
+.ob-chip-x{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;background:none;border:0;color:inherit;cursor:pointer}
+.ob-chip-x svg{width:14px;height:14px}
+.ob-chip--add{border-style:dashed;background:none;color:var(--maroon-text)}
+.ob-team-row{display:flex;flex-direction:column;gap:8px}
+.ob-team-sport{font-size:.8125rem;font-weight:600;color:var(--text-secondary)}
+.ob-text{width:100%;min-height:50px;resize:none}
+.ob-meta{display:flex;align-items:flex-start;gap:8px;min-height:16px}
+.ob-count{margin-left:auto;flex:none;font-size:.6875rem;color:var(--text-muted)}
+.ob-err{flex:1;font-size:.8125rem;font-weight:600;color:var(--loss);overflow-wrap:anywhere}
+.ob-err[hidden]{display:none}
+.ob-switches{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--card-radius,14px);overflow:hidden}
+.ob-switch-sub{display:block;font-size:.75rem;font-weight:400;color:var(--text-muted)}
+.ob-switch[aria-disabled="true"]{opacity:.55}
+.ob-remove{align-self:flex-start;min-height:44px;margin-left:auto;padding:0 8px;background:none;border:0;font:inherit;font-size:.8125rem;font-weight:600;color:var(--loss);cursor:pointer}
+.ob-earlier{display:flex;align-items:center;gap:8px;min-height:52px}
+.ob-earlier-l{font-size:.875rem;font-weight:600}
+.ob-earlier-v{flex:1;min-width:0;font-size:.8125rem;color:var(--text-muted);overflow-wrap:anywhere}
+.ob-tip-read{margin:0;font-size:1rem;line-height:1.5;color:var(--text-primary)}
+.ob-about{display:flex;flex-direction:column;gap:16px;padding-top:16px}
+.ob-about .ob-private{margin:0;font-size:.8125rem;line-height:1.5;color:var(--text-secondary)}
+.ob-about-actions{display:flex;flex-direction:column;gap:8px}
+.cc-tips{display:flex;flex-direction:column;gap:8px}
+.cc-tips .ls-card{display:flex;flex-direction:column}
+@media (prefers-reduced-motion:reduce){ .tip-card,.tip-got,.gs-hide,.ob-chip{transition:none} .tip-got:active,.gs-hide:active,.ob-chip:active{transform:none} }
+/* The Obligations switch row (D2 lane 1, UN-541, DI-1015/1016): the League Settings switch row inside a grouped-list card, its helper and the failed line stacked 8 pt apart. The row, the switch and the footer are the
+   shipped .ls-row / .cc-row-switch / .ls-footer; only the stack and the failed line are new. Tokens only. */
+.obt-block{display:flex;flex-direction:column;gap:8px}
+.obt-err{font-weight:600;color:var(--loss)}
+.obt-err[hidden]{display:none}
+/* ═══ end ONBOARDING ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 /* ── SP-56 STANDINGS-FIT (DI-473, 2026-09-30) — Season Summary + Weekly History fit ONE screen wide ─────────
    Never a scroller: no overflow-x:auto, no min-width. table-layout:fixed + <colgroup> widths.
@@ -7975,7 +8414,8 @@ body.native-shell #ls-sheet .chat-sheet-header{position:relative;padding-top:14p
    BREATHING ROOM: the card's image bleeds to the card edge and everything else sits 16 in; the body stack gap is 8; the meta row wraps with an 8 gap; chips are 44 pt tall with an
    8 gap between them and 16 in from the edge. MOTION: one language - the shipped press (scale .97, --motion-fast, --ease-native); Reduce Motion removes it. Mobile-first; no media query needed. */
 .news-card{padding:0;overflow:hidden;cursor:pointer;min-width:0;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
-.news-card:active{transform:scale(.97)}
+@media (hover:hover){.news-card:active{transform:scale(.97)}}
+.news-card[data-pressed="true"]{transform:scale(.97)}   /* T-05: the touch press is [data-pressed] (nav-gestures.js bindPressState()), :active only under a hovering pointer; see button.gd-head */
 .news-card:focus-visible{outline:2px solid var(--maroon-text);outline-offset:2px}
 /* a reserved 16:9 box: nothing jumps when the picture arrives; a picture that fails to load is removed (js adds --failed), never left as a broken-image glyph */
 .news-card__image{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:var(--bg-input)}
@@ -7992,9 +8432,11 @@ body.native-shell #ls-sheet .chat-sheet-header{position:relative;padding-top:14p
 /* W-105 (DI-W105-3, Drew: "include the whole headline for each news site"): the publisher's WHOLE headline, wrapped onto as many lines as it needs at every text size
    (no line clamp, no ellipsis; the 300-character data limit is the only bound). min-width:0 so a long word can never widen the card. newstest 9b-8 pins this body. */
 .news-card__headline{margin:0;font-size:1rem;font-weight:600;line-height:1.35;color:var(--text-primary);overflow-wrap:anywhere;min-width:0}
-.news-card__meta{display:flex;align-items:center;flex-wrap:wrap;gap:8px;width:100%;font-size:.75rem;line-height:1.35;color:var(--text-secondary)}
-.news-card__pub{font-weight:600}
-.news-card__sport{margin-left:auto}
+.news-card__pub{font-weight:600;min-width:0;overflow-wrap:anywhere}
+/* D2 DI-852 (2, 3), the approved mockup's extNews: the eyebrow leads with the source and its trailing group (time, then the outbound arrow) sits at the trailing edge — the tap leaves Munera */
+.news-card__trail{margin-inline-start:auto;display:inline-flex;align-items:center;gap:8px;flex:none}
+.news-card__out{display:inline-flex;flex:0 0 auto;width:16px;height:16px;color:var(--text-secondary)}
+.news-card__out svg{width:16px;height:16px}
 @media (prefers-reduced-motion:reduce){
   .news-card{transition:none}
   .news-images-bound .news-card__image{transition:none}
@@ -8007,15 +8449,17 @@ body.native-shell #ls-sheet .chat-sheet-header{position:relative;padding-top:14p
 .news-card--grouped{cursor:default;transition:none}
 .news-card--grouped:active{transform:none}
 .news-card__main{display:block;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
-.news-card__main:active{transform:scale(.97)}
+@media (hover:hover){.news-card__main:active{transform:scale(.97)}}
+.news-card__main[data-pressed="true"]{transform:scale(.97)}
 .news-card__main:focus-visible{outline:2px solid var(--maroon-text);outline-offset:-2px;border-radius:var(--card-radius)}
 .news-card__also-row{display:flex;padding:0 16px 16px}
 .news-card__also{min-height:44px;width:100%;display:flex;align-items:center;justify-content:flex-start;padding:8px 16px;border:1px solid var(--border);border-radius:var(--card-radius);background:var(--bg-card-alt);
   color:var(--text-secondary);font-size:.8125rem;font-weight:600;line-height:1.35;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
-.news-card__also:active{transform:scale(.97)}
+@media (hover:hover){.news-card__also:active{transform:scale(.97)}}
+.news-card__also[data-pressed="true"]{transform:scale(.97)}
 .news-card__also:focus-visible{outline:2px solid var(--maroon-text);outline-offset:2px}
-.news-card__eyebrow{margin:0;display:flex;align-items:center;gap:8px;min-width:0;max-width:100%;font-size:.75rem;line-height:1.35;color:var(--text-secondary)}
-.news-card__kind{flex:none;font-weight:600}
+.news-card__eyebrow{margin:0;display:flex;align-items:center;flex-wrap:wrap;gap:8px;width:100%;min-width:0;max-width:100%;font-size:.75rem;line-height:1.35;color:var(--text-secondary)}
+/* D2 DI-797 (W-130): the "Storyline" kind label is gone from the card (its rule, .news-card__kind, went with it); the tag below is the only storyline-specific part of the eyebrow, and only when the headline does not already name the team */
 .news-card__tag{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .news-card__updated{color:var(--text-secondary)}
 #news-also-sheet-wrap{position:fixed;inset:0;z-index:8000}
@@ -8038,7 +8482,7 @@ body.native-shell #news-also-sheet .chat-sheet-header{position:relative;touch-ac
 .news-also-go{flex:none;font-size:.8125rem;font-weight:600;color:var(--maroon-text)}
 @media (prefers-reduced-motion:reduce){
   .news-card__main,.news-card__also,.news-also-open,#news-also-sheet,#news-also-sheet-wrap .chat-sheet-backdrop{transition:none}
-  .news-card__main:active,.news-card__also:active,.news-also-open:active{transform:none}
+  .news-card__main:active,.news-card__also:active,.news-also-open:active,.news-card__main[data-pressed="true"],.news-card__also[data-pressed="true"]{transform:none}
 }
 /* --- D1 LANE C (DI-660…662, DI-664, DI-669, 2026-10-08) — the Home CONTENT cards (matchup, player to watch, spotlight). They wear the feed card's own shell
    (.feed-card .feed-card--tap: 16 pt padding, 8 pt rhythm, the 97% press, the eyebrow, title, body and caption); only the pieces a feed card has no word for are here.
@@ -8387,7 +8831,11 @@ body.native-shell #rival-picker-sheet .chat-sheet-header{position:relative;paddi
 .gd{display:flex;flex-direction:column;min-width:0;border-radius:16px;overflow:hidden;overflow:clip;background:linear-gradient(135deg,var(--maroon) 0%,var(--maroon-mid) 100%);color:var(--on-accent);box-shadow:var(--shadow-card)}
 .gd-head{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:0 8px;min-height:44px;width:100%;padding:8px 40px 8px 16px;border:0;background:none;color:inherit;font:inherit;text-align:left;-webkit-tap-highlight-color:transparent}   /* wraps to a second line under large text (nothing truncates meaning); the chevron is pinned, so the wrap never moves it */
 button.gd-head{cursor:pointer;transition:transform var(--motion-fast) ease-out}
-button.gd-head:active{transform:scale(.97)}
+/* T-05 / FB-047 (Drew, 2026-10-17: "When scrolling on the gameday cards, pressing the game cards without engaging shouldnt make it smaller w the feedback") — on a touch screen the
+   press is js/nav-gestures.js bindPressState()'s [data-pressed] (a finger at rest, or a tap), never :active: WebKit holds :active on the card under a thumb from touch-down until it lifts, a
+   scroll included. :active keeps the press where the primary pointer hovers (a mouse button down is a press). iosgesturetest [T05]. */
+@media (hover:hover){button.gd-head:active{transform:scale(.97)}}
+button.gd-head[data-pressed="true"]{transform:scale(.97)}
 button.gd-head:focus-visible,.gdp:focus-visible{outline:2px solid var(--on-accent);outline-offset:-2px}
 .gd-row:focus-visible{outline:2px solid var(--maroon-text);outline-offset:-2px}
 .gd-head--static{padding-right:16px}
@@ -8405,7 +8853,8 @@ button.gd-head:focus-visible,.gdp:focus-visible{outline:2px solid var(--on-accen
 .gd-rail{display:flex;gap:8px;overflow-x:auto;overflow-y:hidden;padding:0 16px 16px;scroll-padding:0 16px;scroll-snap-type:x proximity;overscroll-behavior-x:contain;scrollbar-width:none;-webkit-overflow-scrolling:touch}
 .gd-rail::-webkit-scrollbar{display:none}
 .gdp{flex:0 0 10.9em;display:flex;flex-direction:column;justify-content:center;gap:2px;min-height:56px;padding:8px 16px;border-radius:12px;border:1px solid var(--gameday-pill-line);background:var(--gameday-pill-bg);color:inherit;font:inherit;font-size:.875rem;text-align:left;cursor:pointer;scroll-snap-align:start;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) ease-out,opacity var(--motion-fast) ease-out}
-.gdp:active{transform:scale(.97)}
+@media (hover:hover){.gdp:active{transform:scale(.97)}}
+.gdp[data-pressed="true"]{transform:scale(.97)}   /* T-05: see button.gd-head above */
 .gdp[data-leaving="true"]{opacity:0;pointer-events:none}   /* DI-604: a game that ended leaves the rail with a 150 ms fade (js/gameday-dom.js removes the pill after it); Reduce Motion removes it at once */
 .gdp-l1{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-weight:700;font-size:.86em;font-variant-numeric:tabular-nums;white-space:nowrap}
 .gdp-sp{font-size:.66em;font-weight:700;letter-spacing:.06em;opacity:.8}
@@ -8445,8 +8894,13 @@ button.gd-head:focus-visible,.gdp:focus-visible{outline:2px solid var(--on-accen
 .gd-btn{min-height:44px;padding:8px 16px;font-family:inherit;font-size:.875rem;font-weight:600;letter-spacing:0;text-transform:none}   /* the approved mockup's buttons: sentence case in the system face (the card is a compact surface; "Make picks" is 25% narrower than Oswald caps, which is what keeps the message two lines at large text) */
 .gd .feed-action--solid{background:var(--oxblood-on);color:var(--oxblood);border:1px solid var(--on-accent)}   /* the shipped white-on-crimson button; the 1px --on-accent edge keeps it a button on Graphite Dark's near-white card */
 .gd .feed-action--outline{background:transparent;color:var(--on-accent);border:1px solid var(--on-accent)}
+.gd .gd-btn:active:not(:disabled){transform:none}                                  /* T-05: the shipped .btn:active press, keyed like the card's own controls */
+@media (hover:hover){.gd .gd-btn:active:not(:disabled){transform:scale(.97)}}
+.gd .gd-btn[data-pressed="true"]:not(:disabled){transform:scale(.97)}
 .gd-row{display:flex;flex-direction:column;gap:4px;width:100%;min-height:44px;padding:8px 16px;border:1px solid var(--border);border-radius:14px;background:var(--bg-card);color:var(--text-primary);font:inherit;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) ease-out}
-.gd-row:active{transform:scale(.97)}
+@media (hover:hover){.gd-row:active{transform:scale(.97)}}
+@media (hover:hover){.feed-card--tap:active{transform:scale(.97)}}   /* T-05: the Home feed card's mouse press (its touch press is in the Home block) */
+.gd-row[data-pressed="true"]{transform:scale(.97)}   /* T-05: see button.gd-head above */
 .gd-row--hl{outline:2px solid var(--on-accent);outline-offset:2px}
 .gd-r1{display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:700}
 .gd-r1-t{min-width:0;font-variant-numeric:tabular-nums}
@@ -8545,6 +8999,11 @@ button.gd-head:focus-visible,.gdp:focus-visible{outline:2px solid var(--on-accen
 .gv-status.gv-xf{display:grid;justify-items:center;align-items:center}
 .gv-status.gv-xf > *{grid-area:1/1}
 .gv-xf-in{animation:gd-fade-in var(--motion-fast) ease-out both}
+/* D2 DI-826 (lane 3): the cross-league summary line crossfades its text in place (crossFadePart's ghost lies over the new line, laid out as the button lays out its own content), and a pill
+   that ENTERS the rail fades in where it lands (a Peek arrival; with the leaving pill's fade, a rank change is a crossfade in place). 150 ms; Reduce Motion: none (below). */
+.gd-sum.gv-xf{position:relative}
+.gd-sum > .gv-xf-ghost{position:absolute;inset:0;display:inherit;align-items:inherit;justify-content:inherit;gap:inherit;padding:inherit;box-sizing:border-box;text-align:inherit}
+.gdp[data-entering="true"]{animation:gd-fade-in var(--motion-fast) ease-out both}
 .gv-xf-out{animation:gd-fade-out var(--motion-fast) ease-out both;pointer-events:none}
 .gv-fresh:empty,.gv-line:empty,.gv-neutral:empty,.gv-yours-box:empty,.gv-picks:empty,.gv-note-box:empty{display:none}
 .feed-item--hl{outline:2px solid var(--maroon-text);outline-offset:2px;border-radius:var(--card-radius)}
@@ -8562,11 +9021,76 @@ button.gd-head:focus-visible,.gdp:focus-visible{outline:2px solid var(--on-accen
   .gd-x,.gd[data-gd-moving="true"] .gd-rail,.gd[data-gd-moving="true"] .gd-msg,.gd[data-gd-moving="true"] .gd-x{animation:none}
   button.gd-head,.gdp,.gd-row,.gv-step-btn,.chat-return-chip{transition:none}
   .gdp--skel{animation:none;opacity:.5}
-  .ps-body.gv-fade,.ps-body.ps-body-ghost,.gv-enter,.gv > .gv-enter,.gv-xf-in,.gv-xf-out{animation:none}
-  .ps-body.ps-body-ghost,.gv-xf-ghost{display:none}
+  .ps-body.gv-fade,.ps-body.ps-body-ghost,.gv-enter,.gv > .gv-enter,.gv-xf-in,.gv-xf-out,.gdp[data-entering="true"]{animation:none}
+  .ps-body.ps-body-ghost,.gv-xf-ghost,.gd-sum > .gv-xf-ghost{display:none}   /* D2 DI-826: the summary ghost's own (more specific) display rule is overridden here too */
 }
 @media (min-width:600px){
   .gd-foot .feed-action,.gd-msg .feed-action{flex:0 1 220px}
+}
+/* ── D2 lane 3 · DI-817…827 · GAME DAY ACROSS LEAGUES (a member of two or more leagues; js/gameday-leagues.js) and DI-822 FULL GAME DAY (js/full-gameday.js) ─────────────────────────────────────
+   Tokens only. A pill carries ONE more line, its league chip ("Residency · NHL"), so it is 64 pt (the budget, DI-825); the summary line is one 44 pt control under the rail, 8 pt below it and 16 pt from the
+   card's edges (Breathing Room); it is always TWO lines tall (its sentence is usually two at 375 pt) and its skeleton is the same, so the card never changes height when another league lands
+   (gdleaguesbrowsertest [1g]). A press is the shipped 97 % over --motion-fast. */
+.gdp--lg{min-height:64px;padding-top:4px;padding-bottom:4px}   /* three short lines inside DI-825's 64 pt (the shipped pill is 56 pt with two) */
+.gdp-l0{font-size:.66em;font-weight:700;letter-spacing:.06em;line-height:1.15;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gd-sum{display:flex;align-items:center;gap:8px;min-height:max(44px,calc(1.8rem + 16px));margin:-8px 16px 16px;padding:8px 8px 8px 16px;border:0;border-radius:12px;background:var(--gameday-pill-bg);color:inherit;font:inherit;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) ease-out}
+/* the press follows bug T-05's rule (Drew 2026-10-19: cards "should stay the same unless you're engaging into them"): on a touch screen it is [data-pressed] (nav-gestures.js bindPressState(), T-05's branch),
+   never :active — WebKit holds :active under a scrolling thumb; :active only where a pointer hovers. */
+@media (hover:hover){button.gd-sum:active{transform:scale(.97)}}
+button.gd-sum[data-pressed="true"]{transform:scale(.97)}
+button.gd-sum:focus-visible{outline:2px solid var(--on-accent);outline-offset:-2px}
+.gd-sum-t{flex:1 1 auto;min-width:0;font-size:.75rem;font-weight:600;line-height:1.2;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.gd-sum-chev{display:inline-flex;flex:0 0 auto;width:16px;height:16px}
+.gd-sum-chev svg{width:16px;height:16px}
+.gd-sum--skel{cursor:default;pointer-events:none}
+.gd-sum-bar{flex:1 1 auto;height:14px;border-radius:7px;background:var(--gameday-pill-line);animation:feed-skel-pulse var(--skeleton-shimmer,1400ms) ease-in-out infinite}
+.gd-st--prov{background:var(--bg-card-alt);color:var(--text-secondary)}
+.fgd{display:flex;flex-direction:column;gap:16px;padding:16px}
+.fgd-sec{display:flex;flex-direction:column;gap:8px}
+.fgd-sect{margin:0 4px;font-size:.7rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary)}
+.fgd-group{display:flex;flex-direction:column;border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--bg-card)}
+.fgd-row{display:flex;align-items:center;gap:8px;width:100%;min-height:56px;padding:8px 16px;border:0;border-top:1px solid var(--border);background:var(--bg-card);color:var(--text-primary);font:inherit;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:background-color var(--motion-fast) ease-out}
+.fgd-row:first-child{border-top:0}
+@media (hover:hover){.fgd-row:active{background:var(--bg-card-alt)}}
+.fgd-row[data-pressed="true"]{background:var(--bg-card-alt)}   /* the list row's highlight, by the same T-05 rule */
+.fgd-row:focus-visible{outline:2px solid var(--maroon-text);outline-offset:-2px}
+.fgd-tx{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px}
+.fgd-tx b{font-size:.95rem;font-weight:600;line-height:1.3;font-variant-numeric:tabular-nums}
+.fgd-tx span{font-size:.78rem;line-height:1.35;color:var(--text-secondary)}
+.fgd-tx .fgd-cov{font-weight:700;color:var(--text-primary)}
+.fgd-tx .fgd-cov--covering,.fgd-tx .fgd-cov--covered{color:var(--win)}
+.fgd-tx .fgd-cov--trailing{color:var(--live-trail-text)}
+.fgd-tx .fgd-cov--missed{color:var(--loss)}
+.fgd-tx .fgd-mut{font-weight:600;color:var(--text-secondary)}
+.fgd-prov{display:inline-flex;flex:0 0 auto;align-items:center;min-height:24px;padding:0 8px;border-radius:12px;background:var(--bg-card-alt);border:1px solid var(--border);color:var(--text-secondary);font-size:.72rem;font-weight:700;white-space:nowrap}
+.fgd-chev{display:inline-flex;flex:0 0 auto;width:16px;height:16px;color:var(--text-secondary)}
+.fgd-chev svg{width:16px;height:16px}
+.fgd-row--more .fgd-tx b{color:var(--maroon-text)}
+.fgd-cap{margin:0 4px;font-size:.78rem;color:var(--text-secondary)}
+/* D2 DI-1046…1050 (lane 3): the picked-post card inside a room bubble — the static card (no image, no author or post text), ONE 44 pt target that opens the post outside Munera, the
+   outbound arrow; the web-only "Show post" (OFF in this release) and its frame host, whose loading state is a skeleton of the frame's own size (no spinner, no jump). Tokens only. */
+.chat-post-card{display:flex;flex-direction:column;gap:8px;margin:4px 0;max-width:100%}
+.chat-post-open{display:flex;align-items:center;gap:8px;width:100%;min-height:44px;padding:8px 16px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card);color:var(--text-primary);font:inherit;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.chat-post-open:active{transform:scale(.97)}
+.chat-post-tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.chat-post-kind{font-size:.82rem;font-weight:600}
+.chat-post-where{font-size:.78rem;color:var(--text-secondary);overflow-wrap:anywhere}
+.chat-post-cap{font-size:.75rem;color:var(--text-secondary)}
+.chat-post-out{display:inline-flex;flex:0 0 auto;width:16px;height:16px;color:var(--text-secondary)}
+.chat-post-out svg{width:16px;height:16px}
+.chat-post-show{align-self:flex-start;min-height:44px;padding:0 16px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card-alt);color:var(--text-primary);font:inherit;font-size:.85rem;cursor:pointer}
+.chat-post-frame{display:block;width:100%}
+.chat-post-frame[data-loading="true"]{min-height:240px;border-radius:12px;background:var(--bg-card-alt)}
+.chat-post-iframe{display:block;width:100%;height:480px;border:0;border-radius:12px}
+@media (prefers-reduced-motion:reduce){.chat-post-open{transition:none}}
+.chat-sheet-readonly{margin:0;padding:16px;text-align:center;font-size:.85rem;line-height:1.45;color:var(--text-secondary);border-top:1px solid var(--border)}   /* D2 DI-876: an archived sport's thread is read-only */
+.chat-sheet-league{margin:0 0 8px;font-size:.75rem;line-height:1.4;color:var(--text-secondary);overflow-wrap:anywhere}   /* D2 DI-860: the game thread's "{League} · {Sport}" line (two or more leagues), the Game view's twin */
+.gv-league{margin:0 0 8px;font-size:.75rem;line-height:1.4;color:var(--text-secondary);text-align:center}   /* D2 DI-860: "{League} · {Sport}" above the Game view's matchup (two or more leagues) */
+.league-selector-note{margin:16px 0 0;font-size:.8125rem;line-height:1.45;color:var(--text-secondary)}   /* D2 Q5: the leagues Home is not reading, named (never silently dropped) */
+@media (prefers-reduced-motion:reduce){
+  .gd-sum,.fgd-row{transition:none}
+  button.gd-sum:active,button.gd-sum[data-pressed="true"]{transform:none}
+  .gd-sum-bar{animation:none;opacity:.7}
 }
 /* ── D1 Lane B · DI-607 / DI-581 · the Dashboard's Sort row, the Sort sheet and the Custom arrange (js/game-sort.js · js/game-arrange.js) ──────────────────────────────────────────────────────
    Tokens only. The row sits directly under the "All Picks by Game" header: "{n} games" (15 pt semibold) over a 12 pt caption on the left, the 44 pt bordered Sort button on the right; at large text the row
@@ -8624,20 +9148,21 @@ body.native-shell #sort-sheet .chat-sheet-header{position:relative;padding-top:1
 /* D1 Lane B — DI-597 Share to chat (2026-10-08). The sheet is the sort sheet's recipe on its own ids (fixed layer, --share-drag-y with the scrim fading with it, the page behind held still, no motion
    under Reduce Motion), laid out as the approved Game view frame draws it (docs/mockups/d1/gameday.html "sheet:share"): title and subtitle, a 44 pt close, the preview card, the comment field, "Post to
    chat" and "Cancel" centred 8 pt apart, and the footnote. Spacing on the 8 pt grid; tokens only. */
-#share-sheet-wrap{position:fixed;inset:0;z-index:8000}
-#share-sheet-wrap ~ .modal-overlay{z-index:8100}
-html:has(#share-sheet-wrap){overflow:hidden}
-#share-sheet{transform:translateY(calc(100% * var(--share-drag-y,0)));animation-duration:var(--motion-modal);animation-timing-function:var(--ease-native);transition:transform var(--motion-modal) var(--ease-native)}
-#share-sheet[data-dragging="true"]{transition:none}
-#share-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--share-drag-y,0));transition:opacity var(--motion-nav) ease-out}
-#share-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
-body.native-shell #share-sheet .chat-sheet-header{position:relative;padding-top:14px;touch-action:none}
-#share-sheet .chat-sheet-header{align-items:flex-start;margin-bottom:8px}
+/* D2 DI-808 / DI-862 (lane 3, 2026-10-19): "Share to which Locker Room?" is the SAME sheet recipe on its own ids (#talk-league-*), listed FIRST in each rule below — one recipe, not a fork. */
+#talk-league-wrap,#share-sheet-wrap{position:fixed;inset:0;z-index:8000}
+#talk-league-wrap ~ .modal-overlay,#share-sheet-wrap ~ .modal-overlay{z-index:8100}
+html:has(#talk-league-wrap),html:has(#share-sheet-wrap){overflow:hidden}
+#talk-league-sheet,#share-sheet{transform:translateY(calc(100% * var(--share-drag-y,0)));animation-duration:var(--motion-modal);animation-timing-function:var(--ease-native);transition:transform var(--motion-modal) var(--ease-native)}
+#talk-league-sheet[data-dragging="true"],#share-sheet[data-dragging="true"]{transition:none}
+#talk-league-wrap .chat-sheet-backdrop,#share-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--share-drag-y,0));transition:opacity var(--motion-nav) ease-out}
+#talk-league-wrap[data-dragging="true"] .chat-sheet-backdrop,#share-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
+body.native-shell #talk-league-sheet .chat-sheet-header,body.native-shell #share-sheet .chat-sheet-header{position:relative;padding-top:14px;touch-action:none}
+#talk-league-sheet .chat-sheet-header,#share-sheet .chat-sheet-header{align-items:flex-start;margin-bottom:8px}
 .share-head-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 auto;padding-top:4px}
-#share-sheet .chat-sheet-close{width:44px;height:44px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;transition:transform var(--motion-fast) var(--ease-native)}
-#share-sheet .chat-sheet-close:active{transform:scale(.97)}
-#share-sheet .chat-sheet-scroll{flex:0 1 auto;min-height:0}
-#share-sheet-body{overscroll-behavior:contain;padding:0 4px 8px;display:flex;flex-direction:column;gap:16px}
+#talk-league-sheet .chat-sheet-close,#share-sheet .chat-sheet-close{width:44px;height:44px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;transition:transform var(--motion-fast) var(--ease-native)}
+#talk-league-sheet .chat-sheet-close:active,#share-sheet .chat-sheet-close:active{transform:scale(.97)}
+#talk-league-sheet .chat-sheet-scroll,#share-sheet .chat-sheet-scroll{flex:0 1 auto;min-height:0}
+#talk-league-body,#share-sheet-body{overscroll-behavior:contain;padding:0 4px 8px;display:flex;flex-direction:column;gap:16px}
 .share-preview{margin:0;padding:16px;display:flex;flex-direction:column;gap:8px}
 .share-eyebrow{display:flex;align-items:center;gap:8px;font-size:.78rem;color:var(--text-secondary);min-width:0}
 .share-eyebrow > span:last-child{min-width:0;overflow-wrap:anywhere}
@@ -8660,12 +9185,13 @@ body.native-shell #share-sheet .chat-sheet-header{position:relative;padding-top:
 .gv-share{margin:0}
 /* a shared item's attachment under the bubble (DI-597): "Open details ›" (44 pt) or the calm unavailable line — fixed copy only */
 .chat-share-attach{display:inline-flex;align-items:center;gap:8px;margin:8px 0 0;min-height:44px;padding:0 16px;border:1px solid var(--border);border-radius:12px;background:var(--bg-input);color:var(--maroon-text);font:inherit;font-size:.88rem;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
-.chat-share-attach:active{transform:scale(.97)}
+@media (hover:hover){.chat-share-attach:active{transform:scale(.97)}}
+.chat-share-attach[data-pressed="true"]{transform:scale(.97)}   /* DI-1095: see .pick-btn */
 .chat-share-chev{display:inline-flex;width:16px;height:16px}
 .chat-share-chev svg{width:16px;height:16px;display:block}
 .chat-share-attach--none{display:block;min-height:0;padding:0;border:0;background:none;color:var(--text-muted);font-weight:400;font-size:.78rem;cursor:default}
-.chat-share-attach--none:active{transform:none}
-@media (prefers-reduced-motion:reduce){.chat-share-attach{transition:none}.chat-share-attach:active{transform:none}}
+.chat-share-attach--none:active,.chat-share-attach--none[data-pressed="true"]{transform:none}
+@media (prefers-reduced-motion:reduce){.chat-share-attach{transition:none}.chat-share-attach:active,.chat-share-attach[data-pressed="true"]{transform:none}}
 .btn.dc-sort-act{min-height:44px;padding:0 20px;text-transform:none;letter-spacing:0;font-family:inherit;font-size:.9rem}
 .btn.dc-sort-act--ghost{background:transparent;color:var(--maroon-text);box-shadow:none}
 .dc-sort-note{margin:16px 0 0;text-align:center;font-size:.8rem;line-height:1.4;color:var(--text-muted)}
@@ -8867,7 +9393,8 @@ body.native-shell #scribe-profile-sheet .chat-sheet-header{position:relative;tou
   background:transparent;color:var(--text-primary);font:600 .9375rem/1.15 'Inter',system-ui,sans-serif;text-align:center;cursor:pointer;
   -webkit-tap-highlight-color:transparent;touch-action:manipulation;
   transition:transform var(--motion-fast) var(--ease-native),color var(--motion-fast) var(--ease-native)}
-.sport-seg-btn:active{transform:scale(.97)}
+@media (hover:hover){.sport-seg-btn:active{transform:scale(.97)}}
+.sport-seg-btn[data-pressed="true"]{transform:scale(.97)}   /* DI-1095: see .pick-btn */
 .sport-seg-btn[aria-checked="true"]{color:var(--on-accent);font-weight:700}
 .sport-seg-btn:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 /* a gold dot on an UNSELECTED segment whose picks are due (the fact is in its accessible name too) */
@@ -8875,7 +9402,7 @@ body.native-shell #scribe-profile-sheet .chat-sheet-header{position:relative;tou
 /* the page content fades in over --motion-fast when the sport changes (no navigation, no reload) */
 .sport-swap-in{animation:sportSwapIn var(--motion-fast) var(--ease-native)}
 @keyframes sportSwapIn{from{opacity:.4}to{opacity:1}}
-@media (prefers-reduced-motion:reduce){.sport-seg-btn{transition:none}.sport-seg-btn:active{transform:none}.sport-swap-in{animation:none}}
+@media (prefers-reduced-motion:reduce){.sport-seg-btn{transition:none}.sport-seg-btn:active,.sport-seg-btn[data-pressed="true"]{transform:none}.sport-swap-in{animation:none}}
 
 /* --- the header pill's due dot (DI-556): 8 pt gold, LEADING (the pill ellipsizes at its end), never a number. Gold-light on the maroon chrome is the pairing DI-328b measured. */
 .league-pill-badge{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--gold-light);margin-right:6px;vertical-align:middle;flex:none}
@@ -8936,14 +9463,16 @@ body.native-shell #league-overview-sheet .chat-sheet-header{position:relative;pa
 .lo-glance{display:flex;flex-wrap:wrap;gap:8px}
 .lo-chip{min-height:44px;padding:0 14px;display:inline-flex;align-items:center;gap:8px;border:0;border-radius:99px;cursor:pointer;
   font:600 .8rem/1.2 'Inter',system-ui,sans-serif;-webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:transform var(--motion-fast) var(--ease-native)}
-.lo-chip:active{transform:scale(.97)}
+@media (hover:hover){.lo-chip:active{transform:scale(.97)}}
+.lo-chip[data-pressed="true"]{transform:scale(.97)}   /* DI-1095: see .pick-btn */
 .lo-chip--due{background:var(--gold-pale);color:var(--gold-text)}
 .lo-chip--live{background:var(--live-bg);color:var(--live-text)}
-@media (prefers-reduced-motion:reduce){.lo-chip{transition:none}.lo-chip:active{transform:none}}
+@media (prefers-reduced-motion:reduce){.lo-chip{transition:none}.lo-chip:active,.lo-chip[data-pressed="true"]{transform:none}}
 /* The sport card: ONE button (the whole card is the target); the Join card is an article with a button of its own */
 .lo-card{width:100%;text-align:left;display:flex;flex-direction:column;gap:8px;font:inherit;color:inherit;min-height:44px;transition:transform var(--motion-fast) var(--ease-native)}
 button.lo-card{cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
-button.lo-card:active{transform:scale(.97)}
+@media (hover:hover){button.lo-card:active{transform:scale(.97)}}
+button.lo-card[data-pressed="true"]{transform:scale(.97)}   /* DI-1095: see .pick-btn */
 .lo-card--focus{outline:2px solid var(--gold);outline-offset:2px}
 .lo-card-wrap{display:flex;flex-direction:column;gap:8px}
 .lo-card-head{display:flex;align-items:center;gap:8px;min-width:0}
@@ -8977,6 +9506,36 @@ button.lo-card:active{transform:scale(.97)}
 .lo-row-right{font-size:.78rem;color:var(--text-muted);white-space:nowrap}
 .lo-row-chev{display:flex;align-items:center;color:var(--text-muted)}
 .lo-row-chev svg{width:18px;height:18px}
+/* D2 DI-869 / DI-875 / DI-876 (lane 3, UN/PF-518, 2026-10-19): ARCHIVE AND RESTORE. The two confirmations are the shared action sheet with three (or two) plain groups and the announcement switch;
+   the Archived sports list and an archived sport's read-only record are pushed screens built from the league overview's own rows (.lo-list / .lo-row), 16 pt from the edges, 16 between groups,
+   8 inside one. Tokens only. A row in the record that is not a button (a standings line) takes the row's look without its press. */
+.ms-ar-groups{display:flex;flex-direction:column;border-bottom:1px solid var(--border)}
+.ms-ar-row{display:flex;flex-direction:column;gap:2px;padding:8px 16px;text-align:left;border-top:1px solid var(--border)}
+.ms-ar-row:first-child{border-top:0}
+.ms-ar-ttl{font-size:.82rem;font-weight:600;color:var(--text-primary)}
+.ms-ar-body{font-size:.78rem;line-height:1.4;color:var(--text-secondary)}
+.lc-actionsheet .control-center-row--toggle{border-bottom:1px solid var(--border)}
+.ms-ar-error{margin:0;padding:0 16px;font-size:.78rem;line-height:1.4;color:var(--loss,var(--text-primary));text-align:center}
+.ms-ar-error:not(:empty){padding:8px 16px}
+.comm-sport-state-row{display:flex;flex-direction:column;gap:8px;padding:8px 0;border-top:1px solid var(--border)}
+.comm-sport-state-row:first-child{border-top:0;padding-top:0}
+.comm-sport-state-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px}
+.comm-sport-state-badge{flex:0 0 auto}
+.comm-sport-state-btn{align-self:flex-start;min-height:44px}
+/* D2 DI-869's blocked state, in place (review fix 5): the shipped sentence and the one button to that sport's week, directly under the control that was tapped — an 8 pt group, 16 pt in */
+.ms-archive-blocked{display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin:8px 0 0;padding:0 16px}
+.ms-archive-blocked-text{margin:0;font-size:.8125rem;line-height:1.35;color:var(--text-secondary)}
+.ms-archive-blocked-go{min-height:44px}
+.ar-page{display:flex;flex-direction:column;gap:16px;padding:16px}
+.ar-note{margin:0;padding:0 4px;font-size:.82rem;line-height:1.45;color:var(--text-secondary)}
+.ar-group{display:flex;flex-direction:column;gap:8px}
+.ar-row{cursor:default}
+.ar-row:active{background:var(--bg-card)}
+.ar-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
+.ar-restore{min-height:44px}
+.ar-banner{display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin:0;padding:16px;background:var(--bg-card-alt)}
+.ar-badge{display:inline-flex;align-items:center;min-height:24px;padding:0 8px;border-radius:12px;border:1px solid var(--border);font-size:.72rem;font-weight:700;color:var(--text-secondary)}
+.ar-banner-tx{margin:0;font-size:.9rem;line-height:1.45;color:var(--text-primary)}
 @media (prefers-reduced-motion:reduce){.lo-row{transition:none}}
 
 /* D1 / DI-528 - the sport chip in a Home feed card's eyebrow (only in a league with several sports): the sport's code, outlined, the reason pill's height, pushed to the card's trailing edge. Text
@@ -8998,6 +9557,9 @@ button.lo-card:active{transform:scale(.97)}
    Both pills are TINTED pairs (the --loss-bg / --gold-pale surface with its own text token), the pairing contrastscan reviews in both themes: the solid --loss fill with --on-accent text that the inline style used
    was 2.77:1 in dark mode (--loss is the brightened TEXT red there), a contrast failure the inline style had hidden from the scan. */
 .admin-ai-loss{color:var(--loss)}
+/* D2 DI-1097 (W-111): the quiet "Pictures: n of m" line under the news rows of the status card: caption level (.75rem), the secondary text colour, 16 pt in line with the rows' own text; the warning state (ten or more stories, none pictured) wears the card's amber text (--gold-text, the pairing .admin-ai-pill-amber already uses) */
+.content-status-pictures{margin:0;padding:8px 16px;font-size:.75rem;line-height:1.35;color:var(--text-secondary)}
+.content-status-pictures--warn{color:var(--gold-text)}
 .badge.admin-ai-pill-loss{background:var(--loss-bg);color:var(--loss);border-color:var(--loss)}
 .badge.admin-ai-pill-amber{background:var(--gold-pale);color:var(--gold-text);border-color:var(--gold)}
 /* the cards' own Retry / Refresh are .btn-sm (34 pt); a tap target is never under 44 (measured: adminairendertest [A]) */
@@ -9034,8 +9596,9 @@ body.native-shell #admin-ai-sheet .chat-sheet-header{position:relative;touch-act
 .chat-source-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .chat-source-chip{min-height:44px;box-sizing:border-box;padding:0 12px;border:1px solid var(--bg-input);border-radius:999px;background:var(--bg-card);color:var(--text-secondary);font:inherit;font-size:.78rem;font-weight:600;
   display:inline-flex;align-items:center;max-width:100%;cursor:pointer;transition:transform var(--motion-fast) var(--ease-native)}
-.chat-source-chip:active{transform:scale(.97)}
-@media (prefers-reduced-motion:reduce){.chat-source-chip{transition:none}.chat-source-chip:active{transform:none}}
+@media (hover:hover){.chat-source-chip:active{transform:scale(.97)}}
+.chat-source-chip[data-pressed="true"]{transform:scale(.97)}   /* DI-1095: see .pick-btn */
+@media (prefers-reduced-motion:reduce){.chat-source-chip{transition:none}.chat-source-chip:active,.chat-source-chip[data-pressed="true"]{transform:none}}
 /* ═══ D1 LANE C (source chips) — END ═══ */
 
 /* ═══ D1 W-68 / W-69 (2026-10-14) — COMM -> GAMES: ONE GAMES LIST, THE ADD-OR-SWAP SHEETS, THE SWAP PICKER ═══════════════════════════════════════════════════════════════════
@@ -9096,6 +9659,44 @@ body.native-shell #admin-ai-sheet .chat-sheet-header{position:relative;touch-act
 .week-wizard-game-item{display:flex;align-items:stretch;gap:8px;overflow:hidden}
 .week-wizard-game-item .week-wizard-game-row{flex:1;min-width:0}
 .btn.week-wizard-game-remove{flex:none;min-height:44px;color:var(--loss)}
+/* D2 lane 2 (DI-887, mockup d2-sport-rules frame 1): "Which night?" chips - 44 pt high, 8 pt apart, wrapping (never collapsing); the selected chip takes the brand border; the game count sits beside the label in the muted text colour. */
+.wiz-night-chips{display:flex;flex-wrap:wrap;gap:8px}
+.btn.wiz-night-chip{min-height:44px;display:inline-flex;align-items:center;gap:4px;transition:transform var(--motion-fast,150ms) ease-out}
+.btn.wiz-night-chip:active{transform:scale(.97)}
+.btn.wiz-night-chip.selected{border-color:var(--maroon);background:var(--maroon-pale);color:var(--text-primary)}
+#wiz-night-card .flex{flex-wrap:wrap}
+/* D2 lane 2 (DI-888 / DI-907 / DI-919, mockup d2-sport-rules frames 4 and 5): the "How this slate works" row is the shared 44 pt ghost button; a price caption sits INSIDE the pick button under the team name in the
+   secondary text colour with tabular numerals (so a price arriving later does not move the name); the rules sheet's message keeps its line breaks. */
+.btn.how-slate-btn{min-height:44px}
+.pick-btn .pick-btn-price{display:block;font-variant-numeric:tabular-nums;margin-top:2px;min-height:1em}
+#ls-action-layer .lc-as-msg{white-space:pre-line}
+
+/* D2 lane 2 (DI-914 / DI-918, mockup frames 6 to 8): the settings rows are 52 pt, the format rows 56 pt (a name and one sentence), the lines rows 56 pt switch rows; 8 pt inside a group, 16 pt between groups and from the edge. */
+.settings-row{display:flex;align-items:center;gap:8px;width:100%;min-height:52px;padding:8px 16px;background:transparent;border:0;border-bottom:1px solid var(--border);color:inherit;font:inherit;text-align:left;cursor:pointer;transition:transform var(--motion-fast,150ms) ease-out}
+.settings-row:active{transform:scale(.98)}
+.settings-row-static{cursor:default}
+.settings-row-label{flex:1}
+.settings-row svg,#comm-sport-settings-card svg{width:16px;height:16px;flex:none}
+.fmt-list{display:flex;flex-direction:column}
+.fmt-row{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-height:56px;padding:8px 16px;background:transparent;border:0;border-bottom:1px solid var(--border);color:inherit;font:inherit;text-align:left;cursor:pointer;width:100%}
+.fmt-row.selected{background:var(--maroon-pale)}
+.fmt-row:disabled{cursor:default;opacity:1}
+.fmt-row{position:relative;padding-right:56px}
+.fmt-check{position:absolute;right:16px;top:50%;width:20px;height:20px;margin-top:-10px;color:var(--maroon-text)}
+.fmt-check svg{width:20px;height:20px}
+/* press feedback (Interaction Principles: ~97% compress, smooth return). :active only where a real pointer hovers (iOS keeps :active stuck after a swipe: the T-05 rule); the touch path joins bindPressState when fix/d2-bugA-ios merges. */
+.fmt-row,.lines-row{transition:transform var(--motion-fast) var(--ease-native),background-color var(--motion-fast) var(--ease-native)}
+@media (hover:hover){.fmt-row:not(:disabled):active,.lines-row:not(:disabled):active{transform:scale(.97)}}
+@media (prefers-reduced-motion:reduce){.fmt-row,.lines-row{transition:none}.fmt-row:active,.lines-row:active{transform:none}}
+.fmt-row-name{font-weight:600}
+.fmt-row-sentence{font-size:.78rem;line-height:1.4}
+.fmt-draft{padding:8px 16px}
+.fmt-draft-row{width:100%}
+.fmt-error{margin:8px 16px}
+.lines-row{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:56px;padding:8px 16px;border-bottom:1px solid var(--border)}
+.lines-row-text{display:flex;flex-direction:column;gap:2px;flex:1}
+.lines-row-name{font-weight:600}
+.lines-foot{padding:8px 16px 0}
 /* the shared action sheet with N ordinary actions (actionSheetHTML({ actions })): a divider between them, each >= 54 pt */
 .lc-as-act+.lc-as-act{border-top:1px solid var(--border)}
 /* the swap picker sheet: the Add a sport sheet's recipe, scoped to ITS ids. The sheet and the scrim follow --swap-drag-y (0..1), a live drag drops the transitions, Reduce Motion drops them all;
@@ -9133,6 +9734,205 @@ body.native-shell #swap-picker-sheet .chat-sheet-header{position:relative;paddin
 @media (prefers-reduced-motion:reduce){#swap-picker-sheet,#swap-picker-sheet-wrap .chat-sheet-backdrop,.swap-pk-opt,.swap-pk-dot,#swap-picker-sheet .swap-pk-close{transition:none}.swap-pk-opt:active,#swap-picker-sheet .swap-pk-close:active{transform:none}}
 /* ═══ END D1 W-68 / W-69 ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
 
+/* ═══ D2 lane 1 batch 3: SEASON STAKES (UN/PF-542, DI-1022..1030) — the season-ender vote on Standings, its propose sheet and its confirmations ═══════════════
+   One card at the top of the sport's Standings (mockup d2-obligations.html frames 4 and 5). Every gap is 8 px inside a group and 16 px between groups and at the edges (Design Philosophy, Breathing Room);
+   the buttons are the shared .btn at the 44 px tap target (the press feedback is the shared one); colours are tokens only. The sheet reuses the invite / onboarding sheet chrome (.ij-sheet). */
+.stk-card{display:flex;flex-direction:column;gap:8px;margin-bottom:16px}
+.stk-lab{display:flex;align-items:center;gap:8px;font-size:.6875rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--gold-text)}
+.stk-lock{display:inline-flex;width:16px;height:16px;color:var(--text-muted)}
+.stk-lock svg{width:16px;height:16px}
+.stk-text{font-size:1rem;font-weight:700;color:var(--text-primary);overflow-wrap:anywhere}
+.stk-meta,.stk-note{margin:0;font-size:.8125rem;color:var(--text-muted)}
+.stk-actions{display:flex;flex-direction:column;gap:8px}
+.stk-actions-row{flex-direction:row}
+.stk-btn{min-height:44px;margin:0;box-sizing:border-box}
+.stk-btn.btn-primary{border:1px solid transparent}   /* the secondary button carries a 1 px border: the primary gets an invisible one so Yes and No are exactly the same width */
+.stk-actions-row .stk-btn{flex:1 1 0;min-width:0}
+.stk-btn[aria-pressed="true"]{box-shadow:inset 0 0 0 2px var(--gold-text)}
+.stk-fail{margin:0;font-size:.8125rem;font-weight:600;color:var(--loss)}
+.stk-sheet .stk-body{gap:16px}
+.stk-sheet .form-input{font-size:1rem}   /* 16 px: a smaller field makes iOS zoom the page on focus */
+.stk-field{display:flex;flex-direction:column;gap:8px}
+.stk-meta-row{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.stk-err{font-size:.8125rem;font-weight:600;color:var(--loss)}
+.stk-err[hidden]{display:none}
+.stk-count{margin-left:auto;font-size:.8125rem;color:var(--text-muted);font-variant-numeric:tabular-nums}
+.stk-window[aria-checked="true"]{font-weight:700;color:var(--maroon-text)}
+/* ═══ D2 lane 1 batch 3: SEASON STAKES — END ═══════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* ═══ D2 lane 4 batch 2 — SCRIBE Analytics surfaces (2026-10-21; mockup docs/mockups/d2-analytics.html frames 2, 3, 4, 9) ═══════════════════════════════════════════════════
+   The insight DETAIL and YOUR NUMBERS are pushed screens that compose the card detail's vocabulary (.cd, .cd-card, .cd-h, .cd-items, .cd-item, .cd-mark, .cd-actions): the pushed shell already gives 16 pt between
+   groups and to the screen's edges, each card is one group (16 pt padding, 8 pt between its lines), a button group is centred and 8 pt apart, and every target is >= 44 pt (Breathing Room). Only what the vocabulary
+   lacks is added below: the big figures, the definition disclosure, a tappable row, the sport control, and the Ask SCRIBE sheet (the Share sheet's recipe on its own ids). Tokens only; one press language (scale .97). */
+.ins-figs{display:flex;flex-wrap:wrap;gap:16px}
+.ins-fig{display:flex;flex-direction:column;gap:8px;min-width:96px}
+.ins-fig-v{font-size:1.5rem;font-weight:700;line-height:1.15;font-variant-numeric:tabular-nums;color:var(--text-primary)}
+.ins-fig-l{font-size:.8125rem;line-height:1.35;color:var(--text-secondary)}
+.ins-disc{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:44px;margin:0;padding:0;border:0;background:none;color:var(--text-primary);font:inherit;font-weight:600;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.ins-disc:active{transform:scale(.97)}
+.ins-disc-chev,.ins-row-chev{display:inline-flex;flex:0 0 auto;width:16px;height:16px;color:var(--text-muted);transition:transform var(--motion-fast) var(--ease-native)}
+.ins-disc-chev svg,.ins-row-chev svg{width:16px;height:16px;display:block}
+.ins-disc[aria-expanded="true"] .ins-disc-chev{transform:rotate(90deg)}
+.ins-defn [hidden]{display:none}
+.ins-row{width:100%;min-height:56px;margin:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.ins-row:active{transform:scale(.97)}
+.yn-section .ins-row:first-of-type{border-top:0}
+.yn-teams{display:flex;flex-direction:column;gap:8px;min-width:0}
+.yn-teams-h{padding:0 4px}
+.yn-team-list{display:flex;flex-direction:column;gap:16px;min-width:0}
+.ins-seg{display:flex;gap:2px;padding:2px;border-radius:10px;background:var(--bg-card-alt)}
+.ins-seg-btn{flex:1;min-width:0;min-height:44px;padding:0 8px;border:0;border-radius:8px;background:none;font:inherit;font-size:.8rem;font-weight:600;color:var(--text-secondary);cursor:pointer;-webkit-tap-highlight-color:transparent;transition:background var(--motion-fast) var(--ease-native),color var(--motion-fast) var(--ease-native),transform var(--motion-fast) var(--ease-native)}
+.ins-seg-btn:active{transform:scale(.97)}
+.ins-seg-btn[aria-checked="true"]{background:var(--bg-card);color:var(--text-primary);font-weight:700;box-shadow:var(--shadow-card)}
+.cd-unavail{margin:0}
+/* Ask SCRIBE: the sheet (fixed layer, --ask-drag-y with the scrim fading with it, the page behind held still), then its body */
+#ask-sheet-wrap{position:fixed;inset:0;z-index:8000}
+#ask-sheet-wrap ~ .modal-overlay{z-index:8100}
+html:has(#ask-sheet-wrap){overflow:hidden}
+#ask-sheet{transform:translateY(calc(100% * var(--ask-drag-y,0)));animation-duration:var(--motion-modal);animation-timing-function:var(--ease-native);transition:transform var(--motion-modal) var(--ease-native)}
+#ask-sheet[data-dragging="true"]{transition:none}
+@media (max-width:699px){#ask-sheet{height:82vh}}   /* DI-970 / DI-1110: the Ask sheet is a fixed-height sheet (the shell's own 82vh clamp), so neither a growing question box nor the keyboard changes its height; the body scrolls */
+#ask-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--ask-drag-y,0));transition:opacity var(--motion-nav) var(--ease-native)}
+#ask-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
+#ask-sheet-wrap[data-closing]{pointer-events:none}
+body.native-shell #ask-sheet .chat-sheet-header{position:relative;padding-top:14px;touch-action:none}
+#ask-sheet .chat-sheet-header{align-items:center;margin-bottom:8px}
+.ask-head-text{display:flex;flex-direction:column;gap:8px;min-width:0;flex:1 1 auto}
+#ask-sheet .chat-sheet-close{width:44px;height:44px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;transition:transform var(--motion-fast) var(--ease-native)}
+#ask-sheet .chat-sheet-close:active{transform:scale(.97)}
+#ask-sheet .chat-sheet-scroll{flex:0 1 auto;min-height:0}
+#ask-sheet-body{overscroll-behavior:contain;padding:0 4px 8px}
+.ask{display:flex;flex-direction:column;gap:16px;min-width:0}
+.ask-scope{align-self:center;display:inline-flex;align-items:center;margin:0;min-height:28px;padding:0 12px;border-radius:14px;background:var(--bg-card-alt);border:1px solid var(--border);font-size:.74rem;font-weight:600;color:var(--text-secondary);text-align:center}
+.ask-conv{display:flex;flex-direction:column;gap:8px;min-width:0}
+.ask-conv:empty{display:none}
+.ask-turn{display:flex;gap:8px;align-items:flex-start;min-width:0}
+.ask-turn--me{justify-content:flex-end}
+/* DI-970: an arriving answer fades in over 150 ms (only the newest: the sheet clears the mark after it paints) */
+.ask-turn--new{animation:ask-turn-in var(--motion-fast) var(--ease-native) both}
+/* DI-1107: SCRIBE's read on the detail: the body is reserved at a typical read's height (six lines, two short sentences at the larger text sizes) so the detail does not jump when the text replaces the skeleton; the newest fades in */
+.ins-read-body{display:flex;flex-direction:column;gap:8px;min-height:calc(6 * 1.45em)}
+.ins-read-body .cd-body{margin:0;line-height:1.45}
+.ins-read--new .ins-read-body{animation:ask-turn-in var(--motion-fast) var(--ease-native) both}
+@keyframes ask-turn-in{from{opacity:0}to{opacity:1}}
+.ask-av{display:inline-flex;flex:0 0 28px;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:var(--bg-card-alt);border:1px solid var(--border);color:var(--maroon-text)}
+.ask-av svg{width:16px;height:16px;display:block}
+.ask-col{display:flex;flex-direction:column;gap:8px;min-width:0}
+.ask-bub{max-width:88%;padding:8px 16px;border-radius:16px;font-size:.9rem;line-height:1.4;overflow-wrap:anywhere}
+.ask-bub--me{background:var(--maroon);color:var(--on-accent);border-bottom-right-radius:4px}
+.ask-bub--sc{background:var(--bg-card);border:1px solid var(--border);border-bottom-left-radius:4px;color:var(--text-primary)}
+.ask-bub--load{display:flex;flex-direction:column;gap:8px;min-width:160px}
+.ask-src{font-size:.72rem;line-height:1.35;color:var(--text-muted)}
+.ask-chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+.ask-chips--row{flex-wrap:nowrap;justify-content:flex-start;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.ask-chips--row::-webkit-scrollbar{display:none}
+.ask-chip{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border-radius:22px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-primary);font:inherit;font-size:.86rem;font-weight:600;white-space:nowrap;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.ask-chip:active:not(:disabled){transform:scale(.97)}
+.ask-chip:disabled{opacity:.6}
+.ask-composer{display:flex;gap:8px;align-items:center}
+.ask-input{flex:1 1 auto;min-width:0;min-height:44px;box-sizing:border-box;padding:11px 16px;border:1px solid var(--border);border-radius:22px;background:var(--bg-input);color:var(--text-primary);font:inherit;font-size:1rem;line-height:1.35;resize:none;overflow-y:auto;height:calc(var(--ask-rows,1) * 1.35em + 22px);max-height:calc(3 * 1.35em + 22px);transition:height 120ms var(--ease-native)}   /* DI-1110: one to three lines, then it scrolls inside itself */
+.ask-send{flex:0 0 44px;display:inline-flex;align-items:center;justify-content:center;width:44px;min-width:44px;height:44px;padding:0;border:0;border-radius:50%;background:var(--maroon);color:var(--on-accent);cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.ask-send:active:not(:disabled){transform:scale(.97)}
+.ask-send-ic{display:inline-flex;width:16px;height:16px}
+.ask-send-ic svg{width:16px;height:16px;display:block}
+.ask-composer--off .ask-input{opacity:.55}
+.ask-composer--off .ask-send{background:var(--bg-card-alt);color:var(--text-muted)}
+/* batch 3 (DI-970): the composer's counter from 250 characters, and the one link under a model answer ("Open What if") */
+.ask-count{flex:0 0 auto;font-size:.75rem;line-height:1.4;color:var(--text-muted);font-variant-numeric:tabular-nums}
+.ask-count--hide{display:none}
+.ask-link{display:block;margin:0 auto;min-height:44px;padding:0 16px;border:0;border-radius:22px;background:none;color:var(--maroon-text);font:inherit;font-size:.875rem;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.ask-link:active{transform:scale(.97)}
+.ask-banner{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px 8px 8px 16px;border-radius:12px;background:var(--bg-card-alt);border:1px solid var(--border);color:var(--text-primary);font-size:.82rem;font-weight:600}
+.ask-note{margin:0;text-align:center;font-size:.75rem;line-height:1.4;color:var(--text-muted)}
+.ask-share{min-height:44px;width:100%;display:flex;align-items:center;justify-content:center;gap:8px;transition:transform var(--motion-fast) var(--ease-native)}
+.ask-share:active{transform:scale(.97)}
+.ask-share--pri{background:var(--maroon);color:var(--on-accent);border:1px solid transparent}
+/* Third pass (2026-10-21): the approved elements that were missing (mockup frames 4, 5, 6). One easing curve (--ease-native) everywhere in this block; 8 pt inside a group, 16 pt between groups; no 2 or 4 pt
+   gap inside a text stack (the shipped .cd-item-main's 4 pt is lifted to 8 on these screens). */
+.ins-detail .cd-item-main,.yn .cd-item-main,.wi .cd-item-main,.gdi .cd-item-main{gap:8px}
+/* a game behind an insight is a button that opens the game (DI-964 item 3) */
+.ins-gitem{padding:0}
+.ins-grow{display:flex;align-items:center;gap:16px;width:100%;min-height:56px;margin:0;padding:8px 0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.ins-grow:active{transform:scale(.97)}
+.ins-grow .cd-item-main{flex:1 1 auto}
+/* the in-place disclosure (rank table, Seasons, a strategy row, a picker): the height opens over 150 ms; the closed body is out of the reading order (visibility) */
+.ins-xp{display:flex;flex-direction:column;min-width:0}
+.ins-xp-body{display:grid;grid-template-rows:0fr;visibility:hidden;transition:grid-template-rows var(--motion-fast) var(--ease-native),visibility 0s var(--ease-native) var(--motion-fast)}
+.ins-xp[data-open="true"]>.ins-xp-body{grid-template-rows:1fr;visibility:visible;transition:grid-template-rows var(--motion-fast) var(--ease-native),visibility 0s var(--ease-native) 0s}
+.ins-xp-in{min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:8px}
+.ins-xp-in::before,.ins-xp-in::after{content:'';display:block;height:0;flex:0 0 auto}
+.ins-xp-in--rows{gap:0}
+.ins-xp-in--rows::before,.ins-xp-in--rows::after{display:none}
+.ins-xp-in--rows>.ins-row{border-top:1px solid var(--border)}
+.ins-xp-chev{transition:transform var(--motion-fast) var(--ease-native)}
+.ins-xp[data-open="true"]>button .ins-xp-chev,.ins-xp[data-open="true"]>.ins-disc .ins-disc-chev{transform:rotate(90deg)}
+.ins-row--static{cursor:default;transition:none}
+.ins-row--static:active{transform:none}
+.ins-table{width:100%;border-collapse:collapse;font-size:.8125rem;line-height:1.35;font-variant-numeric:tabular-nums}
+.ins-table th,.ins-table td{padding:8px;text-align:left;border-top:1px solid var(--border);color:var(--text-primary);font-weight:400}
+.ins-table thead th{border-top:0;color:var(--text-secondary);font-weight:600}
+.ins-table tbody th{color:var(--text-secondary)}
+/* Your numbers: the rank by week (a small bar line, a taller bar is a higher place), "Compare with...", and the What if / Seasons rows */
+.yn-rank{display:flex;flex-direction:column;gap:8px;min-width:0}
+.yn-spark{display:flex;align-items:flex-end;gap:8px;height:44px;min-width:0}
+.yn-spark-bar{flex:1 1 0;min-width:4px;height:calc(var(--h,.5) * 100%);border-radius:4px 4px 0 0;background:var(--maroon-text)}
+.yn-links{gap:0}
+.yn-links>*+*{border-top:1px solid var(--border)}
+/* What if (frame 5): the retrospective caption, the strategy rows, the week-by-week bars (accent = the strategy, secondary = yours; never the win / loss colours), perfect cards */
+.wi-pin{margin:0;padding:8px 16px;border-radius:12px;background:var(--bg-card-alt);border:1px solid var(--border);color:var(--text-primary);font-size:.8125rem;font-weight:600;line-height:1.45}
+.wi-scope{align-self:center}
+.wi-group{gap:0}
+.wi-group>*+*{border-top:1px solid var(--border)}
+.wi-diff{flex:0 0 auto;font-size:.875rem;font-weight:600;line-height:1.35;color:var(--text-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}
+.wi-bars{display:flex;flex-direction:column;gap:8px}
+.wi-bar{display:flex;align-items:center;gap:8px;min-height:24px}
+.wi-bar-wk{flex:0 0 32px;font-size:.75rem;line-height:1;color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.wi-track{position:relative;flex:1 1 auto;height:24px}
+.wi-track::before{content:'';position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--border)}
+.wi-b{position:absolute;left:50%;height:8px;min-width:8px;width:calc(var(--f,0) * 100%);border-radius:4px}
+.wi-b--neg{left:auto;right:50%}
+.wi-b--zero{left:calc(50% - 4px);width:8px}
+.wi-b--would{top:0;background:var(--maroon-text)}
+.wi-b--yours{bottom:0;background:var(--text-secondary)}
+/* pull to refresh on Your numbers: the status pill sits above the screen's scroller (zero height in the flow, so nothing moves) */
+.ins-ptr-wrap{position:relative;flex:0 0 auto;height:0;overflow:visible;z-index:2}
+.ins-ptr{position:absolute;top:8px;left:50%;transform:translateX(-50%);margin:0;min-height:28px;padding:0 12px;display:inline-flex;align-items:center;border-radius:14px;background:var(--bg-card);border:1px solid var(--border);box-shadow:var(--shadow-card);font-size:.75rem;font-weight:600;color:var(--text-secondary);white-space:nowrap;opacity:0;pointer-events:none;transition:opacity var(--motion-fast) var(--ease-native)}
+.ins-ptr[data-phase="pulling"],.ins-ptr[data-phase="armed"],.ins-ptr[data-phase="refreshing"]{opacity:1}
+.ins-ptr[data-phase="armed"],.ins-ptr[data-phase="refreshing"]{color:var(--maroon-text)}
+/* Game Day (frame 6, DI-977): the Insights row on the Game view (one 56 pt card-row after the score card) and the Game insights sheet (the Ask sheet's recipe on its own ids) */
+.gv>.gdi-entry{margin:0}
+.gdi-entry{display:flex;align-items:center;gap:16px;width:100%;min-height:56px;padding:8px 16px;text-align:left;color:inherit;font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
+.gdi-entry:active{transform:scale(.97)}
+.gdi-entry .cd-item-main{flex:1 1 auto;gap:8px}
+.gdi-entry-icon{display:inline-flex;flex:0 0 auto;width:20px;height:20px;color:var(--maroon-text)}
+.gdi-entry-icon svg{width:20px;height:20px;display:block}
+#gdi-sheet-wrap{position:fixed;inset:0;z-index:8000}
+#gdi-sheet-wrap ~ .modal-overlay{z-index:8100}
+html:has(#gdi-sheet-wrap){overflow:hidden}
+#gdi-sheet{transform:translateY(calc(100% * var(--gdi-drag-y,0)));animation-duration:var(--motion-modal);animation-timing-function:var(--ease-native);transition:transform var(--motion-modal) var(--ease-native)}
+#gdi-sheet[data-dragging="true"]{transition:none}
+#gdi-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--gdi-drag-y,0));transition:opacity var(--motion-nav) var(--ease-native)}
+#gdi-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
+#gdi-sheet-wrap[data-closing]{pointer-events:none}
+body.native-shell #gdi-sheet .chat-sheet-header{position:relative;padding-top:14px;touch-action:none}
+#gdi-sheet .chat-sheet-header{align-items:center;margin-bottom:8px}
+#gdi-sheet .chat-sheet-close{width:44px;height:44px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;transition:transform var(--motion-fast) var(--ease-native)}
+#gdi-sheet .chat-sheet-close:active{transform:scale(.97)}
+#gdi-sheet .chat-sheet-scroll{flex:0 1 auto;min-height:0}
+#gdi-sheet-body{overscroll-behavior:contain;padding:0 4px 8px}
+.gdi-sub{margin:0;font-size:.8125rem;line-height:1.35;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gdi{display:flex;flex-direction:column;gap:16px;min-width:0}
+.gdi-live{text-align:center}
+.gdi-list{gap:0}
+.gdi-list>*+*{border-top:1px solid var(--border)}
+.gdi-fact--extra{display:none}
+.gdi-list[data-expanded="true"] .gdi-fact--extra{display:flex}
+.gdi-fact .cd-mark{flex:0 0 auto}
+.gdi-line.gv-xf,.gdi-sub.gv-xf{display:grid}
+.gdi-line.gv-xf>*,.gdi-sub.gv-xf>*{grid-area:1/1}
+@media (prefers-reduced-motion:reduce){.ins-disc,.ins-disc-chev,.ins-row,.ins-seg-btn,#ask-sheet,#ask-sheet-wrap .chat-sheet-backdrop,#ask-sheet .chat-sheet-close,.ask-chip,.ask-send,.ask-link,.ask-share,.ask-turn--new,.ins-read--new .ins-read-body,.ask-input,.ins-grow,.ins-xp-body,.ins-xp[data-open="true"]>.ins-xp-body,.ins-xp-chev,.ins-ptr,.gdi-entry,#gdi-sheet,#gdi-sheet-wrap .chat-sheet-backdrop,#gdi-sheet .chat-sheet-close{transition:none;animation:none}.ins-disc:active,.ins-row:active,.ins-seg-btn:active,#ask-sheet .chat-sheet-close:active,.ask-chip:active,.ask-send:active,.ask-link:active,.ask-share:active,.ins-grow:active,.gdi-entry:active,#gdi-sheet .chat-sheet-close:active{transform:none}}
+/* ═══ D2 lane 4 batch 2 — END ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
 /* ═══ SOCIAL PLATFORM v1 HOME — BEGIN (js/home.js: DI-367 card shell · DI-364 Now card · DI-368 native interactions · DI-371 every state) ══════════════════
    The Home feed's card system, appended as ONE banner-delimited block. SEMANTIC TOKENS ONLY — never a colour literal — so it reads correctly in Light, in Dark,
    and under every school overlay without a per-theme rule of its own (SP-52's theme work lands in parallel and re-points the tokens, not these selectors):
@@ -9152,6 +9952,8 @@ body.native-shell #swap-picker-sheet .chat-sheet-header{position:relative;paddin
 .feed-card-icon{display:inline-flex;flex:0 0 auto;width:16px;height:16px;color:var(--maroon-text)}
 .feed-card-icon svg{width:16px;height:16px}
 .feed-card-reason{display:inline-flex;align-items:center;min-height:24px;padding:0 8px;border-radius:12px;background:var(--bg-card-alt);color:var(--text-secondary);font-size:.72rem;font-weight:600;letter-spacing:.02em}
+/* D2 DI-806 (lane 3): the league chip ("IRB · CFB") for a member of two or more leagues — the reason pill's shape with a 1 pt border, bolder; FIRST in the eyebrow; never a button. */
+.feed-card-prov{display:inline-flex;align-items:center;min-height:24px;padding:0 8px;border-radius:12px;background:var(--bg-card-alt);border:1px solid var(--border);color:var(--text-secondary);font-size:.72rem;font-weight:700;letter-spacing:.02em;white-space:nowrap}
 .feed-card-title{margin:0;font-size:1rem;font-weight:600;line-height:1.35;color:var(--text-primary)}
 .feed-card-body{margin:0;font-size:.875rem;line-height:1.45;color:var(--text-secondary)}
 .feed-card-body--scribe{white-space:pre-line}
@@ -9213,12 +10015,21 @@ body.native-shell #swap-picker-sheet .chat-sheet-header{position:relative;paddin
    DI-587: NEW / EARLIER hairlines. DI-586: the windowing sentinel.
    DI-574: the new-posts pill — a sticky ZERO-height slot (it never pushes the feed) holding one 44 pt button; chevronLeft turned a quarter turn so it points up; a 150 ms fade with a slide of 8 pt or less. */
 .feed-card--tap{cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--motion-fast) var(--ease-native)}
-.feed-card--tap:active{transform:scale(.97)}
+.feed-card--tap[data-pressed="true"]{transform:scale(.97)}   /* T-05: the touch press (nav-gestures.js bindPressState()); the mouse's :active press sits with the Game Day rules, outside this block (no media query here, [11-16]) */
 .feed-card--tap:focus-visible{outline:2px solid var(--maroon-text);outline-offset:2px}
 .feed-card-chev{display:inline-flex;flex:0 0 auto;width:16px;height:16px;margin-left:auto;color:var(--text-secondary)}
 .feed-card-chev svg{width:16px;height:16px}
 /* D1 merge (2026-10-08): in a several-sport league a tappable card's eyebrow holds BOTH the sport chip (margin-left:auto, pushed to the trailing edge) and the chevron; the chip takes the free space and the chevron follows it at the 8 pt eyebrow gap, so the two never split the space and the chip never floats mid-row. */
 .sport-chip + .feed-card-chev{margin-left:0}
+/* D2 DI-851…857 (lane 3, UN/PF-512, 2026-10-19): TWO CARD FAMILIES, four signals, never colour alone — (1) a 3 pt leading edge inside the card radius (logical start edge), (2) the eyebrow's
+   lead label, (3) the trailing glyph (outbound arrow when the tap leaves Munera, chevron when it stays), (4) the VoiceOver prefix. The two aliases are declared on BODY, not :root: a :root
+   alias of a token a body.theme-* block overrides would resolve to the Munera value on every theme (SP-52 DI-448 R1; schoolthemetest [3]); on body each theme's own token is used.
+   No new hex, no tinted background. Action cards (Game Day, the nudges, notes, skeletons, dividers, the end marker) carry neither class. */
+body{--family-external-edge:var(--text-secondary);--family-league-edge:var(--maroon-text)}
+.card.fam-ext,.card.fam-lg{position:relative;overflow:hidden}
+.card.fam-ext::before,.card.fam-lg::before{content:'';position:absolute;inset-block:0;inset-inline-start:0;width:3px;z-index:1;pointer-events:none}
+.card.fam-ext::before{background:var(--family-external-edge)}
+.card.fam-lg::before{background:var(--family-league-edge)}
 /* W-92 (DI-W92-8, 2026-10-17): when each card happened — a quiet caption-level time on the eyebrow's trailing edge, [icon][reason][sport chip][time][chevron].
    The trailing three are ONE group (.feed-card-trail) pushed to the trailing edge, so they never split the row's free space between two auto margins, and at the
    largest text size the group drops to its own line together, right-aligned (it wraps inside itself only if it must, keeping its 8 pt gap). The time is

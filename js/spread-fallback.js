@@ -35,6 +35,8 @@ export const SPREAD_COPY = Object.freeze({
   PAUSED: "Spread lookup is paused to protect this month's allowance. Enter spreads yourself for now.",
   // DI-W71.10 (Drew D-80): this league has used today's vendor lookups. Calm and final for today: no Try again (trying again today cannot succeed).
   DAILY_LIMIT: "This league has used today's spread lookups. Try again tomorrow, or enter the spread yourself.",
+  // DI-926 (W-79, migration 0063): every league together has used today's shared allowance. Calm and final for today, like DAILY_LIMIT (no Try again).
+  PLATFORM_LIMIT: 'The shared lookup allowance for today is used up. Try again tomorrow or enter the spread yourself.',
   ERROR: "Couldn't check other sources. Try again.",
   TRY_AGAIN: 'Try again',
   OFFLINE: "Couldn't fetch games — check your connection and try again.",
@@ -161,7 +163,7 @@ export function includePatch(current, card) {
  * deps: { getGames(weekId), fetchEspn(week) -> { games?, error? }, saveGame(game), lookup(weekId) -> { ok:true, results, unmatched } | { ok:false, reason }, now() -> ISO,
  *         onStage?(stage: 'espn'|'other') }. `skipEspn` runs stage 2 alone (the automatic check right after a fetch has just run stage 1).
  * @returns {Promise<{ stage1: { ran, error, added, all }, other: { status, cards, noLine } }>}
- *   other.status: 'skipped' | 'cards' | 'none' | 'not_configured' | 'paused' | 'unsupported' | 'daily_limit' | 'error'
+ *   other.status: 'skipped' | 'cards' | 'none' | 'not_configured' | 'paused' | 'unsupported' | 'daily_limit' | 'platform_limit' | 'error'
  */
 export async function runFindSpreads({ week, deps, skipEspn = false }) {
   const out = { stage1: { ran: false, error: false, added: 0, all: false }, other: { status: 'skipped', cards: [], noLine: 0 } };
@@ -190,7 +192,7 @@ export async function runFindSpreads({ week, deps, skipEspn = false }) {
   try { answer = await deps.lookup(week.weekId); } catch { answer = { ok: false, reason: 'vendor_error' }; }
   if (!answer || answer.ok !== true) {
     const r = answer && answer.reason;
-    out.other.status = r === 'not_configured' ? 'not_configured' : r === 'paused' ? 'paused' : r === 'unsupported' ? 'unsupported' : r === 'daily_limit' ? 'daily_limit' : 'error';
+    out.other.status = r === 'not_configured' ? 'not_configured' : r === 'paused' ? 'paused' : r === 'unsupported' ? 'unsupported' : r === 'daily_limit' ? 'daily_limit' : r === 'platform_limit' ? 'platform_limit' : 'error';
     return out;
   }
   const byId = new Map(still.map((g) => [String(g.gameId), g]));

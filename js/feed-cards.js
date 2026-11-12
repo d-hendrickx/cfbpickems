@@ -76,6 +76,8 @@ import { arePicksPublic } from './storage.js';
 import { FORBIDDEN_META_KEYS, assertMetaIsBlindSafe } from './notify-copy.js';
 import { calculateAtsWinner, evaluatePick, computeFirstKickoff } from './scoring.js';
 import { weeksInGroup } from './data-model.js';
+import { slateName, slateFact } from './slate-name.js';   // int/v0.31.0 (D2 lane 2 x lane 3): a card names a night by its label (`slate` beside `weekN`; football facts stay byte-identical)
+import { gameFinalMs } from './game-state.js';   // D2 sweep DI-1091 (W-102): a game's card is dated by its FINAL SCORE (`finalAt`), not its last edit
 import { SEASON_2025 } from './history-2025.js';
 import { orderedGradedResults, streakChange, loneWolfWinner, STREAK_MIN, MILESTONE_MARKS } from './stats-core.js';
 import { memberSeasonStats, sortWeeks, isUpsetCalled, upsetLineLabel, atsMarginOf } from './stats.js';
@@ -154,23 +156,23 @@ export const CARD_REVEAL_CLASS = Object.freeze({
  * The whole map is DEEP-frozen (security N1) — an exported allow-list is not editable at runtime.
  */
 export const CARD_ALLOWED_FACTS = deepFreeze({
-  'slate.published':  ['weekN', 'gameCount', 'firstKickoff'],
-  'picks.submitted':  ['weekN', 'submittedCount', 'totalPlayers'],
-  'week.revealed':    ['weekN', 'submittedCount', 'totalPlayers'],
+  'slate.published':  ['weekN', 'slate', 'gameCount', 'firstKickoff'],
+  'picks.submitted':  ['weekN', 'slate', 'submittedCount', 'totalPlayers'],
+  'week.revealed':    ['weekN', 'slate', 'submittedCount', 'totalPlayers'],
   // chips: [{playerId, initials, result}] — result is 'win'|'loss' ONLY, never a team name per player.
   // D1 Lane B / DI-610 (2026-10-08): `gameId`, `gameIds`, `teamIds`, `weekId` — INTERNAL ids (no pick data) — are how a card says which game it is about, so the Game view's Related section can find it (cardsForGame).
   // W-92 (DI-W92-2): `standout` — who called the upset or stood alone on this game, as display names and counts only (see NESTED_FACT_KEYS).
   'game.final':       ['awayTeam', 'homeTeam', 'awayScore', 'homeScore', 'atsWinnerTeam', 'marginCovered', 'chips', 'gameId', 'gameIds', 'teamIds', 'weekId', 'standout'],
   'called.it':        ['playerId', 'playerName', 'team', 'matchup', 'spreadDisplay', 'scoreLine', 'gameId', 'gameIds', 'teamIds', 'weekId'],
   'stood.alone':      ['playerId', 'playerName', 'team', 'matchup', 'against', 'gameId', 'gameIds', 'teamIds', 'weekId'],
-  'week.result':      ['weekN', 'weekWinnerName', 'weekWinnerRecord', 'weekLoserName', 'weekLoserRecord'],
+  'week.result':      ['weekN', 'slate', 'weekWinnerName', 'weekWinnerRecord', 'weekLoserName', 'weekLoserRecord'],
   // almaMaterResult: { team, result } — result 'win'|'loss' ONLY (see NESTED_FACT_KEYS).
   'player.week':      ['playerId', 'playerName', 'weekN', 'wins', 'losses', 'streakRun', 'streakKind', 'almaMaterResult'],
   // W-92 (DI-W92-1): ONE card per week and kind. Its people are `members`, each item rebuilt from its own allow-list (NESTED_FACT_KEYS).
-  'rank.changed':     ['weekN', 'members', 'rankedCount'],
-  'streak.extended':  ['weekN', 'members'],
-  'streak.broken':    ['weekN', 'members'],
-  'milestone.reached': ['weekN', 'members'],
+  'rank.changed':     ['weekN', 'slate', 'members', 'rankedCount'],
+  'streak.extended':  ['weekN', 'slate', 'members'],
+  'streak.broken':    ['weekN', 'slate', 'members'],
+  'milestone.reached': ['weekN', 'slate', 'members'],
   'year.ago':         ['note', 'name', 'record', 'weekN', 'superlative'],
   'scribe.post':      ['messageId', 'body', 'timestamp', 'gameId', 'gameIds', 'teamIds', 'weekId'],
   'lockerroom.top':   ['authorName', 'excerpt', 'reactionCount'],
@@ -348,13 +350,14 @@ export function nameList(names, max = 3) {
  * @param {{requiresReveal:string, gameId?:string|null}} card
  * @param {{week:object, game?:object|null, confirmedWeekStatus?:string|null, viewerId?:string|null, now?:number}} ctx
  */
-export function isRevealed(card, { week, game = null, confirmedWeekStatus = null, viewerId = null, now = Date.now() } = {}) {
+export function isRevealed(card, { week, game = null, confirmedWeekStatus = null, viewerId = null, now = Date.now(), isPublic = null } = {}) {
   void viewerId; void now; // part of the contract (and of mutation seams); the gate itself never keys on the viewer
   if (!card) return false;
   if (card.requiresReveal === 'never') return true;
+  const pub = revealPredicate(isPublic);
   if (card.requiresReveal === 'after-reveal') {
     if (!week) return false;
-    const revealed = arePicksPublic(week); // js/storage.js — the ONE function every gate asks; NEVER canViewOtherPicks()
+    const revealed = pub(week); // js/storage.js arePicksPublic — the ONE function every gate asks (or, for a peeked league, that league's own — see revealPredicate); NEVER canViewOtherPicks()
     if (!revealed) return false;
     // Game-scoped types ALSO require THEIR OWN game to be final: the reveal being
     // true only means the WEEK is public; it says nothing about any one game inside
@@ -372,9 +375,21 @@ export function isRevealed(card, { week, game = null, confirmedWeekStatus = null
     // The WHOLE WEEK must be finalized per the SERVER-CONFIRMED status (RG-253) —
     // never the local mirror's optimistic value. `confirmedWeekStatus` is resolved
     // once, by the snapshot assembler; this function does not re-derive it.
-    return arePicksPublic(week) && confirmedWeekStatus === 'final';
+    return pub(week) && confirmedWeekStatus === 'final';
   }
   return false; // deny-by-default — an unknown or missing requiresReveal never renders
+}
+
+/**
+ * D2 DI-811 (thread 101826-D2, lane 3) — WHICH LEAGUE'S REVEAL. storage.js `arePicksPublic(week)` is the ACTIVE league's answer: in supabase mode it reads the adapter's
+ * server-confirmed status BY WEEK ID, and week ids are unique only within a league (the tables' keys are `(league_id, id)`), so asking it about ANOTHER league's week could
+ * answer with the active league's week of the same id. A snapshot built for a peeked league therefore carries its own `isPublic` (that league's server-reported status,
+ * js/peek-store.js), and every gate in this module asks it. Omitted — every snapshot the active league builds, every caller that predates DI-811 — it IS arePicksPublic,
+ * so nothing about the active league changes. A predicate that throws, or answers anything but `true`, is NOT public (fail closed).
+ */
+function revealPredicate(isPublic) {
+  if (typeof isPublic !== 'function') return arePicksPublic;
+  return (w) => { try { return isPublic(w) === true; } catch { return false; } };
 }
 
 /**
@@ -383,13 +398,14 @@ export function isRevealed(card, { week, game = null, confirmedWeekStatus = null
  * parity (`seasonStandingsRows()`): a week hidden from history, and a demo week
  * (UN-71), contribute to nothing unless `includeDemo`.
  */
-export function buildRevealedView({ weeks = [], games = [], picks = [], weeklyResults = [], confirmedStatusFor = null, includeDemo = false } = {}) {
+export function buildRevealedView({ weeks = [], games = [], picks = [], weeklyResults = [], confirmedStatusFor = null, includeDemo = false, isPublic = null } = {}) {
   const confirmed = (w) => { try { return typeof confirmedStatusFor === 'function' ? confirmedStatusFor(w) : null; } catch { return null; } };
+  const pub = revealPredicate(isPublic);   // D2 DI-811: the snapshot's own league's reveal (arePicksPublic when none is given)
   const revealedWeeks = asArray(weeks).filter(w => {
     if (!w) return false;
     if (!includeDemo && w.dataSourceMode === 'demo') return false;
     if (w.showInHistory === false) return false;
-    return arePicksPublic(w) && confirmed(w) === 'final';
+    return pub(w) && confirmed(w) === 'final';
   });
   const ids = new Set(revealedWeeks.map(w => w.weekId));
   return {
@@ -617,6 +633,7 @@ function normalizeSnapshot(snapshot) {
     submissionCounts: (s.submissionCounts && typeof s.submissionCounts === 'object') ? s.submissionCounts : {},
     chatScribe: asArray(cc.scribe), chatLockerRoom: asArray(cc.lockerRoom),
     currentWeekId: s.currentWeekId ?? null, todayKey: typeof s.todayKey === 'string' ? s.todayKey : null,
+    isPublic: typeof s.isPublic === 'function' ? s.isPublic : null,   // D2 DI-811: a peeked league's own reveal; null = arePicksPublic (the active league)
   };
 }
 
@@ -650,7 +667,7 @@ export function deriveCards(snapshot, opts = {}) {
   // (`s.confirmedStatusFor`; absent => null => nothing), and restricts games / picks / results to those weeks.
   // It can only REMOVE: an honest view passes through unchanged, an unfiltered one is cut back to the truth.
   // `includeDemo:true` leaves the demo decision to `keepWeek` below (the commissioner exception lives there).
-  const rv = buildRevealedView({ weeks: s.revealedWeeks.filter(hasWeekN), games: s.revealedGames, picks: s.revealedPicks, weeklyResults: s.revealedWeeklyResults, confirmedStatusFor: s.confirmedStatusFor, includeDemo: true });
+  const rv = buildRevealedView({ weeks: s.revealedWeeks.filter(hasWeekN), games: s.revealedGames, picks: s.revealedPicks, weeklyResults: s.revealedWeeklyResults, confirmedStatusFor: s.confirmedStatusFor, includeDemo: true, isPublic: s.isPublic });
   s.revealedWeeks = rv.revealedWeeks; s.revealedGames = rv.revealedGames; s.revealedPicks = rv.revealedPicks; s.revealedWeeklyResults = rv.revealedWeeklyResults;
 
   // ── who ── (truthy `active`, exactly as Standings filters: app.js `getPlayers().filter(p => p.active)`)
@@ -668,7 +685,7 @@ export function deriveCards(snapshot, opts = {}) {
   const keepWeek = (w) => hasWeekN(w) && (viewerIsCommissioner || w.dataSourceMode !== 'demo');
   const gate = (type, week, game = null) => isRevealed(
     { type, requiresReveal: CARD_REVEAL_CLASS[type], gameId: game ? game.gameId : null },
-    { week, game, confirmedWeekStatus: confirmedFor(week), viewerId, now },
+    { week, game, confirmedWeekStatus: confirmedFor(week), viewerId, now, isPublic: s.isPublic },
   );
   // S-C10 — other-members'-picks confirmation. `selfExempt` is true only for a fact that
   // needs NO other member's data (their own pick; their own week/streak/milestone).
@@ -745,7 +762,7 @@ export function deriveCards(snapshot, opts = {}) {
 
     if (gate('slate.published', W) && st !== 'draft' && wGames.length > 0) {
       push('slate.published', W, {
-        facts: { weekN: W.weekNumber, gameCount: wGames.length, firstKickoff: first ? first.toISOString() : null },
+        facts: { weekN: W.weekNumber, ...slateFact(W), gameCount: wGames.length, firstKickoff: first ? first.toISOString() : null },
         sortKey: isoAt(openMs),
       });
     }
@@ -753,7 +770,7 @@ export function deriveCards(snapshot, opts = {}) {
     // stays there as the count changes — the count is a living fact on an old card, not a new event (the Now card carries "N/6 in" live).
     if (gate('picks.submitted', W) && st === 'open' && countsKnown) {
       push('picks.submitted', W, {
-        facts: { weekN: W.weekNumber, submittedCount: nz(counts.submittedCount), totalPlayers: nz(counts.totalPlayers) },
+        facts: { weekN: W.weekNumber, ...slateFact(W), submittedCount: nz(counts.submittedCount), totalPlayers: nz(counts.totalPlayers) },
         sortKey: isoAt(openMs, 1),
       });
     }
@@ -761,11 +778,11 @@ export function deriveCards(snapshot, opts = {}) {
     // js/supabase-backend.js) and lives for the whole LIVE window, re-derived each render. Its time is the REVEAL: the first kickoff
     // (UN-116 — picks go public at kickoff). A week made live by hand before its first kickoff falls back to its lock time, then to its
     // open time, so the card never sorts in the future and never at the clock.
-    if (gate('week.revealed', W) && arePicksPublic(W) && st !== 'final') {
+    if (gate('week.revealed', W) && revealPredicate(s.isPublic)(W) && st !== 'final') {
       const firstMs = first ? first.getTime() : 0, lockedMs = toMs(W.lockedAt);
       const revealMs = (firstMs && firstMs <= now) ? firstMs : (lockedMs && lockedMs <= now) ? lockedMs : openMs;
       push('week.revealed', W, {
-        facts: { weekN: W.weekNumber, ...(countsKnown ? { submittedCount: nz(counts.submittedCount), totalPlayers: nz(counts.totalPlayers) } : {}) },
+        facts: { weekN: W.weekNumber, ...slateFact(W), ...(countsKnown ? { submittedCount: nz(counts.submittedCount), totalPlayers: nz(counts.totalPlayers) } : {}) },
         sortKey: isoAt(revealMs),
       });
     }
@@ -776,7 +793,7 @@ export function deriveCards(snapshot, opts = {}) {
   // gate) — S-C5. What is computed before the gate is the game's own public row data (score line, timestamps), never a pick.
   for (const W of allWeeks) {
     for (const g of gamesOf(W.weekId)) {
-      const base = toMs(g.lastUpdated) || toMs(g.updatedAt) || toMs(g.kickoff);
+      const base = gameFinalMs(g);   // DI-1091: finalAt, else lastUpdated, else updatedAt, else kickoff
       const picksOf = () => s.picks.filter(p => p && p.gameId === g.gameId);
 
       if (gate('game.final', W, g) && othersConfirmed(W)) {
@@ -839,7 +856,7 @@ export function deriveCards(snapshot, opts = {}) {
   for (const W of revealedSorted) {
     const rowsW = s.revealedWeeklyResults.filter(r => r && r.weekId === W.weekId);
     const wGames = s.revealedGames.filter(g => g && g.weekId === W.weekId);
-    const lastGameMs = wGames.reduce((m, g) => Math.max(m, toMs(g.lastUpdated) || toMs(g.updatedAt) || toMs(g.kickoff)), 0);
+    const lastGameMs = wGames.reduce((m, g) => Math.max(m, gameFinalMs(g)), 0);
     const endMs = toMs(W.finalizedAt) || lastGameMs;
     const prevW = sameSeasonBefore(W);
     const rec = (r) => dashPair(r.correctCount ?? r.correctPicks ?? 0, r.incorrectCount ?? r.incorrectPicks ?? 0);
@@ -853,7 +870,7 @@ export function deriveCards(snapshot, opts = {}) {
       const ln = loser && (nameOf(loser.playerId) || loser.displayName);
       if (winner && loser && winner.playerId !== loser.playerId && wn && ln) {
         push('week.result', W, {
-          facts: { weekN: W.weekNumber, weekWinnerName: String(wn), weekWinnerRecord: rec(winner), weekLoserName: String(ln), weekLoserRecord: rec(loser) },
+          facts: { weekN: W.weekNumber, ...slateFact(W), weekWinnerName: String(wn), weekWinnerRecord: rec(winner), weekLoserName: String(ln), weekLoserRecord: rec(loser) },
           sortKey: isoAt(endMs, 6),
         });
       }
@@ -875,7 +892,7 @@ export function deriveCards(snapshot, opts = {}) {
       }
       moved.sort((a, b) => (a.toRank - b.toRank) || byRoster(a, b));
       if (moved.length) {
-        push('rank.changed', W, { facts: { weekN: W.weekNumber, rankedCount: activePlayers.length, members: moved }, sortKey: isoAt(endMs, 5), reason: groupReason('rank.changed', moved) });
+        push('rank.changed', W, { facts: { weekN: W.weekNumber, ...slateFact(W), rankedCount: activePlayers.length, members: moved }, sortKey: isoAt(endMs, 5), reason: groupReason('rank.changed', moved) });
       }
     }
 
@@ -896,8 +913,8 @@ export function deriveCards(snapshot, opts = {}) {
         if (ch.state === 'active') extended.push({ playerId: p.playerId, playerName: nm, run: ch.run, kind: ch.kind });
         else if (ch.state === 'broken') broken.push({ playerId: p.playerId, playerName: nm, run: ch.run, kind: ch.kind });
       }
-      if (extended.length) push('streak.extended', W, { facts: { weekN: W.weekNumber, members: extended }, sortKey: isoAt(endMs, 3), reason: groupReason('streak.extended', extended) });
-      if (broken.length && gate('streak.broken', W)) push('streak.broken', W, { facts: { weekN: W.weekNumber, members: broken }, sortKey: isoAt(endMs, 3), reason: groupReason('streak.broken', broken) });
+      if (extended.length) push('streak.extended', W, { facts: { weekN: W.weekNumber, ...slateFact(W), members: extended }, sortKey: isoAt(endMs, 3), reason: groupReason('streak.extended', extended) });
+      if (broken.length && gate('streak.broken', W)) push('streak.broken', W, { facts: { weekN: W.weekNumber, ...slateFact(W), members: broken }, sortKey: isoAt(endMs, 3), reason: groupReason('streak.broken', broken) });
     }
 
     // milestone.reached — a MILESTONE_MARKS crossing this week, RAW correct counts. W-92 (DI-W92-1): ONE card per week; a member who
@@ -912,7 +929,7 @@ export function deriveCards(snapshot, opts = {}) {
         const crossed = MILESTONE_MARKS.filter(mark => before < mark && after >= mark);
         if (crossed.length) crossedMembers.push({ playerId: p.playerId, playerName: nm, mark: Math.max(...crossed), total: after });
       }
-      if (crossedMembers.length) push('milestone.reached', W, { facts: { weekN: W.weekNumber, members: crossedMembers }, sortKey: isoAt(endMs, 4), reason: groupReason('milestone.reached', crossedMembers) });
+      if (crossedMembers.length) push('milestone.reached', W, { facts: { weekN: W.weekNumber, ...slateFact(W), members: crossedMembers }, sortKey: isoAt(endMs, 4), reason: groupReason('milestone.reached', crossedMembers) });
     }
   }
 
@@ -1026,7 +1043,7 @@ export function cardCopy(card, { escHtml, formatKickoff = (iso) => String(iso), 
   // D1 DI-528 — in a several-sport league a card that quotes a week, a rank or a record NAMES its sport ("NFL Week 3", "moved into 1st in NFL"); with no `sportCode` (a one-sport league, a chat
   // card) every string below is exactly v0.29.0's.
   const sp = sportCode ? t(sportCode) : '';
-  const wk = (n) => `${sp ? `${sp} ` : ''}Week ${numStr(n)}`;
+  const wk = (n) => `${sp ? `${sp} ` : ''}${slateName({ weekN: numStr(n), slate: f.slate }) || 'Week '}`;   // int/v0.31.0: a night's label, else "Week n" (exactly as before)
   const inSp = sp ? ` in ${sp}` : '';
   // W-92 (DI-W92-1 / DI-W92-4): a combined card's people. Each name crosses the injected escaper BEFORE it is joined, so the list is safe
   // wherever the names are; `runs` is the supporting line's "{name} {figure}" for the first three, then " · +N more".

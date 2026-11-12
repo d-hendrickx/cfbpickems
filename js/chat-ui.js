@@ -69,6 +69,7 @@
  * All state lives in chat.js; this module renders and forwards intents.
  */
 
+import { slateName } from './slate-name.js';
 import {
   initChat, startChatTransport, onChat, chatStatus, getMessages, getMessage, resolveTag,
   sendMessage, sendEvent, editMessage, deleteMessage, toggleReact, pinMessage,
@@ -91,6 +92,7 @@ import {
   forceRefresh,
   isPrivateSelfTest,
   isPrivateScribeChangelog,
+  confirmAppend,
 } from './chat.js';
 import {
   scribeInspectMessage, scribeTrigger, resetScribeMemory,
@@ -107,8 +109,11 @@ import {
   sportDbCodeForGame, secondHalfFromPeriod, crowdTurn, almaSideState, almaCondition,
 } from './scribe-scoring.js';
 import {
-  recordFeedback, recordFeedbackReasons, getFeedbackFor, isScribeFeedbackEnabled,
+  recordFeedback, recordFeedbackReasons, getFeedbackFor, isScribeFeedbackEnabled, onFeedbackWrite,
 } from './scribeFeedback.js';
+// D2 lane 1 (UN-531 / DI-781..788): the ONE submission-state language - the popover's inline status, the rewrite modal's button and the chat-settings fields all use it.
+import { attachSubmit, createSubmitMachine, confirmSeamKey } from './submit-state.js';
+import { avatarHTML } from './avatar.js';   // D2 lane 1 (DI-776): the one avatar renderer; a bubble with no photo draws exactly what it drew before
 import {
   getSession, getPlayers, getPlayer, getCurrentWeek, getGames, getWeeks,
   getPicks, getEffectiveWeekStatus, arePicksPublic,
@@ -123,6 +128,7 @@ import {
   // imports nothing, unlike app.js's claimedAlmaMaters(), which chat-ui must not import).
   almaMaterPlayersForTeam,
 } from './data-model.js';
+import { lineText } from './formats.js';   // D2 lane 2 (DI-915): the one line formatter
 import { calculateAtsWinner } from './scoring.js';
 // RG-176 — the generic repaint-survival mechanism. app.js wires it at
 // navigateTo(), but renderChatPage() is ALSO reached from four places that
@@ -147,7 +153,8 @@ import { icon } from './icons.js';   // D1 Lane B / DI-588: the Back chip's chev
 import { sourceChipsHTML, openSourceChip } from './source-chips.js';
 // DI-444 (UN-387, 2026-09-29) — the ONE platform predicate (AD-68); zero
 // dependencies, so this adds no cycle. Read by chatHeaderRefreshWanted() only.
-import { isNativeShell } from './platform.js';
+import { isNativeShell, openExternalUrl } from './platform.js';
+import { matchPickedPost, pickedPostCardHTML, buildEmbedFrame, EMBED_WEB_ENABLED } from './picked-post.js';   // D2 DI-1046…1050 (lane 3): picked-post cards (a pure leaf)
 // Step 6 (full-app review, 2026-09-26) — nav-gestures.js imports only
 // platform and haptics, so this adds no cycle. bindBottomAnchor (v0.27.x
 // bugfix, 2026-09-27) keeps the page thread pinned across the keyboard
@@ -163,9 +170,10 @@ import { validShareRef, shareBody, shareMeta, findRecentShare, SHARE_COPY } from
 // D1 (DI-553 / DI-530) — the Locker Room's sport pills. competition.js is the read API over the storage seam (no cycle: it imports storage/auth/data-model/sports, never this file) and the ONE
 // source of "which sports does this league run" (isMultiSport / leagueSports); chat-sport-pills.js is the pure row builder; sport-tag.js is the closed set of tags.
 import { isMultiSport, leagueSports, competitionForWeek, getAllCurrentWeeks } from './competition.js';
-import { sportPillsMarkup } from './chat-sport-pills.js';
+import { scopeButtonModel, scopeButtonMarkup, scopeMenuMarkup } from './chat-sport-pills.js';   // D2 sweep W-128: the one scope button and its menu replace the sport row (sportPillsMarkup stays the accessible-name contract's home)
 import { validSportTag } from './sport-tag.js';
-import { getIdentityEpoch } from './auth.js';   // D1 (DI-553, N3): the pill is reset by ANY sign-in — see sportFilterOwnerKey()
+import { getIdentityEpoch } from './auth.js';
+import { sportLabelOf } from './home-leagues.js';   // D2 DI-860 (lane 3): the sport WORD for the thread header's league line (a pure leaf; the Game view's own source)   // D1 (DI-553, N3): the pill is reset by ANY sign-in — see sportFilterOwnerKey()
 
 export const chatDigest = _digest;
 
@@ -219,6 +227,7 @@ const U = {
   returnFilter: null,       // the filter they were reading, restored after login
   returnAt: 0,              // when it was set — the intent expires (see RETURN_WINDOW_MS)
   sportFilter: 'all',       // D1 (DI-553) — the Locker Room's sport pill: 'all' | a dbCode. IN MEMORY ONLY (never stored), independent of the sport context, and read through currentSportFilter()
+  scopeOpen: false,         // D2 sweep W-128 (DI-793) — the scope menu under the button at the row's leading edge: open or closed. IN MEMORY ONLY; closes on a choice, an outside tap, Escape and a tab change
   sportFilterOwner: '',     // D1 (DI-553, DI-538, security A5, N3) — whose selection it is: `${memberId}|${leagueId}|${identityEpoch}`; another account, another league or ANY new sign-in reads it as 'all'
 };
 
@@ -1039,19 +1048,53 @@ function systemSportFields({ weekId = '', gameId = '' } = {}) {
     return code && ctx.sports.includes(code) ? { sportTag: code } : {};
   } catch { return {}; }
 }
-function sportPillsHTML() {
+/**
+ * D2 sweep, W-128 (UN-533 / DI-792…795): the Locker Room's SCOPE — which league and which sport the room is showing — is ONE pill at the leading edge of the thread row (it replaces the
+ * old sport row), with an anchored menu behind it. The room's league name comes from the cached memberships (never a read of league data), the sports from the same list the sport row
+ * used (js/competition.js, `[]` in a one-sport league), the selection from currentSportFilter() — nothing about filtering changed, only where the control lives.
+ */
+function scopeLeagueName() {
+  try {
+    const id = getActiveLeagueId();
+    const m = (getCachedMemberships() || []).find((x) => x && x.leagueId === id);
+    return m && typeof m.leagueName === 'string' ? m.leagueName : '';
+  } catch { return ''; }
+}
+const scopeLeagueCount = () => { try { return (getCachedMemberships() || []).length; } catch { return 0; } };
+/** Unread rows in the sports the button is NOT showing (a dot on the button, never a count). With `All` selected everything is in view, so nothing is "elsewhere". */
+function scopeOtherUnread(sports, selected) {
+  if (!sports.length || selected === 'all') return 0;
+  const ctx = chatSportCtx(sports), self = me();
+  let n = 0;
+  for (const s of sports) {
+    if (s.dbCode === selected) continue;
+    const u = unreadForRender(self, sportCursorTag(s.dbCode), ctx);
+    if (u && u.known) n += u.count;
+  }
+  return n;
+}
+function scopeButtonHTML() {
   const sports = lockerRoomSportList();
-  if (!sports.length) return '';
-  const ctx = chatSportCtx(sports);
-  const self = me();
+  const selected = sports.length ? currentSportFilter(sports) : 'all';
+  return scopeButtonMarkup({ model: scopeButtonModel({ leagueName: scopeLeagueName(), sports, selected }), otherUnread: scopeOtherUnread(sports, selected), open: U.scopeOpen, esc });
+}
+function scopeMenuHTML() {
+  if (!U.scopeOpen) return '';
+  const sports = lockerRoomSportList();
+  if (sports.length < 2) return '';
+  const ctx = chatSportCtx(sports), self = me();
   const view = (u) => ({ badge: unreadBadgeText(u), unread: (u && u.known) ? u.count : 0 });
-  return sportPillsMarkup({
+  return scopeMenuMarkup({
+    showLeague: scopeLeagueCount() > 1, leagueName: scopeLeagueName(),
     sports, selected: currentSportFilter(sports),
     allUnread: view(unreadForRender(self, 'all')),
     unreadOf: (dbCode) => view(unreadForRender(self, sportCursorTag(dbCode), ctx)),
     esc,
   });
 }
+let _scopeHooks = null;
+/** app.js registers what the league row and a one-sport league's button open (the SAME league selector the header pill opens: it lives in app.js, which this module cannot import). */
+export function registerChatScopeHooks(h) { _scopeHooks = (h && typeof h === 'object') ? h : null; }
 /**
  * A deep link or "Open in chat" that wants ONE message on screen: if the selected sport pill would hide it, the filter goes back to `All` first (DI-553: a target is never hidden). Returns
  * whether the filter was reset. A message that is not in the fold YET (a push can arrive before the room has been read this session) also resets it: it may land hidden, and a target is never
@@ -1153,10 +1196,14 @@ function pillsHTML() {
     html += `<button class="chat-pill${U.filter === tag ? ' active' : ''}${live ? ' chat-pill-live' : ''}" data-chat-filter="${esc(tag)}">
       ${live ? '<span class="live-pulse"></span>' : ''}${esc(gamePillLabel(found.game, found.week, labelSports, labelCtx))} ${dot(n)}</button>`;
   });
-  // D1 (DI-553): the sport row (above, '' in a one-sport league) rides in the same call, so the page template, the periodic repaint and the search toggle swap ONE thing.
-  return `${sportPillsHTML()}<div class="chat-pills-scroll">${html}</div>`;
+  // D2 sweep W-128: the sport row that used to ride above this row is gone — the scope button (scopeButtonHTML) holds the sport choice; this is the thread row alone.
+  return `<div class="chat-pills-scroll">${html}</div>`;
 }
 export const _pillsHTMLForTest = pillsHTML;
+// D2 sweep W-128 test seams (the `_xForTest` convention): the scope button and menu markup the page paints, and the menu's open state
+export const _scopeButtonHTMLForTest = () => scopeButtonHTML();
+export const _scopeMenuHTMLForTest = (open = true) => { const was = U.scopeOpen; U.scopeOpen = open; try { return scopeMenuHTML(); } finally { U.scopeOpen = was; } };
+export const _scopeOpenForTest = () => U.scopeOpen;
 
 /**
  * Player-visible retention notice (UN-88). A player who scrolls back and hits
@@ -1304,12 +1351,18 @@ function linkifySegment(text) {
  * `<img>`) wrapper it writes itself — it cannot be used to prematurely close
  * or inject into that tag.
  */
-function renderUrlToken(raw, imgPreview) {
+function renderUrlToken(raw, imgPreview, post = null) {
   let url = raw;
   let trail = '';
   const tm = URL_TRAILING_PUNCT_RE.exec(url);
   if (tm) { trail = tm[0]; url = url.slice(0, url.length - trail.length); }
   if (!url) return raw;   // degenerate: the whole token was punctuation — bail out unlinked
+  // D2 DI-1046 (lane 3; security R3/R8): in the ROOM BUBBLE only (`post` is bodyHTML's), an X or Reddit POST link is the static card — matched, rebuilt and escaped in js/picked-post.js;
+  // the card carries the message id and the link's position, never a URL. Every other caller (and every other link) keeps the plain link below.
+  if (post && typeof post.mid === 'string') {
+    const pp = matchPickedPost(url);
+    if (pp) { const html = pickedPostCardHTML(pp, { esc, mid: post.mid, n: post.n, showButton: embedsOfferedHere() }); post.n += 1; return `${html}${trail}`; }
+  }
   const href = /^www\./i.test(url) ? `https://${url}` : url;
   // XSS-HARDEN round 2, C6 (2026-09-12) — DEFENCE IN DEPTH. Today the only
   // caller is bodyHTML(), whose URL_RE matches http(s):// and www. and nothing
@@ -1342,12 +1395,62 @@ function bodyHTML(m) {
   const escaped = esc(m.body);
   const imgPreview = isChatImagePreviewEnabled();
   const parts = escaped.split(URL_RE);
+  const post = { mid: String(m.id ?? ''), n: 0 };   // D2 DI-1046: the picked-post cards' positions in THIS message (the tap re-derives them from the stored body)
   let out = '';
   for (let i = 0; i < parts.length; i++) {
-    out += (i % 2 === 1) ? renderUrlToken(parts[i], imgPreview) : linkifySegment(parts[i] || '');
+    out += (i % 2 === 1) ? renderUrlToken(parts[i], imgPreview, post) : linkifySegment(parts[i] || '');
   }
   return out;
 }
+
+// ── D2 DI-1046…1050 (lane 3): picked-post cards ──────────────────────────────────────────────────────────────────────────────────────────────────────
+/** The posts a stored message body links, in the order bodyHTML() numbers them (the SAME split and the same trailing-punctuation rule) — what a tap resolves against, never the DOM. */
+function pickedPostsInBody(body) {
+  const parts = esc(typeof body === 'string' ? body : '').split(URL_RE);
+  const out = [];
+  for (let i = 1; i < parts.length; i += 2) {
+    let url = parts[i];
+    const tm = URL_TRAILING_PUNCT_RE.exec(url);
+    if (tm) url = url.slice(0, url.length - tm[0].length);
+    const pp = url ? matchPickedPost(url) : null;
+    if (pp) out.push(pp);
+  }
+  return out;
+}
+let _embedWebForTest = false;
+/** "Show post" exists only on the web, and only while the feature constant is on (R7). The native shell never offers it, whatever the constant says. */
+function embedsOfferedHere() { return !isNativeShell() && (EMBED_WEB_ENABLED === true || _embedWebForTest === true); }
+/** A card's tap: the post the message links at that position, opened OUTSIDE Munera (the in-app browser on native, a new tab on the web) — the rebuilt URL only. */
+function openPickedPost(mid, n) {
+  const m = typeof mid === 'string' && mid ? getMessage(mid) : null;
+  if (!m || m.deleted) return;
+  const pp = pickedPostsInBody(m.body)[Math.floor(Number(n) || 0)];
+  if (!pp) return;
+  haptic('light');
+  openExternalUrl(pp.url);
+}
+/** "Show post" (web, R7): the platform's own embed page in the ONE sandboxed iframe, inside this card's frame host, on the member's tap; never on native, never twice. */
+function showPickedPost(btn, mid, n) {
+  if (!embedsOfferedHere() || !btn || typeof btn.closest !== 'function') return;
+  const m = typeof mid === 'string' && mid ? getMessage(mid) : null;
+  if (!m || m.deleted) return;
+  const pp = pickedPostsInBody(m.body)[Math.floor(Number(n) || 0)];
+  const card = btn.closest('[data-post-card]');
+  const host = card ? card.querySelector('[data-post-frame]') : null;
+  if (!pp || !host || host.querySelector('iframe')) return;
+  const frame = buildEmbedFrame(document, pp);
+  if (!frame) return;
+  host.setAttribute('data-loading', 'true');
+  frame.addEventListener('load', () => { try { host.removeAttribute('data-loading'); } catch { /* the card left */ } }, { once: true });
+  host.hidden = false;
+  host.appendChild(frame);
+  btn.hidden = true;
+}
+export const _pickedPostsInBodyForTest = pickedPostsInBody;
+export const _showPickedPostForTest = showPickedPost;
+export const _openPickedPostForTest = openPickedPost;
+/** Test seam (embedtest): the web "Show post" path, exercised while the shipped constant stays OFF. Never called from js/ (embedtest pins it). */
+export function _setEmbedWebForTest(on) { _embedWebForTest = on === true; }
 
 /**
  * The static quote visual — author + truncated body — extracted so the FEAT-5
@@ -1765,6 +1868,7 @@ function toggleFeedbackPicker(anchorEl, mid, renderFn = renderChatPage, surface 
   // the write repaints the room, and the repaint re-mounts whatever the marker
   // names — doing it first would strand this mount on a detached row.
   const discarded = existing ? takeFeedbackPickerFlush() : null;
+  if (!_fbMachine.locked) { _fbInFlight.clear(); _fbMachine.reset(); }   // a fresh open starts idle: the last line's "Saved" is not this line's news
   // Row container, never the trigger button — see the block comment above.
   const host = anchorEl.closest?.('.chat-actions, .chat-reactions') || anchorEl;
   mountFeedbackPicker({ host, m, self, mid, surface, renderFn, working: null });
@@ -1943,14 +2047,50 @@ function dropFeedbackPickerWork() {
 const chipsForRating = (rating, chips) =>
   chips.filter(c => (SCRIBE_FEEDBACK_CHIP_FAMILY[c] === 'positive') === (rating === 'hit'));
 
+/**
+ * D2 lane 1 (UN-531 / DI-783) - THE POPOVER'S ONE SAVE-STATE LINE. A rating, a chip set and a note are instant writes (no Save button), so the state is one quiet line under the popover:
+ * "Saving…" while any of this device's feedback events is still on its way, "Saved" once the SERVER has assigned every one a seq (chat.js confirmAppend), and the Try Again line when the outbox gave
+ * up or the server could not be reached ("Saved on this device. Waiting to reach the server."). The machine is module-level and so is the in-flight set, because every write repaints the room and
+ * the popover is rebuilt each time; the rebuilt popover re-binds to the SAME machine and so shows the live state. A fresh open starts idle (a "Saved" from another line is not this line's news).
+ */
+const _fbMachine = createSubmitMachine({});
+// The acknowledgment both adopters ask (the popover's line and the rewrite modal's Save): chat.js confirmAppend(). A test seam swaps it, the way the other `_xForTest` seams here do.
+let _confirmAppendImpl = (id, opts) => confirmAppend(id, opts);
+export function _setConfirmAppendForTest(fn) { _confirmAppendImpl = typeof fn === 'function' ? fn : (id, opts) => confirmAppend(id, opts); }
+const _fbInFlight = new Map();   // id -> retry count: the events this device sent that the server has not yet acknowledged
+let _fbStatusBinding = null;
+async function drainFeedbackAcks() {
+  while (_fbInFlight.size) {
+    const [id, tries] = _fbInFlight.entries().next().value;
+    const r = await _confirmAppendImpl(id, { retry: tries > 0 });   // Try Again re-queues an event the outbox gave up on; it never sends a second copy
+    if (r === 'saved') { _fbInFlight.delete(id); continue; }
+    _fbInFlight.set(id, tries + 1);
+    return r;                                                  // 'refused' | 'pending': an unacknowledged event ends the pass; the line reports it and Try Again re-asks
+  }
+  return 'saved';
+}
+onFeedbackWrite((id) => {
+  _fbInFlight.set(id, 0);
+  if (!_fbMachine.locked) _fbMachine.submit(drainFeedbackAcks);   // a write made while a pass is running is picked up by that pass's loop
+});
+function bindFeedbackStatus(picker) {
+  if (_fbStatusBinding) { _fbStatusBinding.destroy(); _fbStatusBinding = null; }
+  const statusEl = picker?.querySelector?.('[data-fb-status]');
+  if (!statusEl) return;
+  _fbStatusBinding = attachSubmit({ statusEl, machine: _fbMachine, idleLabel: 'Save', listen: false, run: drainFeedbackAcks });
+}
+export function _feedbackMachineForTest() { return _fbMachine; }
+export function _resetFeedbackStatusForTest() { _fbInFlight.clear(); _fbMachine.reset(); }
+
 function mountFeedbackPicker({ host, m, self, mid, surface, renderFn, working }) {
   document.getElementById('chat-feedback-picker')?.remove();
   const picker = document.createElement('div');
   picker.className = 'reaction-picker feedback-picker-wrap';
   picker.id = 'chat-feedback-picker';
   picker.dataset.mid = mid;
-  picker.innerHTML = feedbackPopoverHTML(m, self, working);
+  picker.innerHTML = feedbackPopoverHTML(m, self, working) + '<div class="ss-status ss-fb-status" data-fb-status></div>';
   host.appendChild(picker);
+  bindFeedbackStatus(picker);
 
   const myState = () => getFeedbackFor(mid)[self] || {};
   const curRating = () => (working && 'rating' in working ? working.rating : (myState().rating || null));
@@ -2273,7 +2413,8 @@ function openFeedbackTextModal({ targetId, category, title, placeholder, submitL
       <textarea class="form-textarea" id="fb-modal-text" maxlength="1000" rows="4" placeholder="${esc(placeholder)}">${esc(prefill)}</textarea>
       <span class="chat-char-count" id="fb-modal-count" style="display:none"></span>
     </div>
-    <button class="btn btn-primary btn-block" id="fb-modal-submit"${requireText ? ' disabled' : ''}>${esc(submitLabel)}</button>
+    <button class="btn btn-primary btn-block ss-btn" id="fb-modal-submit"${requireText ? ' disabled' : ''}>${esc(submitLabel)}</button>
+    <div class="ss-status" id="fb-modal-status"></div>
     ${allowRemove ? `<button class="btn btn-ghost btn-block" id="fb-modal-remove">Remove</button>` : ''}
   </div>`;
   document.body.appendChild(ov);
@@ -2283,57 +2424,50 @@ function openFeedbackTextModal({ targetId, category, title, placeholder, submitL
   const textEl = ov.querySelector('#fb-modal-text');
   const countEl = ov.querySelector('#fb-modal-count');
   const submitBtn = ov.querySelector('#fb-modal-submit');
+  // D2 lane 1 (UN-531 / DI-781..786) - the Save button is the shared submission-state control. While "Saving…" it is disabled (no double submit, DI-785); it says Saved only once the SERVER has
+  // acknowledged the event (chat.js confirmAppend), then the modal dismisses 600 ms later; a refused or unreachable server leaves the modal OPEN with the text kept and Try Again.
+  // The event id is remembered across Try Again so a retry re-asks about the SAME event instead of sending a second copy - unless the text changed, which is a new answer.
+  const getText = () => (textEl.value || '').trim();
+  let sentId = null, sentText = null;
+  const saveTask = async () => {
+    const text = getText();
+    if (requireText && !text) return false;
+    const retry = !!sentId && sentText === text;
+    if (!retry) {
+      // weigh_in: text if supplied, else the boolean flag - see correction #7's note above. rewrite: always text (requireText guarantees non-empty).
+      const id = recordFeedback({ targetId, category, value: text || true, author: self });
+      if (typeof id !== 'string') { sentId = null; return false; }   // disabled master switch / nothing queued: never "Saved"
+      sentId = id; sentText = text;
+    }
+    return _confirmAppendImpl(sentId, { retry });
+  };
+  const binding = attachSubmit({
+    button: submitBtn, statusEl: ov.querySelector('#fb-modal-status'), idleLabel: submitLabel, run: saveTask,
+    dismissOnSaved: true,
+    onDismiss: () => {
+      close();
+      // Reviewer BLOCK finding #1 / N1 follow-up (c), 2026-09-12: this receipt goes to the app-level toast every other "saved" confirmation uses (see showReceipt() above),
+      // never the gated notification toast.
+      if (category === 'rewrite') showReceipt('Rewrite saved.');
+      renderFn();
+    },
+  });
   const sync = () => {
     // Same near-limit threshold/format as the composer's own #chat-count
-    // (E1's explicit reuse requirement — not a second counter convention).
+    // (E1's explicit reuse requirement - not a second counter convention).
     const len = textEl.value.length;
     if (countEl) { countEl.style.display = len >= 900 ? 'inline' : 'none'; countEl.textContent = `${len}/1000`; }
-    if (requireText && submitBtn) submitBtn.disabled = !textEl.value.trim();
+    if (requireText && submitBtn && binding.machine.state === 'idle') submitBtn.disabled = !textEl.value.trim();
   };
-  textEl?.addEventListener('input', sync);
+  textEl?.addEventListener('input', () => { binding.dirty(); sync(); });
   sync();
-  // Non-blocking finding #5 — an explicit clear (value: null), the same
+  // Non-blocking finding #5 - an explicit clear (value: null), the same
   // "explicit clear event, not silence" shape E1 already uses for re-tapping
   // a selected rating (chat.js's applyTo() 'feedback' branch treats `null` as
-  // a real, replace-worthy value — never a no-op).
+  // a real, replace-worthy value - never a no-op).
   ov.querySelector('#fb-modal-remove')?.addEventListener('click', () => {
     recordFeedback({ targetId, category, value: null, author: self });
     close();
-    renderFn();
-  });
-  submitBtn?.addEventListener('click', () => {
-    const text = (textEl.value || '').trim();
-    if (requireText && !text) return;
-    // weigh_in: text if supplied, else the boolean flag — see correction #7's
-    // note above. rewrite: always text (requireText guarantees non-empty).
-    recordFeedback({ targetId, category, value: text || true, author: self });
-    close();
-    // Reviewer BLOCK finding #1: _toastWouldSuppress() suppresses on BOTH the
-    // chat page AND the dashboard — i.e. every page a rewrite can actually be
-    // submitted from (the modal only opens from a message rendered in chat).
-    // Without `force:true` this toast was unconditionally a silent no-op.
-    // `force` bypasses that suppression exactly like the pick-reveal system
-    // announcement already does (line ~2326, `showToast({author:'system',
-    // body:...}, {force:true})`) — and this MUST follow the same
-    // message-shaped-object precedent, not a bare string: drainToast() reads
-    // `msg.author`/`msg.body` and pipes `msg.author` through initialsOf(),
-    // which does `nameOf(id).slice(0,2)` for any non-scribe/system author —
-    // a bare string has no `.author`, so `nameOf(undefined)` returns
-    // `undefined` and `.slice()` on it throws. `author:'system'` is the exact
-    // short-circuit initialsOf()/nameOf() already have for this case (⚙ /
-    // "League"), so this renders safely, not just "doesn't crash."
-    //
-    // N1 follow-up (c), 2026-09-12 — RESOLVED, the other way round. The note
-    // that used to sit here flagged this toast as the one RECEIPT among
-    // chat-ui's notices and left it literal pending a ruling. The ruling:
-    // receipts are not notifications, so they do not belong on the gated
-    // notification toast at all. This now goes to the app-level toast every
-    // other "saved" confirmation in the app uses — see showReceipt() above for
-    // why that is the right layer rather than a bypass flag in showToast().
-    // The whole {force:true} / message-shaped-object dance goes with it: the
-    // app toast takes a plain string, so there is no initialsOf()/nameOf()
-    // hazard to guard against here any more.
-    if (category === 'rewrite') showReceipt('Rewrite saved.');
     renderFn();
   });
 }
@@ -2348,9 +2482,12 @@ function openFeedbackTextModal({ targetId, category, title, placeholder, submitL
  * styles.css (the #notif-priming-btn precedent), not by touching .btn-sm, whose
  * 34px base is shared by every compact row in the app.
  *
- * Destination is Rules → Release notes, not the Picks card (coordinator Q1):
- * the Picks card shows only the current release, and a player tapping this three
- * weeks later wants the release the post is about.
+ * Destination is the release history (control center → Help & Feedback →
+ * Version history, opened at THIS release by app.js openReleaseHistory(); T-03,
+ * 2026-10-18 — it said Rules → Release notes until DI-304 moved the history),
+ * not the Picks card (coordinator Q1): the Picks card shows only the current
+ * release, and a player tapping this three weeks later wants the release the
+ * post is about.
  */
 function whatsNewLinkHTML(m) {
   if (m.meta?.kind !== 'whatsNew') return '';
@@ -2503,7 +2640,7 @@ function messageHTML(m, self, showNewDivider) {
   return `${showNewDivider ? '<div class="chat-new-divider"><span>NEW</span></div>' : ''}
   <div class="chat-msg${mine ? ' chat-mine' : ''}${scribe ? ' chat-scribe' : ''}${privateChip ? ' chat-msg-private' : ''}${pending ? ' is-pending' : ''}${failed ? ' is-failed' : ''}" data-mid="${esc(m.id)}">
     <span class="chat-swipe-reply-icon" aria-hidden="true">↩</span>
-    <div class="chat-avatar${scribe ? ' chat-avatar-scribe' : ''}${mine ? ' chat-avatar-mine' : ''}" ${accent ? `style="background:${esc(accent)};color:#fff"` : ''}>${esc(initialsOf(m.author))}</div>
+    ${avatarHTML(scribe ? null : { playerId: m.author }, 'md', { tag: 'div', cls: `chat-avatar${scribe ? ' chat-avatar-scribe' : ''}${mine ? ' chat-avatar-mine' : ''}`, initials: initialsOf(m.author), accent: accent || '' })}
     <div class="chat-bubble-col">
       <div class="chat-meta">
         <span class="chat-author">${esc(nameOf(m.author))}</span>${mine ? '<span class="sr-only">You</span>' : ''}
@@ -2561,14 +2698,17 @@ export const _messageHTMLForTest = messageHTML;
 let _shareResolver = null;
 /** @param {{available:(ref)=>boolean, open:(ref)=>void}|null} r */
 export function registerShareResolver(r) { _shareResolver = (r && typeof r.available === 'function' && typeof r.open === 'function') ? r : null; }
-function shareAvailable(ref) {
+// Security J-2 (2026-10-22): the resolver is also told WHO SENT the message (its `author`, stamped by the server's chat_append from the sender's own seat; never meta a member writes),
+// so a reference whose meaning depends on its sender (a What-if strategy is the SENDER's own) is refused when it names somebody else.
+const shareCtxOf = (m) => ({ author: m && typeof m.author === 'string' && m.author ? m.author : null });
+function shareAvailable(ref, ctx = { author: null }) {
   if (!ref || !_shareResolver) return false;
-  try { return _shareResolver.available(ref) === true; } catch { return false; }
+  try { return _shareResolver.available(ref, ctx) === true; } catch { return false; }
 }
 function shareAttachHTML(m) {
   if (!m || !m.meta || typeof m.meta !== 'object' || !Object.prototype.hasOwnProperty.call(m.meta, 'ref')) return '';
   const ref = validShareRef(m.meta.ref);
-  if (ref && shareAvailable(ref)) {
+  if (ref && shareAvailable(ref, shareCtxOf(m))) {
     return `<button type="button" class="chat-share-attach" data-share-open="${esc(m.id)}">${esc(SHARE_COPY.open)}<span class="chat-share-chev" aria-hidden="true">${icon('chevronRight')}</span></button>`;
   }
   return `<p class="chat-share-attach chat-share-attach--none">${esc(SHARE_COPY.unavailable)}</p>`;
@@ -2578,10 +2718,10 @@ function openShareAttachment(mid) {
   const m = typeof mid === 'string' && mid ? getMessage(mid) : null;
   if (!m || m.deleted || m.author === 'scribe') return;
   const ref = validShareRef(m.meta && m.meta.ref);
-  if (!ref || !shareAvailable(ref)) return;
+  if (!ref || !shareAvailable(ref, shareCtxOf(m))) return;
   haptic('light');
   if (document.getElementById('chat-sheet-wrap')) closeSheet();   // opened from a game's thread sheet: the sheet steps aside for the detail
-  try { _shareResolver.open(ref); } catch (e) { console.error('[chat] the shared item could not open', e); }
+  try { _shareResolver.open(ref, shareCtxOf(m)); } catch (e) { console.error('[chat] the shared item could not open', e); }
 }
 /** "You already shared this": this member's message for the same reference in the same place in the last 10 minutes, or null. */
 export function findShareDuplicate({ ref, gameTag = '' } = {}) {
@@ -2809,11 +2949,11 @@ export function renderChatPage() {
       // and offers the way back to every message; a game that has its pill keeps the header exactly as it was (the pill is its label, and the Locker Room pill is the way back).
       const offPill = !activeGameTags().includes(U.filter);
       const wkN = Number(found.week.weekNumber);
-      const weekText = Number.isFinite(wkN) && wkN > 0 ? `Week ${wkN}` : String(found.week.label || 'Week');
+      const weekText = Number.isFinite(wkN) && wkN > 0 ? slateName(found.week) : String(found.week.label || 'Week');   // D2 lane 2: a game night is named by its label
       const matchupText = offPill ? `${esc(g.awayTeam)} at ${esc(g.homeTeam)} · ${esc(weekText)}` : `${esc(g.awayTeam)} @ ${esc(g.homeTeam)}`;
       viewHeader = `<div class="chat-view-header${headerCls}">
         <div><strong>${matchupText}</strong>
-          <span class="text-muted text-xs">${esc(formatSpread(g.lockedSpread ?? g.spread, g.favorite, g) || '')}</span></div>
+          <span class="text-muted text-xs">${esc(lineText({ ...g, spread: g.lockedSpread ?? g.spread }, undefined, { formatSpread }) || '')}</span></div>
         <div>${g.status === GAME_STATUS.LIVE ? `<span class="live-pulse"></span> LIVE ${score}` : score}</div>
       </div>${offPill ? '<div class="chat-view-back"><button type="button" class="chat-view-all" data-chat-filter="all">All messages</button></div>' : ''}`;
     }
@@ -2865,21 +3005,25 @@ export function renderChatPage() {
   const searchQuery = U.searchQuery.trim();
   const scrollBodyHTML = (U.searchOpen && searchQuery)
     ? searchResultsHTML(searchQuery)
-    : `${(retentionOn() || backfillBlockedByEpoch()) ? '' : '<button class="chat-load-older" id="chat-load-older">↑ load earlier</button>'}${msgsHTML}`;
+    : `${(retentionOn() || backfillBlockedByEpoch()) ? '' : '<button class="chat-load-older" id="chat-load-older">↑ load earlier</button>'}${chatTipHTML()}${msgsHTML}`;
 
   const pageHTML = `
     ${banner}
     ${retentionNoticeHTML()}
     <div class="chat-sticky-stack">
-      <div class="chat-header-row">
-        <h2>Chat <span class="badge badge-beta" title="Still being tested — tell us if something looks wrong">BETA</span> ${_chatSyncBadgeHTML()}</h2>
+      <!-- D2 sweep W-128 (UN-533 / DI-792…795): ONE row. The old title row and the sport row are gone: the sync chip (only on an error), the scope button (league and
+           sport), the thread pills (or the search bar, in place) and the search button share a single 44 pt row. The tab bar names the page; the loud-fail rule keeps its chip. -->
+      <div class="chat-topbar${U.searchOpen ? ' is-searching' : ''}">
+        ${_chatSyncBadgeHTML()}
+        ${scopeButtonHTML()}
+        ${U.searchOpen ? searchBarHTML() : pillsHTML()}
         <div class="chat-header-actions">
-          <button class="btn btn-ghost btn-sm" id="chat-search-btn" title="Search chat" aria-label="Search chat">🔍</button>
+          <button class="btn btn-ghost btn-sm" id="chat-search-btn" title="Search chat" aria-label="Search chat">${icon('search')}</button>
           ${chatHeaderRefreshWanted() ? refreshControlHTML('chat-refresh') : ''}
         </div>
       </div>
+      ${scopeMenuHTML()}
       ${returnChipHTML()}
-      ${U.searchOpen ? searchBarHTML() : pillsHTML()}
       ${viewHeader}
     </div>
     <!-- DI-442 (UN-385, 2026-09-29, Drew: the composer should read as "the
@@ -2931,8 +3075,10 @@ export function renderChatPage() {
   // of the page is rebuilt around it. Falls back to the whole-page write —
   // and RG-174's draft restore below — whenever it cannot (first render, a
   // different player, signed out). See carryComposerAcross().
+  const pillPlaces = readPillRowPlaces(c);           // T-04 / FB-045 — the pill rows' place, before the write replaces them
   const carried = carryComposerAcross(c, pageHTML, 'chat-input', _composerOwner);
   if (!carried) c.innerHTML = pageHTML;
+  restorePillRowPlaces(c, pillPlaces);
 
   bindChatPage();
   // DI-344/345 §Render paths — the SAME isLeaguePaused(league) check
@@ -3052,24 +3198,57 @@ function renderPillsOnly() {
   const host = document.querySelector('#page-chat .chat-pills-scroll');
   // D1 (DI-553): pillsHTML() now carries the sport row above its own row (its dots move with the same marks; it appears if the league just became multi-sport and goes if it stopped being one),
   // so the old sport row, if any, is dropped as the pair is swapped in. A one-sport league has none, so this adds nothing there.
-  if (host) document.querySelector('#page-chat .chat-sport-pills')?.remove();
+  const page = document.getElementById('page-chat');
+  const pillPlaces = readPillRowPlaces(page);        // T-04 / FB-045
   if (host) host.outerHTML = pillsHTML();
-  bindFilterButtons(document.getElementById('page-chat'));
+  if (host) restorePillRowPlaces(page, pillPlaces);
+  // D2 sweep W-128: the scope button's dot (unread in the sports it is not showing) moves with the same marks; the menu, when it is open, is left exactly as it is
+  const scopeBtn = document.getElementById('chat-scope-btn');
+  if (host && scopeBtn) { const html = scopeButtonHTML(); if (html) scopeBtn.outerHTML = html; }
+  bindFilterButtons(page);
+  bindScopeButton(page);
+}
+
+/**
+ * T-04 / FB-045 (Drew, 2026-10-17, TestFlight build 4: "Right swiping the game threads in the chat tab snaps back left and doesnt let me turn"). The sport row and the
+ * game-thread row are horizontal scrollers, and every repaint of the room REPLACES them: renderChatPage()'s page write (every poll and every inbound event while the room
+ * is open, every tap on a pill) and renderPillsOnly()'s outerHTML one second after each of those (the mark-read repaint). A replaced scroller starts at scrollLeft 0, so the
+ * row went back to its start under the reader's finger, and a thread tapped far along the row slid out of view a second later. The place each row had is read before the
+ * write and put back after it (the RG-279 rule the message list already follows, for the other axis). A different sport selection is a different game row: it opens at its
+ * start. Measured in iosgesturetest.mjs [T04].
+ */
+const PILL_ROW_SELECTORS = ['.chat-pills-scroll'];   // D2 sweep W-128: the sport row is gone (the scope menu holds the sport choice)
+let _pillRowSport = null;
+function readPillRowPlaces(host) {
+  const places = { sport: _pillRowSport, rows: [] };
+  if (!host || typeof host.querySelector !== 'function') return places;
+  for (const sel of PILL_ROW_SELECTORS) {
+    const el = host.querySelector(sel);
+    if (el && el.scrollLeft > 0) places.rows.push([sel, el.scrollLeft]);
+  }
+  return places;
+}
+function restorePillRowPlaces(host, places) {
+  const sport = U.sportFilter;
+  _pillRowSport = sport;
+  if (!host || typeof host.querySelector !== 'function' || !places) return;
+  for (const [sel, left] of places.rows) {
+    if (sel === '.chat-pills-scroll' && places.sport !== sport) continue;   // another sport's threads: a new list
+    const el = host.querySelector(sel);
+    if (el) el.scrollLeft = left;
+  }
 }
 
 // ── Signed-out composer replacement ───────────────────────────────────────────
 /**
- * v0.17.2: reading the Locker Room is open to anyone who cleared the site PIN;
- * posting requires a verified player. Previously this was a dead line of text.
- * Now it mirrors the dashboard's "Go to Picks" pattern — a real button that
- * routes to the login screen and comes back here once the player is verified.
+ * D2 lane 6 (D-108): there is NO anonymous read (DI-767 d). This prompt is reachable only in the credential-free local mode, where the player picker is the login; it mirrors the
+ * dashboard's "Go to Picks" pattern — a real button that routes to the picker and comes back here once a name is chosen.
  */
 function loginPromptHTML() {
   return `
   <div class="chat-login-prompt">
     <div class="chat-login-prompt-text">
-      <strong>Log in to post.</strong>
-      <span class="text-muted text-xs">Reading is open to the league — posting needs your PIN.</span>
+      <strong>Choose your name to post.</strong>
     </div>
     <button class="btn btn-primary btn-sm" id="chat-login-btn">Log in →</button>
   </div>`;
@@ -3129,7 +3308,7 @@ function composerHTML() {
   <div class="chat-composer">
     ${replyMsg ? `<div class="chat-replying">↩ replying to <strong>${esc(nameOf(replyMsg.author))}</strong>: ${esc(replyMsg.body.slice(0, 60))}
       <button id="chat-cancel-reply">✕</button></div>` : ''}
-    ${found ? `<div class="chat-tag-chip-row"><span class="chat-tag-chip">🏈 ${esc(gameShort(found.game, found.week))}
+    ${found ? `<div class="chat-tag-chip-row"><span class="chat-tag-chip">${esc(found.game && found.game.espnSport === 'nhl' ? '🏒' : '🏈')} ${esc(gameShort(found.game, found.week))}
       <button id="chat-strip-tag" title="Remove game tag — post to the main room only">✕</button></span>
       <span class="text-muted text-xs">tagged — shows in this game's thread and the Locker Room</span></div>` : ''}
     <div class="chat-composer-row">
@@ -3559,6 +3738,68 @@ function bindFilterButtons(root) {
   root?.querySelectorAll('[data-chat-sport-filter]').forEach(b => b.addEventListener('click', () => onSportPillTap(b.dataset.chatSportFilter)));   // D1 (DI-553)
 }
 
+// ── D2 sweep W-128 (UN-533 / DI-793): the scope button and its anchored menu ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+// The button opens the menu IN PLACE (the menu node is inserted under the row, the thread is not repainted, so nothing under it moves); it closes on a choice, a tap anywhere else, Escape and
+// a tab change. One document listener pair exists only while the menu is open. In a league that runs one sport the button is not a menu: it opens the league selector (app.js, through the hook).
+let _scopeDocOff = null;
+function scopeMenuNode() { return document.getElementById('chat-scope-menu'); }
+function closeScopeMenu() {
+  U.scopeOpen = false;
+  if (_scopeDocOff) { try { _scopeDocOff(); } catch { /* detached */ } _scopeDocOff = null; }
+  try { scopeMenuNode()?.remove(); } catch { /* already gone */ }
+  document.getElementById('chat-scope-btn')?.setAttribute('aria-expanded', 'false');
+}
+function bindScopeMenu(menu) {
+  if (!menu || menu.__scopeBound) return;
+  menu.__scopeBound = true;                                                 // the sport rows are bound by bindFilterButtons() (the page paint) or by openScopeMenu() (the in-place insert), never here: one handler each
+  menu.querySelectorAll('[data-chat-scope-action="league"]').forEach(b => b.addEventListener('click', () => {
+    closeScopeMenu();
+    try { _scopeHooks && typeof _scopeHooks.openLeagueSelector === 'function' && _scopeHooks.openLeagueSelector(); } catch { /* the selector is app.js's; a failure must not strand the menu */ }
+  }));
+}
+function openScopeMenu() {
+  U.scopeOpen = true;                       // the menu paints only while open (scopeMenuHTML reads it)
+  const html = scopeMenuHTML();
+  if (!html) { U.scopeOpen = false; return; }
+  const topbar = document.querySelector('#page-chat .chat-topbar');
+  if (!topbar) return;
+  scopeMenuNode()?.remove();
+  topbar.insertAdjacentHTML('afterend', html);
+  document.getElementById('chat-scope-btn')?.setAttribute('aria-expanded', 'true');
+  const menu = scopeMenuNode();
+  bindScopeMenu(menu);
+  menu?.querySelectorAll('[data-chat-sport-filter]').forEach(b => b.addEventListener('click', () => onSportPillTap(b.dataset.chatSportFilter)));
+  haptic('selection');
+  if (!_scopeDocOff && typeof document.addEventListener === 'function') {
+    const onDoc = (e) => {
+      const t = e && e.target;
+      if (t && typeof t.closest === 'function' && (t.closest('#chat-scope-menu') || t.closest('#chat-scope-btn'))) return;
+      closeScopeMenu();
+    };
+    const onKey = (e) => { if (e && e.key === 'Escape') { closeScopeMenu(); document.getElementById('chat-scope-btn')?.focus?.({ preventScroll: true }); } };
+    document.addEventListener('click', onDoc, true);
+    document.addEventListener('keydown', onKey);
+    _scopeDocOff = () => { document.removeEventListener('click', onDoc, true); document.removeEventListener('keydown', onKey); };
+  }
+}
+function bindScopeButton(root) {
+  const btn = (root || document).querySelector ? (root || document).querySelector('#chat-scope-btn') : null;
+  if (btn && !btn.__scopeBound) {
+    btn.__scopeBound = true;
+    btn.addEventListener('click', () => {
+      if (btn.getAttribute('data-chat-scope') === 'league') {
+        try { _scopeHooks && typeof _scopeHooks.openLeagueSelector === 'function' && _scopeHooks.openLeagueSelector(); } catch { /* app.js's selector failing must not break the room */ }
+        return;
+      }
+      if (U.scopeOpen) closeScopeMenu(); else openScopeMenu();
+    });
+  }
+  bindScopeMenu(scopeMenuNode());
+  if (U.scopeOpen && !scopeMenuNode()) closeScopeMenu();   // the state says open but there is no menu to show (the league became one-sport): never a stale open flag
+}
+/** A leave of the Chat tab closes the menu (app.js navigateTo calls it through chat-ui's page lifecycle: the next paint finds U.scopeOpen false). */
+export function closeChatScopeMenu() { if (U.scopeOpen) closeScopeMenu(); }
+
 /**
  * D1 (DI-553) — a tap on a sport pill. Tapping the pill that is already selected does nothing (no haptic, no repaint). Otherwise: the selection haptic (native only; haptic() gates itself),
  * the selection moves, and the SAME page repaints (the composer is carried across, nothing is rebuilt that was not already rebuilt for a game pill) with a 150 ms fade-in of the new list,
@@ -3569,6 +3810,8 @@ let _chatFadeNext = false;
 function onSportPillTap(value) {
   const sports = lockerRoomSportList();
   const next = sports.some(s => s.dbCode === value) ? value : 'all';
+  const wasOpen = U.scopeOpen;
+  if (wasOpen) closeScopeMenu();                                                  // D2 sweep W-128: choosing a row (the same one too) dismisses the menu
   if (next === currentSportFilter(sports)) return;
   haptic('selection');
   try { _returnHooks && typeof _returnHooks.onFilterChange === 'function' && _returnHooks.onFilterChange(); } catch { /* the chip is a courtesy */ }   // D1 DI-588: a sport pill is a chat filter pill; changing it ends the Back chip
@@ -3609,6 +3852,8 @@ function runChatListFade(scroll) {
  */
 function bindMessageActionButtons(host, renderFn, surface) {
   host?.querySelectorAll('[data-share-open]').forEach(b => b.addEventListener('click', () => openShareAttachment(b.dataset.shareOpen)));   // D1 DI-597: a shared item's "Open details"
+  host?.querySelectorAll('[data-post-open]').forEach(b => b.addEventListener('click', (e) => { e?.stopPropagation?.(); openPickedPost(b.dataset.postOpen, b.dataset.postN); }));   // D2 DI-1048: a picked post opens outside Munera
+  host?.querySelectorAll('[data-post-show]').forEach(b => b.addEventListener('click', (e) => { e?.stopPropagation?.(); showPickedPost(b, b.dataset.postShow, b.dataset.postN); }));   // D2 DI-1047: web only, behind the constant
   host?.querySelectorAll('[data-reply]').forEach(b => b.addEventListener('click', () => openReplyFor(b.dataset.reply, surface)));
   host?.querySelectorAll('[data-reply]').forEach(keepComposerFocus);   // RG-297 (RG-296 review finding 1)
   // ONE query, reused twice below — the wiring and the DI-268 re-mount both
@@ -3731,6 +3976,7 @@ export const _bindMessageActionButtons = bindMessageActionButtons;
 function bindChatPage() {
   const c = document.getElementById('page-chat'); if (!c) return;
   bindFilterButtons(c);
+  bindScopeButton(c);   // D2 sweep W-128
   bindReturnChip(c);   // D1 DI-588
   bindLoginPrompt(c);
 
@@ -4498,30 +4744,32 @@ function maybeMentionMenu(input) {
 // listener would go stale), and importing app.js here would make chat-ui.js
 // depend on the module that already imports it.
 /**
- * ══ DI-182a/f (STEP 3b) — THE ALMA-MATER DROPDOWN IS *ONE* IMPLEMENTATION ════
+ * ══ THE COLLEGE FOOTBALL TEAMS CONTROL IS *ONE* IMPLEMENTATION (DI-182f, carried into D2 lane 1 / DI-779, DI-1011..1012) ════════════════════════════════════════════════════
  *
- * DI-182f is explicit: the player's self-edit row and the commissioner's
- * `showEditPlayerModal()` must be "the SAME function call — one dropdown
- * implementation, two call sites." That function is `buildAlmaMaterOptions()`,
- * and it lives in js/app.js because it reads `cachedEspnTeamsList()`, which is
- * app.js MODULE STATE (the ESPN team catalog, fetched and cached there).
- *
- * chat-ui.js CANNOT IMPORT IT. app.js already imports chat-ui.js, so the reverse
- * edge would close a cycle — the same reason the "My SCRIBE File" button a few
- * lines below has its click wired in app.js by delegation rather than here.
- * Copying the builder into this file would satisfy the letter of DI-182a and
- * break DI-182f outright: two implementations that drift the first time the
- * catalog's shape changes.
- *
- * SO app.js REGISTERS ITS OWN BUILDER, ONCE, AT INIT. Dependency injection in
- * one direction only: chat-ui.js declares what it needs, app.js supplies it, and
- * there is still exactly one `buildAlmaMaterOptions()` in the codebase with two
- * callers. Unregistered (a suite importing chat-ui.js on its own), the row falls
- * back to the player's current value as the only option — which renders
- * correctly and saves correctly, it just cannot offer the catalog.
+ * The player's self-edit row and the commissioner's `showEditPlayerModal()` and the Profile pane are the SAME component, built by js/app.js (it reads the ESPN catalog and the week statuses,
+ * which are app.js module state). chat-ui.js CANNOT IMPORT app.js (app.js imports chat-ui.js: a cycle), so app.js REGISTERS its builder and its one writer, once, at init: dependency injection in
+ * one direction. Unregistered (a suite importing chat-ui.js on its own) the row renders nothing and writes nothing: fail-closed.
  */
-let _almaOptionsProvider = null;
-export function registerAlmaMaterOptionsProvider(fn) { _almaOptionsProvider = typeof fn === 'function' ? fn : null; }
+let _cfbTeamsProvider = null;
+let _cfbTeamsWriter = null;
+/** D2 lane 1 (UN-507 / DI-734): the Locker Room's first-use tip. The app owns the account store and the tip card; this module only PLACES the finished card at the top of the room (the main view, never a game thread or the Records). */
+let _chatTipProvider = null;
+export function registerChatTipProvider(fn) { _chatTipProvider = typeof fn === 'function' ? fn : null; }
+function chatTipHTML() {
+  if (!_chatTipProvider || U.filter !== 'all') return '';
+  try { const h = _chatTipProvider(); return typeof h === 'string' ? h : ''; } catch { return ''; }
+}
+export function registerCfbTeamsProvider(fn) { _cfbTeamsProvider = typeof fn === 'function' ? fn : null; }
+export function registerCfbTeamsWriter(fn) { _cfbTeamsWriter = typeof fn === 'function' ? fn : null; }
+export function _cfbTeamsProviderForTest() { return _cfbTeamsProvider; }
+const PREFS_CFB_IDS = Object.freeze({ home: 'pref-home', alma: 'pref-alma', desig: 'pref-desig' });
+function cfbTeamsRowHTML(player) {
+  if (_cfbTeamsProvider) {
+    try { return _cfbTeamsProvider(player, PREFS_CFB_IDS) || ''; }
+    catch (e) { console.warn('[chat-ui] the college football teams provider failed', e); }
+  }
+  return '';
+}
 /**
  * SECURITY F-3 / DI-T7.6 (audit #10) — THE SELF-EDIT WRITER, ALSO INJECTED.
  *
@@ -4540,17 +4788,9 @@ export function registerAlmaMaterOptionsProvider(fn) { _almaOptionsProvider = ty
  * silently did nothing is recoverable; one that blanked a phone number is not.
  */
 let _playerPatchWriter = null;
+const _prefsSubmitBindings = new Map();   // D2 lane 1: fieldId -> the live inline-status binding, replaced each time the panel is rebuilt
 export function registerPlayerPatchWriter(fn) { _playerPatchWriter = typeof fn === 'function' ? fn : null; }
 export function _playerPatchWriterForTest() { return _playerPatchWriter; }
-export function _almaOptionsProviderForTest() { return _almaOptionsProvider; }
-function almaOptionsHTML(current) {
-  if (_almaOptionsProvider) {
-    try { return _almaOptionsProvider(current); }
-    catch (e) { console.warn('[chat-ui] the alma-mater options provider failed', e); }
-  }
-  const cur = (current || '').trim();
-  return `<option value="">— None —</option>${cur ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : ''}`;
-}
 
 // UX Revamp wiring pass 1 (DI-303, 2026-09-25) — exported so js/app.js can
 // embed this SAME body inside the control-center drawer's Chat settings
@@ -4566,10 +4806,14 @@ export function prefsPanelHTML() {
   const prefs = getNotifPrefs();
   const accent = getAccent();
   const player = getPlayer(self);
+  const teamsHTML = cfbTeamsRowHTML(player);
+  const cfbRow = teamsHTML ? '<div class="chat-prefs-row chat-prefs-row-block">' + teamsHTML + '</div>'
+    + '<div class="chat-prefs-row chat-prefs-ss" id="pref-alma-ss" hidden><div class="ss-status" id="pref-alma-status"></div></div>' : '';
   return `
   <div class="card mb-md chat-prefs">
     <div class="chat-prefs-row"><label>Display name</label>
       <input class="form-input" id="pref-nick" maxlength="16" value="${esc(getChatNick() || '')}" placeholder="${esc(getPlayer(self)?.displayName || '')}" /></div>
+    <div class="chat-prefs-row chat-prefs-ss" id="pref-nick-ss" hidden><div class="ss-status" id="pref-nick-status"></div></div>
     <!-- ── DI-182a (Step 3b) — the two league-identity rows ──────────────────
          NAMED LIMITATION, carried over from the DI verbatim rather than quietly
          dropped: housing a LEAGUE-IDENTITY edit inside a panel titled around
@@ -4587,13 +4831,8 @@ export function prefsPanelHTML() {
     <div class="chat-prefs-row"><label>Initials</label>
       <input class="form-input" id="pref-initials" maxlength="3" autocapitalize="characters" spellcheck="false"
              value="${esc(player?.initials || '')}" placeholder="${esc((player?.displayName || '').charAt(0).toUpperCase())}" /></div>
-    <div class="chat-prefs-row"><label>Alma mater</label>
-      <select class="form-input" id="pref-alma">${almaOptionsHTML(player?.almaMater || '')}</select></div>
-    <!-- RG-TBD-B3 (2026-09-29) — the picker's one-line caption. Written by
-         js/app.js syncAlmaMaterCatalogNotes() right after the drawer paints and
-         again when the ESPN catalog fetch settles; its line box is reserved
-         (.alma-catalog-note) so the rows below never move. -->
-    <div class="chat-prefs-row text-muted alma-catalog-note" id="pref-alma-note" role="status" style="font-size:.75rem"></div>
+    <div class="chat-prefs-row chat-prefs-ss" id="pref-initials-ss" hidden><div class="ss-status" id="pref-initials-status"></div></div>
+    ${cfbRow}
     <div class="chat-prefs-row"><span class="text-muted" style="font-size:.75rem">Your commissioner can also set this for you.</span></div>
     <div class="chat-prefs-row"><label>Accent</label>
       <div class="chat-accent-row">${ACCENTS.map(a =>
@@ -4676,7 +4915,6 @@ function _prefsField(root, id) {
 }
 export function bindPrefsPanel(scopeEl = document) {
   const root = scopeEl && (typeof scopeEl.querySelector === 'function' || typeof scopeEl.getElementById === 'function') ? scopeEl : document;
-  _prefsField(root, 'pref-nick')?.addEventListener('change', e => { setChatNick(e.target.value); renderChatPage(); });
   // ── DI-182a (Step 3b) — the two league-identity rows ──────────────────────
   // Both write the SAME fields the commissioner's Edit Player modal writes,
   // through the SAME injected field patch (js/app.js's patchPlayer(), security
@@ -4686,7 +4924,7 @@ export function bindPrefsPanel(scopeEl = document) {
   // today. No new conflict-resolution logic is being built for this."
   const saveSelfField = (patch) => {
     const self = me();
-    if (!self) return;                       // anonymous viewers never reach this panel anyway
+    if (!self) return false;                 // anonymous viewers never reach this panel anyway
     // A FIELD PATCH, not a whole-row write. `patch` here is always exactly one
     // key — `initials` or `almaMater` — so the contact fields are provably not
     // in it, and patchPlayer() re-reads the row at write time rather than
@@ -4694,25 +4932,66 @@ export function bindPrefsPanel(scopeEl = document) {
     // above for why it arrives by injection instead of by import.
     if (!_playerPatchWriter) {
       console.warn('[chat-ui] no player-patch writer is registered; the self-edit was NOT saved (fail-closed: a write that did nothing is recoverable, one that blanked a contact field is not)');
-      return;
+      return false;
     }
-    _playerPatchWriter(self, patch);
+    return _playerPatchWriter(self, patch) !== false;   // D2 lane 1: the answer, so the inline status never says Saved for a write that did not happen
   };
-  _prefsField(root, 'pref-initials')?.addEventListener('change', e => {
+  // D2 lane 1 (UN-531 / DI-783, DI-785) - the three fields that save on `change` show their state inline, under the field (a button-less binding): "Saving…", "Saved", or the Try Again line.
+  // One machine per field id, so the rebuilt panel re-binds to the live state; the lock is the machine's (a blur and a Return on the same value cannot start two saves); "Saved" is the SERVER's
+  // word (the seam is asked about cfbp_players, DI-782), and an offline write reads "Saved on this device. Waiting to reach the server."
+  const bindInline = (fieldId, write) => {
+    const field = _prefsField(root, fieldId);
+    if (!field) return;
+    _prefsSubmitBindings.get(fieldId)?.destroy();
+    const binding = attachSubmit({
+      statusEl: _prefsField(root, `${fieldId}-status`), rowEl: _prefsField(root, `${fieldId}-ss`), idleLabel: 'Save', id: `chat-${fieldId}`, listen: false,
+    });
+    _prefsSubmitBindings.set(fieldId, binding);
+    field.addEventListener('input', () => binding.dirty());
+    field.addEventListener('change', (e) => {
+      const value = e.target.value;
+      binding.submit(async () => (write(value) === false ? 'refused' : confirmSeamKey('cfbp_players')));
+    });
+  };
+  bindInline('pref-nick', (v) => {
+    setChatNick(v);
+    renderChatPage();
+    return (getChatNick() || '') === String(v || '').slice(0, 16);      // the write landed iff the stored nick is what was typed (setChatNick answers nothing)
+  });
+  bindInline('pref-initials', (v) => {
     // Trimmed + uppercased to match getPlayerInitials()'s own fallback, which
-    // uppercases the first letter of the display name — otherwise a player who
+    // uppercases the first letter of the display name - otherwise a player who
     // types "dh" gets a lowercase avatar next to five uppercase ones.
-    saveSelfField({ initials: String(e.target.value || '').trim().toUpperCase().slice(0, 3) });
+    const ok = saveSelfField({ initials: String(v || '').trim().toUpperCase().slice(0, 3) });
     renderChatPage();
+    return ok;
   });
-  _prefsField(root, 'pref-alma')?.addEventListener('change', e => {
-    // The VALUE is `location`, the same field parseAndReport() stores as
-    // game.homeTeam/awayTeam — so Alma Mater Watch's exact-equality match
-    // applies to whatever is saved here, exactly as it does to the
-    // commissioner's override. Same field, same shape, same function.
-    saveSelfField({ almaMater: String(e.target.value || '') });
-    renderChatPage();
-  });
+  // D2 lane 1 (DI-1011, DI-1012): the college football teams control. Any of its three hidden inputs (Home team, Alma mater, the designation) changing is ONE save of ALL THREE through the one writer
+  // (app.js applyCfbTeams, injected): the designated school into `almaMater`, the other into preferences, in one write. The inline status row shows Saving… / Saved / Try Again under the control.
+  {
+    const fields = ['pref-home', 'pref-alma', 'pref-desig'].map((id) => _prefsField(root, id));
+    if (fields[1]) {
+      _prefsSubmitBindings.get('pref-alma')?.destroy();
+      const binding = attachSubmit({ statusEl: _prefsField(root, 'pref-alma-status'), rowEl: _prefsField(root, 'pref-alma-ss'), idleLabel: 'Save', id: 'chat-pref-alma', listen: false });
+      _prefsSubmitBindings.set('pref-alma', binding);
+      // Read back by id (the three hidden inputs): a school pick and a designation tap each fire ONE bubbling `change` on their input.
+      const readTeams = () => ({ home: String(fields[0]?.value || ''), alma: String(fields[1]?.value || ''), designated: fields[2]?.value === 'home' ? 'home' : 'alma' });
+      for (const f of fields) {
+        if (!f) continue;
+        f.addEventListener('change', () => {
+          const self = me();
+          const input = readTeams();
+          binding.dirty();
+          binding.submit(async () => {
+            if (!self || !_cfbTeamsWriter) return 'refused';
+            const ok = _cfbTeamsWriter(self, input) !== false;
+            renderChatPage();
+            return ok ? confirmSeamKey('cfbp_players') : 'refused';
+          });
+        });
+      }
+    }
+  }
   root.querySelectorAll('[data-accent]').forEach(b => b.addEventListener('click', () => { setAccent(b.dataset.accent || null); renderChatPage(); }));
   // The pref-toasts / pref-toast-duration / pref-sound handlers were removed
   // with their rows (2026-09-24, Option A) — see prefsPanelHTML(). The `?.`
@@ -4884,6 +5163,36 @@ function sheetSportLead(week) {
   return sport ? `${esc(sport.code)} · ` : '';
 }
 
+/**
+ * D2 DI-860 (lane 3, 2026-10-19): with two or more memberships the game thread names its league above the matchup — "{League full name} · {Sport label}", the Game view's own
+ * line (js/home.js model.leagueLine), at 0.75 rem --text-secondary, 8 pt above the title. One membership, or a league with no name: nothing (unchanged).
+ */
+export function threadLeagueLineHTML(week) {
+  let ms = [];
+  try { ms = getCachedMemberships() || []; } catch { ms = []; }
+  if (!Array.isArray(ms) || ms.length < 2) return '';
+  let lid = null;
+  try { lid = getActiveLeagueId(); } catch { lid = null; }
+  const m = ms.find((x) => x && x.leagueId === lid);
+  if (!m || typeof m.leagueName !== 'string' || !m.leagueName) return '';
+  let comp = null;
+  try { comp = week ? competitionForWeek(week) : null; } catch { comp = null; }
+  const sport = sportLabelOf((comp && comp.sport) || (week && week.sport) || 'cfb');
+  return `<div class="chat-sheet-league">${esc(m.leagueName)} · ${esc(sport)}</div>`;
+}
+
+/**
+ * D2 DI-876 (lane 3, 2026-10-19): a game of an ARCHIVED sport opens its thread READ-ONLY — the composer is replaced by one sentence. A client courtesy, recorded as such: the server still
+ * accepts a post (it is delivered untagged, the shipped rule). Its history stays readable here and under All in the Locker Room.
+ */
+const THREAD_ARCHIVED_HTML = '<p class="chat-sheet-readonly" role="note">This sport is archived. Threads are read-only.</p>';
+export function threadArchivedFor(week) {
+  if (!week) return false;
+  let c = null;
+  try { c = competitionForWeek(week); } catch { c = null; }
+  return !!(c && c.archivedAt);
+}
+
 export function openGameChatSheet(gameId) {
   if (!isChatEnabled()) { redirectChatDisabled(); return; }
   closeSheet();                                    // one thread sheet at a time; also ends a previous one's drag binding
@@ -4915,8 +5224,8 @@ export function openGameChatSheet(gameId) {
     <div class="chat-sheet-backdrop"></div>
     <div class="chat-sheet" id="chat-thread-sheet">
       <div class="chat-sheet-header${headerCls}">${isNativeShell() ? '<span class="sheet-grabber" aria-hidden="true"></span>' : ''}
-        <div class="chat-sheet-head-text"><div class="chat-sheet-title">${g ? esc(g.awayTeam) + ' @ ' + esc(g.homeTeam) : 'Game thread'}</div>
-          <div class="chat-sheet-sub">${sportLead}${g ? esc(formatSpread(g.lockedSpread ?? g.spread, g.favorite, g) || '') : ''}${status}</div>
+        <div class="chat-sheet-head-text">${threadLeagueLineHTML(found && found.week)}<div class="chat-sheet-title">${g ? esc(g.awayTeam) + ' @ ' + esc(g.homeTeam) : 'Game thread'}</div>
+          <div class="chat-sheet-sub">${sportLead}${g ? esc(lineText({ ...g, spread: g.lockedSpread ?? g.spread }, undefined, { formatSpread }) || '') : ''}${status}</div>
           <div class="chat-sheet-sub chat-sheet-lens">Also appears in the Locker Room</div></div>
         <div class="chat-sheet-header-actions">
           ${refreshControlHTML('chat-sheet-refresh')}
@@ -4925,7 +5234,7 @@ export function openGameChatSheet(gameId) {
       </div>
       <div class="chat-sheet-openrow"><button type="button" class="btn btn-ghost btn-sm" id="chat-sheet-open-main">Open in chat</button></div>
       <div class="chat-scroll chat-sheet-scroll" id="chat-sheet-scroll"></div>
-      ${sheetComposerHTML()}
+      ${threadArchivedFor(found && found.week) ? THREAD_ARCHIVED_HTML : sheetComposerHTML()}
     </div>`;
   document.body.appendChild(wrap);
   _sheetPinNextRender = true;                      // RG-280 — a (re)opened sheet starts at the newest message
@@ -5328,11 +5637,12 @@ export function emitPickRevealEvent(week) {
   // floating copy of it.
 }
 
+// D2 lane 2 (DI-893 / DI-915 / DI-927 #8): a hockey game's post reads "🏒 Puck drop" (the replace in `body`; football's post is byte-identical) and a pick-the-winner game carries no line text (never "PK").
 export function emitKickoffEvent(game) {
   sendEvent({
     id: `sys_kick_${game.gameId}`, type: 'system', author: 'system', notify: false,
     gameTag: game.gameId, ...systemSportFields({ weekId: game.weekId, gameId: game.gameId }),   // D1 (DI-553)
-    body: `🏈 Kickoff — ${game.awayTeam} @ ${game.homeTeam} ${formatSpread(game.lockedSpread ?? game.spread, game.favorite, game) || ''}`,
+    body: `🏈 Kickoff — ${game.awayTeam} @ ${game.homeTeam} ${lineText({ ...game, spread: game.lockedSpread ?? game.spread }, undefined, { formatSpread }) || ''}`.replace(game.espnSport === 'nhl' ? '🏈 Kickoff' : '\u0000', '🏒 Puck drop'),
     meta: { kind: 'kickoff', gameId: game.gameId },
   });
 }

@@ -215,6 +215,7 @@ export function groupDuplicateCoverage(items) {
     const also = members.filter((m) => m !== lead).map((m) => Object.freeze({
       id: m.id, publisher: m.publisher || m.source, via: m.via || null, headline: m.headline, publishedAt: m.publishedAt, url: m.url,
       linkHosts: Array.isArray(m.linkHosts) ? m.linkHosts : null,
+      rank: rankOf(m),                                              // D2 DI-1059: Home includes a cluster on its BEST member's score (the member's own publisher rank and time); the lead stays the lowest rank
     }));
     visible.set(lead, { item: { ...lead, relevanceTier: best.relevanceTier, reason: best.reason }, also });
   }

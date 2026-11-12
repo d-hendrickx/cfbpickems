@@ -28,6 +28,7 @@
  * Pure: no DOM, no storage writes, no clock of its own (`now` is a parameter). Reads synchronously (CONVENTIONS #9).
  */
 
+import { slateName, slateFact } from './slate-name.js';
 import { arePicksPublic } from './storage.js';
 import { FORBIDDEN_META_KEYS, assertMetaIsBlindSafe } from './notify-copy.js';
 import {
@@ -35,6 +36,7 @@ import {
 } from './feed-cards.js';
 import { evaluatePick, calculateAtsWinner, calculateSeasonStandings, computeEffectiveLockAt } from './scoring.js';
 import { formatSpread } from './data-model.js';
+import { lineText } from './formats.js';   // D2 lane 2 (DI-915): every printed line routes through the one formatter ('' for a pick-the-winner game, never "PK")
 import { SEASON_2025 } from './history-2025.js';
 import { memberSeasonStats, sortWeeks, atsMarginOf, viewerWeekLine } from './stats.js';
 import { orderedGradedResults, runLength } from './stats-core.js';
@@ -54,7 +56,7 @@ const TITLES = Object.freeze({
   'game.final': () => 'Final',
   'called.it': () => 'Called it',
   'stood.alone': () => 'Stood alone',
-  'week.result': (c) => (numOk(c.facts && c.facts.weekN) ? `Week ${c.facts.weekN}` : 'Week result'),
+  'week.result': (c) => (numOk(c.facts && c.facts.weekN) ? slateName(c.facts) : 'Week result'),
   'player.week': (c) => (c.facts && c.facts.playerName ? `${c.facts.playerName}'s week` : 'Weekly update'),
   'rank.changed': () => 'Rank change',
   'streak.extended': () => 'Streak',
@@ -82,21 +84,21 @@ export const STREAK_LIST_MAX = 10;
  * are structured and rebuilt item by item from DETAIL_ITEM_KEYS. None of these names is in FORBIDDEN_META_KEYS (module-load scan below).
  */
 export const DETAIL_ALLOWED_FACTS = deepFreeze({
-  'slate.published': ['weekN', 'gameCount', 'firstKickoffText', 'lockText', 'lockCountdown', 'yourCountText', 'weekStatus', 'games'],
-  'picks.submitted': ['weekN', 'inText', 'lockText', 'yourStatus', 'weekStatus', 'yourCountText'],
-  'week.revealed': ['weekN', 'inText', 'weekStatus', 'games'],
+  'slate.published': ['weekN', 'slate', 'gameCount', 'firstKickoffText', 'lockText', 'lockCountdown', 'yourCountText', 'weekStatus', 'games'],
+  'picks.submitted': ['weekN', 'slate', 'inText', 'lockText', 'yourStatus', 'weekStatus', 'yourCountText'],
+  'week.revealed': ['weekN', 'slate', 'inText', 'weekStatus', 'games'],
   // W-92 (DI-W92-6): the game card's "Called it" / "Stood alone" list — the retired cards' rows, one per named member.
-  'game.final': ['weekN', 'matchup', 'lineText', 'resultText', 'coverText', 'coveredNames', 'missedNames', 'yourPickText', 'yourResult', 'yourWeekText', 'weekFinal', 'threadGameId', 'standoutTitle', 'standoutItems'],
+  'game.final': ['weekN', 'slate', 'matchup', 'lineText', 'resultText', 'coverText', 'coveredNames', 'missedNames', 'yourPickText', 'yourResult', 'yourWeekText', 'weekFinal', 'threadGameId', 'standoutTitle', 'standoutItems'],
   'called.it': ['matchup', 'playerName', 'playerId', 'pickText', 'finalText', 'outrightByText', 'alsoText', 'upsetsText', 'threadGameId', 'spreadDisplay', 'team'],
   'stood.alone': ['matchup', 'playerName', 'playerId', 'team', 'againstText', 'resultText', 'threadGameId'],
-  'week.result': ['weekN', 'winnerText', 'loserText', 'recordText', 'winnerName', 'weekId'],
-  'player.week': ['weekN', 'playerName', 'playerId', 'recordText', 'streakText', 'almaText', 'games', 'wins', 'losses', 'streakSentence'],
+  'week.result': ['weekN', 'slate', 'winnerText', 'loserText', 'recordText', 'winnerName', 'weekId'],
+  'player.week': ['weekN', 'slate', 'playerName', 'playerId', 'recordText', 'streakText', 'almaText', 'games', 'wins', 'losses', 'streakSentence'],
   // W-92 (DI-W92-6): a combined card (two or more members) is one screen with a section per member: `sections` (each rebuilt below) and one `sentence`.
-  'rank.changed': ['weekN', 'playerName', 'playerId', 'fromText', 'toText', 'winPctText', 'weeksText', 'gapText', 'sections', 'sentence'],
-  'streak.extended': ['playerName', 'playerId', 'runText', 'startedText', 'longestText', 'games', 'sentence', 'weekN', 'sections'],
-  'streak.broken': ['playerName', 'playerId', 'runText', 'startedText', 'longestText', 'games', 'sentence', 'weekN', 'sections'],
-  'milestone.reached': ['playerName', 'playerId', 'markText', 'totalText', 'games', 'weekN', 'sections', 'sentence'],
-  'year.ago': ['weekN', 'winnerText', 'recordText', 'superlative', 'members', 'thisYearText', 'leaderName', 'sentence'],
+  'rank.changed': ['weekN', 'slate', 'playerName', 'playerId', 'fromText', 'toText', 'winPctText', 'weeksText', 'gapText', 'sections', 'sentence'],
+  'streak.extended': ['playerName', 'playerId', 'runText', 'startedText', 'longestText', 'games', 'sentence', 'weekN', 'slate', 'sections'],
+  'streak.broken': ['playerName', 'playerId', 'runText', 'startedText', 'longestText', 'games', 'sentence', 'weekN', 'slate', 'sections'],
+  'milestone.reached': ['playerName', 'playerId', 'markText', 'totalText', 'games', 'weekN', 'slate', 'sections', 'sentence'],
+  'year.ago': ['weekN', 'slate', 'winnerText', 'recordText', 'superlative', 'members', 'thisYearText', 'leaderName', 'sentence'],
   'scribe.post': ['body', 'postedText', 'reactionText', 'weekText', 'matchup', 'messageId', 'threadGameId'],
   'lockerroom.top': ['body', 'authorName', 'postedText', 'reactionText', 'messageId'],
 });
@@ -277,7 +279,7 @@ function shareOf({ card, c, week, game, s }) {
   if (!ref) return null;
   const title = detailTitle(card);
   const sport = c.showSport && card.sport ? c.sportLabel(card.sport) : '';
-  const weekPart = week && numOk(week.weekNumber) && !/\bWeek\s+\d/.test(title) ? `Week ${week.weekNumber}` : '';
+  const weekPart = week && numOk(week.weekNumber) && !/\bWeek\s+\d/.test(title) ? slateName(week) : '';
   const matchup = game ? `${plain(game.awayTeam)} at ${plain(game.homeTeam)}` : '';
   const eyebrow = [sport, title, weekPart, matchup].filter(Boolean).join(' · ');
   const scored = game && game.status === 'final' && numOk(game.awayScore) && numOk(game.homeScore);
@@ -295,7 +297,7 @@ const matchupOf = (g) => `${g.awayTeam} at ${g.homeTeam}`;
 function lineOf(g) {
   const sv = (g.lockedSpread !== null && g.lockedSpread !== undefined) ? g.lockedSpread : g.spread;
   if (sv === null || sv === undefined || sv === '') return 'TBD';
-  return formatSpread(Number(sv), g.favorite, g);
+  return lineText({ ...g, spread: Number(sv) }, undefined, { formatSpread });
 }
 const ownPick = (s, gameId) => (s.viewerId ? (s.picks.find(p => p && p.gameId === gameId && p.playerId === s.viewerId) || null) : null);
 const pickersOf = (s, gameId) => s.picks.filter(p => p && p.gameId === gameId);
@@ -374,7 +376,7 @@ function viewerWeekSentence(env, week) {
   const line = viewerWeekLine({ week, games: s.games, picks: s.picks, viewerId: s.viewerId });
   if (!line || line.graded === 0) return { text: '', final: false };
   const final = confirmed === 'final';
-  return { text: `That puts you at ${dash(line.wins, line.losses)} for Week ${week.weekNumber}${final ? '' : ' so far'}.`, final };
+  return { text: `That puts you at ${dash(line.wins, line.losses)} for ${slateName(week)}${final ? '' : ' so far'}.`, final };
 }
 
 /**
@@ -440,7 +442,7 @@ const BUILDERS = {
     const mine = s.viewerId ? s.picks.filter(p => p && p.weekId === week.weekId && p.playerId === s.viewerId && games.some(g => g.gameId === p.gameId)).length : null;
     const status = env.confirmed || week.status;
     const facts = finalizeDetailFacts('slate.published', {
-      weekN: week.weekNumber, gameCount: games.length, firstKickoffText: card.facts.firstKickoff ? c.formatTime(card.facts.firstKickoff) : '',
+      weekN: week.weekNumber, ...slateFact(week), gameCount: games.length, firstKickoffText: card.facts.firstKickoff ? c.formatTime(card.facts.firstKickoff) : '',
       lockText: lock.text, lockCountdown: lock.ms !== null && lock.ms > s.now ? c.formatCountdown(lock.ms - s.now) : '',
       yourCountText: mine === null ? '' : `${mine} of ${games.length} made`, weekStatus: status,
       games: gameRowsFor(env, games, { withLine: true }),
@@ -452,7 +454,7 @@ const BUILDERS = {
       facts, freshness: eventFreshness(env),
       rows: compactRows(row('Games', facts.gameCount), row('First kickoff', facts.firstKickoffText), row('Picks lock', facts.lockText), row('Your picks', facts.yourCountText)),
       lists: [{ id: 'slate', title: 'The slate', items: facts.games || [] }],
-      meaning: [`Week ${facts.weekN}'s slate is up.`, facts.lockCountdown ? `Picks lock in ${facts.lockCountdown}.` : (open ? '' : 'Picks are locked.')],
+      meaning: [facts.slate ? `The ${facts.slate} slate is up.` : `Week ${facts.weekN}'s slate is up.`, facts.lockCountdown ? `Picks lock in ${facts.lockCountdown}.` : (open ? '' : 'Picks are locked.')],
       actions: s.viewerId ? [act('go-picks', open ? (complete ? 'Edit My Picks' : 'Make your picks') : 'View the slate', 'primary', { weekId: week.weekId })] : [],   // THIS week, in its sport (the app's openSportWeek)
     };
   },
@@ -463,7 +465,7 @@ const BUILDERS = {
     const mine = s.viewerId ? s.picks.filter(p => p && p.weekId === week.weekId && p.playerId === s.viewerId).length : null;
     const lock = lockTextOf(env);
     const facts = finalizeDetailFacts('picks.submitted', {
-      weekN: week.weekNumber, inText: `${nz(card.facts.submittedCount)} of ${nz(card.facts.totalPlayers)}`, lockText: lock.text,
+      weekN: week.weekNumber, ...slateFact(week), inText: `${nz(card.facts.submittedCount)} of ${nz(card.facts.totalPlayers)}`, lockText: lock.text,
       yourStatus: mine === null ? '' : (games.length > 0 && mine >= games.length ? 'Submitted' : 'Not yet'), weekStatus: env.confirmed || week.status,
     });
     return {
@@ -482,14 +484,14 @@ const BUILDERS = {
     const rowsOk = arePicksPublic(week) && env.othersOk;
     const inText = card.facts.submittedCount !== undefined ? `${nz(card.facts.submittedCount)} of ${nz(card.facts.totalPlayers)}` : '';
     const facts = finalizeDetailFacts('week.revealed', {
-      weekN: week.weekNumber, inText, weekStatus: env.confirmed || week.status,
+      weekN: week.weekNumber, ...slateFact(week), inText, weekStatus: env.confirmed || week.status,
       games: rowsOk ? gameRowsFor(env, games, { withLine: false, withPick: true, withSplit: true, withState: true }) : [],
     });
     return {
       facts, freshness: eventFreshness(env),
       rows: compactRows(row('Games', games.length), row('Picks in', facts.inText)),
       lists: [{ id: 'games', title: 'The games', items: facts.games || [] }],
-      meaning: [`Week ${facts.weekN} is revealed.`, 'Every pick is visible now.'],
+      meaning: [`${slateName(facts)} is revealed.`, 'Every pick is visible now.'],
       actions: [act('go-dashboard', 'Open Dashboard', 'primary', { weekId: week.weekId })],
     };
   },
@@ -508,7 +510,7 @@ const BUILDERS = {
     const wk = viewerWeekSentence(env, week);
     const so = standoutRows(env);
     const facts = finalizeDetailFacts('game.final', {
-      weekN: week.weekNumber, matchup: matchupOf(game), lineText: lineOf(game), resultText, coverText,
+      weekN: week.weekNumber, ...slateFact(week), matchup: matchupOf(game), lineText: lineOf(game), resultText, coverText,
       coveredNames: joinNames(covered), missedNames: joinNames(missed),
       yourPickText: mark ? `${mark.text} ${mark.mark}${mark.word}`.trim() : '', yourResult: mark ? mark.result : '', yourWeekText: wk.text, weekFinal: wk.final, threadGameId: game.gameId,
       ...(so ? { standoutTitle: so.title, standoutItems: so.items } : {}),
@@ -533,13 +535,13 @@ const BUILDERS = {
     const winner = plain(f.weekWinnerName).trim(), loser = plain(f.weekLoserName).trim();
     const tableHtml = c.scoreSummaryRowsHTML ? plain(c.scoreSummaryRowsHTML(week)) : '';   // the Dashboard's own rows — they already carry SP-54's tiebreak note when the tie context was used
     const facts = finalizeDetailFacts('week.result', {
-      weekN: week.weekNumber, weekId: week.weekId, winnerName: winner, recordText: plain(f.weekWinnerRecord),
+      weekN: week.weekNumber, ...slateFact(week), weekId: week.weekId, winnerName: winner, recordText: plain(f.weekWinnerRecord),
       winnerText: winner ? `${winner} (${plain(f.weekWinnerRecord)})` : '', loserText: loser ? `${loser} (${plain(f.weekLoserRecord)})` : '',
     });
     return {
       facts, freshness: eventFreshness(env), tableHtml,
       rows: compactRows(row('Winner', facts.winnerText), row('Loser', facts.loserText)),
-      meaning: winner ? [`${winner} took Week ${facts.weekN}, ${facts.recordText}.`] : [],
+      meaning: winner ? [`${winner} took ${slateName(facts)}, ${facts.recordText}.`] : [],
       actions: [act('go-standings', 'See standings', 'primary'), ...weekResultsAction(env, week)],
     };
   },
@@ -548,7 +550,7 @@ const BUILDERS = {
   // streakMember / milestoneMember); two or more get a section per member (groupParts).
   'rank.changed'(env) {
     return groupParts(env, rankMember, {
-      sentence: (n, week) => `Standings changed for ${n} members after Week ${week.weekNumber}.`,
+      sentence: (n, week) => `Standings changed for ${n} members after ${slateName(week)}.`,
       actions: (e) => [act('go-standings', 'See standings', 'primary'), ...weekResultsAction(e, e.week)],
     });
   },
@@ -580,7 +582,7 @@ const BUILDERS = {
         const standings = calculateSeasonStandings(view.players, view.revealedWeeklyResults.filter(r => r && ids.has(r.weekId)), view.allWeeks, view.tieContexts);
         const lead = standings.find(x => x.currentRank === 1);
         const nm = lead ? nameIn(s, lead.playerId) : '';
-        if (nm) { thisYear = `${nm} leads after Week ${done[done.length - 1].weekNumber}`; leader = nm; }
+        if (nm) { thisYear = `${nm} leads after ${slateName(done[done.length - 1])}`; leader = nm; }
       }
     } catch { thisYear = ''; leader = ''; }
     const facts = finalizeDetailFacts('year.ago', {
@@ -603,7 +605,7 @@ const BUILDERS = {
     const ctxW = cand && cand.context ? cand.context : null;
     const facts = finalizeDetailFacts('scribe.post', {
       body, postedText: card.facts.timestamp ? c.formatTime(card.facts.timestamp) : '',
-      reactionText: cand && nz(cand.reactionCount) > 0 ? `${nz(cand.reactionCount)}` : '', weekText: ctxW && ctxW.weekN ? `Week ${ctxW.weekN}` : '',
+      reactionText: cand && nz(cand.reactionCount) > 0 ? `${nz(cand.reactionCount)}` : '', weekText: ctxW && ctxW.weekN ? slateName(ctxW) : '',
       matchup: ctxW && ctxW.matchup ? ctxW.matchup : '', messageId: card.facts.messageId, threadGameId: ctxW && ctxW.gameId ? ctxW.gameId : '',
     });
     return {
@@ -664,7 +666,7 @@ function groupParts(env, perMember, { sentence, actions }) {
     sections.push({ key: m.playerId, title: m.playerName, items: asArray(p.rows).slice(0, 4).map(r => ({ key: `${m.playerId}:${r.label}`, primary: r.label, secondary: r.value })) });
   }
   if (!sections.length) return null;
-  const facts = finalizeDetailFacts(env.card.type, { weekN: env.week.weekNumber, sections, sentence: sentence(sections.length, env.week) });
+  const facts = finalizeDetailFacts(env.card.type, { weekN: env.week.weekNumber, ...slateFact(env.week), sections, sentence: sentence(sections.length, env.week) });
   if (!asArray(facts.sections).length) return null;
   return {
     facts, freshness: eventFreshness(env), rows: [],
@@ -687,14 +689,14 @@ function rankMember(env, m) {
     if (mine && above) { const gap = nz(above.totalCorrect) - nz(mine.totalCorrect); gapText = gap > 0 ? `${Number(gap.toFixed(1))} ${gap === 1 ? 'pick' : 'picks'} (weighted)` : 'Level on picks (a tiebreaker applies)'; }
   } catch { gapText = ''; }
   const facts = finalizeDetailFacts('rank.changed', {
-    weekN: week.weekNumber, playerName: m.playerName, playerId: m.playerId, fromText: ordinal(m.fromRank), toText: `${ordinal(m.toRank)} of ${nz(card.facts.rankedCount)}`,
+    weekN: week.weekNumber, ...slateFact(week), playerName: m.playerName, playerId: m.playerId, fromText: ordinal(m.fromRank), toText: `${ordinal(m.toRank)} of ${nz(card.facts.rankedCount)}`,
     winPctText: stats.winPct === null || stats.winPct === undefined ? '' : `${stats.winPct}%`,
     weeksText: stats.weeklyWins === null || stats.weeklyWins === undefined ? '' : dash(stats.weeklyWins, stats.weeklyLosses), gapText,
   });
   return {
     facts,
     rows: compactRows(row('From', facts.fromText), row('To', facts.toText), row('Season win %', facts.winPctText), row('Weeks won–lost', facts.weeksText), row('Gap to the rank above', facts.gapText)),
-    meaning: [`${facts.playerName} moved from ${facts.fromText} to ${ordinal(m.toRank)} after Week ${facts.weekN}.`, 'Rank counts each game by its multiplier. Win % counts every pick once.'],
+    meaning: [`${facts.playerName} moved from ${facts.fromText} to ${ordinal(m.toRank)} after ${slateName(facts)}.`, 'Rank counts each game by its multiplier. Win % counts every pick once.'],
     actions: [act('go-standings', 'See standings', 'primary')],
   };
 }
@@ -787,7 +789,7 @@ function streakMember(env, f) {
   const kindWord = streakWord(f.kind);
   const facts = finalizeDetailFacts(card.type, {
     playerName: f.playerName, playerId: f.playerId, runText: `${nz(f.run)} ${f.kind === 'misses' ? 'misses' : 'covers'}`,
-    startedText: startWeek && hasWeekN(startWeek) ? `Week ${startWeek.weekNumber}` : '',
+    startedText: startWeek && hasWeekN(startWeek) ? slateName(startWeek) : '',
     longestText: stats.longestStreak && stats.longestStreak.run > 0 ? `${stats.longestStreak.run} ${stats.longestStreak.run === 1 ? 'cover' : 'covers'}` : '', games: items,
     sentence: broken ? (snappedOn ? `${f.playerName}'s ${nz(f.run)}-game streak snapped on ${snappedOn}.` : `${f.playerName}'s ${nz(f.run)}-game streak snapped this week.`) : `${f.playerName} is on a ${nz(f.run)}-game ${kindWord} streak.`,
   });

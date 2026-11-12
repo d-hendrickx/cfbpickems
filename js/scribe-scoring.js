@@ -313,6 +313,7 @@ export function sportDbCodeForGame(game) {
   if (typeof raw !== 'string') return null;
   if (raw === 'college-football') return 'cfb';
   if (raw === 'nfl') return 'nfl';
+  if (raw === 'nhl') return 'nhl';      // D2 lane 2: a registered sport; its second-half period is null (silent) in the table below
   return null;
 }
 

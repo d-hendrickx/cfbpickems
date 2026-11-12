@@ -41,6 +41,9 @@
  */
 
 import { sendEvent, whenAppended, getMessages, chatScopeGen } from './chat.js';
+// T-24f / M-80 — the room's manners (pure). The canned path below consults them only when the league's `serverJobs.scribeConversation` is on.
+import { getSettings } from './storage.js';
+import { conversationSwitchOn, normalizeRoomRows, decideConversation, hookTermsFrom, CONVO_RULES } from './scribe-convo.js';
 // Build 2, Group C (2026-09-10, UN-150…154) — the @scribe mention branch now
 // calls the interactive (LLM-backed) runtime instead of posting a canned
 // line unconditionally. One-directional import (scribeAgent.js never imports
@@ -70,7 +73,7 @@ import {
 // WHICH voice pool generated the line it's rating, months later. Deliberately
 // NOT tied to APP_VERSION itself — SCRIBE's voice can change independently of
 // an app release. Carried on every SCRIBE post via scribeTrigger() below.
-export const SCRIBE_VERSION = '3.2';
+export const SCRIBE_VERSION = '3.3';
 
 const LEDGER_KEY = 'cfbp_scribe_ledger';   // { lineHash: lastUsedMs }
 const LAST_POST_KEY = 'cfbp_scribe_lastpost'; // { rateKey: lastMs } ('' = main room, gameId = per-game)
@@ -675,6 +678,56 @@ async function fireScribeMention({ gameTag, author, authorName, triggerMessageId
  * `trigger`: key of SCRIBE_POOLS. `subject`: stable string identifying the event
  * (playerId, gameId…) — part of the deterministic id so six clients dedupe.
  */
+/** T-24b / W-139 — the tier-0 triggers raised by a HUMAN MESSAGE (scribeInspectMessage), as opposed to by an event. */
+export const MESSAGE_DRIVEN_TIER0 = Object.freeze(['drinkDebt', 'verbosity', 'lastPlaceTaunt']);
+/**
+ * M-80 (Drew, 2026-10-21: "m80 approve": "obey the dial, a quiet dial silences them", not "retire them") — THE SIX EVENT-DRIVEN CANNED LINES OBEY THE DIAL AND THE CONVERSATION GATE.
+ * They used to post whenever the 10-minute room cooldown allowed, at every frequency setting, into whatever the room was saying. Two kinds, because only one of them has a server twin:
+ *   - `unanimous` HAS one (SIGNAL_POINTS 25, a verified server trigger): like the three message-driven lines it is the DEGRADED path, posted only when the server path is unavailable
+ *     (`not_ready`, `server_off_latch`); while the server path is up `considerAutonomous()` reads the dial and a refusal posts nothing.
+ *   - `upsetWatch`, `callout`, `extraPointBust/Win` and `anniversary` have NO server twin (no SIGNAL_POINTS entry, no verifier), so the server score is 0 at every level and gating them on
+ *     it would silence them for good, which is not what Drew approved (a first build did exactly that: silent while the server worked, unconditional when it was down). They get a LOCAL dial
+ *     score instead, compared with the same threshold table the server dial uses (`FREQUENCY_LEVELS`: quiet 85, reserved 65, balanced 45, active 25, unhinged 15), and post their canned
+ *     line when it clears, whether or not the server path is up. The weights are the builder's proposal for Drew: `callout` (the receipt line) 50 and the two extra-point lines and `upsetWatch` 45
+ *     clear Balanced and above and are silent at Reserved and Quiet; `anniversary` 25 is the lightest and clears Active and Unhinged only.
+ * With `serverJobs.scribeConversation` on, a canned line that may post also waits for the room (`cannedConversationAllows`).
+ */
+export const DIAL_GOVERNED_TIER0 = Object.freeze(['upsetWatch', 'callout', 'extraPointBust', 'extraPointWin', 'anniversary', 'unanimous']);
+/** The local dial score of the five lines with no server twin (M-80). */
+export const LOCAL_DIAL_POINTS = Object.freeze({ upsetWatch: 45, callout: 50, extraPointBust: 45, extraPointWin: 45, anniversary: 25 });
+/** Tier-0 lines that post as a canned line ONLY when the server path is unavailable: the message-driven three and `unanimous` (the one event line with a server twin). */
+export const DEGRADED_ONLY_TIER0 = Object.freeze([...MESSAGE_DRIVEN_TIER0, 'unanimous']);
+/** M-80 — does this device's dial let a no-server-twin line speak? `{ points, threshold, clears }`; an unlisted trigger has no local score and returns null. */
+export function localDialClears(trigger) {
+  if (!Object.prototype.hasOwnProperty.call(LOCAL_DIAL_POINTS, trigger)) return null;
+  const level = getScribeFrequency();
+  const threshold = Object.prototype.hasOwnProperty.call(FREQUENCY_LEVELS, level) ? FREQUENCY_LEVELS[level] : FREQUENCY_LEVELS[FREQUENCY_DEFAULT];
+  return { points: LOCAL_DIAL_POINTS[trigger], threshold, clears: LOCAL_DIAL_POINTS[trigger] >= threshold };
+}
+
+/**
+ * M-80 — the conversation gate for the canned path, ON THIS DEVICE: when the league has `serverJobs.scribeConversation` on, the same pure decision the server runs
+ * (`js/scribe-convo.js`) is asked of the room this phone can see. A canned line is "dropped, not queued" (this file's contract), so a `hold` is a drop here. Off (the default)
+ * or unreadable: no gate, the shipped behaviour. Returns true when the canned line may post.
+ */
+export function cannedConversationAllows(trigger, { gameTag = '', vars = {}, triggerMessageId = null, now = Date.now() } = {}) {
+  try {
+    if (!conversationSwitchOn(getSettings())) return true;
+    const rows = getMessages({ tag: 'all' }).slice(-CONVO_RULES.readWindow).map((m) => ({
+      id: m.id, seq: m.seq || 0, type: m.type, author: m.author,
+      // security F4 (2026-10-21): the server-set `relayed` is passed THROUGH, never defaulted. A SCRIBE row that does not carry `relayed === false` reads as `other` (not SCRIBE's own, not a human) and fails closed.
+      relayed: typeof m.relayed === 'boolean' ? m.relayed : undefined, game_tag: m.gameTag || '', reply_to: m.replyTo || '', ts: m.ts, body: m.body || '',
+      author_kind: m.author === 'scribe' ? 'scribe' : (m.author === 'system' ? 'system' : 'player'),
+    }));
+    const messageDriven = MESSAGE_DRIVEN_TIER0.includes(trigger);
+    const d = decideConversation({
+      messages: normalizeRoomRows(rows), nowMs: now, gameTag: gameTag || '',
+      opportunity: { kind: messageDriven ? 'message' : 'event', triggerMessageId: messageDriven && triggerMessageId ? String(triggerMessageId) : '', memberIds: [], hookTerms: hookTermsFrom(Object.values(vars || {})) },
+    });
+    return d.action === 'speak';
+  } catch { return true; }
+}
+
 export function scribeTrigger(trigger, { gameTag = '', subject = '', vars = {}, bucketMin = 10, notify = false, quote = null, triggerMessageId = null } = {}) {
   if (!SCRIBE_POOLS[trigger]) return false;
   // Build 3, D1 — EVERY detector feeds the opportunity score here, at the one
@@ -690,7 +743,18 @@ export function scribeTrigger(trigger, { gameTag = '', subject = '', vars = {}, 
   // verifiers for the two message-driven triggers that pass one (drinkDebt, verbosity) refuse without
   // it — so a candidate that cleared the dial reserved the cooldown (dropping the canned line below)
   // and was then refused: silence. Event-driven callers pass none, and none is sent for them.
-  considerAutonomous(trigger, { subject, gameTag, triggerMessageId: triggerMessageId || '' });
+  const auto = considerAutonomous(trigger, { subject, gameTag, triggerMessageId: triggerMessageId || '' });
+  // T-24b / W-139 (FB-060, 2026-10-19) — A KEYWORD IN A CONVERSATION DOES NOT BUY A CANNED LINE WHILE THE REAL PATH IS UP. The three MESSAGE-driven
+  // triggers (drink/owe/beer/balance, six messages in two minutes, last place naming first) fell through to `pickLine()` whenever the dial said "not worth
+  // it" — which at Balanced is almost always (15, 10 and 0 points against 45) — and dropped a stock line into the middle of the exchange: SCRIBE.md 9.5's
+  // "respond to every message mentioning SCRIBE's known topics", with the frequency dial (section 14) never read. DI-440 C1's rule for the live-upset
+  // fallback (chat-ui.js `routeLiveUpset`) now covers these too: the canned line is the DEGRADED path, posted only when the server path is unavailable
+  // (`not_ready`, `server_off_latch`); `below_threshold`, a cooldown, the consecutive guard and a fired candidate all post nothing here.
+  // M-80 (2026-10-21) — `unanimous` follows the message-driven rule; the other five read the LOCAL dial (`LOCAL_DIAL_POINTS`); then the conversation gate for whatever may still post as a canned line.
+  if (DEGRADED_ONLY_TIER0.includes(trigger) && !(auto && (auto.reason === 'not_ready' || auto.reason === 'server_off_latch'))) return false;
+  const localDial = localDialClears(trigger);
+  if (localDial && !localDial.clears) return false;                                                                   // a quiet dial silences it (no server twin to ask)
+  if ((localDial || DEGRADED_ONLY_TIER0.includes(trigger)) && !cannedConversationAllows(trigger, { gameTag, vars, triggerMessageId })) return false;
   // Direct-mention replies bypass the rate limit (spec); everything else is
   // rationed — the restraint IS the character.
   const direct = trigger === 'mention';

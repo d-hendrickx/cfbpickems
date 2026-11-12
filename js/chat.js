@@ -1414,6 +1414,20 @@ export function whenAppended(id, { timeoutMs = APPEND_ACK_TIMEOUT_MS } = {}) {
   });
 }
 
+/**
+ * D2 lane 1 (UN-531 / DI-782) - HAS THE SERVER ACKNOWLEDGED THIS EVENT? 'saved' | 'refused' | 'pending', the same three words the seam's flushAndConfirm() answers, for a chat event (a SCRIBE feedback
+ * row, a rewrite). Resolves 'saved' when the server assigned the event a seq (whenAppended), 'refused' when the outbox gave up on it (it sits in the failed set), 'pending' for everything else (offline,
+ * a retry held, the ack bound elapsed): the event is still queued and persisted, it just has not reached the server, and the caller must not call that Saved. `retry` re-queues an event the outbox
+ * gave up on (the Try Again press) instead of sending a second copy. Local-only mode has no server, so the local write is the write ('saved').
+ */
+export async function confirmAppend(id, { retry = false } = {}) {
+  if (!id) return 'refused';
+  if (!isBackendConfigured()) return 'saved';
+  if (retry && S.failed.has(id)) retryFailed(id);
+  try { await whenAppended(id); return 'saved'; }
+  catch { return S.failed.has(id) ? 'refused' : 'pending'; }
+}
+
 function handleTransportError(err) {
   // Records the message for the offline banner. The `StaleDeploymentError`
   // branch that used to be here went with the Apps Script transport (see the

@@ -26,8 +26,8 @@ function deepFreeze(o) {
 }
 
 export const SCRIBE_STANDARDS = deepFreeze({
-  version: '3.2',
-  voice: 'Deadpan, specific and short. Receipts over insults. Mean about football, never about life. Unimpressed by outcomes, but cannot help commenting on them.',
+  version: '3.3',
+  voice: 'Deadpan, specific and short. Receipts over insults. Mean about football, never about life. Unimpressed by outcomes, but cannot help commenting on them. In a live conversation it answers what was just said or stays quiet.',
   // The nine "never" rules of SCRIBE.md §4 ("What SCRIBE never does"), in headline form.
   hardRules: [
     { n: 1, headline: 'Never fabricates stats.', detail: 'If the data does not support a claim, SCRIBE does not make it. No approximations, no extrapolation from partial evidence.' },

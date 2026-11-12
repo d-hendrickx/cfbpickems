@@ -4,10 +4,10 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.30.2';
+export const APP_VERSION = 'v0.31.0';
 // v0.30.2 (W-105, the Home visuals: whole news headlines, team marks on finished-game cards, the news picture rhythm) ships 2026-10-17; if the deploy lands on a different
 // day, set this and WHATS_NEW_RELEASES[0].date to that day together (whatsnewtest pins them equal). v0.30.1 (W-92, the Home feed fix) shipped 2026-10-17.
-export const APP_VERSION_DATE = '2026-10-17';
+export const APP_VERSION_DATE = '2026-11-12';
 
 /**
  * UN-124 + FEAT-3 / DI-200.0 (UN-200/UN-201, 2026-09-12) — release notes,
@@ -144,6 +144,46 @@ export const APP_VERSION_DATE = '2026-10-17';
 // ("Home shows more photos, …") waits until the news-site picture pins (DI-W105-6, Drew-run SQL) are run and the live check shows pictures (the coordinator's
 // ruling 3). The first line is SCRIBE's chat-post headline (42 characters, inside the 90-character cut).
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.31.0',
+    date: '2026-11-12',
+    added: [
+      'Invite friends with a link or a code.',
+      'Whoever joins lands in your league and can set up their profile straight away.',
+      'A Getting started card on Home walks new members through their first picks, with short tips you can turn off.',
+      'Add a profile photo in Profile. It shows next to your name in chat and on the roster.',
+      'Commissioners can turn money and prizes off for a sport, so the league plays it just for fun. The Rules page says so.',
+      'Season stakes: as a sport\'s season ends, the league can vote on a punishment for last place. The result shows only whether it passed.',
+      'Home now covers every league you\'re in, and Game Day\'s All games screen lists every game across your leagues.',
+      'Commissioners can archive a sport the league has finished and restore it later. Its record stays readable.',
+      'Commissioners: a new League tab in Comm puts the league\'s settings on their own pages.',
+      'No more codes to type: you sign in with Google or your Munera email and password.',
+      'SCRIBE\'s voice is updated: it reads the room better, and in a new league it says it doesn\'t know the history yet instead of making it up.',
+      'SCRIBE insights on Home: short, checked facts about how your league picks, with Your numbers in Profile and a what-if view.',
+      'Tap Ask on an insight to ask SCRIBE about it, and get an answer from the league record.',
+      'Let SCRIBE use my profile now does what it says: with it on, SCRIBE can use your profile answers in Ask SCRIBE; with it off, it never does.',
+      'An insight\'s detail screen shows SCRIBE\'s read, and a question SCRIBE has already answered comes back instantly.',
+      'You can also ask SCRIBE about a team card or a Game Day fact.',
+      'Insight cards now appear for a league you peek at from Home.',
+      'A new A team you follow chip shows why an insight about another team you follow is on your Home.',
+      'Commissioners can choose how a sport is picked (against the spread or pick the winner) and which lines Picks shows, and can void a game.',
+      'Hockey: commissioners can add the NHL to a league, with its own rules, lines and Game Day.',
+      'Find spreads now checks other odds sources when ESPN has no line.',
+      'Type to search when you pick your alma mater.',
+      'On Picks, How this slate works explains the rules for an NFL or NHL slate, or any pick-the-winner week.',
+      'The Locker Room has one simpler row at the top: tap the league and sport to switch, with a dot when another sport has unread messages.',
+      'Privacy policy updated (version 5.1.0): it now covers profile photos, the starter profile and questions sent to SCRIBE.',
+    ],
+    fixed: [
+      'Cards on Home no longer shrink when you scroll across them; they press only when you tap.',
+      'Headlines from every publisher load again.',
+      'Save and Submit buttons show working, saved or failed.',
+      'Pick buttons, chat pills and league rows stay still while you scroll; they press only when you tap.',
+      'A finished game\'s card on Home shows when the game ended, not when its score was last edited.',
+      'News cards drop the word Storyline, and show a team\'s tag only when the headline doesn\'t already name it.',
+      'Two faint text colours are darker and easier to read.',
+    ],
+  },
   {
     version: 'v0.30.2',
     date: '2026-10-17',
@@ -592,10 +632,9 @@ import {
   formatGameTime, formatVenueDisplay, formatSpread, getPlayerInitials,
   sourceModeLabelOf, ALMA_MATER_DISPLAY, getAlmaMaterMatch, ownGet,
   formatTeamName, getTeamDisplay, gameDataReadiness,
-  buildAbbrMap, REACTION_PALETTE,
+  buildAbbrMap, teamAbbr, NFL_TEAM_ABBR, REACTION_PALETTE,
   THEMES,
   HISTORICAL_DEMO_WEEK, HISTORICAL_DEMO_GAMES, REAL_WEEK_1_2026,
-  SITE_PIN,
   getAutoLockOffsetMinutes, getAutoLiveEnabled, getAutoFinalizeEnabled,
   obligationRole, obligationNextStatus, obligationStatusDisplay, isObligationActive, normalizeDeniedReason, DENIED_REASON_MAX,
   getEffectiveGroupId, weeksInGroup, getGroupTiebreakerWeek,
@@ -609,9 +648,8 @@ import {
   initStorage, resetToDemo, ensureSeedData,
   getBackendMode, setBackendMode,
   getSettings, saveSetting,
-  getSession, setSession, clearSession,
+  getSession, clearSession, chooseLocalPlayer, sweepLegacyPinDeviceKeys, hasLegacySiteUnlock, clearLegacySiteUnlock,
   getPlayers, getPlayer, savePlayer, addPlayer,
-  verifyPlayerPin, hasPlayerPin, setPlayerPin, getPlayerPin,
   getCurrentWeek, getWeek, getWeeks, saveWeek, deleteWeek,
   getActiveWeekId, setActiveWeekId, getEffectiveWeekStatus, arePicksPublic,
   getRevealEmitted, setRevealEmitted,
@@ -640,6 +678,7 @@ import {
   countPicksForGame, deletePicksForGame,
   saveFetchProof, getFetchProof,
   getTimezone, setTimezone,
+  getInsightState, setInsightState,   // D2 lane 4: what the insight surfaces already showed this identity (device-local)
   // D1 DI-531 — the Join action's write (insert-only; the adapter's route decides who may write which row).
   addCompetitionMember, removeCompetitionMember, getCompetitionMembers,
   getTheme, setTheme,
@@ -661,8 +700,6 @@ import {
   // of the league default. The player record stays authoritative; see
   // applyTheme() and KEYS.THEME_HINT.
   getThemeHint, setThemeHint,
-  isSiteUnlocked, setSiteUnlocked, verifySitePin,
-  getEffectiveSitePin, setSitePin,
   resetCurrentWeekData,
   exportAllData, exportAllDataRaw,
   // Groups A/B (2026-09-10) — notification category prefs, DI-A4
@@ -748,7 +785,7 @@ import {
   // Second remediation pass (2026-09-17): getAccountUserId() is the first term
   // of the identity tuple the session-change chokepoint latches on (reviewer
   // F-1/F-2); the last-known-authMode pair is SEC F1-R1's fail-closed store.
-  getAccountUserId, getLastKnownAuthMode, setLastKnownAuthMode,
+  getAccountUserId, getLastKnownAuthMode, setLastKnownAuthMode, onBeforeAccountDelete, previewInvite, InviteLookupError,
   // SECURITY A-1-R (2026-09-21): "has anything authoritative said what mode
   // this page is in yet?" — a different question from getAuthMode(), which
   // answers its DEFAULT 'pins' for the whole pre-config window.
@@ -839,7 +876,7 @@ import {
   // DI-182a/f (Step 3b) — app.js OWNS buildAlmaMaterOptions() (it reads the
   // ESPN catalog cached in this module) and hands it down, because chat-ui.js
   // importing app.js would close a cycle. One implementation, two call sites.
-  registerAlmaMaterOptionsProvider,
+  registerCfbTeamsProvider, registerCfbTeamsWriter, registerChatTipProvider,
   // SECURITY A-1 (RG-196, 2026-09-21) — handed down for the same layering
   // reason: this module owns isContentWithheld(), chat-ui.js owns the surfaces
   // that must stay silent while it is true, and the import edge only goes one
@@ -863,9 +900,10 @@ import {
   resetGameChatSheetForTeardown,
   // D1 Lane B / DI-588 — the Back chip: the hooks app.js registers (it owns the pushed screens) and the programmatic Locker Room view.
   registerChatReturnHooks, showChatFilter,
+  registerChatScopeHooks, closeChatScopeMenu,   // D2 sweep W-128: the Locker Room's scope button opens the SAME league selector the header pill opens; leaving Chat closes its menu
   registerShareResolver, postShareToChat, findShareDuplicate,   // D1 Lane B (DI-597): Share to chat
 } from './chat-ui.js';
-import { validShareRef, SHARE_COPY } from './chat-share.js';   // D1 Lane B (DI-597): the reference's one gate and the sheet's words (a pure leaf)
+import { validShareRef, shareRefLeagueOk, SHARE_COPY } from './chat-share.js';   // D1 Lane B (DI-597): the reference's one gate and the sheet's words (a pure leaf)
 // UN-412 / DI-506c — `onChat` + `getMessages as getChatMessages` (last two names) serve the "Who's in" arrival hook: a subscriber that READS the folded room and writes nothing.
 import { setPollMode, sendEvent as sendChatEvent, sendMessage as sendChatMessage, sendGameReact, getMessage as getChatMessage, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats, unreadCount, mentionUnreadCount, isChatImagePreviewEnabled, wakeChat, clearOutbox, forceRefresh, rescopeChat, getMessages, isPrivateRow, chatBoundToLeague, chatLoadedFromTs, onChat, getMessages as getChatMessages } from './chat.js';
 // RG-176 — the ONE generic answer to the repaint hazard RG-174 fixed in one
@@ -927,13 +965,14 @@ import {
   composeFinalizeTieNotice,
 } from './tie-context.js';
 // FB-027 / DI-518 — getCompetitions too: the wizard's Finalize button names the sport in a multi-sport league ("Finalize NFL Week 6").
-import { profileForWeek, competitionForWeek, getDefaultCompetition as getLeagueDefaultCompetition, getCompetitions as getLeagueCompetitions, getAllCurrentWeeks, getCurrentWeekFor, saveCompetition as saveLeagueCompetition, getWeeksForCompetition, getLiveSports } from './competition.js';
+import { formatForWeek, marketsShownForWeek, profileForWeek, competitionForWeek, getDefaultCompetition as getLeagueDefaultCompetition, getCompetitions as getLeagueCompetitions, getAllCurrentWeeks, getCurrentWeekFor, saveCompetition as saveLeagueCompetition, getWeeksForCompetition, getLiveSports, getArchivedHistory, obligationsOn, anyObligationsOn, obligationsSetBy } from './competition.js';
 // D1 (v0.30.0, Lane A: DI-532…536) - the commissioner's multisport operations. multisport-admin.js is PURE (copy, the deterministic competition id, which sports can be
 // added, the archive rule, the all-sports rows, a sport's entries, the wizard helpers); sport-seam.js is the seam to the client branch's participation + pointer API
 // (who is in a sport, the sport pointer) with a single-sport fallback until that branch merges. Both are LEAF modules: neither imports this file.
 import {
-  MS_COPY, archiveSportSheetHTML, addSportOptions, newCompetitionRow, archiveBlocker, nextActionFor, allSportsRows, nextDeadlinesLine, sportEntriesModel,
+  MS_COPY, addSportOptions, newCompetitionRow, archiveBlocker, nextActionFor, allSportsRows, nextDeadlinesLine, sportEntriesModel,
   nextWeekNumberFor, slateSizeFor, tiebreakerGameOptions, tiebreakerFieldsFor, suggestSlateFor, addSportAction, archiveSportAction, inCountOf, inCountText, addSportRowSubtitle,
+  ARCHIVE_COPY, archiveRefusalCopy, restoreSportAction, archivedSportsRows, archiveSportConfirmHTML, restoreSportConfirmHTML, archivePickHTML, archiveBlockedHTML, restoreSetupOfferHTML, sportsStateCardHTML,   // D2 DI-867…880 (lane 3)
 } from './multisport-admin.js';
 // D1 (W-68 / W-69, 2026-10-14) - ONE games list on Comm -> Games, and the add-or-swap rule on a full slate. games-list.js (the join, the rows, the markup) and slate-add.js (the rule, the sheets'
 // copy, add / swap / remove over injected deps) are PURE leaf modules: no storage, no DOM, neither imports this file. keyed-list.js reconciles a list by key so an add or a remove patches ONE row.
@@ -945,7 +984,18 @@ import {
   entriesSupported, entryRows, addEntry as sportSeamAddEntry, removeEntry as sportSeamRemoveEntry,
 } from './sport-seam.js';
 // D1 (DI-536 / DI-512): which sports' cards the Rules page shows, and the words of the NFL card (pure).
-import { rulesSports, nflRulesItems, NFL_RULES_HEADING, RULES_COLLEGE_NOTE } from './sport-rules.js';
+import { rulesSports, rulesCards, rulesOpeningNote, nflRulesItems, NFL_RULES_HEADING, RULES_COLLEGE_NOTE } from './sport-rules.js';
+// D2 lane 2 (DI-903 to DI-909): the rules as data (one source for the Rules cards, the sheet and the onboarding lines) and the format registry.
+import { sportRulesItems, lifecycleWords, defaultRulesFor, NEUTRAL_DEBTS_ITEMS, howThisSlateWorks } from './rules-model.js';
+import { moneylineCaption, totalPillText, cleanPrice } from './markets.js';
+import { settingsRowsModel, formatSheetHTML, linesSheetHTML, FORMAT_SHEET_COPY } from './format-sheet.js';
+import { isVoided, keepsVoidGrade, canVoid, canUndoVoid, voidGame, undoVoidGame, voidPrompts, settlement, VOID_COPY } from './void-game.js';
+import { MARKETS_FOOTNOTE, resultLineText, liveMarkWords, applyFormatToGame, formatLabel, marketsShown, marketLocked, isPickTheWinnerGame } from './formats.js';
+import { resolveFormat as resolveSportFormat, isPickTheWinner, lineText, offeredFormats, defaultFormat } from './formats.js';
+import { slateFact, slateName as weekSlateName, setupLabel } from './slate-name.js';   // aliased: app.js already has its own slateName(game) (a matchup's name)
+import { requestChips, requestEspnKey, sportKeyOfRecord, sportEventKey, REQUEST_COPY, REQUEST_ESPN_KEYS } from './request-game.js';
+import { isNightSport, nightLabel, nightChips, nightDecision, tiebreakerChoice, lockLine, openBlock, slateWindow, seasonOfNight, NIGHT_COPY, etDateOf, addDays } from './night-slate.js';
+import { ruleSetKeyForWeek, wizardStampFields } from './rules-model.js';
 // D1 (v0.30.0, thread 100726-D1, Lane A) — the multisport client: the sport context and who-plays-a-sport (js/competition.js), then four pure leaf modules (the card status, the overview markup, the
 // switcher and the combined slate). Each is a leaf: no storage, no DOM, no pick reader; every effect is in this file.
 import {
@@ -1055,7 +1105,7 @@ import {
   bindScrollDirection, bindKeyboardAvoid, bindPullToRefresh, bindWeekSwipe, chronologicalWeekIds,
   bindBottomBounce, gesturesSuspended, prefersReducedMotion, bindSwipeToDismiss,
   bindBottomPullToRefresh, claimTouch, releaseTouch, deferRenderWhileWeekSwiping, deferInPlaceRepaint, pauseNavHide,
-  isPagerYieldTarget,
+  isPagerYieldTarget, bindPressState, CONTENT_PRESS_SELECTOR,
 } from './nav-gestures.js';
 // SP-57 (2026-10-01) — the long-press section drag engine: a leaf module (imports nav-gestures.js, haptics.js and
 // icons.js only, never this file); every app-side effect is a callback passed to attachSectionDrag().
@@ -1113,7 +1163,7 @@ import {
   clearMaintenanceBannerCacheOnIdentityChange,
   getCachedSignupsOpen,
   // N1 (DI-430/433, 2026-09-30) — the release gate's cache (DEFAULT FALSE, the opposite of signups) and the sports the picker may offer.
-  getCachedLeagueCreationOpen, getCachedLeagueCreationScope, getCachedOfferedSports,
+  getCachedLeagueCreationOpen, getCachedLeagueCreationScope, getCachedOfferedSports, getCachedCanCreateLeague, refreshCanCreateLeague,
   // SECURITY GATE NOTE A (2026-09-25) — wired as the boot-tail call's own
   // guard, below (applyAuthModeDecision()). Was exported and never read.
   hasAttemptedMaintenanceBannerFetch,
@@ -1123,6 +1173,11 @@ import {
 // NETWORK) — safe to import from app.js, the DOM-side wiring layer.
 import { renderAdminPanel } from './admin-panel.js';
 import { renderCommTabBar, COMM_TABS } from './comm-panel-layout.js';
+// D2 lane 6 (UN/PF-528, DI-758): the League tab's pure half (rows model, list card, back bar, page cards); the DOM and the taps are wired below, in renderCommPage()/setLeaguePage().
+import * as CLT from './comm-league-tab.js';
+import { newLeagueOnRows } from './league-defaults.js';
+import { setSwipeBackSurface } from './nav-gestures.js';
+import { canOperateCard } from './roles.js';
 // W-70 (2026-10-14) - the pure half of native navigation in the week wizard (swipe-down with a discard ask, the step pager's table); see js/wizard-nav.js.
 import {
   WIZ_NAV_COPY, snapshotWizardControls, wizardControlsDirty, canStartWizardSheetDrag,
@@ -1147,16 +1202,17 @@ import * as AX from './account-exit.js'; import * as LS from './league-settings.
 import { listProfiles, getProfile } from './sports/index.js';
 // Social Platform Home (v0.29.0, DI-366/370/372, HOME_WIRING_CHECKLIST_100126): the Home renderer and its chat-candidate source. Built lazily by getHomeWiring() below, never at module scope.
 import { createHome, makeChatCandidateSource, shortWhen, scrollPageBy } from './home.js';
+import { createPeekStore, HOME_LEAGUE_CAP } from './peek-store.js';   // D2 lane 3 (DI-803): the read-only Peek store — every OTHER league the member is in, in memory only; handed to Home
 // D1 Lane B (2026-10-07, DI-570 / DI-579): the one game-state vocabulary (stale / awaiting / no-score are honest words, not silence) and the viewer's game ORDER (Kickoff · Live first · My order).
 // Both are pure leaf modules; the preference's seam is storage.js (the player record, never the league-shared settings).
-import { gameStateOf } from './game-state.js';
+import { gameStateOf, stampFinalAt, finalAtPatch } from './game-state.js';   // D2 sweep DI-1091 (W-102): stampFinalAt dates a game's final score once
 import { orderGames } from './game-order.js';
 // D1 Lane B (DI-571 / DI-575): the pushed-screen shell (a leaf; every app effect arrives as a callback — configured lazily below) that Home's card detail opens in.
-import { configurePushedScreens, pushScreen, popScreen, closeAllScreens, invalidateScreens, isScreenOpen, stackSnapshot } from './pushed-screen.js';
+import { configurePushedScreens, pushScreen, popScreen, closeAllScreens, invalidateScreens, isScreenOpen, stackSnapshot, topScreenId } from './pushed-screen.js';
 // D1 Lane B (DI-594 / 595 / 596, history): the member comparison and the week detail - two pure leaf modules (markup and models); every read and every effect is in this file.
 import { buildComparison, comparisonHTML, unavailableComparisonHTML, rivalChoices, rivalPickerBodyHTML, COMPARE_COPY, parseCompareShareId } from './compare.js';
 import { buildWeekDetail, weekDetailHTML, unavailableWeekDetailHTML } from './week-detail.js';
-import { crossFadeBody } from './gameday-dom.js';   // D1 Lane B Game Day fix round 2 (DI-591): the Game view's prev / next cross-fade (a leaf)
+import { crossFadeBody, crossFadePart } from './gameday-dom.js';   // D1 Lane B Game Day fix round 2 (DI-591): the Game view's prev / next cross-fade (a leaf); D2 lane 4: the Insights sheet's changed text cross-fades with the same part fade
 import { getGameOrderMode, getManualGameOrder, setGameOrderMode, setManualGameOrder, clearManualGameOrder } from './storage.js';
 // D1 Lane B (2026-10-08, DI-591 / DI-611 / DI-612, Drew D-63/D-64): the chip-helper module (the GATE `pickVisibilityFor` and the Dashboard's member chips, extracted verbatim), the ONE By person / By team renderer, and
 // the member's Show picks choice. Both modules are leaves; their app-owned helpers are injected once, by ensurePickModules() below.
@@ -1176,10 +1232,50 @@ import { isPilotOnlyAllowed, setPilotOnlyLeagueResolver } from './pilot-only.js'
 setPilotOnlyLeagueResolver(() => (getAuthMode() === 'supabase' ? activeLeagueRow() : { pilot: true }));
 // D1 Lane C (DI-672 / DI-673, 2026-10-08): the news SERVER path's injected client, the "Also from" sheet's opener and the sheet's body (built in newsCard.js, C10).
 import { installNewsTransport, fetchContentDetail, fetchLeagueInsight } from './newsTransport.js';
+// D2 lane 4 batch 2 (SCRIBE Analytics, 2026-10-21) - the insight surfaces: the app-side wire over the pure engine, the public team-facts reader, and the DOM half (detail, Your numbers, Ask SCRIBE).
+import { createAnalyticsWire } from './analytics-wire.js';
+import { installTeamFactsTransport, fetchTeamFacts } from './team-facts-transport.js';
+import { installPickEventsTransport, fetchPickEvents } from './pick-events-transport.js';   // D2 lane 4: the pick-history platform setting and the viewer's own pick_events
+import { createInsightUI, isInsightId } from './insight-ui.js';
+// D2 lane 4 batch 3 (DI-970, DI-971): Ask SCRIBE's open questions: the platform setting and the one call to scribe-ask's insight route
+import { askOpenCached, refreshAskOpen, askInsightModel } from './ask-insight-client.js';
+import { gameInsightsRowHTML, withInsightsRow } from './game-insights-view.js';   // D2 lane 4 third pass (DI-977): the Game view's Insights row
 // D1 Lane C (DI-669 / DI-665 / DI-666): the Home content cards' detail, share text and "Talk about it" line (built in content-card.js from the PUBLIC payload only).
 import { contentDetailHTML, contentDetailUnavailableHTML, contentDetailActions, talkLine, spotlightShareText, CONTENT_KIND_META, insightSectionHTML } from './content-card.js';
 import { registerHomeNewsOpeners, registerHomeNewsWeeks } from './newsFeed.js';
-import { renderAlsoFromSheet, bindAlsoFromSheetEvents, openNewsArticle } from './newsCard.js';
+import { renderAlsoFromSheet, bindAlsoFromSheetEvents, openNewsArticle, makeDateFormatter } from './newsCard.js';   // D2 DI-1092: makeDateFormatter builds the player's-zone formatter the sheet's rows use
+// D2 lane 1 (UN-531 / DI-782, 2026-10-19): the ONE submission-state language. The module never claims a server acknowledgment nobody gave, so it is told how to ask the adapter: supabase data mode asks
+// sb.flushAndConfirm(key) ('saved' | 'refused' | 'pending'); local-only mode has no server, the local write IS the write ('saved'). A throw is 'pending', never a claim.
+import { registerSeamConfirmer, confirmSeamKey, attachSubmit, paintSubmitControl, submitControlHTML } from './submit-state.js';
+// D2 lane 1 (UN-530 / DI-779, UN-507A / DI-1011..1014): the ONE searchable school picker, and the college football teams control (a home team and an alma mater, one designated). Both are configured here
+// with the app's escaper, its one cached ESPN catalog and its one team shorthand; their document delegates are bound in boot().
+import { configureSchoolPicker, bindSchoolPickerDelegate, refreshOpenSchoolPicker, schoolFieldHTML, openSchoolPicker } from './school-picker.js';
+import { readCfbTeams, cfbTeamsPatch, cfbTeamsGuard, cfbTeamsControlHTML, readCfbTeamsControl, bindCfbTeamsDelegate, CFB_TEAMS_COPY } from './cfb-teams.js';
+configureSchoolPicker({ escHtml, getCatalog: (key) => obCatalogFor(key), retryCatalog: (key) => { if (!key || key === 'cfb') retrySchoolCatalog(); }, abbr: (loc) => teamAbbr(loc), onOpen: () => { maybeRefreshAlmaMaterCatalog(); } });
+// D2 lane 1 (UN-530 / DI-773..778): profile photos. ONE renderer (avatarHTML) for every person-avatar, the league directory and the signed-URL cache, injected with the app's own client, escaper and
+// identity readers; the transport is silent until a league is active and a client exists. A change to what the directory says repaints through the same path a Realtime row does.
+// D2 lane 1 (UN-506 / DI-724..731): the invite and join sheets' words, states and markup (pure); app.js owns the layer, the RPCs and the routing.
+import * as IJ from './invite-join.js';
+// D2 lane 1 (UN-507 / UN-507A): onboarding, About you, tips and the Getting started card. The pure halves, the markup and the owner-only account store; the glue is the block before the LEAVE flow.
+import * as PQ from './profile-questions.js';
+import * as TP from './tips.js';
+import * as OB from './onboarding-ui.js';
+import * as SP from './season-punishment.js';   // D2 lane 1 batch 3 (UN/PF-542, DI-1022..1030): the season-ender vote's words, arithmetic and markup
+import * as SPS from './season-punishment-store.js';   // ...and its seven server calls and cache
+import { configureSeasonStakes } from './season-punishment-store.js';
+import * as OBT from './obligations-toggle.js';   // D2 lane 1 (UN-541, DI-1015..1021): the Obligations switch's words and markup
+import { configureAccountContext, loadAccountContext, clearAccountContext, accountContextAvailable, getAccountProfile, getAccountTips, patchAccountProfile, patchAccountTips, removeAllAccountProfile } from './account-context.js';
+import { configureAvatars, avatarHTML, bindAvatarDelegate, refreshAvatarDirectory, clearAvatarDirectory, avatarGate, readNativeBuild, processAvatarFile, uploadOwnAvatar, removeOwnAvatar,
+  removeOwnAvatarBeforeDeletion, ownAvatarPath, reportPhotoText, avatarPreviewHTML, AVATAR_COPY } from './avatar.js';
+onBeforeAccountDelete(() => removeOwnAvatarBeforeDeletion());   // DI-775: the photo object is removed before the deletion RPC (a SQL cascade cannot delete a Storage object)
+configureAvatars({
+  escHtml, getClient: () => getSupabaseClient(), getLeagueId: () => getActiveLeagueId() || '', getOwnUserId: () => getAccountUserId() || '', getOwnMemberId: () => getSession()?.playerId || '',
+  initialsOf: (p) => getPlayerInitials(p), onChange: () => { try { _repaintForSupabaseData('avatars'); } catch (e) { console.warn('[avatar] repaint failed', e); } },
+});
+registerSeamConfirmer(async (key) => {
+  if (!isSupabaseDataMode()) return 'saved';
+  try { return await sb.flushAndConfirm(key); } catch { return 'pending'; }
+});
 
 // DI-208c step 1 (PASS 1b) — the native-shell body class, applied as early as
 // this module can reach `document.body` without touching index.html's inline
@@ -1274,6 +1370,7 @@ export const state = {
   layoutFocus: null,
   // Active tab within the Commissioner panel (week / games / players / settings / data)
   commTab: 'week',
+  leaguePage: 'list',          // D2 lane 6 (DI-758): which page of the Commissioner League tab is open ('list' = the rows); the panel's data-league-view mirrors it
   // UX Revamp wiring pass 2 (2026-09-25), DI-320/345 — active tab within the
   // Admin panel (week / games / players / settings / data / super-admin).
   adminTab: 'week',
@@ -1289,6 +1386,8 @@ export const state = {
     error: '',           // '' | 'empty' | 'network'
     filter: '',          // free-text team filter over `results`
     postToChat: true,    // coordinator ruling Q2 — checkbox defaults ON
+    sport: '',           // D2 lane 2 (DI-923): the dbCode the member chose on the card's sport segment; '' = the active sport
+    resultSport: '',     // ...and the ESPN key the CURRENT results were searched for (a request stores it)
   },
   // Available-games filter (commissioner panel). Persists within a session.
   availFilter: {
@@ -1421,25 +1520,34 @@ export function hasUnsavedDraft(week, playerId) {
  * Only an explicit `=== true` — a read that actually happened — may select a
  * mode by config or write the last-known value. Everything else keeps the last
  * known good answer, and falls back to today's 'pins' only when there has never
- * been one. boottest [16]'s structural rule now requires every `return` in
+ * been one. [D2 lane 6, D-108: "falls back to 'pins'" is gone; see the function's own unreadable branch.] boottest [16]'s structural rule now requires every `return` in
  * loadDeployedConfig() to carry the flag explicitly, so "unknown" can only ever
  * arise from a caller outside that function.
  */
 function resolveEffectiveAuthMode(deployed) {
   if (deployed?.authModeKnown === true) {
-    const mode = deployed?.authMode || 'pins';
-    const persisted = setLastKnownAuthMode(mode);
+    const mode = deployed?.authMode || 'supabase';
+    // D2 lane 6 (DI-765, D-108) — only the shipped mode is remembered. The credential-free 'local' mode is an explicit
+    // developer/test selection and is never persisted: a device must not come to treat "local" as its identity.
+    // A read that says anything else CLEARS the memory, so a device flipped to local is not treated as a supabase device.
+    const persisted = setLastKnownAuthMode(mode === 'supabase' ? 'supabase' : '');
     // SEC S-2 — the write is verified now, and a failure is loud rather than
     // swallowed. THIS boot is unaffected (the config read answered the question
     // directly); what is lost is the memory a FUTURE boot would fall back on if
     // its own config read failed, which on a cut-over device is the difference
-    // between holding and downgrading to PINs.
-    if (!persisted && mode !== 'pins') {
-      console.error(`[auth] this device is in '${mode}' mode but could not record that on the device (storage full, or private browsing). This session is unaffected; a future boot whose config.json read FAILS will fall back to PIN mode here.`);
+    // between holding and... holding (see the unreadable branch below).
+    if (!persisted) {
+      console.error(`[auth] this device is in '${mode}' mode but could not record that on the device (storage full, or private browsing). This session is unaffected; a future boot whose config.json read FAILS will hold on the "cannot reach Munera" screen.`);
     }
     return mode;
   }
-  return getLastKnownAuthMode() || 'pins';
+  // ── D2 lane 6, step 1 (DI-765, D-108) — AN UNREADABLE CONFIG NEVER BECOMES A LOCAL APP ──
+  // This used to fall back to the last-known mode or a PIN-gated local mode: a device that had never completed a config read was
+  // treated as a PIN-gated local-only device, which accepts picks that never sync (the phantom-pick failure CLAUDE.md
+  // forbids). It now resolves to 'supabase' whatever the device remembers, so the hold branch in applyAuthModeDecision()
+  // fires (authModeKnown !== true) and the "cannot reach Munera" hold screen goes up instead of any app. A device with a
+  // hydrated mirror is unchanged: its remembered mode was 'supabase' and it already held here.
+  return 'supabase';
 }
 export const _resolveEffectiveAuthModeForTest = resolveEffectiveAuthMode;
 
@@ -1505,6 +1613,9 @@ async function applyAuthModeDecision() {
   // this device; both keys are gone from config.json and nothing reads them.
   const authMode = resolveEffectiveAuthMode(deployed);
   configureAuth({ ...deployed, authMode });
+  // Security hardening (D2 lane 6): the page's default mode before config loads is 'local', and in that window getSession() reads the local-session key. On a device whose config resolves to the
+  // shipped mode that record is junk (and a stale one must never be honoured), so it is removed here, the moment the mode is known. Needs only the resolved mode (it sits after it).
+  if (authMode === 'supabase') { try { clearSession(); } catch (e) { console.warn('[auth] the local session record could not be removed (storage refusing writes)', e); } }
   // S2-1 (full-app review, 2026-09-26) — the maintenance-banner boot fetch
   // USED TO sit here, right after configureAuth(). That fixed the authMode
   // half of REVIEWER BLOCK 1 but not the SDK half: this line runs ~180 lines
@@ -1612,35 +1723,12 @@ async function applyAuthModeDecision() {
     forceSignedOutSession();
     applyIdentityDeltaIfChanged('config-unreadable-hold');
     showAuthHoldGate('config-unreadable');
-    console.error("[auth] config.json could not be read and this device last booted in 'supabase' mode — holding signed out rather than downgrading to PINs.");
+    console.error("[auth] config.json could not be read — holding on the \"cannot reach Munera\" screen (D2 lane 6, D-108: an unreadable config never becomes a local app).");
     return { deployed, authMode, hold: 'config-unreadable' };
   }
 
   if (authMode === 'supabase') {
-    // SEC F1-R1, second half — on a supabase boot the PIN-mode session record
-    // is dead weight with a live hazard attached: getSession() no longer reads
-    // it, so a stale `{isAdmin:true}` sits there invisibly until something puts
-    // the device back in 'pins' mode and reads it straight back. Removed ONCE,
-    // here, on a config read that actually said 'supabase' — never on the hold
-    // path above, where a transient network failure must not cost a player
-    // their PIN login. clearSession() is a direct removeItem(), not a save(),
-    // so it is unaffected by the write interlock below.
-    //
-    // GUARDED AT THE CALL SITE (reported by the fourth-gate security pass;
-    // js/storage.js is ask-first, so the unguarded removeItem() stays reported
-    // rather than edited). WHAT THE GUARD BUYS, stated as the consequence: on a
-    // device whose storage refuses every operation this line threw straight out
-    // of boot() — above the interlock, above the gate, above every fail-closed
-    // branch below — leaving the app in whatever state the paint-first phase had
-    // reached with no lock and no banner. It is now a warning, and the boot
-    // continues into the interlock. WHAT THE GUARD COSTS: the stale
-    // `cfbp_session` record stays on that device. It is unreadable to this mode
-    // (getSession() delegates to auth.js while authMode is 'supabase'), so it is
-    // inert until a rollback to 'pins' — which is a strictly better failure than
-    // a dead boot, and is named here rather than discovered later.
-    try { clearSession(); } catch (e) {
-      console.warn('[auth] the PIN-mode session record could not be removed on this device (storage is refusing writes); continuing into the interlock rather than aborting the boot', e);
-    }
+    // D2 lane 6 (D-108): the PIN-era session record is no longer read by ANY mode and is swept at the top of boot() (sweepLegacyPinDeviceKeys), so the per-branch removal that stood here is gone.
     // ── SEC F1 (CRITICAL) — THE INTERLOCK. A CONFIGURATION QUESTION ──────────
     // authMode:'supabase' in a build with NO Supabase data layer wired
     // (dataMode is not 'supabase', or no adapter probe was ever registered) is
@@ -2310,11 +2398,11 @@ function wireSupabaseAdapter() {
     // §6.1 — the two Sheets-era device records the first Supabase boot wipes,
     // each through its owning module's EXPORTED accessor…
     clearMirror,
-    setSiteUnlocked,
+    setSiteUnlocked: clearLegacySiteUnlock,   // D2 lane 6: the adapter's dep keeps its old name; the implementation is storage.js's sweep of the dead PIN-era flag
     // …and each read back through its owning module's PREDICATE (reviewer F9).
     // A missing accessor reports "NOT VERIFIED", never success.
     hasSheetMirror: hasSheetMirrorOnDevice,
-    isSiteUnlocked,
+    isSiteUnlocked: hasLegacySiteUnlock,
     // RG-202 — the adapter's bounded write retry refreshes the session before an AUTH-class
     // attempt (a 401/PGRST301 on a token that expired between the debounce tick and the request —
     // the "wake from background and type" race). The refresh is auth.js's, not the adapter's:
@@ -2653,6 +2741,7 @@ function showSupabaseOfflineBanner(at, heldText = '') {
 function hideSupabaseOfflineBanner() {
   document.getElementById('supabase-offline-banner')?.remove();
 }
+export const _fmtBannerTimeForTest = (iso) => fmtBannerTime(iso);   // headermetatest [t35]: the REAL formatter (every banner/pick-status test injected its own)
 /** "as of 4:12 PM" — the player's own timezone, through the same helper every
  *  other time in the app goes through, so an offline banner cannot be the one
  *  place that renders UTC. Falls back to '' rather than to a raw ISO string. */
@@ -2660,7 +2749,9 @@ function fmtBannerTime(iso) {
   try {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '';
-    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: getTimezone() || undefined });
+    // T-35 / W-75: getTimezone() is a KEY ('PT', 'ET' …); `timeZone` takes an IANA name. Passing the key threw a RangeError, so this
+    // returned '' on every call and the offline banner never showed its time. sportViewerZone() maps the key (unknown -> the default).
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: sportViewerZone().iana });
   } catch { return ''; }
 }
 
@@ -3054,6 +3145,9 @@ async function boot() {
   // before anything that could touch the active-league pointer (the earliest
   // of which, `wireSupabaseAdapter()`, is still several lines below).
   _warmRelaunchAtBoot = !!getActiveLeagueId();
+  // D2 lane 6 (DI-765, D-108) — the dead legacy device keys (`cfbp_session`, the site front-door flag) are swept on every boot, in every mode, until TestFlight build 4 expires
+  // (~2027-01-15; build 4 still carries the PIN code that writes them). Needs no resolved precondition (a plain removeItem), so it sits with the other boot-start device reads.
+  try { sweepLegacyPinDeviceKeys(); } catch (e) { console.warn('[auth] the legacy device keys could not be swept (storage refusing writes); they are unread in every mode', e); }
   wireMigrationPendingBanner();
   // ── PHASE III STEP 5 (DI-T5.1) — the chat context, beside the predicate and for the same
   //    reason. The predicate says whether THIS LEAGUE's data has moved; this says whether this
@@ -3078,12 +3172,14 @@ async function boot() {
   // D1 Lane C (DI-673): News reads OUR backend (`news_feed`, `news_sources_for`) on the SAME client, injected like chat's. Dormant until Home asks; a device with no
   // client shows News's calm "temporarily unavailable" state (never the phone-side ESPN fetch: that contingency is C20-gated, NEWS_CLIENT_ESPN_FALLBACK).
   installNewsTransport({ getClient: getSupabaseClient });
+  installTeamFactsTransport({ getClient: getSupabaseClient });   // D2 lane 4: public team facts (rpc team_facts_list, a sport and nothing else); dormant until Your numbers or Home asks
+  installPickEventsTransport({ getClient: getSupabaseClient });   // D2 lane 4: the pick-history setting and, only when it is on, the viewer's own pick_events (RLS: own rows only)
   registerHomeNewsOpeners({ openAlsoFrom: openNewsAlsoSheet, openContent: openContentDetail, retryContent: () => { void getHomeWiring().homeView.refresh(); } });
   // Review B2 (2026-10-14): News and the Home content cards read EVERY current week (DI-535's multi-sport sweep), each tagged with its competition's sport (never a stored week.sport).
   registerHomeNewsWeeks(() => currentWeeksToSweep().map((w) => {
     let sport = null;
     try { sport = competitionForWeek(w)?.sport || null; } catch { sport = null; }
-    return sport === 'cfb' || sport === 'nfl' ? { ...w, sport } : w;
+    return sport && listProfiles().some((p) => p.key === sport) ? { ...w, sport } : w;   // D2 lane 2 (DI-900): the registry, not a hard-coded cfb/nfl pair
   }));
   // ── SECURITY A-1 (RG-196) — THE WITHHELD PREDICATE, INSTALLED BEFORE CHAT ──
   // Beside the two installs above and for the same reason: `initChatUI({phase:
@@ -3137,7 +3233,6 @@ async function boot() {
   // fail-closed memory, written only by a config read that SUCCEEDED), so
   // paint-first is untouched: no network, no await, and on every flag-off
   // device it answers '' or 'pins' and this line is byte-identical to before.
-  const supabaseDevice = (() => { try { return getLastKnownAuthMode() === 'supabase'; } catch { return false; } })();
   let rendered = false;
   // ── THE SHEETS MIRROR PRIME IS GONE (2026-09-23) ──────────────────────────
   // `primeFromMirror()` read `cfbp_sheet_mirror` synchronously and painted the
@@ -3182,7 +3277,14 @@ async function boot() {
   // index.html (never rebuilt by a page render), so this binds once, here.
   try { bindSyncBadgeTap(); } catch (e) { console.warn('[sync-badge] tap bind failed', e); }
   try { bindKeyboardAvoid(); } catch (e) { console.warn('[nav-gestures] bindKeyboardAvoid failed', e); }
+  // D2 sweep, DI-1095 (W-163): the touch press for the controls outside Home that sit in scrolling content (pick buttons, chat pills, league rows) — T-05's rule, one delegated binding on the body.
+  // It needs only the DOM (no auth, config or SDK precondition), so it carries no boot-order assertion; presstest [W163-boot] pins that it is armed here and nowhere earlier.
+  try { bindPressState(document.body, CONTENT_PRESS_SELECTOR); } catch (e) { console.warn('[nav-gestures] content press bind failed', e); }
   try { bindComingSoonDispatcher(); } catch (e) { console.warn('[leagues-home] coming-soon dispatcher bind failed', e); }
+  // D2 lane 1 (DI-779, DI-1012): the two document-level delegates of the school picker and the college football teams control (a school row opens the sheet; a designation segment writes its value).
+  try { bindSchoolPickerDelegate(); bindCfbTeamsDelegate(); } catch (e) { console.warn('[school-picker] delegate bind failed', e); }
+  try { bindOnboardingDelegates(); bindObtDelegate(); bindStkDelegate(); } catch (e) { console.warn('[onboarding] delegate bind failed', e); }   // D2 lane 1 (UN-507): one delegate for every onboarding tap
+  try { bindAvatarDelegate(); } catch (e) { console.warn('[avatar] delegate bind failed', e); }   // D2 lane 1 (DI-773): one capture listener: a picture that fails to load is removed and the initials under it show
   // N1 (DI-430, 2026-09-30) — the New League entry dispatcher, beside its sibling (one delegated listener for `[data-action="create-league"]`).
   try { bindCreateLeagueDispatcher(); } catch (e) { console.warn('[league-create] dispatcher bind failed', e); }
   // N1 (DI-430) — `?join=CODE` is captured NOW, at boot, and the URL is scrubbed in the same call (the value is persisted first). It needs NO resolved precondition —
@@ -3292,7 +3394,9 @@ async function boot() {
   // one unfalsifiable — removing it would change nothing, and a defence layer
   // nothing can prove the absence of is not a layer. boottest [30] (D2) pins
   // the order against the source for the same reason.
-  if (supabaseDevice) armBootIdentityCover();
+  // D2 lane 6 (D-108): armed on EVERY device now. The PIN gate used to stand in front of a never-booted device; with it gone the page is covered (inert) until the config
+  // read answers, and the release/hold paths below end it. (Previously gated on the last-known mode being 'supabase'.)
+  armBootIdentityCover();
   try { initChatUI({ phase: 'early' }); } catch (e) { console.warn('[chat] early start failed', e); }
   // Item 10 — wired in the EARLY phase as well as the late one (below). The
   // listener is latched, so the second call is a no-op; what it buys is a
@@ -3375,7 +3479,6 @@ async function boot() {
   //
   // THE ROLLBACK THIS OWES BACK is paid immediately after the decision — see
   // the call site below the hold branch.
-  if (!supabaseDevice && !isSiteUnlocked()) showSitePinGate();
   // (armBootIdentityCover() has already run, far above — see SECURITY A-1-R
   //  beside initChatUI({phase:'early'}). It CANNOT be here: the replay this
   //  cover exists for happens before this line.)
@@ -3413,22 +3516,7 @@ async function boot() {
     return;
   }
 
-  // ── RG-194 — THE PIN GATE THE DEFERRAL ABOVE OWES BACK ────────────────────
-  // Deferring the PIN gate on a cut-over device must not mean FORGETTING it.
-  // This is the rollback case: `cfbp_auth_mode_last_known` still says
-  // 'supabase', but config.json — which is the authority the moment it is
-  // readable — has been rolled back to 'pins', and this device has never
-  // satisfied the site PIN. Same three terms as the deferred call and the same
-  // terms runAuthHoldCheck() already uses on ITS recovery path (the
-  // `decision.authMode !== 'supabase' && !isSiteUnlocked()` line), plus "no
-  // overlay is already up" so a gate somebody else painted is never replaced.
-  //
-  // Unreachable on every device that did NOT defer: a pins device already
-  // painted its gate above and `supabaseDevice` is false here.
-  if (supabaseDevice && decision.authMode !== 'supabase' && !isSiteUnlocked()
-      && !document.getElementById('site-gate-overlay')) {
-    showSitePinGate();
-  }
+  // D2 lane 6 (D-108): the PIN gate and its rollback re-show are deleted with the PIN system.
 
   // ══ REVIEWER F1 (2026-09-21) — THE FAIL-SAFE, AND THE RULE IT ENFORCES ═════
   //
@@ -3565,8 +3653,14 @@ async function runPostHydrateTail() {
   // the real catalog once this page load). almaMaterCatalogFallback() is the
   // SAME shape-correcting wrapper showEditPlayerModal() already uses.
   try {
-    registerAlmaMaterOptionsProvider(current => buildAlmaMaterOptions(current, cachedEspnTeamsList() || almaMaterCatalogFallback()));
-  } catch (e) { console.warn('[chat] the alma-mater options provider could not be registered', e); }
+    // D2 lane 1 (DI-779 / DI-1011): the chat-settings row is the shared college football teams control now (two school fields and the designation), handed down the same way.
+    registerCfbTeamsProvider((player, ids) => cfbTeamsHTMLFor(player, ids));
+    registerCfbTeamsWriter((playerId, input) => applyCfbTeams(playerId, input));
+  } catch (e) { console.warn('[chat] the college football teams control could not be registered', e); }
+  // D2 lane 1 (UN-507 / DI-734): the Locker Room's first-use tip card, placed at the top of the room by chat-ui and owned (eligibility, dismissal) by the onboarding block.
+  try { registerChatTipProvider(() => { const tip = obTipFor('chat'); return tip ? OB.tipCardHTML(tip, { escHtml }) : ''; }); } catch (e) { console.warn('[chat] the tip provider could not be registered', e); }
+  // D2 sweep W-128 (DI-793): the Locker Room's scope button — its league row, and a one-sport league's whole button — opens what the header pill opens (the league overview, whose "Switch or join a league" row is the selector). DOM-free registration: it needs no auth, config or SDK precondition.
+  try { registerChatScopeHooks({ openLeagueSelector: () => _leaguePillClick() }); } catch (e) { console.warn('[chat] the scope hooks could not be registered', e); }
   // SECURITY F-3 / DI-T7.6 — the self-edit WRITER, handed down the same way and
   // for the same layering reason. patchPlayer() lives here because this is the
   // module the commissioner's Edit Player modal lives in, so the one policy
@@ -4627,22 +4721,14 @@ function buildControlCenterCtx() {
       // day and chat choice change without a drawer repaint, and a snapshot reopened the row on the last repaint's copy.
       get gameRequestHTML() { return renderGameRequestCardHTML(); },
       releaseNotesHTML: renderReleaseNotesCardHTML(),
-      // DI-423 AMENDMENT (2026-09-28, RG-290 finding) — the Profile pane's
-      // alma-mater field is now the SAME ESPN <select> the chat-prefs picker
-      // uses. buildAlmaMaterOptions()/cachedEspnTeamsList()/almaMaterCatalogFallback():
-      // the EXACT call registerAlmaMaterOptionsProvider() wires up for
-      // chat-ui.js (see near that registration, above) — one option-list
-      // builder, one fallback rule, three callers (chat-prefs, Comm ->
-      // Players -> Edit, and this drawer), never a second implementation.
-      // FIX (RG-298, 2026-09-28, reviewer BLOCK B1) — was `|| ALMA_MATERS`
-      // (a raw string array; buildAlmaMaterOptions() needs `.location`/
-      // `.displayName` objects, so every fallback option rendered EMPTY and
-      // picking one wiped the claim on save) — see the identical fix and its
-      // full reasoning at the registerAlmaMaterOptionsProvider() call above.
-      almaMaterOptionsHTML: buildAlmaMaterOptions(player?.almaMater || '', cachedEspnTeamsList() || almaMaterCatalogFallback()),
-      // RG-TBD-B3 — the caption under that picker: '' once ESPN's full list is
-      // in, otherwise what the short list IS (loading, or couldn't load).
+      // D2 lane 1 (DI-779 / DI-1011..1014) - the Profile pane's teams are the shared college football teams control (a Home team and an Alma mater, each a row that pushes the searchable
+      // school picker, and - only with both set - the "Counts for Alma Mater Watch" segment). It replaces the ESPN <select>; '' when the league plays no college sport.
+      cfbTeamsHTML: cfbTeamsHTMLFor(player, { home: 'cc-field-home-team', alma: 'cc-field-alma-mater', desig: 'cc-field-cfb-desig' }),
+      // RG-TBD-B3 - the caption of the News pane's team picker (the alma-mater pickers' own captions are the school picker's loading / error states now).
       almaMaterNoteText: almaMaterCatalogNoteText(),
+      // D2 lane 1 (UN-507 / UN-507A): the Profile pane's About you section and the fourth pane (Tips & Help); both '' without the account store (silence, never a broken pane).
+      aboutYouHTML: obPaneHTML(),
+      tipsPaneHTML: obTipsPaneHTML(),
     },
     timeZones: TIME_ZONES, currentTimeZone: getTimezone() || DEFAULT_TZ,
     themes: THEMES, currentTheme: getTheme() || 'neutral',
@@ -4667,6 +4753,9 @@ function buildControlCenterCtx() {
     // ABSENT field as "resolved" (`!== false`), so existing fixtures that
     // never set this field are unaffected.
     membershipsResolved: hasResolvedMemberships(),
+    // D2 lane 1 (DI-773, DI-778): the Profile photo control is offered on the web always and on the iPhone shell only on a build that carries the camera and photo-library usage strings.
+    avatar: { available: avatarAvailableNow() },
+    yourNumbers: yourNumbersOffered(),                    // D2 lane 4 (DI-964): Profile's "Your numbers" row
     // DI-335 — "Change Password" vs "Set Password"; null = cannot tell.
     hasPasswordIdentity: getAccountHasPasswordIdentity(),
     callbacks: {
@@ -4687,6 +4776,7 @@ function buildControlCenterCtx() {
       // §Placement note 2). showLeaguesHomeOverlay() carries its own
       // isContentWithheld() guard, mirroring showLeaguePageOverlay()'s.
       onOpenLeaguesHome: () => showLeaguesHomeOverlay(),
+      onOpenYourNumbers: () => getInsightUI().openYourNumbers({ backLabel: 'Back' }),   // D2 lane 4 (DI-964): the drawer has closed itself first
       // SECURITY GATE FINDING 3 (916bdb7 review, 2026-09-25) — the identity
       // header's league-name tap (js/control-center.js, `data-action="cc-
       // open-league-page"`). `showLeaguePageOverlay()` already refuses to
@@ -4703,30 +4793,38 @@ function buildControlCenterCtx() {
       // Dashboard and Standings, so a CHANGED value repaints the page under the
       // drawer, same shape as onSaveAlmaMater below (unchanged = no repaint, so
       // one Profile Save repaints once per field that actually moved).
+      // D2 lane 1 (DI-782): each save callback now ANSWERS - true when the write reached the seam, false when nothing was written (no player record) - so the Profile Save never says "Saved" for a write that did not happen.
       onSaveDisplayName: (v) => {
-        if (!session?.playerId) return;
+        if (!session?.playerId) return false;
         const before = getPlayer(session.playerId)?.displayName;
-        patchPlayer(session.playerId, { displayName: v });
+        const wrote = patchPlayer(session.playerId, { displayName: v });
         if (before !== v) { try { navigateTo(state.currentTab || 'dashboard'); } catch (e) { console.warn('[cc] repaint after the display-name save failed', e); } }
+        return wrote === true;
       },
+      onAvatarEdit: () => openAvatarSheet(),   // D2 lane 1 (DI-773): the Profile avatar button opens the photo action sheet
       onSaveInitials: (v) => {
-        if (!session?.playerId) return;
+        if (!session?.playerId) return false;
         const before = getPlayer(session.playerId)?.initials;
-        patchPlayer(session.playerId, { initials: v });
+        const wrote = patchPlayer(session.playerId, { initials: v });
         if (before !== v) { try { navigateTo(state.currentTab || 'dashboard'); } catch (e) { console.warn('[cc] repaint after the initials save failed', e); } }
+        return wrote === true;
       },
       // RG-290 — patchPlayer() now carries the claim-change ripple; the page
       // under the drawer (Rules roster, Watch, the pool's ⭐ badges) is then
       // repainted the way #ep-save repaints the Comm page, so nothing on
       // screen keeps showing the old claim after the drawer closes.
-      onSaveAlmaMater: (v) => {
-        if (!session?.playerId) return;
+      // D2 lane 1 (DI-1011): ONE save for the college football teams (the Home team, the Alma mater, the designation), through the one writer applyCfbTeams(). `input` is null when the pane
+      // rendered no control (a league with no college sport): nothing to write, nothing to fail.
+      onSaveCfbTeams: (input) => {
+        if (!session?.playerId) return false;
+        if (!input) return true;
         const before = String(getPlayer(session.playerId)?.almaMater || '').trim();
-        patchPlayer(session.playerId, { almaMater: v });
-        if (before !== String(v || '').trim()) {
+        const wrote = applyCfbTeams(session.playerId, input);
+        if (wrote && before !== String(getPlayer(session.playerId)?.almaMater || '').trim()) {
           try { navigateTo(state.currentTab || 'dashboard'); }
-          catch (e) { console.warn('[cc] repaint after the alma-mater save failed', e); }
+          catch (e) { console.warn('[cc] repaint after the teams save failed', e); }
         }
+        return wrote === true;
       },
       onSetTimeZone: (v) => {
         setTimezone(v);
@@ -4894,6 +4992,7 @@ async function maybeRefreshAlmaMaterCatalog() {
   if (_almaCatalogFetchAttempted || almaCatalogComplete()) return;
   _almaCatalogFetchAttempted = true;
   _almaCatalogInFlight = true;
+  refreshOpenSchoolPicker();   // D2 lane 1: a retry from the picker shows its loading state at once
   try {
     const fresh = await fetchEspnTeamsList();
     if (Array.isArray(fresh) && fresh.length) {
@@ -4902,9 +5001,8 @@ async function maybeRefreshAlmaMaterCatalog() {
       _espnTeamsCache = { teams: fresh, fetchedAt: new Date().toISOString() };
       _almaCatalogPartial = fresh.incomplete || null;   // a short list is used AND named
       _almaCatalogFetchFailed = false;
-      patchProfileAlmaMaterOptionsInPlace(fresh);
-      // RG-TBD-B3 — the Chat settings row carries the same picker (#pref-alma).
-      patchProfileAlmaMaterOptionsInPlace(fresh, 'pref-alma');
+      // D2 lane 1 (DI-779): an OPEN school picker takes the full list in place (its own loading / error states replace the old captions).
+      refreshOpenSchoolPicker();
       // SOCIAL PLATFORM NEWS -- the News pane's team picker takes the same in-place landing (its options exclude the teams already followed).
       patchNewsTeamOptionsInPlace(document, fresh, getNewsPrefs().teams);
     } else {
@@ -4937,30 +5035,13 @@ function almaMaterCatalogNoteText() {
  *  caption's line box is reserved in CSS, so nothing below it moves. */
 function syncAlmaMaterCatalogNotes() {
   const text = almaMaterCatalogNoteText();
-  for (const id of ['cc-field-alma-note', 'pref-alma-note', 'cc-news-team-note']) {   // SOCIAL PLATFORM NEWS: + the News pane's caption
+  refreshOpenSchoolPicker();
+  for (const id of ['cc-news-team-note']) {   // SOCIAL PLATFORM NEWS: the News pane's caption (the alma-mater pickers' captions are the school picker's own states now, D2 lane 1)
     const note = document.getElementById(id);
     if (!note) continue;
     if (note.textContent !== text) note.textContent = text;
     note.hidden = false;
   }
-}
-/** R2 — the in-place half of the landing above. `sel.value` is the player's
- *  CURRENT choice (the select always carries one: the stored school it was
- *  rendered with, or whatever they picked since, "— None —" included), so it
- *  — not the stored claim — is what the rebuilt list marks `selected`. The
- *  stored claim is only the fallback for a node that reports no string value.
- *  The value is re-asserted after the swap as well, so the choice survives
- *  even where an engine ignores the `selected` attribute on an options swap.
- *  RG-TBD-B3 — `id` lets the Chat settings row's picker (#pref-alma) take the
- *  same in-place landing; the default keeps every existing call unchanged. */
-function patchProfileAlmaMaterOptionsInPlace(teams, id = 'cc-field-alma-mater') {
-  const sel = document.getElementById(id);
-  if (!sel) return;   // Profile closed/never painted — the next paint reads the cache
-  const current = typeof sel.value === 'string'
-    ? sel.value
-    : String(getPlayer(getSession()?.playerId)?.almaMater || '');
-  sel.innerHTML = buildAlmaMaterOptions(current, teams);
-  sel.value = current;
 }
 export const _maybeRefreshAlmaMaterCatalogForTest = maybeRefreshAlmaMaterCatalog;
 
@@ -5003,6 +5084,8 @@ function bindControlCenterBodies(scopeEl, rowState) {
     // immediately below already did.
     bindFeedbackKindToggle(el);
     el.querySelector('#fb-submit-btn')?.addEventListener('click', () => submitFeedback(el));
+    // D2 lane 1 (DI-778): the report path for a profile photo is THIS form, pre-filled: one tap writes "Report a photo: " into the description and selects Bug; the reporter adds the member's name.
+    el.querySelector('#fb-report-photo-btn')?.addEventListener('click', () => prefillPhotoReport(el));
   });
   // Security fix round (2026-09-25), NOTE 4 — pass the ACTUAL body container
   // (`el`, the freshly-painted `#cc-body-chat` node bindOnceIn() already
@@ -5016,6 +5099,7 @@ function bindControlCenterBodies(scopeEl, rowState) {
   // — it is simply still correct, container-scoped practice.
   bindOnceIn(scopeEl, 'cc-body-chat', (el) => bindPrefsPanel(el));
   bindOnceIn(scopeEl, 'cc-body-scribe', (el) => bindScribeFileBody(el));
+  bindOnceIn(scopeEl, 'cc-body-about', (el) => obBindPane(el));   // D2 lane 1: the About you pane's own submission control
   // RG (2026-10-02, Drew on live v0.28.0: "I'm clicking 'turn on' and nothing is
   // happening") — since the 🔔 header bell was retired (DI-307) this row is the ONLY
   // place the priming card renders, and its Turn On / Reconnect button and both
@@ -5053,6 +5137,7 @@ function bindControlCenterBodies(scopeEl, rowState) {
 let _almaPickerWasOnScreen = false;
 /** RG-TBD-B3 test seam (the `_xForTest` convention) — almatest.mjs [22g]. */
 export const _bindControlCenterBodiesForTest = bindControlCenterBodies;
+export const _mountControlCenterDrawerForTest = () => mountControlCenterDrawer();   // releaselinktest: the boot step that wires #control-center-root
 
 function mountControlCenterDrawer() {
   const root = document.getElementById('control-center-root');
@@ -5674,7 +5759,7 @@ export function postPicksOpenedNotice(week) {
   if (!week) return null;
   return emitLifecyclePost({
     event: LIFECYCLE_EVENTS.PICKS_OPENED, scopeId: week.weekId, weekId: week.weekId, week,
-    facts: { weekN: week.weekNumber },
+    facts: { weekN: week.weekNumber, ...slateFact(week) },   // D2 lane 2: a game night carries its label
   });
 }
 
@@ -5700,8 +5785,8 @@ export function postPicksLockedNotice(week) {
   return emitLifecyclePost({
     event: LIFECYCLE_EVENTS.PICKS_LOCKED, scopeId: week.weekId, weekId: week.weekId, week,
     facts: countable
-      ? { weekN: week.weekNumber, submittedCount, totalPlayers: active.length }
-      : { weekN: week.weekNumber },
+      ? { weekN: week.weekNumber, ...slateFact(week), submittedCount, totalPlayers: active.length }
+      : { weekN: week.weekNumber, ...slateFact(week) },
   });
 }
 
@@ -5724,7 +5809,7 @@ export function postResultsFinalizedNotice(week, weekWinnerName, weekLoserName) 
   return emitLifecyclePost({
     event: LIFECYCLE_EVENTS.RESULTS_FINALIZED, scopeId: week.weekId, weekId: week.weekId, week,
     facts: {
-      weekN: week.weekNumber,
+      weekN: week.weekNumber, ...slateFact(week),
       weekWinnerName: weekWinnerName || undefined,
       weekLoserName: weekLoserName || undefined,
     },
@@ -5747,7 +5832,7 @@ function obligationFacts(ob) {
   const week = ob?.weekId ? getWeek(ob.weekId) : null;
   const label = ob?.note || ob?.amountOrPrize || getSettings().weeklyPrize || '';
   return {
-    ...(week ? { weekN: week.weekNumber } : {}),
+    ...(week ? { weekN: week.weekNumber, ...slateFact(week) } : {}),
     debtorName: getPlayer(ob?.payerPlayerId)?.displayName || undefined,
     creditorName: getPlayer(ob?.recipientPlayerId)?.displayName || undefined,
     obligationLabel: label || undefined,
@@ -6193,6 +6278,8 @@ function holdHomePlaceForPicture({ removedPx, aboveViewport } = {}) {
 }
 
 /** Home's two actions (HOME_ACTIONS): the renderer has already validated the action and the tab against its allow-lists before this runs. */
+let _routeLeagueInFlight = null, _routeLeagueCalls = 0;   // D2 DI-807: Home's route-back is single-flight
+export const _routeLeagueStateForTest = () => ({ inFlight: !!_routeLeagueInFlight, calls: _routeLeagueCalls, settle: _routeLeagueInFlight || Promise.resolve(null) });
 function onHomeAction(action, params = {}) {
   if (action === 'go-tab') {
     const tab = params && params.tab;
@@ -6217,12 +6304,67 @@ function onHomeAction(action, params = {}) {
     return;
   }
   // D1 Lane B / DI-575: a feed card opens its detail. home.js has already resolved the id against the cards derived for the current paint; openCardDetail() resolves it AGAIN, from live data.
-  if (action === 'open-card' && params && typeof params.cardId === 'string') openCardDetail(params.cardId);
+  if (action === 'open-card' && params && typeof params.cardId === 'string') { if (isInsightId(params.cardId)) getInsightUI().openDetail(params.cardId); else openCardDetail(params.cardId); }   // D2 lane 4: an insight card opens the insight detail (ins1: ids; the wire re-resolves it from live data)
   // D1 Lane B Game Day (DI-605/606): a row of the open card opens that game's Game view (home.js has validated the id against the card's rows; openGameView() resolves it again from live data).
   if (action === 'open-game' && params && typeof params.gameId === 'string') openGameView(params.gameId, { from: 'home' });
   // The footer's Dashboard button. `scope` ('all' | a sport | null) is Lane A's Dashboard scope (DI-525 rev 3): until that branch is merged the Dashboard has one scope, so it only opens the Dashboard.
   if (action === 'open-dashboard') openDashboardFromGameDay(params && params.scope);
+  // D2 DI-807 (lane 3): a card or a Game Day item from ANOTHER league. home.js resolved it against its own paint; the ONE router (routeToLeague: membership re-check, the switch with its cover, then
+  // deepLinkTo, which validates sport / week / game against the new league) does the rest. No second router (DI-864).
+  // DI-807: ONE route at a time — a second tap (a double tap, or another league's card tapped while the cover is up) is dropped until the first route settles, so a league switch is never
+  // started twice or crossed with another (the cover blocks the page, but a tap can land before it paints).
+  if (action === 'route-league' && params && typeof params.leagueId === 'string' && params.destination && typeof params.destination.tab === 'string' && !_routeLeagueInFlight) {
+    _routeLeagueCalls += 1;
+    const p = (async () => { try { return await routeToLeague(params.leagueId, { tab: params.destination.tab, params: { ...(params.destination.params || {}) } }); } catch { return null; } })();
+    _routeLeagueInFlight = p;
+    void p.then(() => { if (_routeLeagueInFlight === p) _routeLeagueInFlight = null; });
+  }
+  // D2 DI-822: "+n more" and "All {n} games ›" open the Full Game Day screen (a pushed screen: swipe-back, the 260 ms slide, Back to Home).
+  if (action === 'open-full-gameday') openFullGameDay();
 }
+
+/**
+ * D2 DI-822 (lane 3) — FULL GAME DAY: every game in the member's leagues, grouped Picks due · Live now · Starting soon · Later today · Upcoming · Final today. The model is Home's own (the last paint's
+ * cross-league Game Day, js/full-gameday.js); the screen repaints with Home. A row of the active league opens its Game view over this screen (Back returns here); a row of another league routes
+ * there through routeToLeague (the switch closes the screens). Every id is resolved by Home against its own paint (Std-9).
+ */
+let _fgdRefresh = null;                                   // test seam: null = the app's one refresh path (runManualSync)
+let _fgdUnbindPull = () => {};
+function openFullGameDay() {
+  if (isContentWithheld()) return;
+  ensurePushedScreens();
+  clearReadingChain();
+  const hv = getHomeWiring().homeView;
+  try { _fgdUnbindPull(); } catch { /* a stale binder */ }
+  _fgdUnbindPull = () => {};
+  pushScreen({
+    id: 'full-gameday', title: 'Game Day', backLabel: 'Home', meta: { kind: 'full-gameday' },
+    onClose: () => { try { _fgdUnbindPull(); } catch { /* already gone */ } _fgdUnbindPull = () => {}; },
+    render: () => { const r = hv.fullGameDay(); return r ? r.html : '<div class="ps-empty"><p class="ps-empty-title">No games in your leagues right now.</p></div>'; },
+    onClick: (e, api) => {
+      const t = e && e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-fgd-item],[data-fgd-due],[data-fgd-more]') : null;
+      if (!t) return;
+      const r = hv.fullGameDayTap({ item: t.getAttribute('data-fgd-item'), due: t.getAttribute('data-fgd-due'), more: t.getAttribute('data-fgd-more') });
+      if (r === 'more' && api && typeof api.repaint === 'function') api.repaint();
+      if (r === 'game' && isNativeShell()) haptic('light');
+    },
+  });
+  // DI-822: pull-to-refresh on THIS screen refreshes Peek and the active league together — the app's ONE refresh path (runManualSync: Home's leg forces the Peek, DI-804) — with the shipped
+  // completion haptic and loud-fail banner. Bound to the level's own scrolling body (it keeps its scroll position: a repaint writes the body, never re-creates it), live only while Full Game
+  // Day is the TOP level, and unbound when the screen closes. Every other surface on top (a sheet, a modal, the drawer, the gate) still suspends it.
+  _fgdUnbindPull = bindPullToRefresh(() => document.querySelector('#pushed-root .ps-level[data-ps-id="full-gameday"] [data-ps-body]'),
+    (...a) => (typeof _fgdRefresh === 'function' ? _fgdRefresh(...a) : runManualSync('pull-to-refresh')), {
+      insidePushed: true,
+      isActive: () => topScreenId() === 'full-gameday',
+      onFail: () => showSyncFailureBanner("Pull-to-refresh couldn't reach the server."),
+    });
+  // int/v0.31.0 (lane 3 x bug A, T-05 / FB-047): the rows press only for a finger at rest, never while the list scrolls (bindPressState; css presses .fgd-row on [data-pressed]). Unbound with the pull.
+  const unbindFgdPull = _fgdUnbindPull;
+  const unbindFgdPress = bindPressState(document.querySelector('#pushed-root .ps-level[data-ps-id="full-gameday"]'), '.fgd-row');
+  _fgdUnbindPull = () => { try { unbindFgdPress(); } catch { /* already gone */ } unbindFgdPull(); };
+}
+export const _openFullGameDayForTest = openFullGameDay;
+export const _setFullGameDayRefreshForTest = (fn) => { _fgdRefresh = typeof fn === 'function' ? fn : null; };
 
 // ─── Home card detail (D1 Lane B, DI-571 / DI-575 / DI-576 / DI-585) ──────────────────────────────────────────────────────────────────────────────────────────────
 // The detail is a PUSHED SCREEN (js/pushed-screen.js) over Home, which stays mounted underneath untouched (so Back lands on the same card at the same offset). The model is rebuilt from the
@@ -6329,6 +6471,311 @@ function onCardDetailClick(e, api, cardId, { fromGame = false } = {}) {
   }
 }
 
+// ═══ D2 lane 4 batch 2 (SCRIBE Analytics v1, 2026-10-21) — THE INSIGHT SURFACES: wire, detail, Your numbers, Ask SCRIBE ═══════════════════════════════════════════════
+// The engine (js/analytics) is pure; js/analytics-wire.js builds its ELIGIBLE FINAL-WEEK INPUT from the live storage mirror and runs it in budgeted slices AFTER a Home paint (never during a scroll);
+// js/insight-ui.js mounts the three surfaces. THE BLIND RULE is asked here, where the rows are read: a week enters only if the SERVER confirmed it and, in Supabase mode, the picks read for it has
+// landed (sb.picksReadWhilePublic) - anything else is null (fail closed), never the local status. Nothing here writes the storage seam; the no-repeat ledger lives in session memory (a stored copy needs a
+// KEYS entry, which is Drew's to approve - flagged in the hand-back).
+let _analyticsWire = null, _insightUI = null, _askOwnSwipe = false, _gdiOwnSwipe = false, _analyticsLastTouch = 0, _analyticsRefreshTimer = null, _gameDayTimer = null;
+function analyticsConfirmedStatus(w) {
+  if (!w) return null;
+  if (getBackendMode() !== 'supabase') return w.status;                    // the no-credential local substrate: one device, no server to wait for
+  try { return sb.picksReadWhilePublic(w.weekId) === true ? (sb.getConfirmedWeekStatus(w.weekId) || null) : null; } catch { return null; }
+}
+function analyticsSource() {
+  const leagueId = getActiveLeagueId();
+  if (!leagueId) return null;
+  return {
+    leagueId, leagueName: getActiveLeagueName() || '', zone: contentTimeOpts().timeZone,
+    competitions: () => getLeagueCompetitions(), weeks: () => getWeeks(), games: () => getGames(), picks: () => getPicks(), players: () => getPlayers(),
+    competitionMembers: () => getCompetitionMembers(), weeklyResults: () => getWeeklyResults(),
+  };
+}
+/**
+ * F-2 (release review; PF-508, DI-835, DI-1073): the member's OWN onboarding answers, as Home and the analytics wire read them: `{ homeTeams: { [sport]: [names] }, schools: [names], sports: [codes] }`.
+ * Explicitly provided fields only, never inferred; an empty profile is `{ homeTeams: {}, schools: [], sports: [] }`. Device-only: nothing here is stored or sent. The scope is the viewer: the signed-in
+ * member's own player record in the active league (the home team per sport; the college football home team through js/cfb-teams.js) and the owner-only account profile of THIS account (other teams,
+ * colleges attended, sports followed). Another member's record is never read, so no member's answers feed anyone else's Home. Withheld content (signed out, a hold) answers nothing.
+ */
+function ownProfileSignals() {
+  const out = { homeTeams: {}, schools: [], sports: [] };
+  try {
+    if (isContentWithheld()) return out;
+    const sess = getSession();
+    const me = sess && sess.playerId ? getPlayer(sess.playerId) : null;
+    if (!me) return out;
+    const put = (sport, name) => {
+      const n = typeof name === 'string' ? name.trim() : '';
+      if (!n || !/^[a-z][a-z0-9_]{0,15}$/i.test(String(sport))) return;
+      const key = String(sport).toLowerCase();
+      const list = out.homeTeams[key] || (out.homeTeams[key] = []);
+      if (!list.some((x) => x.toLowerCase() === n.toLowerCase())) list.push(n);
+    };
+    const cfb = readCfbTeams(me);
+    put('cfb', cfb.home);
+    const homes = me.preferences && typeof me.preferences === 'object' && me.preferences.homeTeams && typeof me.preferences.homeTeams === 'object' ? me.preferences.homeTeams : {};
+    for (const [sport, v] of Object.entries(homes)) for (const name of (Array.isArray(v) ? v : [v])) put(sport, name);
+    const acct = getAccountProfile() || {};
+    const others = acct.other_teams && typeof acct.other_teams === 'object' && !Array.isArray(acct.other_teams) ? acct.other_teams : {};
+    for (const [sport, arr] of Object.entries(others)) for (const name of (Array.isArray(arr) ? arr : [])) put(sport, name);
+    if (Array.isArray(acct.schools_attended)) out.schools = acct.schools_attended.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim());
+    if (Array.isArray(acct.sports_followed)) out.sports = acct.sports_followed.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim().toLowerCase());
+  } catch { return { homeTeams: {}, schools: [], sports: [] }; }
+  return out;
+}
+export const _ownProfileSignalsForTest = () => ownProfileSignals();
+/**
+ * M-93 DI-1112: the member's "Other teams you follow" that are NOT also their home team for that sport (the seat's home teams, the college football one through its designation).
+ * ownProfileSignals() folds the other teams into its home-team lists (F-2, DI-835: Home's ranker treats every followed team alike); the followed set separates them again with this
+ * list so a card about one says "A team you follow", never "Your home team". Same scope and rules as ownProfileSignals(): the signed-in member's own record and account only; withheld, nothing.
+ */
+function ownOtherTeamsOnly() {
+  const out = {};
+  try {
+    if (isContentWithheld()) return out;
+    const sess = getSession();
+    const me = sess && sess.playerId ? getPlayer(sess.playerId) : null;
+    if (!me) return out;
+    const seatHome = new Set();
+    const noteHome = (sport, name) => { const n = typeof name === 'string' ? name.trim() : ''; if (n) seatHome.add(`${String(sport).toLowerCase()}\u0000${n.toLowerCase()}`); };
+    noteHome('cfb', readCfbTeams(me).home);
+    const homes = me.preferences && typeof me.preferences === 'object' && me.preferences.homeTeams && typeof me.preferences.homeTeams === 'object' ? me.preferences.homeTeams : {};
+    for (const [sport, v] of Object.entries(homes)) for (const name of (Array.isArray(v) ? v : [v])) noteHome(sport, name);
+    const acct = getAccountProfile() || {};
+    const others = acct.other_teams && typeof acct.other_teams === 'object' && !Array.isArray(acct.other_teams) ? acct.other_teams : {};
+    for (const [sport, arr] of Object.entries(others)) {
+      if (!/^[a-z][a-z0-9_]{0,15}$/i.test(String(sport))) continue;
+      const key = String(sport).toLowerCase();
+      for (const name of (Array.isArray(arr) ? arr : [])) {
+        const n = typeof name === 'string' ? name.trim() : '';
+        if (!n || seatHome.has(`${key}\u0000${n.toLowerCase()}`)) continue;
+        const list = out[key] || (out[key] = []);
+        if (!list.some((x) => x.toLowerCase() === n.toLowerCase())) list.push(n);
+      }
+    }
+  } catch { return {}; }
+  return out;
+}
+export const _ownOtherTeamsOnlyForTest = () => ownOtherTeamsOnly();
+/** The member's own followed-team signals (device-only, never sent): the alma mater from the player record, the home teams per sport from the onboarding profile (F-2, `ownProfileSignals()`,
+ *  where the other teams are folded in), and (M-93 DI-1112) the other teams that are not also a home team, so the followed set can file them in their own bucket. */
+function analyticsProfile() {
+  let alma = '';
+  try { const s = getSession(); const p = s && s.playerId ? getPlayer(s.playerId) : null; alma = p && typeof p.almaMater === 'string' ? p.almaMater.trim() : ''; } catch { alma = ''; }
+  return { almaBySport: alma ? { cfb: [alma] } : {}, homeTeamsBySport: ownProfileSignals().homeTeams, otherTeamsBySport: ownOtherTeamsOnly() };
+}
+export const _analyticsProfileForTest = () => analyticsProfile();
+function analyticsBusy() { return Date.now() - _analyticsLastTouch < 200 || !!document.querySelector('#pushed-root [data-ps-dragging], .chat-sheet[data-dragging="true"]'); }
+export function getAnalyticsWire() {
+  if (_analyticsWire) return _analyticsWire;
+  const mark = () => { _analyticsLastTouch = Date.now(); };
+  try { for (const ev of ['scroll', 'touchstart', 'touchmove']) document.addEventListener(ev, mark, { capture: true, passive: true }); } catch { /* a missing listener only means the engine may run during a scroll */ }
+  _analyticsWire = createAnalyticsWire({
+    getSource: analyticsSource,
+    confirmedStatusFor: analyticsConfirmedStatus,
+    getViewerId: () => { try { return viewerMemberId() || null; } catch { return null; } },
+    getProfile: analyticsProfile,
+    // Admin-controlled switches (2026-10-21; no code constant): the followed-team family follows the league's serverJobs.teamFacts switch (Background jobs); pick history follows the platform
+    // setting analytics_pick_events_enabled (0068 runbook's last step), read with the viewer's own pick_events rows only when it is on
+    getSwitches: () => { try { const j = getSettings().serverJobs; return { teamFamily: !!(j && j.teamFacts === true) }; } catch { return { teamFamily: false }; } },
+    fetchPickEvents: ({ leagueId }) => fetchPickEvents({ leagueId, identity: currentIdentityKey() }),
+    fetchTeamFacts: (sports) => fetchTeamFacts({ sports, identity: currentIdentityKey() }),
+    ledger: { get: () => { const id = insightIdentity(); return id ? getInsightState(id).ledger : null; }, set: (t) => { const id = insightIdentity(); if (id) setInsightState(id, { ledger: t }); } },   // device-local, per identity (storage.js INSIGHT_STATE): "no repeats" survives a reload and one identity never reads another's
+    schedule: (fn) => { if (typeof requestIdleCallback === 'function') requestIdleCallback(() => fn(), { timeout: 250 }); else setTimeout(fn, 0); },
+    clock: () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()),
+    busy: analyticsBusy,
+    now: () => Date.now(),
+    isWithheld: isContentWithheld,
+    isAskOpen: askOpenCached,                                                         // Ask SCRIBE's "Why is this unusual?" chip follows the platform setting (batch 3)
+  });
+  return _analyticsWire;
+}
+export const _getAnalyticsWireForTest = getAnalyticsWire;
+/**
+ * M-93 DI-1113: ONE engine wire per PEEKED league (a league on Home that is not the active one). Only a league the Peek store targets AND whose view is readable (not partial, not absent) gets
+ * one; every dependency is read from the store on each refresh. The engine runs the final-week class over that league's OWN filtered rows, with that league's server-confirmed status only once
+ * its picks read landed (the active league's rule), as that league's member. A peeked league contributes league-wide insight cards only: no profile, no team family, no pick history.
+ * Its ledger is the identity's record for that league, READ-ONLY (the detail opens, and notes what was shown, through the active wire after the route).
+ */
+const _peekWires = new Map();                                                       // leagueId -> { owner, wire }
+function peekOwnerFor(leagueId, memberId) {
+  const acct = String(currentIdentityKey()).split(IDENTITY_KEY_SEP)[0];
+  return acct && acct !== 'null' && typeof memberId === 'string' && memberId ? [acct, leagueId, memberId].join(IDENTITY_KEY_SEP) : null;
+}
+function peekWireFor(leagueId) {
+  try {
+    if (typeof leagueId !== 'string' || !leagueId || isContentWithheld() || leagueId === getActiveLeagueId()) return null;
+    const peek = _homeWiring && _homeWiring.peek;
+    if (!peek || typeof peek.targets !== 'function' || typeof peek.leagueView !== 'function') return null;
+    if (!peek.targets().some((m) => m && m.leagueId === leagueId)) { dropPeekWire(leagueId); return null; }   // a league that stopped being a target loses its wire
+    const view = peek.leagueView(leagueId);
+    if (!view) return null;
+    const owner = peekOwnerFor(leagueId, view.memberId);
+    if (!owner) return null;
+    const had = _peekWires.get(leagueId);
+    if (had && had.owner === owner) return had.wire;
+    if (had) dropPeekWire(leagueId);
+    const viewNow = () => { try { return peek.leagueView(leagueId); } catch { return null; } };
+    const wire = createAnalyticsWire({
+      getSource: () => { const v = viewNow(); return v && v.source ? { ...v.source, leagueName: v.leagueName || '', zone: contentTimeOpts().timeZone } : null; },
+      confirmedStatusFor: (w) => { const v = viewNow(); return v && w && v.picksReadConfirmed(w.weekId) ? (v.confirmedStatusFor(w) || null) : null; },
+      getViewerId: () => { const v = viewNow(); return v && v.memberId === view.memberId ? v.memberId : null; },
+      getProfile: () => ({ almaBySport: {}, homeTeamsBySport: {} }),
+      getSwitches: () => ({ teamFamily: false }),
+      fetchPickEvents: async () => ({ on: false, rows: [] }),
+      fetchTeamFacts: async () => ({ rows: [], stale: false, failed: [] }),
+      ledger: { get: () => { try { return getInsightState(owner).ledger; } catch { return null; } }, set: () => {} },
+      schedule: (fn) => { if (typeof requestIdleCallback === 'function') requestIdleCallback(() => fn(), { timeout: 250 }); else setTimeout(fn, 0); },
+      clock: () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()),
+      busy: analyticsBusy,
+      now: () => Date.now(),
+      isWithheld: isContentWithheld,
+      isAskOpen: askOpenCached,
+    });
+    _peekWires.set(leagueId, { owner, wire });
+    return wire;
+  } catch { return null; }
+}
+/** Home's insight cards for ONE league: the active league's from the active wire, a peeked league's from its own wire, anything else none (fail closed). */
+function insightCardsForLeague(leagueId) {
+  try { const w = typeof leagueId === 'string' && leagueId && leagueId === getActiveLeagueId() ? getAnalyticsWire() : peekWireFor(leagueId); return w ? w.homeInsightCards({ leagueId }) : []; } catch { return []; }
+}
+export const _insightCardsForLeagueForTest = (leagueId) => insightCardsForLeague(leagueId);
+/** Test seam: replace the Home wiring's Peek store (the app's own is built over the server read). */
+export const _setHomePeekForTest = (p) => { getHomeWiring(); clearPeekWires(); _homeWiring.peek = p; };
+function dropPeekWire(leagueId) { const e = _peekWires.get(leagueId); _peekWires.delete(leagueId); try { if (e) e.wire.reset(); } catch { /* gone */ } }
+function clearPeekWires() { for (const id of [..._peekWires.keys()]) dropPeekWire(id); }
+export const _peekWireForTest = (leagueId) => peekWireFor(leagueId);
+export const _peekWireCountForTest = () => _peekWires.size;
+/** Run the engine once the page has painted: single-flight inside the wire, a no-op inside five minutes, a Home repaint only when the set of insights actually moved. */
+function scheduleAnalyticsRefresh() {
+  if (_analyticsRefreshTimer !== null || isContentWithheld() || !getActiveLeagueId()) return;
+  _analyticsRefreshTimer = setTimeout(async () => {
+    _analyticsRefreshTimer = null;
+    try {
+      const wire = getAnalyticsWire();
+      const before = wire.candidates().map((c) => c.id).join('|');
+      const r = await wire.refresh();
+      let moved = false;
+      if (r && r.ok === true) {
+        moved = wire.candidates().map((c) => c.id).join('|') !== before;
+        getInsightUI().notifyDataChanged();
+        if (isScreenOpen()) invalidateScreens();
+      }
+      // M-93 DI-1113: then each PEEKED league's wire, one at a time in target order (each single-flight, inside its own five-minute floor and idle slices, yielding to a touch or scroll)
+      moved = (await refreshPeekWires()) || moved;
+      if (moved && state.currentTab === 'home') { renderHomePage(); }       // (braces: homenavtest 4-14 counts the three LIVE repaint sites by this shape; this one is the analytics refresh)
+    } catch (e) { console.warn('[analytics] refresh failed', e); }
+  }, 0);
+}
+export const _scheduleAnalyticsRefreshForTest = scheduleAnalyticsRefresh;
+/** M-93 DI-1113: refresh the peeked leagues' wires in target order, one at a time; true when any of their candidate sets moved (Home repaints once). */
+async function refreshPeekWires() {
+  let moved = false;
+  const peek = _homeWiring && _homeWiring.peek;
+  let ids = [];
+  try { ids = peek && typeof peek.targets === 'function' ? peek.targets().map((m) => m && m.leagueId).filter((x) => typeof x === 'string' && x) : []; } catch { ids = []; }
+  for (const id of [..._peekWires.keys()]) if (!ids.includes(id)) dropPeekWire(id);
+  for (const id of ids) {
+    if (isContentWithheld()) break;
+    const w = peekWireFor(id);
+    if (!w) continue;
+    try {
+      const before = w.candidates().map((c) => c.id).join('|');
+      const r = await w.refresh();
+      if (r && r.ok === true && w.candidates().map((c) => c.id).join('|') !== before) moved = true;
+    } catch (e) { console.warn('[analytics] a peeked league could not refresh', e); }
+  }
+  return moved;
+}
+export const _refreshPeekWiresForTest = refreshPeekWires;
+/**
+ * D2 lane 4 third pass (DI-974 to 977): Game Day's facts are computed AFTER the Game view paints, on a timer, never inside its render and never while a touch or scroll is moving (it waits a
+ * quarter second and asks again). The wire answers false when nothing a game shows moved (its signature: scores, statuses, the server-confirmed week status, a 30 s clock), so a Game view
+ * repaint that schedules it again ends there: no loop. When a game's facts did move, the open screen repaints (the row appears or changes through the Game view's own in-place patcher)
+ * and an open Insights sheet updates in place.
+ */
+function scheduleGameDayRefresh() {
+  if (_gameDayTimer !== null || isContentWithheld() || !getActiveLeagueId()) return;
+  _gameDayTimer = setTimeout(() => {
+    _gameDayTimer = null;
+    if (analyticsBusy()) { scheduleGameDayRefreshLater(); return; }
+    try {
+      if (getAnalyticsWire().refreshGameDay()) {
+        if (isScreenOpen()) invalidateScreens();
+        getInsightUI().notifyGameDayChanged();
+      }
+    } catch (e) { console.warn('[analytics] game day failed', e); }
+  }, 0);
+}
+function scheduleGameDayRefreshLater() { setTimeout(() => scheduleGameDayRefresh(), 250); }
+export const _scheduleGameDayRefreshForTest = scheduleGameDayRefresh;
+/** The Insights row for the Game view (DI-977): the wire's CACHED answer only (a render never computes); '' when the game has no fact right now. */
+function gameInsightsRowFor(gameId) {
+  try { return gameInsightsRowHTML(getAnalyticsWire().gameDayFor(gameId), { escHtml, icon }); } catch { return ''; }
+}
+function getInsightUI() {
+  if (_insightUI) return _insightUI;
+  _insightUI = createInsightUI({
+    wire: getAnalyticsWire(), escHtml, icon, haptic,
+    ensurePushedScreens, mountSheetShell, playSheetExit: playDeleteSheetExit, finishSlide: finishSlideThenRemove,
+    // its own swipe-down asks every OTHER surface, and never the pushed screen it opened over (it always opens over one): the rival picker's and the Share sheet's rule. Before this third pass the
+    // pushed screen was on the list, so the Ask sheet's drag-down could never arm (a device-only defect, found in the touched-screen audit).
+    dismissBlocked: () => { _askOwnSwipe = true; try { return _dismissBlockingSurfaceUp({ excludePushed: true }); } finally { _askOwnSwipe = false; } },
+    gdiDismissBlocked: () => { _gdiOwnSwipe = true; try { return _dismissBlockingSurfaceUp({ excludePushed: true }); } finally { _gdiOwnSwipe = false; } },
+    crossFade: (el, apply) => crossFadePart(el, apply, { reduced: prefersReducedMotion(), setTimer: (fn, ms) => setTimeout(fn, ms) }),
+    isContentWithheld, showToast, isOnline: () => (typeof navigator === 'undefined' || navigator.onLine !== false),
+    formatTime: (ms) => formatGameTime(new Date(ms).toISOString(), getTimezone() || DEFAULT_TZ),
+    beforePush: () => clearReadingChain(),
+    today: () => memberLocalDayKey(Date.now()),
+    loadAskLimits: () => { const id = insightIdentity(); return id ? getInsightState(id).ask : null; },
+    saveAskLimits: (s) => { const id = insightIdentity(); if (id) setInsightState(id, { ask: s }); },
+    openProfile: () => { try { closeAllScreens('navigate'); } catch { /* the stack is a courtesy */ } try { controlCenterApi?.openProfile?.(); } catch { /* the drawer is a courtesy */ } },
+    // D2 lane 4 third pass: the approved elements that were missing. Each is the SHIPPED path, never a second copy of it.
+    openGame: (gameId, { backLabel = 'Insight' } = {}) => openGameView(gameId, { from: 'card', backLabel }),          // DI-964 item 3: a game behind an insight opens the Game view above it
+    openCompare: ({ competitionId = null, opener = null } = {}) => openRivalPicker({ competitionId, rivalId: null, opener, onPick: (rival) => openComparison({ rivalId: rival, competitionId, backLabel: 'Your numbers' }) }),   // "Compare with..." (DI-964): Standings' own "you" path
+    compareOffered: () => { try { const me = viewerMemberId(); return !!me && getPlayers().some((p) => p && p.playerId !== me && p.active !== false); } catch { return false; } },
+    archiveSeasons: () => (isPilotOnlyAllowed('season2025Record') ? [{ season: SEASON_2025.season, sport: 'cfb' }] : []),   // IRB's 2K25 record (weekly totals only) is the pilot's alone, by the registry's one predicate
+    openSeasonArchive: (season) => {                                                    // the 2K25 record where it already lives (the year.ago card's "see-2025" path): Standings, scrolled to it
+      if (season !== SEASON_2025.season || !isPilotOnlyAllowed('season2025Record')) return;
+      try { closeAllScreens('navigate'); } catch { /* the stack is a courtesy */ }
+      navigateTo('leaderboard');
+      try { document.querySelector('[data-section-id="stand-2025-record"]')?.scrollIntoView({ block: 'start' }); } catch { /* the section may be hidden by the player's layout */ }
+    },
+    shareOffered: () => shareOffered(),                                                // Send to the Locker Room (PF-520 / DI-963): the app's own "may this member share now"
+    openShare: (s) => openShareSheet(s),                                               // ...through the ONE share sheet, which re-asks the gate before it posts
+    // Ask SCRIBE's open questions (batch 3, DI-970 to 973): the platform setting (re-read when the sheet opens) and the ONE call; the server recomputes, caps and guards
+    isAskOpen: askOpenCached, refreshAskOpen: () => refreshAskOpen(), askModel: (request) => askInsightModel(request),
+    syncNow: () => runManualSync('pull-to-refresh'),                                   // the app's ONE sync path (AD-06: its failure is loud, below)
+    onSyncFail: () => showSyncFailureBanner("Pull-to-refresh couldn't reach the server."),
+  });
+  return _insightUI;
+}
+export const _getInsightUIForTest = getInsightUI;
+/** The key the insight record is stored under: the identity tuple (account, league, member), or null when there is no league or no member (nothing is stored for a signed-out visitor). */
+function insightIdentity() {
+  const parts = currentIdentityKey().split(IDENTITY_KEY_SEP);
+  return parts[1] !== 'null' && parts[2] !== 'null' ? parts.join(IDENTITY_KEY_SEP) : null;
+}
+export const _insightIdentityForTest = insightIdentity;
+/** The member's LOCAL calendar day (YYYY-MM-DD) in their own time zone: Ask SCRIBE's thirty-a-day limit turns over at their midnight, not UTC's. */
+function memberLocalDayKey(ms) {
+  try { return new Intl.DateTimeFormat('en-CA', { timeZone: contentTimeOpts().timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms)); } catch { return new Date(ms).toISOString().slice(0, 10); }
+}
+export const _memberLocalDayKeyForTest = memberLocalDayKey;
+/** Profile's "Your numbers" row exists for a signed-in member in a league while content is not withheld. */
+function yourNumbersOffered() {
+  try { const s = getSession(); return !!(s && s.playerId && s.playerVerified) && !!getActiveLeagueId() && !isContentWithheld(); } catch { return false; }
+}
+/** An identity or league change, or a hold: the wire, the ledger, Your numbers' state and the Ask sheet are the departed account's. */
+function resetInsightSurfaces() {
+  if (_analyticsRefreshTimer !== null) { clearTimeout(_analyticsRefreshTimer); _analyticsRefreshTimer = null; }
+  if (_gameDayTimer !== null) { clearTimeout(_gameDayTimer); _gameDayTimer = null; }
+  try { if (_analyticsWire) _analyticsWire.reset(); } catch { /* the wire is rebuilt on the next paint */ }
+  clearPeekWires();                                                     // M-93 DI-1113: the peeked leagues' wires are the departed identity's too
+  try { if (_insightUI) _insightUI.reset(); } catch { /* the sheet is swept by data-hold-teardown anyway */ }
+}
+
 // ─── The Game view (D1 Lane B, DI-591 / DI-610 / DI-588; Drew D-63) ───────────────────────────────────────────────────────────────────────────────────────────────────────
 // One game, as a PUSHED screen (js/pushed-screen.js) over whatever opened it: Home with Game Day open (Back returns THERE, the card still open), or a card detail (Back returns to the card). Everything it draws
 // is resolved BY GAME ID from the CURRENT data (homeView.resolveGameView) on open and on every repaint — a finished game turns into its final form in place, a game that can no longer be shown becomes the calm
@@ -6350,7 +6797,8 @@ function openGameView(gameId, { from = 'home', backLabel = null, restore = null 
     restoreKey: `gd:${gameId}`,                            // Back returns focus to the row that opened it
     meta: { kind: 'game', ref: gameId },
     instant: !!(restore && restore.instant), scrollTop: restore ? restore.scrollTop : 0,
-    render: () => { const r = hv.resolveGameView(st.gameId); announcer.observe(r); return r ? { html: r.html, right: r.stepperHTML } : { html: hv.gameUnavailable(), right: '' }; },
+    // D2 lane 4 third pass (DI-977): the Insights row joins the screen right after the score card (a keyed section the in-place patcher reconciles); its facts are computed after this paint
+    render: () => { const r = hv.resolveGameView(st.gameId); announcer.observe(r); scheduleGameDayRefresh(); return r ? { html: withInsightsRow(r.html, gameInsightsRowFor(st.gameId)), right: r.stepperHTML } : { html: hv.gameUnavailable(), right: '' }; },
     patch: (el, part) => hv.patchGameView(el, part),       // DI-572(a): a repaint patches the screen IN PLACE (logos, focus and scroll untouched); the stepper's pair keeps the pressed button
     onClick: (e, api) => onGameViewClick(e, api, st),
     onClose: () => announcer.cancel(),
@@ -6375,6 +6823,7 @@ function onGameViewClick(e, api, st) {
   if (!btn) return;
   const act = btn.getAttribute('data-gv-action');
   if (act === 'back-home') { api.pop(); return; }
+  if (act === 'insights') { if (getInsightUI().openGameInsights(st.gameId, { opener: btn })) haptic('light'); return; }   // D2 lane 4 (DI-977): the Game insights sheet; nothing opens for a game with no fact NOW
   if (act === 'open-thread') { haptic('light'); openGameChatSheet(st.gameId); return; }   // the existing bottom sheet; this screen stays beneath it
   if (act === 'share') { const r = hv.resolveGameView(st.gameId); if (!r || !r.share) return; haptic('light'); openShareSheet(r.share); return; }   // DI-597: resolved NOW for this game
   if (act === 'prev' || act === 'next') {
@@ -6468,6 +6917,10 @@ function restoreReadingChain() {
     // D1 Lane B History (DI-588 x DI-595 / DI-596): the week detail and the comparison come back the same way - instant, at the reader's scroll, through their OWN open functions (each re-asks its gates).
     else if (m.kind === 'week' && typeof m.ref === 'string') openWeekDetail(m.ref, { backLabel: lv.backLabel, restore });
     else if (m.kind === 'compare' && typeof m.ref === 'string') openComparison({ rivalId: m.ref, competitionId: typeof m.competitionId === 'string' ? m.competitionId : null, firstId: typeof m.firstId === 'string' ? m.firstId : null, backLabel: lv.backLabel, restore });
+    // D2 lane 4 third pass: an insight detail, Your numbers and What if come back the same way (a game opened from an insight's row can lead to the Locker Room and back)
+    else if (m.kind === 'insight' && typeof m.ref === 'string') getInsightUI().openDetail(m.ref, { backLabel: lv.backLabel, restore });
+    else if (m.kind === 'your-numbers') getInsightUI().openYourNumbers({ backLabel: lv.backLabel, restore });
+    else if (m.kind === 'what-if') getInsightUI().openWhatIf({ backLabel: lv.backLabel, restore });
   }
 }
 let _chatReturnHooksRegistered = false;
@@ -6548,6 +7001,10 @@ export const _openSportWeekForTest = openSportWeek;
 const SHARE_WRAP_ID = 'share-sheet-wrap', SHARE_SHEET_ID = 'share-sheet';
 let _shareSheet = null;     // { share, status: 'ready'|'posting'|'failed'|'duplicate', dupId, comment, unbind, onKey, closing }
 
+/** D2 DI-808 / DI-862: in supabase mode a card id embeds a real league uuid, so a card may be shared only into that league (local mode's ids carry no league to compare). */
+function shareIntoActiveLeagueOk(ref) {
+  try { return getBackendMode() !== 'supabase' || shareRefLeagueOk(ref, getActiveLeagueId()); } catch { return false; }
+}
 /** Share is offered to a signed-in, verified member while chat is on (DI-597: hidden for signed-out viewers and with chat off). */
 function shareOffered() {
   try { const s = getSession(); return isChatEnabled() && !!(s && s.playerId && s.playerVerified) && !isContentWithheld(); } catch { return false; }
@@ -6555,7 +7012,8 @@ function shareOffered() {
 
 function openShareSheet(share) {
   if (isContentWithheld() || !shareOffered() || !share || !validShareRef(share.ref) || typeof share.line !== 'string' || !share.line) return;
-  if (!shareRefAvailableNow(share.ref)) return;             // the sharer's own gate, asked again here: Share exists only for what THIS member may see right now
+  if (!shareRefAvailableNow(share.ref, { author: viewerMemberId() || null })) return;   // the sharer's own gate, asked again here: Share exists only for what THIS member may see right now (J-2: the sender is this member)
+  if (!shareIntoActiveLeagueOk(share.ref)) { showToast(SHARE_COPY.unavailable, 'error'); return; }   // D2 DI-808 / DI-862: a card shares only into its OWN league (0062 rule (b)'s client twin)
   closeShareSheet({ immediate: true });
   let dup = null;
   try { dup = findShareDuplicate({ ref: share.ref, gameTag: share.gameTag || '' }); } catch { dup = null; }
@@ -6623,6 +7081,7 @@ function onShareSheetClick(e) {
   ss.comment = ta ? String(ta.value || '') : ss.comment;
   ss.status = 'posting';
   paintShareSheetBody();
+  if (!shareIntoActiveLeagueOk(ss.share.ref)) { ss.status = 'failed'; paintShareSheetBody(); showToast(SHARE_COPY.unavailable, 'error'); return; }   // D2 DI-808: asked again at the tap (the active league can change under an open sheet)
   let res = null;
   try { res = postShareToChat({ ref: ss.share.ref, line: ss.share.line, comment: ss.comment, gameTag: ss.share.gameTag || '' }); } catch (err) { console.error('[share] the post failed', err); res = null; }
   if (_shareSheet !== ss) return;
@@ -6690,9 +7149,33 @@ function shareTargetsNow() {
   setTimeout(() => { if (_shareTargets === built) _shareTargets = null; }, 0);   // the pass ends with this task
   return built;
 }
-function shareRefAvailable(ref) {
+/**
+ * D2 lane 4 (PF-520 / DI-963): a shared INSIGHT resolves for this reader only from the reader's OWN data: the strict id shape for the ACTIVE league, a listed metric, and insightFromId over the
+ * final-week input (a hidden label is null for anyone but its holder). Before the wire has built once, the answer is "not available" and the build is started on a timer (never inside the chat
+ * paint); when it lands while Chat is showing, the room repaints once.
+ */
+let _insightShareWarm = null;
+// Security J-2 (2026-10-22): `author` is the member who SENT the reference (the message's server-stamped author; the sharer's own seat on the Share sheet). A What-if strategy (cf.*) is
+// its sender's own, so it resolves only when its subject IS that sender; an unknown sender resolves no strategy.
+function insightShareRefOk(id, author = null) {
+  try {
+    const w = getAnalyticsWire();
+    if (!w.isReady()) { warmInsightsForShare(); return false; }
+    return w.shareAvailable(id, { authorId: author }) === true;
+  } catch { return false; }
+}
+function warmInsightsForShare() {
+  if (_insightShareWarm !== null || isContentWithheld() || !getActiveLeagueId()) return;
+  _insightShareWarm = setTimeout(async () => {
+    try { const r = await getAnalyticsWire().refresh(); if (r && r.ok === true && state.currentTab === 'chat') { bumpShareDataVersion(); renderChatPage(); } }
+    catch { /* the attachment stays "not available" */ }
+    finally { _insightShareWarm = null; }
+  }, 0);
+}
+function shareRefAvailable(ref, ctx = {}) {
   const r = validShareRef(ref);
   if (!r || isContentWithheld()) return false;
+  if (r.type === 'insight') return insightShareRefOk(r.id, ctx && typeof ctx.author === 'string' ? ctx.author : null);
   const t = shareTargetsNow();
   if (r.type === 'card') return t.cardIds.has(r.id);
   if (r.type === 'game') return t.gameIds.has(r.id);
@@ -6701,7 +7184,7 @@ function shareRefAvailable(ref) {
   return false;
 }
 /** The exact question, for an ACTION (the tap, the Share sheet's open): the detail or the Game view resolved now, never a cached or Set answer. */
-function shareRefAvailableNow(ref) {
+function shareRefAvailableNow(ref, ctx = {}) {
   const r = validShareRef(ref);
   if (!r || isContentWithheld()) return false;
   _shareTargets = null;
@@ -6711,17 +7194,19 @@ function shareRefAvailableNow(ref) {
     if (r.type === 'game') return !!hv.resolveGameView(r.id);
     if (r.type === 'week') return hv.shareTargets().weekIds.has(r.id) && historyWeekReachable(getWeek(r.id));
     if (r.type === 'compare') return compareRefOk(r.id, null);
+    if (r.type === 'insight') return insightShareRefOk(r.id, ctx && typeof ctx.author === 'string' ? ctx.author : null);
   } catch { return false; }
   return false;
 }
-function openSharedRef(ref) {
+function openSharedRef(ref, ctx = {}) {
   const r = validShareRef(ref);
   if (!r || isContentWithheld()) return;
-  if (!shareRefAvailableNow(r)) return;                    // asked again at the tap, never trusted from the paint
+  if (!shareRefAvailableNow(r, ctx)) return;               // asked again at the tap (with the message's sender), never trusted from the paint
   if (r.type === 'card') openCardDetail(r.id, { backLabel: 'Chat' });
   else if (r.type === 'game') openGameView(r.id, { from: 'chat', backLabel: 'Chat' });
   else if (r.type === 'week') openWeekDetail(r.id, { backLabel: 'Chat' });
   else if (r.type === 'compare') openSharedComparison(r.id);
+  else if (r.type === 'insight') getInsightUI().openDetail(r.id, { backLabel: 'Chat' });   // the reader's own detail, rebuilt from their data
 }
 registerShareResolver({ available: shareRefAvailable, open: openSharedRef });
 export const _shareRefAvailableForTest = shareRefAvailable;
@@ -6740,7 +7225,25 @@ function getHomeWiring() {
   ensurePickModules();   // D1 Lane B: the gate and the By team renderer get the app's helpers before Home (or a Game view) can ask them anything
   const homeNews = createHomeNews();
   const chatCandidates = makeChatCandidateSource({ getMessages, isPrivateRow, chatBoundToLeague });   // DI-372 A1: chatBoundToLeague is chat.js's STORE-backed predicate, by reference (W2)
+  // D2 lane 3 (DI-801 / DI-803): the leagues Home spans besides the active one. Only in supabase data mode, only once the memberships are RESOLVED, never while content is withheld; anything
+  // else answers null, which Home reads as ONE league (no peek, no request, no chip: gate J).
+  const homeMemberships = () => {
+    try {
+      if (getBackendMode() !== 'supabase' || isContentWithheld() || !hasResolvedMemberships()) return null;
+      return getCachedMemberships().map((m) => ({ leagueId: m.leagueId, leagueName: m.leagueName, memberId: m.memberId, role: m.role, pilot: m.pilot === true, status: m.status }));
+    } catch { return null; }
+  };
+  const peek = createPeekStore({
+    peekLeague: (leagueId, opts) => sb.peekLeague(leagueId, opts),   // the member's OWN sign-in; RLS is the boundary (no service role anywhere)
+    memberships: homeMemberships, activeLeagueId: getActiveLeagueId, accountId: getAccountUserId, identityEpoch: getIdentityEpoch,
+    setTimer: (fn, ms) => setTimeout(fn, ms), clearTimer: (h) => clearTimeout(h),
+    onChange: () => { if (state.currentTab === 'home' && !isContentWithheld() && _homeWiring) renderHomePage(); },
+    onRefused: () => { try { void refreshMembershipsAndSession(); } catch { /* the next membership read confirms the removal */ } },   // DI-804: a refused league is confirmed by ONE membership refresh, no toast
+  });
   const homeView = createHome({
+    peek, memberships: homeMemberships,                 // D2 lane 3 (DI-801…816): one Home across the member's leagues; with one membership both are inert (gate J)
+    // D2 DI-823: "{n} new in the {League} Locker Room" — the ACTIVE league's shipped unread count only (chat is bound to the active league, S-C11); another league's is unknown (omitted).
+    activityCount: (leagueId) => { try { return leagueId === getActiveLeagueId() && chatBoundToLeague(leagueId) ? unreadCount(getSession()?.playerId) : null; } catch { return null; } },
     escHtml,                                            // the app's one escaper, never String (S-C6)
     isContentWithheld,                                  // S-C7: the render chokepoint's own gate
     currentIdentityKey,                                 // W3: the real function, so an async paint can compare identities
@@ -6767,7 +7270,7 @@ function getHomeWiring() {
     onAction: onHomeAction,
     setTimer: (fn, ms) => setTimeout(fn, ms), clearTimer: (h) => clearTimeout(h),   // D1 DI-574: the new-posts pill's polite VoiceOver announcement is debounced 1 s (the renderer owns no timer of its own)
     pilotHistoryAllowed: () => isPilotOnlyAllowed('season2025Record'),   // D1 security O1: the `year.ago` card and its detail name the PILOT league's members and 2025 scores — pilot leagues only, by the registry's one predicate
-    onRender: () => { if (isScreenOpen()) invalidateScreens(); },   // D1 Lane B: every Home repaint also refreshes an open card detail (the top level, debounced; its gate is re-asked)
+    onRender: () => { if (isScreenOpen()) invalidateScreens(); scheduleAnalyticsRefresh(); },   // D2 lane 4: the engine runs AFTER a Home paint (idle, in budgeted slices), never during one   // D1 Lane B: every Home repaint also refreshes an open card detail (the top level, debounced; its gate is re-asked)
     liveEntryFor: (gameId) => liveStatusById.get(gameId) || null,   // DI-570: the provider capture, so a stale score says so (the SAME map the Dashboard reads)
     // DI-575/576: what the card detail needs from the app — the game thread's message count, the Dashboard's own week-summary rows (one render path), and which onward actions exist today.
     detailContext: () => ({
@@ -6783,11 +7286,20 @@ function getHomeWiring() {
       canCompare: (memberId, week) => { const me = viewerMemberId(); if (!me || !week || !memberId || memberId === me) return false; const ids = playersForWeek(week).map((p) => p.playerId); return ids.includes(me) && ids.includes(memberId); },
     }),
     fetchNews: homeNews.fetchNews,
+    renderGettingStarted: obGettingStartedHTML,       // D2 lane 1 (UN-507 / DI-735): the finished Getting started card ('' when there is none); Home never reads the account store
     renderNewsCard: homeNews.renderNewsCard,
     newsEmptyCopy: homeNews.emptyCopy,                  // "Pick at least one sport in News settings." when every sport is unchecked
+    rankPrefs: () => { const p = getNewsPrefs(); return { teams: p.teams, sports: p.sports }; },   // D2 DI-835: the chosen-team signal for Home's relevance score (the viewer's own News settings; nothing leaves the device)
+    // D2 integration (2026-10-22, the coordinator's ruling): lane 4's three sources, INJECTED (lane 3's adapter imports nothing of lane 4's). Each answers from the analytics wire's own checked
+    // final-week input, so Home never hands the engine plain rows, and each answers "nothing" before the wire has built (no insight card, no followed team, no pick).
+    // M-93 DI-1113: the active league's cards from the active wire; a PEEKED league's from its own wire (peekWireFor: a peek target with a non-partial view); anything else, none (fail closed)
+    insightCards: ({ leagueId } = {}) => insightCardsForLeague(leagueId),
+    profileSignals: ownProfileSignals,                  // F-2 (release review; DI-835 / DI-1073): the member's OWN onboarding answers: home teams per sport, other teams, colleges attended, sports followed (explicit fields only; nothing inferred)
+    followedTeams: (ctx) => getAnalyticsWire().followedFor({ almaBySport: ctx && ctx.almaBySport, homeTeamsBySport: ctx && ctx.homeTeamsBySport }),
+    finalPicks: () => getAnalyticsWire().ownFinalPicks(),
     // haptic and isDataReady are deliberately NOT passed: the defaults are the right ones (checklist items 14, 15).
   });
-  _homeWiring = { homeView, homeNews };
+  _homeWiring = { homeView, homeNews, peek };
   // D1 Lane B / DI-587: the app going to the background ends a Home visit (the "last seen" marker advances after a visit of 2 s or more). Registered ONCE, with the wiring.
   if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
     document.addEventListener('visibilitychange', () => { if (document.hidden && state.currentTab === 'home') { try { homeView.noteLeft(); } catch { /* a marker is never worth a thrown handler */ } } });
@@ -6953,7 +7465,7 @@ function navigateTo(tab) {
   document.body.dataset.tab = tab;
   // D1 DI-556 — in a league with several sports the header pill's label follows the TAB (the sport on Picks / Dashboard / Standings, the league alone elsewhere), so it is re-read when the
   // tab changes. A league with one sport never takes this branch: its pill is exactly what it was.
-  if (_priorTab !== tab) { try { if (isMultiSport()) renderLeaguePill(); } catch (e) { console.warn('[sport] the pill could not follow the tab', e); } }
+  if (_priorTab !== tab) { try { if (isMultiSport() || getCachedMemberships().length >= 2) renderLeaguePill(); } catch (e) { console.warn('[sport] the pill could not follow the tab', e); } }   // D2 DI-809: "All leagues" on Home follows the tab too
   // D1 (Part 2 item 1) — and the header's week block follows the TAB the same way (the sport's week on a sport tab, the lens' in Comm, the pointer's elsewhere). A one-sport league never takes this branch.
   try { if (isMultiSport()) renderHeaderWeek(); } catch (e) { console.warn('[sport] the header week could not follow the tab', e); }
   // DI-320 §Entry point 2 — 'admin' (reached for an admin-only viewer by the
@@ -6990,6 +7502,7 @@ function navigateTo(tab) {
   if (_priorTab === 'chat' && tab !== 'chat' && typeof requestAnimationFrame === 'function') {
     requestAnimationFrame(_refitLeaguePill);
   }
+  if (_priorTab === 'chat' && tab !== 'chat') { try { closeChatScopeMenu(); } catch { /* a courtesy: the next Chat paint reads the closed state anyway */ } }   // D2 sweep W-128
   // DI-181a — a signed-in supabase account with zero (or unresolved,
   // multi-membership) league context sees the join/create landing or the
   // league selector INSTEAD OF whichever tab it tapped, "in place of a
@@ -7009,6 +7522,7 @@ function navigateTo(tab) {
   // SP-57 (DI-385) — the "Rearranging" bar follows the page that is showing: mounted iff a layout page is in edit mode
   // and visible with two or more sections (a repaint into an empty state clears the mode), unmounted on every other tab.
   syncLayoutEditBar();
+  try { obSyncTips(tab); } catch (e) { console.warn('[onboarding] the tip host could not sync', e); }   // D2 lane 1 (UN-507): the one tip for the screen now showing (or none)
   if (_priorTab !== tab) restoreTabScroll(tab);   // D1 Lane B / DI-585(b): back on Home / Dashboard / Standings, the reader is where they left (same identity, same week)
   // D1 / DI-510 (fix round, E1) — EVERY tab watches the current week's lock instant, so the header badge (it sits above every page) flips at the instant wherever the member is. The Picks, Dashboard and
   // Home paints above armed it already (one timer: arming again just replaces it); this covers the rest.
@@ -7245,8 +7759,11 @@ function navigateTo(tab) {
       bindWeekSwipe(commRoot, () => {
         // No tab strip (the sign-in / not-a-commissioner card): nothing to page through, nothing claimed.
         if (!commRoot.querySelector('.comm-tabbar')) return { inert: true, weekIds: [], currentWeekId: null, tab: 'commissioner' };
+        // D2 lane 6 (DI-764): on a pushed League page the pager pages between [the list, this page]: a left-to-right swipe goes BACK to the list (from anywhere: the drawer stands down, see
+        // setSwipeBackSurface), and a right-to-left swipe rubber-bands; it never switches tab from under the page.
+        if (state.commTab === 'rules' && state.leaguePage !== 'list') return { weekIds: ['list', state.leaguePage], currentWeekId: state.leaguePage, tab: 'commissioner' };
         return { weekIds: COMM_TABS.map((t) => t.key), currentWeekId: state.commTab, tab: 'commissioner' };
-      }, (key) => { setCommTab(key, { source: 'swipe' }); }, {
+      }, (key) => { if (key === 'list') setLeaguePage('list', { source: 'swipe' }); else setCommTab(key, { source: 'swipe' }); }, {
         renderPreview: renderCommPanePreview, incomingAtTop: true, decorateOutgoing: decorateCommOutgoing, navigateRepaints: false,
         shouldYield: (target) => isPagerYieldTarget(target, commRoot),
         // N-7 (review 2026-10-14): the instant-switch flag lives for the slide only; once the layers are gone it is cleared, so a later entry to Comm fades in as it always did.
@@ -7402,11 +7919,11 @@ function renderHeaderWeek() {
       <span class="week-heading-name"><strong>${escHtml(hw.code ? hw.code + ' ' + wl.name : wl.name)}</strong><span class="badge badge-${escHtml(headBadge.phase)}${lockFlipClass()} ml-sm">${escHtml(headBadge.label)}</span></span>
     </span>`;
   } else if (isNativeShell()) {
-    // DI-213a (PASS 1b) — shell brand, not league name: native says
-    // "Munera." escHtml around every interpolated value, per S-C2 — even a
-    // today-static string, once it is a variable. Native's trigger (below)
-    // is icon-only, so no duplication risk here.
-    el.innerHTML = `<strong>${escHtml(getShellBrandName())}</strong>`;
+    // D2 sweep, DI-796 (W-127, FB-044: the word "Munera" in the top bar adds nothing): with no week to show the native header's week block renders NOTHING. The 24 pt Munera mark in the
+    // trigger (below) is the brand and the button that opens Control Center, and the league pill and the week badge carry the context, so the word was a fourth, redundant mark of the same thing.
+    // (DI-213a had this say the shell brand, "Munera", with escHtml around the interpolated value; the word still lives where it adds value: the sign-in screen, the splash and icon,
+    // the Control Center version line, About and the notification settings text. headermetatest [W127] pins every remaining getShellBrandName() call site.)
+    el.innerHTML = '';
   } else {
     // REVIEWER note 3 (v0.27.0 APPROVE WITH NOTES) — this used to repeat
     // `getShellBrandName()` here too, which duplicated the brand name the
@@ -7491,7 +8008,7 @@ export function renderHeaderIdentity() {
   }
   el.hidden = false;
   el.setAttribute('aria-label', `Signed in as ${player.displayName}`);
-  el.innerHTML = `<span class="header-identity-avatar">${escHtml(getPlayerInitials(player))}</span><span class="header-identity-name">${escHtml(player.displayName)}</span>`;
+  el.innerHTML = `${avatarHTML(player, 'sm', { cls: 'header-identity-avatar', initials: getPlayerInitials(player) })}<span class="header-identity-name">${escHtml(player.displayName)}</span>`;
 }
 
 /** One-time click binding — the header identity chip always routes to Picks,
@@ -7549,6 +8066,9 @@ export function setupHeaderIdentity() {
  * Inert (hidden, empty) in 'pins'/'prelink'.
  */
 function _leaguePillClick() { openLeagueOverview(); }   // D1 DI-556: the league name opens the league OVERVIEW (the old "Choose a League" sheet is its "Switch or join a league" row)
+/** D2 DI-809 (lane 3): on Home, a member of two or more leagues sees "All leagues" — Home spans them all — and the pill opens Your Leagues (the shipped selector sheet). */
+function _allLeaguesPillClick() { showLeagueSelectorSheet(); }
+function _allLeaguesPillKeydown(e) { if (e && (e.key === 'Enter' || e.key === ' ')) { if (typeof e.preventDefault === 'function') e.preventDefault(); _allLeaguesPillClick(); } }
 // 2026-09-28 — the multi-league pill carries role="button" + tabindex="0", and
 // a role="button" element must activate on Enter AND Space the way a native
 // <button> does (ARIA APG button pattern); a click listener alone only covers
@@ -7611,7 +8131,7 @@ function _leaguePillSportInfo() {
  * three variants collapse to the same "league name alone" string, so
  * degradation is a no-op, matching pre-DI-417 behavior exactly).
  */
-function _leaguePillContentVariants(name, sport, interactive, hasDue = false) {
+function _leaguePillContentVariants(name, sport, interactive, hasDue = false, { multiLeague = false } = {}) {
   const caret = interactive ? ' <span aria-hidden="true">▾</span>' : '';
   // D1 DI-556 — an 8 pt gold dot LEADS all three variants when any sport the member plays has picks due (it leads rather than trails because the pill ellipsizes at its end, so a trailing dot
   // would be the first thing clipped, and it survives _fitLeaguePill()'s full -> code -> league-only degradation). Never a number. `hasDue` is false for every one-sport league: today's strings.
@@ -7619,9 +8139,14 @@ function _leaguePillContentVariants(name, sport, interactive, hasDue = false) {
   const leagueOnly = `${dot}${escHtml(name)}${caret}`;
   if (!sport) return { full: leagueOnly, code: leagueOnly, leagueOnly };
   const sportSpan = (text) => ` <span class="league-pill-sport">· ${escHtml(text)}</span>`;
+  // D2 DI-859 (lane 3): for a member of two or more leagues the LEAGUE is never what the pill gives up first — after the sport word becomes its code, the league's name truncates to 8 characters
+  // with the code kept, and only then is the pill the league alone (the accessible name always states both). A one-league member's three steps are unchanged.
+  const chars = Array.from(String(name));
+  const short = multiLeague && chars.length > 8 ? `${dot}${escHtml(`${chars.slice(0, 7).join('')}…`)}${sportSpan(sport.code)}${caret}` : null;
   return {
     full: `${dot}${escHtml(name)}${sportSpan(sport.label)}${caret}`,
     code: `${dot}${escHtml(name)}${sportSpan(sport.code)}${caret}`,
+    ...(short ? { short } : {}),
     leagueOnly,
   };
 }
@@ -7675,12 +8200,14 @@ function _fitLeaguePill(el) {
     el.innerHTML = variants.full;
     if (_pillOverflowing(el)) {
       el.innerHTML = variants.code;
+      if (_pillOverflowing(el) && variants.short) el.innerHTML = variants.short;   // D2 DI-859: the league truncates before the sport code goes (two or more leagues only)
       if (_pillOverflowing(el)) el.innerHTML = variants.leagueOnly;
     }
   }
   if (el.getBoundingClientRect().width < LEAGUE_PILL_MIN_PX) el.hidden = true;
 }
 export const _fitLeaguePillForTest = _fitLeaguePill;
+export const _leaguePillContentVariantsForTest = _leaguePillContentVariants;   // D2 DI-859: the variants the fit walks (headermetatest [pill-H3])
 /**
  * Resize/orientation re-fit. A pill _clearLeaguePill() emptied stays hidden
  * (nothing to show); one that has a label is unhidden and re-measured, so a
@@ -7706,6 +8233,8 @@ function _clearLeaguePill(el) {
   el._pillSportVariants = null;
   el.removeEventListener('click', _leaguePillClick);
   el.removeEventListener('keydown', _leaguePillKeydown);
+  el.removeEventListener('click', _allLeaguesPillClick);
+  el.removeEventListener('keydown', _allLeaguesPillKeydown);
   el.removeAttribute?.('role');
   el.removeAttribute?.('tabindex');
   // DI-184j (approved 2026-09-17) — AND THE ACCESSIBLE NAME. Every attribute
@@ -7739,6 +8268,24 @@ export function renderLeaguePill() {
   // the slot empty rather than guess" rule applied to its third input; the two
   // above it (no session, memberships unresolved) already do exactly this.
   if (!name) { _clearLeaguePill(el); return; }
+  // D2 DI-809 (lane 3): Home spans every league of a member of two or more: there the pill reads "All leagues" (no sport) and opens Your Leagues. Every other tab, and a one-league member: below, unchanged.
+  const multiLeague = getCachedMemberships().length >= 2;
+  el.removeEventListener('click', _allLeaguesPillClick);
+  el.removeEventListener('keydown', _allLeaguesPillKeydown);
+  if (multiLeague && state.currentTab === 'home') {
+    el.removeEventListener('click', _leaguePillClick);
+    el.removeEventListener('keydown', _leaguePillKeydown);
+    el.hidden = false;
+    el._pillSportVariants = null;
+    el.innerHTML = 'All leagues <span aria-hidden="true">▾</span>';
+    el.setAttribute('role', 'button');
+    el.setAttribute('tabindex', '0');
+    el.setAttribute('aria-label', 'All leagues. Your leagues. Opens your leagues.');
+    el.addEventListener('click', _allLeaguesPillClick);
+    el.addEventListener('keydown', _allLeaguesPillKeydown);
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => _fitLeaguePill(el)); else _fitLeaguePill(el);
+    return;
+  }
   // DI-418 AMENDMENT to DI-184b (dated 2026-09-28, Drew ruling B, quoted in
   // full in _leaguePillClick()'s own doc comment above) — the
   // `memberships.length > 1` gate on `interactive` is GONE. The pill is a
@@ -7752,7 +8299,7 @@ export function renderLeaguePill() {
   // same as before this DI.
   const sport = _leaguePillSportInfo();
   const due = isMultiSport() ? sportDueItems() : [];   // D1 DI-556: the SAME list the switcher's dots and the overview's chip read; one-sport leagues never compute it
-  const variants = _leaguePillContentVariants(name, sport, interactive, due.length > 0);
+  const variants = _leaguePillContentVariants(name, sport, interactive, due.length > 0, { multiLeague });
   // Bind/unbind EVERY render against the same named handler, so the "no click
   // handler" half of DI-184b is a fact about the element a test can read, not
   // a claim about a code path — and so a re-render can never stack listeners.
@@ -9255,6 +9802,22 @@ async function routeToLeague(leagueId, destination, deps = null) {
 /** Test seam — the REAL router the three tap entries use (`deps` replaces collaborators; see above). */
 export const _routeToLeagueForTest = routeToLeague;
 
+/**
+ * T-03 / FB-043 (Drew, 2026-10-17: "Hitting 'see what changed' in the chat brings you to the rules page ans doesnt actually show you
+ * the new version history"). FEAT-3 / DI-200f's 📋 button on SCRIBE's release post: open the control center at Help & Feedback →
+ * Version history, expand THAT release's entry and scroll to it. The tab underneath does not change, so closing the drawer returns
+ * the player to the Locker Room. A version trimmed from the list still opens the history (graceful, as before). Matched by attribute
+ * value, not a selector, so no version string needs CSS escaping.
+ */
+function openReleaseHistory(version) {
+  if (isContentWithheld()) return;
+  if (!controlCenterApi) return;
+  controlCenterApi.openToRow('feedback', 'version-history');
+  const root = document.getElementById('control-center');
+  const entry = root ? [...root.querySelectorAll('[data-release]')].find((el) => el.getAttribute('data-release') === version) : null;
+  if (entry) { entry.open = true; entry.scrollIntoView({ block: 'start' }); }
+}
+
 /** DI-A5 — resolve a stored/pushed destination into real navigation +
  *  best-effort scroll. Every entry in notifications.js's DEEP_LINK_TABLE maps
  *  to an EXISTING navigateTo() tab; a message no longer in retention (chat)
@@ -9271,16 +9834,42 @@ function deepLinkTo(destination) {
   // line runs, so the withheld page still paints nothing; see
   // stashPendingDeepLink() above for why "not now" stopped meaning "never".
   if (isContentWithheld()) { stashPendingDeepLink(destination); return; }
+  // T-03 / FB-043 — a release link (the Locker Room's "See everything that changed") opens the release history where it lives, the
+  // control center's Version history, over the current tab. It used to navigate to Rules, which has not carried the history since DI-304.
+  { const wn = destination?.params?.whatsNew; if (typeof wn === 'string' && wn) { openReleaseHistory(wn); return; } }
   if (!destination?.tab) { navigateTo('dashboard'); return; }
   // D1 DI-523 (security A4) — a link's `sport` is UNTRUSTED input (the server shape-checks it; nothing else does): it is used only when it names a non-archived sport of THIS league.
   // A valid sport the member PLAYS lands on that sport's tab (the pointer moves first); a valid one they have not joined opens the overview at its Join; an unknown or archived one keeps
   // the sport already in view and lands on the tab as before. `weekId` is honoured only when it is a week of that sport (enterSportContext).
   {
     const sp = destination.params && typeof destination.params.sport === 'string' ? destination.params.sport : '';
+    // D2 DI-878 (lane 3): a link that names an ARCHIVED sport of this league lands where it always did AND says why it is not that sport's page
+    if (sp && !leagueSports().some((s) => s.dbCode === sp)) {
+      let arch = null;
+      try { arch = archivedCompetitions().find((c) => c.sport === sp) || null; } catch { arch = null; }
+      if (arch) showToast(ARCHIVE_COPY.linkArchived(archiveCodeOf(arch)), 'info');
+    }
     if (sp && SPORT_TABS.includes(destination.tab) && leagueSports().some((s) => s.dbCode === sp)) {
       enterSportContext(sp, { tab: destination.tab, weekId: destination.params.weekId, gameId: destination.params.gameId, source: 'deeplink' });
       return;
     }
+  }
+  // D2 DI-807 (lane 3): a Home card from another league, routed here after the switch. Home repaints from the NEW league's data and the card's detail opens only if THAT data still derives it
+  // (the reveal gate is asked again); otherwise the calm sentence, and Home stays put.
+  if (destination.tab === 'home' && destination.params && typeof destination.params.cardId === 'string' && destination.params.cardId) {
+    navigateTo('home');
+    // M-93 DI-1113: an insight card from the league just switched to. Its detail resolves only from THIS league's wire, so the open waits once for that wire to build; an id that still
+    // does not resolve opens the shipped calm unavailable detail.
+    if (isInsightId(destination.params.cardId)) {
+      const cardId = destination.params.cardId;
+      void (async () => { try { await getAnalyticsWire().refresh(); } catch { /* the detail says it is unavailable */ } if (!isContentWithheld()) getInsightUI().openDetail(cardId); })();
+      return;
+    }
+    let opens = false;
+    try { opens = !!getHomeWiring().homeView.resolveCardDetail(destination.params.cardId); } catch { opens = false; }
+    if (opens) openCardDetail(destination.params.cardId);
+    else showToast(SHARE_COPY.unavailable, 'info');
+    return;
   }
   // D1 (DI-553): a push or link to a message must never land hidden behind the Locker Room's sport pill — if the selected pill would hide the target, the filter goes back to All BEFORE the room paints.
   if (destination.tab === 'chat' && destination.params?.messageId) { try { ensureChatTargetVisible({ messageId: destination.params.messageId }); } catch { /* the pill is a courtesy; the link still opens */ } }
@@ -9308,16 +9897,6 @@ function deepLinkTo(destination) {
       if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('chat-flash'); setTimeout(() => el.classList.remove('chat-flash'), 1200); }
     } else if (destination.tab === 'leaderboard' && params.section === 'obligations') {
       document.getElementById('obligations-section')?.scrollIntoView({ block: 'start' });
-    } else if (destination.tab === 'rules' && params.whatsNew) {
-      // FEAT-3 / DI-200f — the 📋 button on SCRIBE's release post. Reuses this
-      // existing mechanism rather than inventing a router: open the Rules tab,
-      // expand THAT version's entry in the release-notes card, scroll to it.
-      // A version no longer in the constant (trimmed at the 12-release cap)
-      // simply lands on the Rules tab, same graceful degradation the chat
-      // message-id case already has. No flash animation — .chat-flash is
-      // chat-scoped and stays there.
-      const el = document.querySelector(`[data-release="${cssId(params.whatsNew)}"]`);
-      if (el) { el.open = true; el.scrollIntoView({ block: 'start' }); }
     }
   }, 60);
   });
@@ -11399,7 +11978,7 @@ function renderHistoricalPicksView(c, week, currentWeek) {
       const score = (g.homeScore != null && g.awayScore != null) ? `${numHtml(g.awayScore)}–${numHtml(g.homeScore)}` : '';
       return `<div class="hist-game-row">
         <div class="hist-matchup">${escHtml(getTeamDisplay(g, 'away'))} @ ${escHtml(getTeamDisplay(g, 'home'))}
-          <span class="text-muted text-xs">${escHtml(formatSpread(g.lockedSpread ?? g.spread, g.favorite, g) || '')}</span></div>
+          <span class="text-muted text-xs">${escHtml(lineText({ ...g, spread: g.lockedSpread ?? g.spread }, undefined, { formatSpread }) || '')}</span></div>
         <div class="hist-right">${score ? `<span class="hist-score">${score}</span>` : ''}
           ${showAts && ats !== 'no_decision' ? `<span class="hist-ats">ATS: ${escHtml(ats)}</span>` : showAts ? '<span class="hist-ats">Push</span>' : ''}
           ${pickBadge}</div>
@@ -11605,7 +12184,7 @@ function renderPicksPageCurrent() {
   state.pickFormShownFor = week.weekId;   // D1 / DI-510: this session now has the editable form up for this week (see the !allowed branch above)
   c.innerHTML = `
     ${renderWeekBanner(week)}
-    ${renderPicksTiming(week, games)}
+    ${renderPicksTiming(week, games)}${picksFormatHelperHTML(week)}
     ${pickStatusCardHTML(week.weekId)}
     <div id="picks-head-slot"></div>
     <div class="flex-between mb-md">
@@ -11627,6 +12206,7 @@ function renderPicksPageCurrent() {
     </div>`;
 
   document.getElementById('logout-btn')?.addEventListener('click', () => { clearSession(); clearPickDraft(); resyncPlayerPreferences(); renderPicksPage(); });
+  bindHowThisSlate(week);
   document.getElementById('tb-input')?.addEventListener('input', e => {
     state.draftTiebreaker = e.target.value !== '' ? parseFloat(e.target.value) : null;
     updateSubmitEnabled(games, week);
@@ -11704,6 +12284,8 @@ export const _renderLockedDraftViewForTest = renderLockedDraftView;
 /** v0.16.0 — The Ischemic Extra Point guess input (optional side bet). */
 function renderExtraPointInput(week, { disabled = false } = {}) {
   if (!week || week.extraPointEnabled === false) return '';
+  // D2 lane 2 (DI-927 #2): a sport with no side contest and no alma-mater rule (the NHL) never asks for a field goal, whatever a stored week says.
+  try { const pr = profileForWeek(week); if (pr && !pr.sideContest && !pr.affinity) return ''; } catch { /* an unknown sport: the shipped behaviour */ }
   const val = state.draftExtraPoint !== null && state.draftExtraPoint !== undefined ? state.draftExtraPoint : '';
   return `
     <div class="card mb-md ep-input-card">
@@ -11732,9 +12314,10 @@ function renderTiebreakerInput(week, { disabled = false } = {}) {
 export const _tiebreakerInputHTMLForTest = renderTiebreakerInput;
 
 function renderLoginScreen(week) {
+  // D2 lane 6 (DI-765, D-108) - the credential-free LOCAL mode's picker: choosing a name IS the login (no PIN, no password). Reachable only in authMode 'local' (the offline
+  // development/test substrate); a production device never renders it (supabase mode shows its own hold/sign-in surfaces).
   const players = getPlayers().filter(p => p.active);
-  // v0.17.2: the lock deadline is the single best reason to sign in, so it sits
-  // above the player grid rather than behind the PIN.
+  // v0.17.2: the lock deadline is the single best reason to sign in, so it sits above the player grid.
   const games = week ? getGames(week.weekId) : [];
   return `
     ${renderWeekBanner(week)}
@@ -11742,7 +12325,7 @@ function renderLoginScreen(week) {
     <div id="picks-head-slot"></div>
     <div class="card">
       <div class="card-header"><span class="card-title">👤 Who Are You?</span></div>
-      <p class="text-secondary text-sm mb-md">Select your name and enter your PIN.</p>
+      <p class="text-secondary text-sm mb-md">Select your name to continue.</p>
       <div class="player-grid" id="player-grid">
         ${players.map(p => {
           const sub  = week ? hasPlayerSubmitted(week.weekId, p.playerId) : false;
@@ -11755,108 +12338,28 @@ function renderLoginScreen(week) {
           </button>`;
         }).join('')}
       </div>
-      <div id="pin-area" style="display:none;margin-top:16px">
-        <div class="divider"></div>
-        <p class="text-sm mb-sm">PIN for <strong id="selected-name"></strong>:</p>
-        <div class="flex gap-sm">
-          <input class="form-input" id="pin-input" type="password" inputmode="numeric"
-            maxlength="8" placeholder="PIN…" style="flex:1;letter-spacing:.2em;font-size:1.2rem"/>
-          <button class="btn btn-primary" id="pin-submit-btn">Enter →</button>
-        </div>
-        <button class="btn btn-ghost btn-sm mt-sm" id="cancel-player-btn">← Back</button>
-      </div>
     </div>`;
 }
 
 /**
- * Copy for a rejected PIN entry.
- *
- * RG-40 — verifyPlayerPin() now fails CLOSED, so an account whose `pinHash` a
- * deploy destroyed (RG-39) rejects every PIN its owner types. Telling that
- * player "❌ Incorrect PIN" is wrong twice over: it is inaccurate — they typed
- * it correctly — and it reads as the app having eaten their identity. They will
- * try the same four digits five times and then call Drew. So the two failures
- * get two messages: one says you mistyped it, the other says there is nothing
- * to type yet and names who can fix it.
- *
- * It deliberately does NOT say "your PIN was erased." From the player's side
- * the two cases (never set, since erased) are indistinguishable and the action
- * is identical, and an app announcing that it lost their credentials is
- * alarming out of proportion to a 30-second fix.
- *
- * An unknown playerId falls through to the generic message rather than the
- * explanatory one, so this never becomes a way to enumerate which ids exist.
- *
- * Exported as its own function — rather than inlined at the one call site in
- * bindLoginScreen() — because bindLoginScreen() only exists inside a live DOM
- * and cannot be reached from the harness, and the alternative (asserting the
- * string appears somewhere in app.js) is the RG-27 anti-pattern. Asserted in
- * loadtest [56].
- */
-export function loginFailureMessage(playerId) {
-  if (playerId && getPlayer(playerId) && !hasPlayerPin(playerId)) {
-    return '🔑 No PIN is set for this account yet — ask Drew to set one in the Commissioner panel.';
-  }
-  return '❌ Incorrect PIN';
-}
-
-/**
- * RG-40 — EXPORTED SO THE GATE ITSELF CAN BE TESTED, not just its parts.
- *
- * Until this export existed, `verifyPlayerPin()` had exactly one caller in the
- * whole app — the `doLogin` closure below — and that caller was unreachable
- * from the harness, so NOTHING asserted that the login screen consults the PIN
- * at all. Replacing the check with `if (true)` passed a fully green suite.
- * That is the RG-27 shape at the worst possible place: an authentication gate
- * whose only coverage is of a predicate nobody proves is called.
- *
- * loadtest [56f] now drives this function through a fixture DOM and asserts on
- * the SESSION it grants and the TOAST it shows.
+ * The local picker's handler, EXPORTED so the gate can be tested through a fixture DOM rather than by grepping for a branch. A tap on a tile is the whole login: it writes the
+ * local device session through chooseLocalPlayer() (storage.js), which refuses outright in supabase mode.
  */
 export function bindLoginScreen() {
-  let selectedId = null;
   document.querySelectorAll('.player-tile').forEach(tile => {
     tile.addEventListener('click', () => {
-      selectedId = tile.dataset.playerId;
-      const p = getPlayer(selectedId);
-      document.querySelectorAll('.player-tile').forEach(t => t.classList.toggle('selected', t === tile));
-      const pa = document.getElementById('pin-area'); if (pa) pa.style.display='block';
-      const ne = document.getElementById('selected-name'); if (ne&&p) ne.textContent=p.displayName;
-      document.getElementById('pin-input')?.focus();
-    });
-  });
-  document.getElementById('cancel-player-btn')?.addEventListener('click', () => {
-    selectedId=null;
-    const pa=document.getElementById('pin-area'); if(pa)pa.style.display='none';
-    document.querySelectorAll('.player-tile').forEach(t=>t.classList.remove('selected'));
-  });
-  const doLogin = () => {
-    if (!selectedId) return;
-    const pin = document.getElementById('pin-input')?.value||'';
-    if (verifyPlayerPin(selectedId, pin)) {
-      setSession(selectedId, false, true); clearPickDraft();
-      // Per-player preferences: re-resolve theme + TZ for the newly-logged-in
-      // player (they may differ from device default or previous player).
+      const selectedId = tile.dataset.playerId;
+      if (!selectedId || !getPlayer(selectedId)) return;
+      chooseLocalPlayer(selectedId); clearPickDraft();
+      // Per-player preferences: re-resolve theme + TZ for the newly-logged-in player.
       resyncPlayerPreferences();
       showToast('✅ Logged in!','success'); renderPicksPage();
-      // UN-115: tapping a player tile focuses the PIN input, which the mobile
-      // browser auto-scrolls to lift above the keyboard. That scroll offset
-      // survives the renderPicksPage() re-render (a much taller tree replaces
-      // #page-picks) and lands the player mid-form. Must run AFTER the
-      // re-render — resetting scroll on the DOM about to be replaced does
-      // nothing. Instant, not smooth — same call bindPicksWeekNav() already
-      // uses for the identical "landed mid-page" case.
+      // The tap may have scrolled the page; the re-render replaces a much taller tree, so reset AFTER it (instant, as bindPicksWeekNav() does).
       window.scrollTo({ top: 0 });
-      // v0.17.2: if they came here from the chat composer's "Log in" button,
-      // bounce them back to the thread they were reading (doc 1.2).
+      // v0.17.2: if they came here from the chat composer's "Log in" button, bounce them back to the thread they were reading (doc 1.2).
       try { resumeChatAfterLogin(); } catch {}
-    } else {
-      showToast(loginFailureMessage(selectedId),'error');
-      const pi=document.getElementById('pin-input'); if(pi){pi.value='';pi.focus();}
-    }
-  };
-  document.getElementById('pin-submit-btn')?.addEventListener('click', doLogin);
-  document.getElementById('pin-input')?.addEventListener('keydown', e => { if(e.key==='Enter')doLogin(); });
+    });
+  });
 }
 
 function renderSubmittedView(c, week, games, session, displayName) {
@@ -11869,7 +12372,7 @@ function renderSubmittedView(c, week, games, session, displayName) {
   // gap, never by a margin on one button (btnspacingtest.mjs).
   c.innerHTML = `
     ${renderWeekBanner(week)}
-    ${renderPicksTiming(week, games)}
+    ${renderPicksTiming(week, games)}${picksFormatHelperHTML(week)}
     ${pickStatusCardHTML(week.weekId)}
     <div id="picks-head-slot"></div>
     <div class="flex-between mb-md">
@@ -11890,6 +12393,7 @@ function renderSubmittedView(c, week, games, session, displayName) {
     </div>`;
   document.getElementById('logout-btn')?.addEventListener('click', () => { clearSession(); clearPickDraft(); resyncPlayerPreferences(); renderPicksPage(); });
   document.getElementById('go-dash-btn')?.addEventListener('click', () => navigateTo('dashboard'));
+  bindHowThisSlate(week);
   document.getElementById('edit-picks-btn')?.addEventListener('click', () => {
     // Enter edit mode. The picks-page render will pre-fill draftPicks from
     // existing picks and show the editable UI with an explanatory banner.
@@ -12226,7 +12730,21 @@ function renderGamesList(games, week) {
     </div>`;
   }
 
+  // D2 lane 2 (DI-919): when any line shows, ONE footnote under the game list: where the lines are from and as of when (the newest capture on the slate, in the viewer's zone), information only; never a
+  // bookmaker's name, link or disclaimer. With the setting on but no game carrying a line: one quiet row. Final slates show no lines, so no footnote.
+  html += picksLinesFootnoteHTML(week, ready);
   c.innerHTML = html || '<p class="text-muted text-center mt-lg">No games on the slate yet.</p>';
+}
+function picksLinesFootnoteHTML(week, games) {
+  if (!week || !games || !games.length) return '';
+  let shown = [];
+  try { shown = marketsShownForWeek(week); } catch { shown = []; }
+  const wantsLines = shown.includes('moneyline') || shown.includes('total') || (shown.includes('spread') && isPickTheWinner(formatForWeek(week)));
+  if (!wantsLines || games.every((g) => g.status === GAME_STATUS.FINAL)) return '';
+  const stamps = games.filter((g) => g.markets && g.markets.capturedAt && g.status !== GAME_STATUS.FINAL).map((g) => Date.parse(g.markets.capturedAt)).filter(Number.isFinite);
+  if (!stamps.length) return `<p class="text-muted text-xs mt-sm" id="picks-lines-note">Lines aren't available for this slate yet.</p>`;
+  const asOf = formatGameTime(new Date(Math.max(...stamps)).toISOString(), getTimezone());
+  return `<p class="text-muted text-xs mt-sm" id="picks-lines-note">${escHtml(`Lines from ESPN as of ${asOf}. For information only. Munera doesn't take or track bets.`)}</p>`;
 }
 
 // DI-7 — the player-facing game card. It intentionally gets NO national-TV
@@ -12466,7 +12984,52 @@ export const _pickButtonContentHTMLForTest = pickButtonContentHTML;
  * player's own picks only — so there is no opponent data in this render
  * path to leak in the first place.
  */
+/**
+ * D2 lane 2 (DI-888 / DI-907): the line under the week card of a PICK-THE-WINNER slate, and the 44 pt "How this slate works" row that opens the rules sheet. The helper line is the format's own words;
+ * the row is shown for every slate of a sport that is not college football's spread (a football-ats slate keeps its Picks page byte-identical to before).
+ */
+function picksFormatHelperHTML(week) {
+  if (!week) return '';
+  let prof = null; try { prof = profileForWeek(week); } catch { prof = null; }
+  const fmt = formatForWeek(week);
+  if (!prof || (prof.key === 'cfb' && !isPickTheWinner(fmt))) return '';
+  const line = isPickTheWinner(fmt) ? (prof.key === 'nhl' ? 'Pick the winner of each game. Overtime and shootout wins count.' : 'Pick the winner of each game.') : '';
+  return `${line ? `<p class="text-secondary text-sm mb-sm" id="picks-format-line">${escHtml(line)}</p>` : ''}<button type="button" class="btn btn-ghost btn-block mb-md how-slate-btn" id="how-slate-btn">How this slate works</button>`;
+}
+/** D2 lane 2 (DI-907): the rules sheet: the four lines, the lock time in the VIEWER's zone, a link to the Rules tab. Read-only; the shared action-sheet layer (swipe-dismiss on iOS, the same sheet closed by Done, Esc or the scrim on web). */
+function openHowThisSlateWorks(week, invoker) {
+  if (!week) return;
+  let prof = null; try { prof = profileForWeek(week); } catch { prof = null; }
+  if (!prof) return;
+  const lockAt = computeEffectiveLockAt(week, getGames(week.weekId));
+  const sheet = howThisSlateWorks({ profile: prof, format: formatForWeek(week), lockText: lockAt ? formatGameTime(lockAt.toISOString(), getTimezone()) : '', lockOffsetMinutes: getAutoLockOffsetMinutes(week) });
+  lsShowActionSheet('rules-how', LC.actionSheetHTML({
+    escHtml, titleId: 'how-slate-title', title: sheet.title, message: [...sheet.lines, sheet.lockLine].filter(Boolean).join('\n'),
+    actions: [{ label: sheet.linkText, action: 'rules-read-all' }], cancel: { label: 'Done', action: 'cancel' }, scrimAction: 'cancel', actionAttr: 'data-ls-action',
+  }), { noHaptic: true, weekId: week.weekId, invoker });
+}
+function bindHowThisSlate(week) {
+  document.getElementById('how-slate-btn')?.addEventListener('click', (e) => openHowThisSlateWorks(week, e.currentTarget));
+}
+
+/** D2 lane 2 (DI-915): the pick format a game is graded and shown in, from its week (a game whose week is not in the mirror, or a week with no stamp, is `ats`: every football card as before). */
+function gameFormatOf(game) {
+  try { const w = game && game.weekId ? getWeek(game.weekId) : null; return w ? formatForWeek(w) : 'ats'; } catch { return 'ats'; }
+}
+/** D2 lane 2 (DI-918): the markets this game's week shows on Picks (default: the graded line only), or [] for a game with no week. */
+function gameMarketsShown(game) {
+  try { const w = game && game.weekId ? getWeek(game.weekId) : null; return w ? marketsShownForWeek(w) : ['spread']; } catch { return ['spread']; }
+}
+
 export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
+  // D2 lane 2 (DI-915 / DI-919): pick the winner shows no spread, no "PK" and no "ATS"; the lines a commissioner turned on show as information (a price caption inside each pick button, a Total pill), never on a Final card.
+  const fmt = gameFormatOf(game);
+  const ptw = isPickTheWinner(fmt);
+  const shownMarkets = game.status === GAME_STATUS.FINAL ? [] : gameMarketsShown(game);
+  const mkts = game.markets || null;
+  const caption = (side) => (shownMarkets.includes('moneyline') ? moneylineCaption(mkts, side) : '');
+  const priceHTML = (side) => { const p = caption(side); return p ? ` <span class="pick-btn-price text-secondary text-xs">${escHtml(p)}</span>` : ''; };
+  const totalPill = shownMarkets.includes('total') ? totalPillText(mkts) : '';
   // DI-331d — read once per card; both pick buttons share the same toggle
   // state (there is no per-button variant).
   const logoViewOn = getLogoView();
@@ -12518,10 +13081,20 @@ export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
   const liveScore = renderLiveScoreBlockHTML(game);
 
   let atsInfo = '';
-  if (showResult && game.status===GAME_STATUS.FINAL) {
+  const voidedCard = isVoided(game);
+  if (showResult && voidedCard) {
+    // D2 lane 2 (DI-896): a voided game has no score and no winner: it says so ("No decision"), never "Winner: —" or "null - null".
+    atsInfo = `<div class="ats-row"><span class="text-xs text-muted"><strong class="result-nd">${escHtml(VOID_COPY.pickChip)}</strong></span></div>`;
+  } else if (showResult && game.status===GAME_STATUS.FINAL) {
     const ats = game.atsWinner??calculateAtsWinner(game);
     const atsLabel = ats==='no_decision'?'No Decision':escHtml(ats||'—');
-    atsInfo = `<div class="ats-row">
+    // D2 lane 2 (DI-915): a pick-the-winner final says who WON (never "ATS"); a No Decision says so plainly.
+    const ndNote = ats==='no_decision' ? `<span class="text-xs text-muted"><strong class="result-nd">${escHtml(resultLineText(fmt, { noDecision: true }))}</strong></span>` : '';
+    atsInfo = ptw
+      ? `<div class="ats-row">
+      <span class="text-xs text-muted">Winner: <strong>${escHtml(game.actualWinner||'—')}</strong></span>${ndNote}
+    </div>`
+      : `<div class="ats-row">
       <span class="text-xs text-muted">Winner: <strong>${escHtml(game.actualWinner||'—')}</strong></span>
       <span class="text-xs text-muted">ATS: <strong class="${ats==='no_decision'?'result-nd':'text-maroon'}">${atsLabel}</strong></span>
     </div>`;
@@ -12534,9 +13107,21 @@ export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
     const homeCovering = adjusted > game.awayScore;
     const pickedHome   = pickedTeam === game.homeTeam;
     const covering     = pickedHome ? homeCovering : !homeCovering;
-    liveAtsBadge = covering
-      ? `<span class="badge badge-live-covering">⚡ Covering</span>`
-      : `<span class="badge badge-live-trailing">⚡ Trailing</span>`;
+    if (ptw) {
+      // D2 lane 2 (DI-915): pick the winner says "leading / trailing / tied" (a tie is not "covering").
+      const words = liveMarkWords(fmt);
+      const diff = game.homeScore - game.awayScore;
+      const mine = pickedHome ? diff : -diff;
+      liveAtsBadge = mine === 0
+        ? `<span class="badge badge-live-even">⚡ ${escHtml(words.level[0].toUpperCase() + words.level.slice(1))}</span>`
+        : mine > 0
+          ? `<span class="badge badge-live-covering">⚡ ${escHtml(words.ahead[0].toUpperCase() + words.ahead.slice(1))}</span>`
+          : `<span class="badge badge-live-trailing">⚡ ${escHtml(words.behind[0].toUpperCase() + words.behind.slice(1))}</span>`;
+    } else {
+      liveAtsBadge = covering
+        ? `<span class="badge badge-live-covering">⚡ Covering</span>`
+        : `<span class="badge badge-live-trailing">⚡ Trailing</span>`;
+    }
   }
 
   const homeCls = `pick-btn ${getBtnClass(game.homeTeam,pickedTeam,result,showResult,game)}`;
@@ -12584,7 +13169,7 @@ export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
         ${renderGameBadges(game)}
         ${dqBadge}
       </div>
-      <div class="game-card-status">${isLocked?'<span class="badge badge-locked">🔒</span>':''}${showResult&&pickedTeam&&game.status===GAME_STATUS.FINAL?`<span class="badge ${getResultBadgeClass(result)}">${getPickStatusLabel(result)}</span>`:''}${liveAtsBadge}</div>
+      <div class="game-card-status">${isLocked?'<span class="badge badge-locked">🔒</span>':''}${showResult&&pickedTeam&&game.status===GAME_STATUS.FINAL?`<span class="badge ${getResultBadgeClass(result)}">${getPickStatusLabel(result)}</span>`:''}${voidedCard&&!(showResult&&pickedTeam)?`<span class="badge badge-final games-voided-mark">${escHtml(VOID_COPY.pickChip)}</span>`:''}${liveAtsBadge}</div>
     </div>
     <div class="game-card-body">
       <div class="matchup">
@@ -12609,10 +13194,10 @@ export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
       ${liveScore}
       ${atsInfo}
       ${venueStr}
-      <div class="spread-row"><span class="text-muted text-xs">Spread:</span>${spreadDisplay}</div>
+      ${ptw ? (totalPill ? `<div class="spread-row"><span class="spread-badge">${escHtml(totalPill)}</span></div>` : '') : `<div class="spread-row"><span class="text-muted text-xs">Spread:</span>${spreadDisplay}${totalPill ? ` <span class="spread-badge">${escHtml(totalPill)}</span>` : ''}</div>`}
       ${!showResult?`<div class="pick-buttons">
-        <button class="${awayCls}" data-team="${escHtml(game.awayTeam)}" data-game-id="${escHtml(game.gameId)}" ${dis}>${pickButtonContentHTML(awayDisplay, game.awayLogo, logoViewOn, game.isManual)}</button>
-        <button class="${homeCls}" data-team="${escHtml(game.homeTeam)}" data-game-id="${escHtml(game.gameId)}" ${dis}>${pickButtonContentHTML(homeDisplay, game.homeLogo, logoViewOn, game.isManual)}</button>
+        <button class="${awayCls}" data-team="${escHtml(game.awayTeam)}" data-game-id="${escHtml(game.gameId)}" ${dis}>${pickButtonContentHTML(awayDisplay, game.awayLogo, logoViewOn, game.isManual)}${priceHTML('away')}</button>
+        <button class="${homeCls}" data-team="${escHtml(game.homeTeam)}" data-game-id="${escHtml(game.gameId)}" ${dis}>${pickButtonContentHTML(homeDisplay, game.homeLogo, logoViewOn, game.isManual)}${priceHTML('home')}</button>
       </div>`:''}
       ${game.espnEventId?`<div class="text-muted text-xs mt-sm text-right">ESPN: ${escHtml(game.espnEventId)}</div>`:''}
     </div>
@@ -12786,6 +13371,7 @@ function submitPicks(week, games) {
   // submit itself still succeeded locally); no-ops on web. D1 third pass (item 1): NOT on the held-refusal path - the member is being warned, not
   // congratulated, and a success tap under a warning toast says the opposite of the words (lockclienttest [2t-2c]; [2t-7] proves it still fires on a real success).
   if (!refusedHeld) nativeHapticImpact('LIGHT');
+  if (!refusedHeld) { try { obNoteFirstPick(); } catch (e) { console.warn('[onboarding] the first-pick note failed', e); } }   // D2 lane 1 (DI-734): the first submitted pick ends the Picks tip by itself
   // UN-115 (DI-115b): submitted view replaces the form. UN-412 / DI-502e: and once it is painted, ask for "Who's in" again — my own tile is
   // already exact (it reads my rows); the OTHER tiles are re-asked, throttled with every other trigger.
   setTimeout(()=>{ renderPicksPage(); window.scrollTo({ top: 0 }); mountPickStatus('own-submit'); },300);
@@ -14038,7 +14624,6 @@ function renderDashboard() {
   // (Option A, Drew): push is the channel for chat activity now, and the chat
   // nav pill's unread badge is what a push-less device keeps. See the block
   // comment in js/chat-ui.js where dashboardChatTeaserHTML() was defined.
-  // `host` stays — the prelink banner below shares it.
   const host = document.getElementById('page-dashboard');
   paintSportSwitcher(host, 'dashboard');   // D1 DI-521: the switcher (CFB · NFL · All sports) is the first element under the title; absent unless the member plays two or more sports
   // DI-331g — idempotent; see bindLogoImageEvents()'s own header. Covers the
@@ -14049,28 +14634,7 @@ function renderDashboard() {
   // DI-331f's deliberate non-conversion of the matrix; it no longer is).
   bindLogoImageEvents(host);
   armLockFlipForPage();   // D1 / DI-510: watch the current week's lock instant (the Dashboard's badge and "Go to Picks" countdown flip with Picks')
-  // ── DI-183a-ii (Step 3b) — "Set up your account", ABOVE EVERYTHING ────────
-  // Inserted the way the chat teaser was: `afterbegin` on the page host,
-  // AFTER renderDashboardInner() has painted. That makes it a banner ABOVE the
-  // ordered sections rather than a new section within them, so RG-01's locked
-  // section order is untouched — the same reason the teaser was placed this way
-  // and not pushed into the section list.
-  //
-  // It used to sit above the chat teaser deliberately — the teaser was an
-  // invitation, the banner is a deadline. With the teaser retired (2026-09-24)
-  // it is simply the first thing on the page. prelinkBannerHTML() returns '' in
-  // every mode but
-  // 'prelink' and while any hold gate is up, so this is inert for everybody
-  // except the six founders in the shadow period.
-  //
-  // RE-SHOWS EACH SESSION (DI-183e): there is no dismissal state and no storage
-  // key for one. A player who is unlinked at cutover is in the single
-  // highest-risk state of the whole phase, so "dismissible but reappearing" is
-  // implemented as "always rendered while the condition holds."
-  if (host && !document.getElementById('prelink-banner')) {
-    const banner = prelinkBannerHTML();
-    if (banner) { host.insertAdjacentHTML('afterbegin', banner); bindPrelinkBanner(host); }
-  }
+  // D2 lane 6 (D-108): the pre-link "Set up your account" dashboard banner (mode 'prelink', dead since the cutover) is deleted.
   // BLOCK 3 (2026-09-25) — see renderPausedLeagueBannerIfNeeded()'s own doc
   // comment. renderDashboard() is called directly (not through navigateTo())
   // from the auto-refresh tick, the live-score repaint, week swipe, pull-to-
@@ -14972,12 +15536,12 @@ function openCommentThreadModal(weekId, gameId) {
     return comments.map(c => {
       const isBot = c.authorKind === 'bot';
       const author = isBot ? 'PickEms Bot' : (playerLookup[c.authorId]?.displayName || 'Unknown');
-      const initials = isBot ? '🤖' : escHtml(getPlayerInitials(playerLookup[c.authorId] || { displayName: author }));
+      const initials = isBot ? '🤖' : getPlayerInitials(playerLookup[c.authorId] || { displayName: author });
       const canDelete = !isBot && (session?.isAdmin || session?.playerId === c.authorId);
       const ts = new Date(c.createdAt);
       const timeStr = ts.toLocaleString(undefined, { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
       return `<div class="comment-item${isBot?' comment-item-bot':''}">
-        <div class="comment-avatar">${initials}</div>
+        ${avatarHTML(isBot ? null : (playerLookup[c.authorId] || null), 'sm', { tag: 'div', cls: 'comment-avatar', initials })}
         <div class="comment-body">
           <div class="comment-head">
             <span class="comment-author">${escHtml(author)}${isBot?' <span class="bot-tag">BOT</span>':''}</span>
@@ -15378,7 +15942,7 @@ export function renderExtraPointLedgerHTML() {
  * result or a money record exists. "In progress" names no status (open vs
  * locked vs live), exactly as the three dashes it replaces never did.
  */
-function historyGroupHTML({ gid, parts, inProgress, winner, loser, openWeekId=null }, i, obligations, sess) {
+function historyGroupHTML({ gid, parts, inProgress, winner, loser, openWeekId=null }, i, obligations, sess, showOb=true) {
   // UN-126 — presence of an obligation for this gid no longer
   // implies it's the settled answer. If more than one ACTIVE
   // (non-voided) 'weekly' obligation exists for this gid, or any
@@ -15445,7 +16009,8 @@ function historyGroupHTML({ gid, parts, inProgress, winner, loser, openWeekId=nu
   };
 
   let cells;
-  if (!hasResult && !hasMoney) cells = `<td class="stand-inprog" colspan="3">${noResult}</td>`;
+  if (!showOb) cells = !hasResult ? `<td class="stand-inprog" colspan="2">${noResult}</td>` : `${who(winner,true)}${who(loser,false)}`;   // D2 lane 1 (DI-1017): obligations OFF for this sport - three columns, no Status cell, nothing obligation-shaped
+  else if (!hasResult && !hasMoney) cells = `<td class="stand-inprog" colspan="3">${noResult}</td>`;
   else if (!hasResult) cells = `<td class="stand-inprog" colspan="2">${noResult}</td><td class="stand-st">${statusCell}</td>`;
   else cells = `${who(winner,true)}${who(loser,false)}<td class="stand-st">${statusCell}</td>`;
 
@@ -15457,11 +16022,11 @@ function historyGroupHTML({ gid, parts, inProgress, winner, loser, openWeekId=nu
   // M-30 (D-61): a denied payment's reason joins this same full-width row (after any tie note), so it sits under the week, above the button.
   const deniedLine = ob ? obligationDeniedLineHTML(ob.status, ob) : '';
   const noteRow = (noteLines.length || deniedLine)
-    ? `<tr class="stand-note${hasAct?' has-act':''}"><td colspan="4">${noteLines.map(l=>`<p class="tie-note">${escHtml(l.text)}</p>`).join('')}${deniedLine}</td></tr>`
+    ? `<tr class="stand-note${hasAct?' has-act':''}"><td colspan="${showOb?4:3}">${noteLines.map(l=>`<p class="tie-note">${escHtml(l.text)}</p>`).join('')}${deniedLine}</td></tr>`
     : '';
   return `<tbody class="stand-wk-group">
           <tr class="stand-row${noteRow?' has-note':(hasAct?' has-act':'')}">${weekCell}${cells}</tr>${noteRow}${hasAct?`
-          <tr class="stand-act"><td colspan="4"><div class="btn-row stand-act-row" role="group" aria-labelledby="stand-wk-${numHtml(i)}">${actions}</div></td></tr>`:''}
+          "<tr class="stand-act"><td colspan="4"><div class="btn-row stand-act-row" role="group" aria-labelledby="stand-wk-${numHtml(i)}">${actions}</div></td></tr>`:''}
         </tbody>`;
 }
 
@@ -16020,7 +16585,9 @@ export function renderLeaderboard() {
   const standings=seasonStandingsRows();
   const weeks=getContextWeeks().filter(w=>w.status!==WEEK_STATUS.DRAFT&&w.dataSourceMode!=='demo').sort((a,b)=>a.weekNumber-b.weekNumber);   // D1 DI-526: this sport's weeks only
   const settings=getSettings();
-  const obligations=getObligations();
+  const histObOn=contextObligationsOn();   // D2 lane 1 (DI-1017): Weekly History's Status column and badges exist only while this sport's obligations are ON
+  const histStatusCol=histObOn?'<col class="stand-c-st">':'', histStatusTh=histObOn?'<th scope="col" class="stand-c">Status</th>':'';
+  const obligations=histObOn ? getObligations() : [];
   const standSess=getSession(); // once per render — every Weekly History row resolves its payment role from the same session
   // D1 Lane B / DI-595: a signed-in, verified member who is ONE OF THESE ROWS can compare; anyone else (signed out, unverified, or a member with no stake in this sport - review N3) gets plain name cells and no hint
   const cmpViewer=(()=>{ const me=viewerMemberId(); return me&&standings.some(r=>r.playerId===me)?me:null; })();
@@ -16135,9 +16702,9 @@ export function renderLeaderboard() {
     'stand-history': `<div class="admin-section-title" id="obligations-section" data-section-header>Weekly History</div>
     ${groupRows.length?`<div class="stand-box mb-md">
       <table class="stand-table stand-table-history" aria-label="Weekly History">
-        <colgroup><col class="stand-c-wk"><col><col><col class="stand-c-st"></colgroup>
-        <thead><tr><th scope="col" class="stand-l">Week</th><th scope="col" class="stand-l">Winner</th><th scope="col" class="stand-l">Loser</th><th scope="col" class="stand-c">Status</th></tr></thead>
-        ${groupRows.map((g,i)=>historyGroupHTML(g,i,obligations,standSess)).join('')}
+        <colgroup><col class="stand-c-wk"><col><col>${histStatusCol}</colgroup>
+        <thead><tr><th scope="col" class="stand-l">Week</th><th scope="col" class="stand-l">Winner</th><th scope="col" class="stand-l">Loser</th>${histStatusTh}</tr></thead>
+        ${groupRows.map((g,i)=>historyGroupHTML(g,i,obligations,standSess,histObOn)).join('')}
       </table>
     </div>`:'<p class="text-muted text-sm mb-md">Weekly history appears after weeks are finalized.</p>'}`,
 
@@ -16148,8 +16715,9 @@ export function renderLeaderboard() {
 
   c.innerHTML=`
     <div class="section-header"><h2>Standings</h2><div class="subtitle">Season ${settings.season}</div></div>
-${standComposed.html}
+${stkOn()?'    <div id="stk-host" data-stk-host></div>\n':''}${standComposed.html}
   `;
+  stkPaintHost();   // D2 lane 1 batch 3 (UN/PF-542): the Season stakes card, at the top of the sport's Standings (cached at once, then the fresh read)
   paintSportSwitcher(c, 'leaderboard');   // D1 DI-521: the sport switcher under the title (absent unless the member plays two or more sports)
 
   bindLayoutEditHandlers(c, 'standings', standComposed.visible, renderLeaderboard);
@@ -16167,23 +16735,24 @@ ${standComposed.html}
   //    behavior:'instant' ON PURPOSE — html{scroll-behavior:smooth} would turn a
   //    plain scrollTo(0,y) into a visible slide after every tap, worse than the
   //    jump it fixes.
-  //  • HAPTIC (T8): one medium impact on a SUCCESSFUL Mark Paid / Confirm Paid /
-  //    Confirm (the status actually changed). None for a Deny's RESULT, none on
-  //    Undo (secondary, commissioner-only, and not offered here any more —
-  //    Amendment 1), none when the action was refused.
-  //    haptic() is a native-only no-op on web; the toast is the web feedback.
+  //  • HAPTIC (T8, AMENDED by D2 lane 1 / DI-784, 2026-10-19): Mark Paid / Confirm Paid are the shared
+  //    submission-state control now (bindObligationSubmit). The haptic is the module's SUCCESS notification
+  //    when the SERVER has acknowledged the write (an error notification when it refused), not a medium
+  //    impact at the tap: a haptic before the server answered would be the same false reassurance a toast
+  //    would be. None for a Deny's RESULT, none on Undo (not offered here — Amendment 1), none when the
+  //    action was refused as not permitted (nothing was written, so nothing completed).
+  //    haptic() is a native-only no-op on web; the button's own Saved face is the web feedback.
   //    T8 / DI-474 NOTE (2026-10-07, 0046 / R-19 follow-up): Deny no longer opens a
   //    prompt(). It opens the destructive-confirm ACTION SHEET, whose APPEARANCE
   //    carries the warning notification every destructive confirm has
   //    (lsShowActionSheet); the confirmed Deny itself gives none (layouttest SF9i/j).
-  const obStatus=id=>getObligations().find(o=>o.obligationId===id)?.status;
   c.querySelectorAll('.ob-action-btn').forEach(btn=>{
+    if (bindObligationSubmit(btn, { repaint: keepScrollRenderLeaderboard })) return;   // D2 lane 1: Mark Paid / Confirm Paid use the shared submission states
     btn.addEventListener('click',()=>{
-      const id=btn.dataset.obId, act=btn.dataset.obAction, y=Number(window.scrollY)||0, before=obStatus(id);
+      const id=btn.dataset.obId, act=btn.dataset.obAction, y=Number(window.scrollY)||0;
       handleObligationAction(id, act, { rerender: keepScrollRenderLeaderboard });
       renderLeaderboard();
       if (typeof window.scrollTo==='function') window.scrollTo({ top:y, left:0, behavior:'instant' });
-      if ((act==='mark'||act==='confirm') && obStatus(id)!==before) haptic('medium');
     });
   });
   // BLOCK 3 (2026-09-25) — see renderPausedLeagueBannerIfNeeded()'s own doc
@@ -16271,7 +16840,7 @@ export function renderAlmaMaterSettingsCard() {
   const allPlayers = getPlayers();
   const claimantsOf = am => almaMaterClaimants(am, allPlayers);
   return `
-      <div class="admin-section" data-comm-tab="rules">
+      <div class="admin-section" data-comm-tab="rules" data-league-page="alma" data-comm-card="alma-maters">
         <div class="admin-section-title">${icon('almaMater')} Alma maters &amp; home teams</div>
         <div class="card">
           <p class="text-muted text-xs mb-md">Derived from what each active player has set as their alma mater and home team — not a separately-editable list. Drives Alma Mater Watch, Alma Mater Rankings, the ⭐ flag, guaranteed slate inclusion, the Rules tab list, and the tiebreaker's Auto-Calc, all from the same roster below. To add, remove, or change a school, edit the claiming player under Players → Edit — the change re-checks every game already on an open/upcoming week's slate immediately (no re-import needed). Weeks that are LOCKED, LIVE, or already FINAL are left untouched, so a tiebreaker answer players already submitted against — or an already-final Auto-Calc — never quietly changes.</p>
@@ -16280,7 +16849,7 @@ export function renderAlmaMaterSettingsCard() {
             <div class="flex gap-sm mb-sm" style="align-items:center">
               <span class="font-display" style="flex:1;font-size:.9rem">${escHtml(am)}</span>
               <span class="text-muted text-xs">${escHtml(claimantsOf(am).map(p => p.displayName).join(', '))}</span>
-            </div>`).join('') : '<p class="text-muted text-xs">No active player has claimed a school yet — set one under Players → Edit.</p>'}
+            </div>`).join('') : '<p class="text-muted text-xs">No active player has claimed a school yet — players set theirs in their profile.</p>'}
           </div>
         </div>
       </div>`;
@@ -16288,117 +16857,8 @@ export function renderAlmaMaterSettingsCard() {
 
 // ─── COMMISSIONER PAGE ────────────────────────────────────────────────────────
 
-/**
- * ══ SECURITY A-3 (2026-09-21, RG-197) — "🚪 LOGOUT COMMISSIONER" ═════════════
- *
- * The Data tab's twin of the Picks page's dead Log Out button, and worse in one
- * respect. Its handler is `setSession(s.playerId, false, s.playerVerified)` —
- * drop the admin flag on the PIN-era record. In authMode:'supabase',
- * js/storage.js's setSession() REFUSES that write outright (it warns and
- * returns, deliberately: a PIN-era record written there would be read back as a
- * live commissioner session by a rollback to 'pins'), and getSession() is
- * synthesized from the membership ROLE in any case. So the tap writes nothing
- * and drops nothing.
- *
- * WHY IT IS WORSE THAN THE PICKS BUTTON. A control labelled "Logout
- * Commissioner" that appears to succeed says that elevated privilege has been
- * PUT DOWN. It has not: the full commissioner surface is still there, on a
- * handset its owner may have just passed to somebody else. A dead control that
- * lies about a privilege boundary is a security defect, not an annoyance.
- *
- * PIN mode is byte-identical — there the handler works and is the only way to
- * step down (CLAUDE.md keeps the PIN model, locked).
- */
-function commLogoutButtonHTML() {
-  if (getAuthMode() === 'supabase') return '';
-  return `<button class="btn btn-ghost btn-sm" id="logout-comm-btn">🚪 Logout Commissioner</button>`;
-}
-export const _commLogoutButtonHTMLForTest = commLogoutButtonHTML;
-
-/**
- * HOW A COMMISSIONER RE-PROVES HE IS THE COMMISSIONER, in one place.
- * Drew, 2026-09-23: *"we got rid of the admin console password but run trainer
- * still requires a password… make a note this will be moved to the admin
- * console."* Coordinator re-gate, same day: retire the re-prompts in supabase
- * mode. This is that decision, named once so the four call sites cannot drift.
- *
- *   'role'      supabase — the session already proves it. `isAdmin` comes from
- *               `league_members.role` (Step 3b, renderCommPage's own branch),
- *               and every destructive action is gated AGAIN server-side against
- *               `is_commissioner` off the JWT. There is nothing left for a
- *               client-side string comparison to add.
- *   'password'  PIN mode — BYTE-IDENTICAL to what it has always been. A PIN
- *               device has no verified role, so the prompt is the only gate
- *               that exists and removing it there would be the real weakening
- *               (CLAUDE.md's locked decision, unchanged for that mode).
- *
- * ── WHY THIS IS A SECURITY *IMPROVEMENT*, NOT A RELAXATION ─────────────────
- * Read this before restoring a prompt "to be safe". The re-prompts compared
- * `btoa(pw)` against `getSettings().adminPasswordHash`. On the live league that
- * field DOES NOT EXIST: `js/supabase-projection.js`'s `CREDENTIAL_FIELDS`
- * ("S1 — never let a secret enter Supabase") stripped it at the cutover import
- * on 2026-09-19, deliberately and correctly. The settings merge therefore falls
- * through to `js/data-model.js`'s DEFAULT_SETTINGS, whose value is
- * `btoa('admin123')` — a constant written in plain sight in a file anybody can
- * read. Since 2026-09-19 the gate in front of "spend real money at Anthropic"
- * has been a password published in the repo. Drew's own run today accepted it.
- *
- * So the choice was never "a password or nothing". It was "a public default, or
- * the verified role the server checks anyway". The role wins on every reading.
- *
- * WHAT REPLACES THE PROMPT IS NOT NOTHING. Where an action is consequential for
- * a reason other than authorisation — the Trainer spends money at Anthropic —
- * the call site keeps a plain `confirm()`. That was always the honest half of
- * that prompt; the password half was the part that was not working.
- */
-function commReauthMode() {
-  return getAuthMode() === 'supabase' ? 'role' : 'password';
-}
-export const _commReauthModeForTest = commReauthMode;
-
-/**
- * The "Commissioner Password" half of the Security & Settings card, and its
- * trailing divider. ABSENT in supabase mode — not disabled, not hidden with
- * CSS. The [51] precedent (`commLogoutButtonHTML`), for the same reason it
- * gives: a control that cannot do what it says is worse than no control,
- * because it reports success. Here it would be worse still — "🔑 Password
- * changed" while `saveSetting('adminPasswordHash', …)` writes a credential into
- * the settings blob EVERY DEVICE HYDRATES, guarding nothing, for a mode in
- * which nothing reads it.
- *
- * SPLICED WITH `+`, NOT `${}`. Same rule `dataActionsRowHTML()` documents: a
- * call interpolated into a markup template is a new site on xsstest's [9c-2]
- * backlog, and this function emits only its own literal markup — there is no
- * user data in it to escape. Concatenation keeps that ratchet at zero.
- *
- * The Site PIN card below it is deliberately NOT touched here. It is dead in
- * supabase mode too (there is no front door to gate) and it renders the current
- * PIN in plain text, which is worth its own look — but widening a security fix
- * mid-review is how a small correct change becomes an unreviewed large one.
- * Raised as its own item instead.
- */
-function commPasswordCardHTML() {
-  if (commReauthMode() === 'role') return '';
-  return `
-          <div class="card-title mb-sm">Commissioner Password</div>
-          <p class="text-muted text-xs mb-sm">Used to access this Commissioner panel and authorize full resets.</p>
-          <div class="form-group">
-            <label class="form-label">Current password</label>
-            <input class="form-input" id="sec-pw-current" type="password" autocomplete="current-password" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">New password</label>
-            <input class="form-input" id="sec-pw-new" type="password" autocomplete="new-password" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Confirm new password</label>
-            <input class="form-input" id="sec-pw-confirm" type="password" autocomplete="new-password" />
-          </div>
-          <button class="btn btn-primary btn-sm" id="sec-change-pw-btn">🔑 Change Password</button>
-
-          <div class="divider"></div>`;
-}
-export const _commPasswordCardHTMLForTest = commPasswordCardHTML;
+// D2 lane 6 (D-108): the "Logout Commissioner" button (a PIN-era step-down; a no-op in supabase mode since RG-197), commReauthMode() (the 'role' vs 'password' re-prompt decision)
+// and the Commissioner Password card are deleted with the PIN system. Every destructive action keeps its own confirm() and is gated again server-side by the verified role.
 
 /**
  * …and the ROW they live in. Both of its buttons are conditional now — Full
@@ -16420,7 +16880,7 @@ function dataActionsRowHTML() {
   // id="reset-demo-btn"`) as the proof that the control is ABSENT rather than
   // disabled on the live league. Extracting it into a helper of its own would
   // silently retire somebody else's security guard, so it moved unchanged.
-  const buttons = `${isSupabaseDataMode() ? '' : `<button class="btn btn-danger btn-sm" id="reset-demo-btn">⚠️ Full Factory Reset</button>`}${commLogoutButtonHTML()}`;
+  const buttons = `${isSupabaseDataMode() ? '' : `<button class="btn btn-danger btn-sm" id="reset-demo-btn">⚠️ Full Factory Reset</button>`}`;
   if (!buttons) return '';
   // CONCATENATED, not interpolated, and deliberately: `${buttons}` would be a
   // new bare-identifier interpolation inside a markup template, which is the
@@ -16496,31 +16956,11 @@ export function renderCommPage() {
   armLockFlipForPage();
   const session=getSession();
   if(!session.isAdmin){
-    // DI-180g — renderCommLogin() (the commissioner PASSWORD form) is
-    // retired entirely in authMode:'supabase': isAdmin is derived from
-    // league_members.role, so there is nothing to log into. DI-182's real
-    // permission-denied card (icon, "Commissioner Only" copy, the twelve-
-    // capability acceptance rows) is Step 3b — NOT built here. This is a
-    // clearly marked, minimal, safe seam so a non-commissioner never sees
-    // admin content in the meantime: no password field, no admin controls,
-    // explicitly labeled as a placeholder for 3b to replace.
-    if (getAuthMode() === 'supabase') {
-      // ── DI-182c (STEP 3b) — THE REAL PERMISSION-DENIED CARD ───────────────
-      // Replaces the 3a placeholder that used to sit here. Reuses
-      // renderCommLogin()'s own `🔐` icon-heading block, minus the password
-      // field and button underneath it — because there is nothing to
-      // authenticate into: `isAdmin` is derived from `league_members.role`, and
-      // the only way to gain it is for a commissioner to grant it.
-      //
-      // "HIDE, DON'T DISABLE" (DI-182g row 3) IS WHY THIS IS A `return`. A
-      // non-commissioner's render path never emits the member-management markup
-      // AT ALL — not disabled, not CSS-hidden, ABSENT. The claim-code visibility
-      // test asserts the two role paths produce structurally different DOM
-      // trees, which is only true if the denial branch never falls through.
-      //
-      // DI-182e's copy names the commissioner so a player knows who to ask. The
-      // name comes off the membership cache (a display name, never an email —
-      // contact columns left the member-readable grant in 0007) and is escaped.
+    // D2 lane 6 (D-108): there is no commissioner PASSWORD form in any mode. A session that is not a commissioner sees the permission-denied card (DI-182c): `isAdmin` comes from the
+    // verified `league_members.role` (supabase) or, in the credential-free local mode, from the local device session.
+    {
+      // "HIDE, DON'T DISABLE" (DI-182g row 3) IS WHY THIS IS A `return`: a non-commissioner's render never emits the member-management markup at all.
+      // DI-182e's copy names the commissioner so a player knows who to ask. The name comes off the membership cache (a display name, never an email) and is escaped.
       const commName = (() => {
         try {
           const active = getActiveLeagueId();
@@ -16536,7 +16976,6 @@ export function renderCommPage() {
       </div>`;
       return;
     }
-    renderCommLogin(c);return;
   }
 
   // Build page in safe sections — any crash shows which section failed
@@ -16635,6 +17074,10 @@ export function renderCommPage() {
     if (isMultiSportLeague()) {
       for (const html of [commSportLensHTML(), commAllSportsCardHTML()]) if (html) sections.push(html);
     }
+    // D2 DI-868 (lane 3): the Sports rows — every sport of the league with its state (Main sport / Active / Archived) and its ONE action (Archive… / Restore…). Shown while the league has two or
+    // more sports of ANY state, so an archived sport's Restore is here even when the league is back to one live sport. INTEGRATOR: this card's tab key is `week`; lane 6's reorganized
+    // commissioner panel moves it into its Sports group (DI-868) — keep the ids (#comm-sports-state-card, data-action comm-sport-archive / comm-sport-restore).
+    { const html = commSportsStateCardHTML(); if (html) sections.push(html); }
 
     // DI-C1 §2.1 — the Week Setup Wizard's entry point, the FIRST card in
     // the Week tab (above Week Manager / Weekly Blurb — "Week Settings" is
@@ -16668,6 +17111,10 @@ export function renderCommPage() {
 
     // D1 (DI-532/534): Sport options (Archive) for a non-default sport under the lens. '' in a one-sport league and for the league's main sport.
     if (isMultiSportLeague()) { const optionsHTML = commSportOptionsCardHTML(); if (optionsHTML) sections.push(optionsHTML); }
+    // D2 lane 2 (DI-896): the postponed / no-result prompt, above the week's controls (never automatic).
+    { const promptHTML = commVoidPromptsHTML(); if (promptHTML) sections.push(promptHTML); }
+    // D2 lane 2 (DI-914 / DI-918): the sport's Pick format, Lines shown on Picks and Rules rows (a league with one sport and one format shows nothing new).
+    { const settingsHTML = commSportSettingsCardHTML(); if (settingsHTML) sections.push(settingsHTML); }
 
     // Groups A/B (2026-09-10, DI-B5) — Commissioner Announcements. RG-10
     // tagging (data-comm-tab="week") so this renders ONLY on Week, not all
@@ -16791,13 +17238,13 @@ export function renderCommPage() {
       const recipients = getPlayers().filter(p => p.active && p.email).length;
       const totalActive = getPlayers().filter(p => p.active).length;
       sections.push(`
-        <div class="admin-section" data-comm-tab="week">
+        <div class="admin-section" data-comm-tab="rules" data-league-page="notifications" data-comm-card="weekly-summary-email">
           <div class="admin-section-title">📤 Weekly Summary Email</div>
           <div class="card">
             <p class="text-secondary text-sm mb-sm">All games are final — you can send the week's recap to players.</p>
             <p class="text-muted text-xs mb-md">
               Email-on-file: <strong>${recipients}</strong> of ${totalActive} active players.
-              ${recipients < totalActive ? '<br>Players without an email won\'t receive the recap — add emails in <em>Players, PINs & Contact</em>.' : ''}
+              ${recipients < totalActive ? '<br>Players without an email on file won\'t receive the recap.' : ''}
             </p>
             <div class="flex gap-sm flex-wrap">
               <button class="btn btn-primary btn-sm" id="weekly-summary-preview-btn">👁 Preview</button>
@@ -16835,29 +17282,7 @@ export function renderCommPage() {
     // Tiebreaker (D1 / DI-516: no Auto-Calc button — the value shows itself and updates as scores arrive)
     if (week) sections.push(commTiebreakerCardHTML(week, players));
 
-    // D1 (DI-534): Sport entries - who plays the lens sport (an opt-in sport only; '' otherwise).
-    { const entriesHTML = commSportEntriesCardHTML(); if (entriesHTML) sections.push(entriesHTML); }   // S12: only when non-empty, so a one-sport Comm panel is byte-identical
-
-    // Nicknames
-    if (week) {
-      sections.push(`
-        <div class="admin-section" data-comm-tab="players">
-          <div class="admin-section-title">Weekly Nicknames</div>
-          <div class="card">
-            ${players.filter(p=>p.active).map(p=>{
-              const nick=getNickname(week.weekId,p.playerId)||'';
-              return`<div class="flex gap-sm mb-sm" style="align-items:center">
-                <span class="font-display" style="min-width:80px;font-size:.9rem">${escHtml(p.displayName)}</span>
-                <input class="form-input" style="flex:1" type="text" maxlength="40"
-                  id="nick-${p.playerId}" placeholder='"the best"' value="${escHtml(nick)}" />
-                <button class="btn btn-secondary btn-sm save-nick-btn" data-player-id="${p.playerId}" data-week-id="${escHtml(week.weekId)}">Save</button>
-              </div>`;
-            }).join('')}
-          </div>
-        </div>`);
-    }
-
-    // ── DI-319 §Copy — INVITE TO LEAGUE (new card) ────────────────────────
+    // ── DI-319 §Copy — INVITE TO LEAGUE (new card; D2 lane 6 DI-759: the TOP card of Members, and the League tab's 'Invite & joining' row is a door to it: one component, two doors) ────────────────────────
     // Cache-then-fetch-then-repaint, same shape as `_platformKvCache`. The
     // join code is already readable by every league member (`leagues_select`
     // — F11), so this is a plain read, not a new grant; presentation is the
@@ -16880,10 +17305,33 @@ export function renderCommPage() {
               <span class="api-url-label">Join Code:</span>
               ${inviteCodeChipHTML(_joinCodeCache)}
               <div class="flex gap-sm mt-sm flex-wrap">
+                <button class="btn btn-primary btn-sm" id="open-invite-sheet-btn">Invite Friends</button>
                 <button class="btn btn-ghost btn-sm" id="copy-invite-code-btn">${icon('clipboard')} Copy</button>
                 <button class="btn btn-ghost btn-sm" id="rotate-invite-code-btn">${icon('refresh')} Rotate Code</button>
               </div>
             </div>
+          </div>
+        </div>`);
+    }
+
+    // D1 (DI-534): Sport entries - who plays the lens sport (an opt-in sport only; '' otherwise).
+    { const entriesHTML = commSportEntriesCardHTML(); if (entriesHTML) sections.push(entriesHTML); }   // S12: only when non-empty, so a one-sport Comm panel is byte-identical
+
+    // Nicknames
+    if (week) {
+      sections.push(`
+        <div class="admin-section" data-comm-tab="players">
+          <div class="admin-section-title">Weekly Nicknames</div>
+          <div class="card">
+            ${players.filter(p=>p.active).map(p=>{
+              const nick=getNickname(week.weekId,p.playerId)||'';
+              return`<div class="flex gap-sm mb-sm" style="align-items:center">
+                <span class="font-display" style="min-width:80px;font-size:.9rem">${escHtml(p.displayName)}</span>
+                <input class="form-input" style="flex:1" type="text" maxlength="40"
+                  id="nick-${p.playerId}" placeholder='"the best"' value="${escHtml(nick)}" />
+                <button class="btn btn-secondary btn-sm save-nick-btn" data-player-id="${p.playerId}" data-week-id="${escHtml(week.weekId)}">Save</button>
+              </div>`;
+            }).join('')}
           </div>
         </div>`);
     }
@@ -16906,75 +17354,15 @@ export function renderCommPage() {
         </div>`);
     }
 
-    // Players
-    if (getAuthMode() !== 'supabase') sections.push(`
-      <div class="admin-section" data-comm-tab="players">
-        <div class="admin-section-title">Players, PINs &amp; Contact</div>
-        <div class="card">
-          <p class="text-muted text-xs mb-md">PINs are hidden by default. Toggle 🙈 to reveal. Save an email per player to share PINs and league updates. Player PINs never appear anywhere outside this panel.</p>
-          ${players.map(p=>{
-            const pin = getPlayerPin(p.playerId);
-            return `
-            <div class="player-admin-row" data-player-row="${p.playerId}">
-              <div class="player-admin-info">
-                <span class="player-admin-avatar${!p.active?' inactive':''}">${escHtml(getPlayerInitials(p))}</span>
-                <div>
-                  <div class="font-display" style="font-size:.9rem">${escHtml(p.displayName)}${!p.active?' <em class="text-muted">(inactive)</em>':''}</div>
-                  ${leagueHasAlmaAffinity() ? `<div class="text-xs text-muted">${escHtml(p.almaMater||'No alma mater set')}</div>` : ''}
-                </div>
-              </div>
-              <div class="player-admin-controls">
-                <div class="player-admin-field">
-                  <label class="micro-label">PIN</label>
-                  <div class="pin-field">
-                    <input class="form-input pin-input" type="password" data-pin="${escHtml(pin)}" value="${escHtml(pin)}" readonly autocomplete="off" />
-                    <button class="btn btn-ghost btn-sm pin-toggle-btn" data-player-id="${p.playerId}" title="Show/hide PIN">🙈</button>
-                  </div>
-                </div>
-                <div class="player-admin-field">
-                  <label class="micro-label">Email</label>
-                  <input class="form-input email-input" type="email" data-player-id="${p.playerId}" value="${escHtml(p.email||'')}" placeholder="player@email.com" />
-                </div>
-                <div class="player-admin-field player-admin-actions">
-                  <button class="btn btn-secondary btn-sm save-email-btn" data-player-id="${p.playerId}" title="Save email">💾</button>
-                  <button class="btn btn-secondary btn-sm share-pin-btn" data-player-id="${p.playerId}" title="Share PIN via email" ${p.email?'':'disabled'}>✉ Share PIN</button>
-                  <button class="btn btn-ghost btn-sm edit-player-btn" data-player-id="${p.playerId}">Edit</button>
-                  <button class="btn btn-ghost btn-sm reset-pin-btn" data-player-id="${p.playerId}" data-name="${escHtml(p.displayName)}">Reset PIN</button>
-                  <button class="btn ${p.active?'btn-danger':'btn-secondary'} btn-sm toggle-player-btn" data-player-id="${p.playerId}">${p.active?'Deactivate':'Activate'}</button>
-                </div>
-              </div>
-            </div>`;
-          }).join('')}
+    // D2 lane 6 (DI-759, DI-765, D-108): the legacy local-mode player-credentials card (PINs, Share PIN, Reset PIN, the broadcast mailer) is removed with the PIN system.
 
-          <div class="divider"></div>
-          ${isSupabaseDataMode() ? `
-          <p class="text-muted text-xs" id="admin-add-player-note">New players add themselves: they sign in with Google and choose Join a League. A member row is only ever created by the server, so there is no Add button here.</p>` : `
-          <div class="flex gap-sm">
-            <input class="form-input" id="admin-new-player" type="text" placeholder="New player name…" style="flex:1" />
-            <button class="btn btn-secondary btn-sm" id="admin-add-player-btn">Add</button>
-          </div>`}
-
-          <div class="divider"></div>
-          <div class="card-title mb-sm">📣 Broadcast to League</div>
-          <p class="text-muted text-xs mb-sm">Sends one email to every active player who has an email on file. Opens your mail client with everyone in BCC (their addresses stay private).</p>
-          <div class="form-group">
-            <label class="form-label">Subject</label>
-            <input class="form-input" id="bcast-subject" type="text" placeholder="Week 5 picks are open" value="CFB Pickems update" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Message</label>
-            <textarea class="form-input" id="bcast-body" rows="4" placeholder="Hey all, picks for this week are open and lock Friday at 6pm. Site: …"></textarea>
-          </div>
-          <button class="btn btn-primary btn-sm" id="bcast-send-btn">✉ Open in Mail Client</button>
-        </div>
-      </div>`);
-
-    // Obligations (v0.17.0: manual add/delete + the 2K25 carryover ledger)
-    sections.push(`
+    // Obligations (v0.17.0: manual add/delete + the 2K25 carryover ledger). D2 lane 1 (DI-1017): the whole card exists only while at least one sport's obligations are ON; the manual add and the 2K25
+    // carryover follow the league default.
+    if (anyObligationsOn()) sections.push(`
       <div class="admin-section" data-comm-tab="players">
         <div class="admin-section-title">Obligations</div>
         <div class="card mb-md">${renderObligationsAdmin()}
-          <div class="divider"></div>
+          ${obligationsOn(null) ? `<div class="divider"></div>
           <div class="form-group"><label class="form-label" style="font-size:.7rem">Add an obligation manually</label>
             <div class="flex gap-sm flex-wrap" style="align-items:flex-end">
               <select class="form-select" id="ob-add-payer" style="width:auto">${players.map(p=>`<option value="${p.playerId}">${escHtml(p.displayName)}</option>`).join('')}</select>
@@ -16983,17 +17371,20 @@ export function renderCommPage() {
               <input class="form-input" id="ob-add-note" placeholder="what & why (e.g. 1 drink — side bet)" style="flex:1;min-width:160px" />
               <button class="btn btn-primary btn-sm" id="ob-add-btn">Add</button>
             </div>
-          </div>
+          </div>` : ''}
         </div>
-        <div class="card">
+        ${obligationsOn(null) ? `<div class="card">
           <div class="flex" style="justify-content:space-between;align-items:baseline">
             <strong style="font-size:.85rem">🍺 2K25 carryover ledger</strong>
             <span class="text-muted text-xs">14 weekly drinks + 1 bonus, all unpaid — from the audited season report</span>
           </div>
           ${renderSeason2025ObligationsAdmin()}
-        </div>
+        </div>` : ''}
       </div>`);
 
+    // D2 lane 6 (DI-757/758/759) — THE LEAGUE TAB (key `rules`): the head (back bar + the rows card) comes first among this tab's sections; every card below carries
+    // data-comm-tab="rules" AND data-league-page (RG-10: a card with no tab attribute would render on every tab). The pages are shown one at a time by CSS off the panel's data-league-view.
+    sections.push(commLeagueTabHeadHTML());
     // Alma Maters — READ-ONLY summary card. See renderAlmaMaterSettingsCard()'s
     // docstring above (2026-09-04) for the model this reflects. Rules tab
     // (retagged 'rules', UX Revamp wiring pass 3a — DI-319 §Rules).
@@ -17001,8 +17392,9 @@ export function renderCommPage() {
 
     // Rules
     sections.push(`
-      <div class="admin-section" data-comm-tab="rules">
+      <div class="admin-section" data-comm-tab="rules" data-league-page="rules" data-comm-card="league-rules">
         <div class="admin-section-title">League Rules</div>
+        ${obtLeagueSlotHTML()}
         <div class="card">
           ${!rulesSports(liveLeagueCompetitions()).hasCfb ? '<p class="text-secondary text-xs mb-sm">The NFL rules, Chat, Permissions and Debts &amp; Bylaws are built in and always appear on the Rules page. Only the text in this box is yours to edit.</p>' : '<p class="text-secondary text-xs mb-sm">Weekly Ties, the Extra Point, Chat, Permissions and Debts &amp; Bylaws are built in and always appear on the Rules page. Only the text in this box is yours to edit.</p>'}
           ${rulesEditorHTML()}
@@ -17012,6 +17404,9 @@ export function renderCommPage() {
           </div>
         </div>
       </div>`);
+
+    sections.push(commLeagueCommissionerCardsHTML({ settings }));   // D2 lane 6 (DI-759): Randomize Picks, the obligations slot, the sports page, Advanced; their bodies are the cards that left Admin
+    sections.push(commissionerContactEmailCardHTML());   // D2 lane 6 (DI-759): moved here from the Security & Settings card
 
     // ══════════════════════════════════════════════════════════════════════
     // THE "☁️ Cloud Sync (Google Sheets)" CARD IS DELETED (2026-09-23).
@@ -17069,6 +17464,7 @@ export function renderCommPage() {
     // Tab visibility lives on the panel container as a data attribute so a
     // single CSS rule handles show/hide for all 18 sections at once.
     c.setAttribute('data-comm-active', state.commTab);
+    bindCommLeagueTab(c);   // D2 lane 6 (DI-758): the rows, the back bar and the page the panel last showed
     // W-70 (DI-W70.3) - the tap and the swipe are ONE path: setCommTab() (below renderCommPage).
     c.querySelectorAll('.comm-tab').forEach(btn => {
       btn.addEventListener('click', () => setCommTab(btn.dataset.commTabBtn, { source: 'tap' }));
@@ -17138,7 +17534,10 @@ export function renderCommPage() {
 export function setCommTab(key, { source = 'tap' } = {}) {
   const c = document.getElementById('page-commissioner');
   if (!c || !COMM_TABS.some((t) => t.key === key)) return false;
+  // D2 lane 6 (DI-758, Principles: Navigation): tapping the tab you are already on pops its pushed page back to the root list, as every native tab bar does.
+  if (key === 'rules' && state.commTab === 'rules' && source === 'tap' && state.leaguePage !== 'list') { setLeaguePage('list'); return true; }
   state.commTab = key;
+  syncLeagueSwipeBack();
   c.setAttribute('data-comm-active', key);
   if (source === 'swipe') c.setAttribute('data-comm-instant', 'true'); else c.removeAttribute('data-comm-instant');
   let activeBtn = null;
@@ -17166,24 +17565,34 @@ export function setCommTab(key, { source = 'tap' } = {}) {
  */
 function renderCommPanePreview(key) {
   const root = document.getElementById('page-commissioner');
-  if (!root || !COMM_TABS.some((t) => t.key === key)) return null;
+  // D2 lane 6 (DI-764, reviewer R1; SB-23): on a pushed League page the pager pages between ['list', this page], so the swipe-back asks for 'list', which is not a tab key. It is the
+  // League tab drawn on its root list, and it must slide in under the outgoing page (without it the page slid away over an empty background and the list popped in afterwards).
+  const listBack = key === 'list' && state.commTab === 'rules' && state.leaguePage !== 'list';
+  const tab = listBack ? 'rules' : key;
+  const page = listBack ? 'list' : state.leaguePage;
+  if (!root || !COMM_TABS.some((t) => t.key === tab)) return null;
   const pane = document.createElement('div');
   pane.className = 'comm-pane';
-  pane.setAttribute('data-comm-pane', key);
+  pane.setAttribute('data-comm-pane', tab);
   for (const child of root.children) {
     if (child.classList.contains('week-swipe-incoming-layer')) continue;
     const own = child.getAttribute('data-comm-tab');
-    if (own !== null && own !== key) continue;
+    if (own !== null && own !== tab) continue;
+    // D2 lane 6 (DI-758): the League tab's pages are shown one at a time; a swipe preview carries only the page it lands on (and the back bar only when that page is off the list).
+    const lp = child.getAttribute('data-league-page');
+    if (lp !== null && lp !== page) continue;
+    if (child.hasAttribute('data-league-bar') && page === 'list') continue;
     pane.appendChild(child.cloneNode(true));
   }
   commPaneScrub(pane);
   pane.querySelectorAll('.comm-tab').forEach((b) => {
-    const active = b.dataset.commTabBtn === key;
+    const active = b.dataset.commTabBtn === tab;
     b.classList.toggle('active', active);
     b.setAttribute('aria-selected', active);
   });
   return pane.querySelector('[data-comm-tab]') || pane.querySelector('.comm-tabbar') ? pane : null;
 }
+export const _renderCommPanePreviewForTest = renderCommPanePreview;
 function commPaneScrub(node) {
   for (const el of node.querySelectorAll('[id], [name], [for]')) { el.removeAttribute('id'); el.removeAttribute('name'); el.removeAttribute('for'); }
 }
@@ -17635,13 +18044,30 @@ async function refreshScribeRoutesCache() {
   if (state.currentTab === 'admin') renderAdminPage();
 }
 
+/**
+ * D2 sweep, DI-1097 (W-111) — the rows behind the status card's "Pictures: n of m" line: the newest 500 stories' id, picture address and publish time. RLS (0053's news_articles_select) already
+ * answers only stories that are not hidden and whose source the registry has enabled; `hidden = false` is asked for as well, so the count never includes a hidden story even if that policy changes.
+ * Nothing else is read: no headline, no link, no publisher. Called ONLY from the platform-admin card's refresh (refreshContentStatusCache, below). No change to `content_status()`, no migration.
+ * It lives HERE, not in js/auth.js: auth.js is in the import closure of the Anthropic-calling Edge Functions, and functions.check C19 forbids that closure from naming a news table.
+ * A failed read THROWS (the caller drops the line); a read that answers nothing usable is null.
+ */
+async function getNewsPictureRows() {
+  const client = getSupabaseClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { data, error } = await client.from('news_articles').select('id, image_url, published_at').eq('hidden', false).order('published_at', { ascending: false }).limit(500);
+  if (error) throw error;
+  return Array.isArray(data) ? data : null;
+}
+
 async function refreshContentStatusCache() {
   if (_contentStatusCache.loading) return;
   _contentStatusCache = { ..._contentStatusCache, loading: true, error: null };
   try {
-    const r = await getContentStatus();
-    if (r.unavailable) _contentStatusCache = { data: null, loading: false, loaded: false, error: 'unavailable', attempted: true };
-    else _contentStatusCache = { data: r.data, loading: false, loaded: true, error: null, attempted: true };
+    // D2 DI-1097 (W-111): the "Pictures: n of m" line's rows ride the SAME refresh (platform admins only: this function is only ever reached from the admin card's own gate). A failed picture read costs
+    // the LINE, never the card: it is dropped, with no error and no count.
+    const [r, pictureRows] = await Promise.all([getContentStatus(), getNewsPictureRows().catch((e) => { console.warn('[admin] the pictures count could not be read', e && e.name); return null; })]);
+    if (r.unavailable) _contentStatusCache = { data: null, loading: false, loaded: false, error: 'unavailable', attempted: true, pictureRows: null };
+    else _contentStatusCache = { data: r.data, loading: false, loaded: true, error: null, attempted: true, pictureRows };
   } catch (e) {
     console.error('[admin] content_status read failed', e);
     // A refresh that fails keeps the rows already on screen (the card says it could not refresh); a first load that fails shows the retry state.
@@ -18295,9 +18721,7 @@ export function renderAdminPage() {
       state: { ..._scribeRoutesCache, spend: spendByClassFromStatus(_contentStatusCache.loaded ? _contentStatusCache.data : null) },
       canWrite: getIsSuperAdmin() === true, escHtml, icon,
     }),
-    'content-ai-status': () => renderContentStatusBody({ state: _contentStatusCache, escHtml, icon, nowMs: Date.now() }),
-    'recalculate-finalized-weeks': () => renderRecalculateFinalizedWeeksAdminSectionHTML(),
-    'obligation-corrections': () => renderObligationCorrectionsAdminSectionHTML(),
+    'content-ai-status': () => renderContentStatusBody({ state: _contentStatusCache, escHtml, icon, nowMs: Date.now(), numHtml }),
     'background-jobs': () => renderBackgroundJobsAdminSectionHTML({ pilot: isPilotLeague(league) }),
     'feedback-bug-reports': () => renderFeedbackAdminSectionHTML(),
     'scribe-training': () => renderScribeTrainerAdminSectionHTML(),
@@ -18305,12 +18729,7 @@ export function renderAdminPage() {
     'data-source-mode': () => renderDataSourceModeBody({ week, allWeeks }),
     'demo-simulation': () => renderDemoSimulationBody({ week, games }),
     'auto-refresh': () => renderAutoRefreshBody({ settings }),
-    'randomize-picks-shortcut': () => renderRandomizePicksBody({ settings }),
-    'security-settings': () => renderSecuritySettingsBody(),
     'export-data': (ctx) => renderExportDataCardBody({ week, isMember: ctx.isMember }),
-    'data-management': () => renderDataManagementBody(),
-    'chat-retention': () => renderChatRetentionAdmin(),
-    'chat-history': () => renderChatEpochAdmin(),
     // DI-425 — moved from Comm→SCRIBE, verbatim behavior.
     'scribe-digest-export': () => renderScribeDigestExportBody({ week }),
     'scribe-post-queue': () => renderScribePostQueueBody(),
@@ -18737,6 +19156,9 @@ function gamesRowCtx(model) {
     pastDraft: model.pastDraft,
     // W-71 (DI-W71.2): a slate game without a spread, in a week that can still take one, offers "Find spread" on its row.
     findSpread: (g) => canFindSpread && SF.isSpreadMissing(g),
+    // D2 lane 2 (DI-896): Void game / Undo void on a slate row, and ESPN's "Postponed" note as a quiet chip (the commissioner's row; players see it on the game).
+    voidAction: (g) => (canVoid({ week: model.week, game: g }) ? 'void' : (canUndoVoid({ week: model.week, game: g }) ? 'undo' : null)),
+    noteChip: (g) => espnNoteChipHTML(g),
   };
 }
 
@@ -19151,7 +19573,7 @@ function gamesCalcAts(weekId) {
   if (!cur || cur.status === WEEK_STATUS.DRAFT) return;
   let count = 0;
   getGames(weekId).forEach((g) => {
-    if (g.status === GAME_STATUS.FINAL && g.lockedSpread !== null) { saveGame({ ...g, atsWinner: calculateAtsWinner(g) }); count++; }
+    if (g.status === GAME_STATUS.FINAL && g.lockedSpread !== null && !isVoided(g)) { saveGame({ ...g, atsWinner: calculateAtsWinner(g) }); count++; }
   });
   finalizeWeek(cur);
   showToast(`✅ ATS calculated for ${count} games`, 'success');
@@ -19201,7 +19623,7 @@ function openGameEditor(gameId, week) {
   if (!g) return;
   showGameModal(g, week, (data) => {
     const cur = getGame(g.gameId) || g;
-    saveGame({ ...cur, ...data, updatedAt: new Date().toISOString() });
+    saveGame(stampFinalAt(cur, { ...cur, ...data, updatedAt: new Date().toISOString() }));   // DI-1091
     showToast('Updated', 'success');
     afterSlateChange();
   });
@@ -19287,6 +19709,18 @@ function onGamesSectionClick(e) {
       const row = gamesRowFromEvent(e, model);
       if (gamesRowGone(row, model, { wantOnSlate: true })) break;
       openGameEditor(row.slateGame.gameId, model.week);
+      break;
+    }
+    case 'row-void': {
+      const row = gamesRowFromEvent(e, model);
+      if (gamesRowGone(row, model, { wantOnSlate: true })) break;
+      askVoidGame({ weekId, gameId: row.slateGame.gameId, invoker: btn });
+      break;
+    }
+    case 'row-undo-void': {
+      const row = gamesRowFromEvent(e, model);
+      if (gamesRowGone(row, model, { wantOnSlate: true })) break;
+      runUndoVoidGame({ weekId, gameId: row.slateGame.gameId });
       break;
     }
     case 'row-find-spread': {
@@ -19700,6 +20134,13 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     runSportNextAction({ kind: b.dataset.kind, sport: b.dataset.sport });
   }));
   document.getElementById('comm-archive-sport-btn')?.addEventListener('click', () => confirmArchiveLensSport());
+  bindCommVoidPrompts();
+  document.getElementById('sport-format-row')?.addEventListener('click', (e) => openFormatSheet(e.currentTarget));
+  document.getElementById('sport-lines-row')?.addEventListener('click', (e) => openLinesSheet(e.currentTarget));
+  document.getElementById('sport-rules-row')?.addEventListener('click', () => navigateTo('rules'));
+  document.querySelectorAll('#comm-sports-state-card [data-action="comm-sport-archive"]').forEach((b) => b.addEventListener('click', () => { haptic('light'); confirmArchiveSport(b.dataset.competition || '', { anchor: b }); }));   // D2 DI-868
+  document.querySelectorAll('#comm-sports-state-card [data-action="comm-sport-open-week"]').forEach((b) => b.addEventListener('click', () => { haptic('light'); openSportWeekInComm(b.dataset.competition || ''); }));   // D2 DI-869: the blocked row's way forward
+  document.querySelectorAll('#comm-sports-state-card [data-action="comm-sport-restore"]').forEach((b) => b.addEventListener('click', () => { haptic('light'); confirmRestoreSport(b.dataset.competition || ''); }));
   bindCommSportEntries();
   // DI-355 (UN-313) — "create-week-btn" retired along with showCreateWeekModal().
   // DI-C1 §2.1 — the Week Setup Wizard's entry point.
@@ -19969,23 +20410,15 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     // only the immediate loading/disabled affordance for the tap itself.
     renderCommPage();
   });
+  document.getElementById('open-invite-sheet-btn')?.addEventListener('click', () => { haptic('light'); openInviteSheet(); });   // D2 lane 1 (DI-729): the same ONE Invite sheet the League page opens
   document.getElementById('copy-invite-code-btn')?.addEventListener('click', () => {
     const code = _joinCodeCache.code;
     if (!code) { showToast(_joinCodeCache.error ? "Couldn't load the join code — tap Retry." : 'Still loading — try again in a moment', 'error'); return; }
     navigator.clipboard.writeText(code).then(() => showToast('Copied', 'success')).catch(() => showToast('Copy failed', 'error'));
   });
-  document.getElementById('rotate-invite-code-btn')?.addEventListener('click', () => {
-    const leagueId = getActiveLeagueId();
-    if (!leagueId) return;
-    if (!confirm('Generate a new invite code? The old one stops working right away.')) return;
-    rotateJoinCode(leagueId)
-      .then((code) => {
-        _joinCodeCache = { leagueId, code, loading: false, error: null };
-        showToast('New invite code generated.', 'success');
-        renderCommPage();
-      })
-      .catch(() => showToast('Unable to save. Try again.', 'error'));
-  });
+  // D2 lane 1 (DI-729, "one implementation"): the card's rotate button opens the ONE Invite sheet and its "Get a new code?" confirmation. There is no second rotate path (the old window.confirm and its direct
+  // rotate call are gone), so the card and the sheet can never disagree about what a new code costs or how a failure reads.
+  document.getElementById('rotate-invite-code-btn')?.addEventListener('click', () => { haptic('light'); if (openInviteSheet()) ijRotateAsk(); });
 
   // DI-352 (UN-310, Drew's 2026-09-27 amendment) — Commissioner → Games'
   // "Build slate" button. SAME orchestration the wizard's Step 2 uses
@@ -20165,17 +20598,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     //   COST — "this makes a paid model call". Still true, still worth asking,
     //     and nothing about auth changes that. It stays, as a plain confirm.
     //
-    let adminPasswordHash = '';
-    if (commReauthMode() === 'password') {
-      const pw = prompt('Enter the Commissioner password to run the SCRIBE Trainer. This makes a paid model call.');
-      if (!pw) return;
-      adminPasswordHash = btoa(pw);
-      if (adminPasswordHash !== getSettings().adminPasswordHash) {
-        showToast('❌ Incorrect password — Trainer run cancelled', 'error'); return;
-      }
-    } else if (!confirm('Run the SCRIBE Trainer now? This makes a paid model call and can take up to two minutes.')) {
-      return;
-    }
+    if (!confirm('Run the SCRIBE Trainer now? This makes a paid model call and can take up to two minutes.')) return;
     // RG-227 (live, 2026-09-22) — THE LABEL TELLS THE TRUTH ABOUT THE WAIT.
     // It read 'Running…', which for a button that answers in a second or two is
     // fine and for this one is not: the Trainer is ONE Anthropic call over a
@@ -20198,7 +20621,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
       // (it has no use for it; it derives the caller from the JWT).
       const result = isServerJobEnabled('trainer')
         ? await runTrainerViaEdgeFunction()
-        : await runTrainerRemote({ adminPasswordHash });
+        : await runTrainerRemote();
       if (result && result.skipped) {
         // Not a failure — a deliberate no-op (kill switch off, hourly floor,
         // or too little rated feedback in the window to say anything).
@@ -20433,7 +20856,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     const hs=parseInt(document.getElementById('demo-home-score')?.value)||0;
     const as_=parseInt(document.getElementById('demo-away-score')?.value)||0;
     // Mark as manual so the ESPN auto-refresh won't overwrite the simulated score.
-    saveGame({...g,status:'live',homeScore:hs,awayScore:as_,dataSource:'manual',lastUpdated:new Date().toISOString()});
+    saveGame(stampFinalAt(g,{...g,status:'live',homeScore:hs,awayScore:as_,dataSource:'manual',lastUpdated:new Date().toISOString()}));   // DI-1091: leaving final clears finalAt
     showToast(`${td(g,'home')} vs ${td(g,'away')}: LIVE ${hs}–${as_}`,'success'); renderCommPage();
   });
   document.getElementById('demo-set-final')?.addEventListener('click',()=>{
@@ -20448,8 +20871,8 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     // is why the candidate is assembled first. Never re-derive the cover
     // locally: lockedSpread precedence, the undefined/blank/non-numeric cases,
     // non-final status, missing scores and pushes are all its job (AD-03).
-    const next={...g,status:'final',homeScore:hs,awayScore:as_,actualWinner,
-      dataSource:'manual',lastUpdated:new Date().toISOString()};
+    const next=stampFinalAt(g,{...g,status:'final',homeScore:hs,awayScore:as_,actualWinner,
+      dataSource:'manual',lastUpdated:new Date().toISOString()});   // DI-1091: finalAt stamped once, at the first change to final
     next.atsWinner=calculateAtsWinner(next);
     saveGame(next);
     showToast(`FINAL: ${td(g,'home')} ${hs} – ${td(g,'away')} ${as_}`,'success'); renderCommPage();
@@ -20458,7 +20881,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     if(!demoResetAllowed())return;
     const gid=demoGameSel?.value; if(!gid)return;
     const g=getGame(gid); if(!g)return;
-    saveGame({...g,status:'scheduled',homeScore:null,awayScore:null,actualWinner:null,atsWinner:null,dataSource:'manual'});
+    saveGame(stampFinalAt(g,{...g,status:'scheduled',homeScore:null,awayScore:null,actualWinner:null,atsWinner:null,dataSource:'manual'}));
     showToast('Reset to scheduled','warning'); renderCommPage();
   });
   document.getElementById('demo-update-score')?.addEventListener('click',()=>{
@@ -20496,7 +20919,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
       if (next.atsWinner !== null) atsComputed++;
       next.dataSource = 'manual';
       next.lastUpdated = new Date().toISOString();
-      saveGame(next);
+      saveGame(stampFinalAt(g, next));   // DI-1091
     });
     finalizeWeek(week);
     const parts = [];
@@ -20509,7 +20932,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.getElementById('demo-reset-all-scheduled')?.addEventListener('click',()=>{
     if(!demoResetAllowed())return;
     if(!week)return;
-    getGames(week.weekId).forEach(g=>saveGame({...g,status:'scheduled',homeScore:null,awayScore:null,actualWinner:null,atsWinner:null}));
+    getGames(week.weekId).forEach(g=>saveGame(stampFinalAt(g,{...g,status:'scheduled',homeScore:null,awayScore:null,actualWinner:null,atsWinner:null})));
     showToast('All games reset to scheduled','warning'); renderCommPage();
   });
 
@@ -20555,7 +20978,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
         lastUpdated:new Date().toISOString(),
       };
       next.atsWinner=calculateAtsWinner(next);
-      planned.push({g,next});
+      planned.push({g,next:stampFinalAt(g,next)});   // DI-1091: a grid edit that makes a game final stamps it once; one that re-opens it clears the stamp
     });
     // Deny-by-default on the feed modes: if ANY row would demote a graded game
     // or null a score/winner/cover that already exists on file, refuse the whole
@@ -20610,108 +21033,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     });
   });
 
-  // Players + PIN management
-  document.getElementById('admin-add-player-btn')?.addEventListener('click', ()=>{
-    // Supabase mode: INSERT into league_members is forbidden by schema (members are created by
-    // join_league / create_league only). The control is absent there; this is the second guard.
-    if(isSupabaseDataMode())return;
-    const n=document.getElementById('admin-new-player')?.value.trim();
-    if(!n)return;
-    if(getPlayers().find(p=>p.displayName.toLowerCase()===n.toLowerCase())){showToast('Already exists','warning');return;}
-    addPlayer(createPlayer(n,'','0000'));
-    document.getElementById('admin-new-player').value='';
-    showToast(`${n} added`,'success'); renderCommPage();
-  });
-  document.querySelectorAll('.edit-player-btn').forEach(btn=>btn.addEventListener('click',()=>showEditPlayerModal(btn.dataset.playerId)));
-  document.querySelectorAll('.toggle-player-btn').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const p=getPlayer(btn.dataset.playerId); if(!p)return;
-      savePlayer({...p,active:!p.active});
-      // Activating/deactivating a player changes who counts toward
-      // claimedAlmaMaters() (it filters to ACTIVE players only) — the same
-      // ripple the player-edit save does, so a deactivated player's claimed
-      // school stops driving the ⭐ flag on open/upcoming weeks immediately
-      // rather than going stale until the next unrelated claim edit.
-      const changed=recomputeAlmaMaterFlags(claimedAlmaMaters());
-      showToast(`${p.displayName} ${p.active?'deactivated':'activated'}${changed?` — ${changed} game${changed===1?'':'s'} in open/upcoming weeks re-flagged`:''}`,'success');
-      renderCommPage();
-    });
-  });
-  document.querySelectorAll('.reset-pin-btn').forEach(btn=>{
-    btn.addEventListener('click',()=>showResetPinModal(btn.dataset.playerId,btn.dataset.name));
-  });
-
-  // ── PIN show/hide toggle ──
-  document.querySelectorAll('.pin-toggle-btn').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const row = btn.closest('[data-player-row]');
-      const input = row?.querySelector('.pin-input');
-      if (!input) return;
-      const showing = input.type === 'text';
-      input.type = showing ? 'password' : 'text';
-      btn.textContent = showing ? '🙈' : '🙉';
-    });
-  });
-
-  // ── Save email for a player ──
-  document.querySelectorAll('.save-email-btn').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const pid = btn.dataset.playerId;
-      const row = btn.closest('[data-player-row]');
-      const email = row?.querySelector('.email-input')?.value.trim() || '';
-      // Light validation — empty is allowed (clears it), otherwise must look like an email.
-      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        showToast('That doesn\'t look like a valid email','error'); return;
-      }
-      const p = getPlayer(pid); if (!p) return;
-      savePlayer({...p, email, updatedAt: new Date().toISOString()});
-      showToast(`Email saved for ${p.displayName}`,'success');
-      // Re-enable / update the share button without a full re-render
-      const shareBtn = row.querySelector('.share-pin-btn');
-      if (shareBtn) shareBtn.disabled = !email;
-    });
-  });
-
-  // ── Share PIN via email (opens user's mail client — no server needed) ──
-  document.querySelectorAll('.share-pin-btn').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const pid = btn.dataset.playerId;
-      const p = getPlayer(pid); if (!p) return;
-      if (!p.email) { showToast('Save an email for this player first','error'); return; }
-      const pin = getPlayerPin(pid);
-      if (!pin) { showToast('No PIN set for this player — Reset PIN first','error'); return; }
-      const siteUrl = window.location.origin + window.location.pathname;
-      const subject = encodeURIComponent('Your CFB Pickems PIN');
-      const body = encodeURIComponent(
-        `Hi ${p.displayName},\n\n` +
-        `Your CFB Pickems login PIN is: ${pin}\n\n` +
-        `Site: ${siteUrl}\n` +
-        `Site PIN (front gate): 6969\n\n` +
-        `Pick your name from the player list, enter the PIN above, and you're in. ` +
-        `Reply to this email if you need it reset.\n`
-      );
-      window.location.href = `mailto:${encodeURIComponent(p.email)}?subject=${subject}&body=${body}`;
-    });
-  });
-
-  // ── Broadcast to all players with email on file ──
-  document.getElementById('bcast-send-btn')?.addEventListener('click',()=>{
-    const subject = (document.getElementById('bcast-subject')?.value || 'CFB Pickems update').trim();
-    const body = (document.getElementById('bcast-body')?.value || '').trim();
-    if (!body) { showToast('Write a message first','error'); return; }
-    const recipients = getPlayers().filter(p=>p.active && p.email).map(p=>p.email);
-    if (!recipients.length) { showToast('No players have an email on file','error'); return; }
-    // BCC keeps everyone's address private. Some mail clients limit URL length,
-    // so we warn rather than fail when the recipient list gets long.
-    const siteUrl = window.location.origin + window.location.pathname;
-    const fullBody = `${body}\n\n— Sent from CFB Pickems\n${siteUrl}`;
-    const mailto = `mailto:?bcc=${encodeURIComponent(recipients.join(','))}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(fullBody)}`;
-    if (mailto.length > 1800) {
-      showToast(`⚠️ Long recipient list (${recipients.length}). If your mail client only opens a few, copy emails from the player list manually.`,'warning');
-    }
-    window.location.href = mailto;
-    showToast(`✉ Opening mail client for ${recipients.length} recipient${recipients.length>1?'s':''}`,'success');
-  });
+  // D2 lane 6 (DI-765): the Players + PIN management handlers (add player, edit, activate, Reset PIN, PIN show/hide, save email, Share PIN, broadcast) went with their card.
 
   // Obligations (v0.17.0: manual add / delete / undo / 2K25 ledger / demo purge)
   document.getElementById('ob-add-btn')?.addEventListener('click',()=>{
@@ -20742,6 +21064,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   // obligationNextStatus in data-model.js), so the comm panel and Standings
   // can never disagree about a transition.
   document.querySelectorAll('.ob-action-btn').forEach(btn=>{
+    if (bindObligationSubmit(btn, { repaint: renderCommPage })) return;   // D2 lane 1: Mark Paid / Confirm Paid use the shared submission states
     btn.addEventListener('click',()=>{
       handleObligationAction(btn.dataset.obId, btn.dataset.obAction, { rerender: renderCommPage });
       renderCommPage();
@@ -20871,11 +21194,6 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     // NOTE WHAT THIS ACTION IS: `resetToDemo()` is a LOCAL, CLIENT-ONLY rewrite
     // of the mirror. There is no `is_commissioner` RPC behind it to fall back
     // on — which is precisely why it does not run in supabase mode at all.
-    if (commReauthMode() === 'password') {
-      const pw = prompt('Enter Commissioner password to confirm FULL factory reset. This deletes ALL data including all weeks and players, and hides all prior chat history (chat rows are hidden, not deleted — reversible from the Data tab):');
-      if (!pw) return;
-      if (btoa(pw) !== getSettings().adminPasswordHash) { showToast('❌ Incorrect password — reset cancelled','error'); return; }
-    }
     if(!confirm('FINAL WARNING: This will permanently delete ALL weeks, picks, players, results, and standings, and hides all prior chat history (chat rows are hidden, not deleted — reversible from the Data tab). Type OK to proceed.'))return;
     // v0.17.5 (caught in review): resetToDemo() writes DEFAULT_SETTINGS, which
     // resets chatEpochSeq to 0 — so if the awaited startFreshChat() below then
@@ -20915,58 +21233,9 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
       : 'Full reset complete, but chat could not be cleared — check your connection and try again from the Data tab.', 'warning');
     renderCommPage(); refreshHeader();
   });
-  document.getElementById('logout-comm-btn')?.addEventListener('click', ()=>{
-    const s=getSession();setSession(s.playerId,false,s.playerVerified);renderCommPage();
-  });
+  // D2 lane 6 (DI-765): the change-password, change-site-PIN and welcome-text handlers are deleted with the controls they bound to.
 
-  // ── Security & Settings: change Commissioner password ──
-  document.getElementById('sec-change-pw-btn')?.addEventListener('click', ()=>{
-    // SECOND GUARD, the `reset-demo-btn` pattern (reviewer, 2026-09-19). The
-    // card is not rendered in supabase mode (`commPasswordCardHTML()`), so this
-    // listener has nothing to bind to there — but a render guard and a handler
-    // guard fail independently, and what this handler does when it is wrong is
-    // write a credential into the settings blob every device hydrates.
-    if (commReauthMode() === 'role') return;
-    const cur = document.getElementById('sec-pw-current')?.value || '';
-    const next = document.getElementById('sec-pw-new')?.value || '';
-    const confirm2 = document.getElementById('sec-pw-confirm')?.value || '';
-    if (!cur || !next || !confirm2) { showToast('Fill in all three password fields','error'); return; }
-    if (btoa(cur) !== getSettings().adminPasswordHash) { showToast('Current password is wrong','error'); return; }
-    if (next.length < 6) { showToast('New password must be at least 6 characters','error'); return; }
-    if (next !== confirm2) { showToast('New passwords don\'t match — re-type both','error'); return; }
-    if (next === cur) { showToast('New password matches the old one','error'); return; }
-    if (!confirm('Change the Commissioner password? You\'ll stay logged in on this device, but need the new password next time.')) return;
-    saveSetting('adminPasswordHash', btoa(next));
-    showToast('🔑 Password changed','success');
-    renderCommPage();
-  });
-
-  // ── Security & Settings: change site PIN ──
-  document.getElementById('sec-change-site-pin-btn')?.addEventListener('click', ()=>{
-    const next = (document.getElementById('sec-site-pin-new')?.value || '').trim();
-    const confirm2 = (document.getElementById('sec-site-pin-confirm')?.value || '').trim();
-    if (!next || !confirm2) { showToast('Enter and confirm the new site PIN','error'); return; }
-    if (next.length < 4) { showToast('Site PIN must be at least 4 characters','error'); return; }
-    if (next !== confirm2) { showToast('PINs don\'t match — re-type both','error'); return; }
-    if (next === getEffectiveSitePin()) { showToast('That\'s already the current site PIN','warning'); return; }
-    if (!confirm(`Change the site PIN to "${next}"? Players will need this PIN on their next visit. (Already-unlocked devices stay unlocked.)`)) return;
-    setSitePin(next);
-    showToast('🚪 Site PIN updated','success');
-    renderCommPage();
-  });
-
-  // ── Security & Settings: save Welcome Screen text ──
-  document.getElementById('sec-save-welcome-btn')?.addEventListener('click', ()=>{
-    const top = (document.getElementById('sec-welcome-title-top')?.value || '').trim();
-    const main = (document.getElementById('sec-welcome-title-main')?.value || '').trim();
-    const sub = (document.getElementById('sec-welcome-subtitle')?.value || '').trim();
-    saveSetting('welcomeTitleTop', top);
-    saveSetting('welcomeTitleMain', main);
-    saveSetting('welcomeSubtitle', sub);
-    showToast('Welcome text saved','success');
-  });
-
-  // ── Security & Settings: save Commissioner contact email ──
+  // ── Commissioner contact email (League tab) ──
   document.getElementById('sec-save-comm-email-btn')?.addEventListener('click', ()=>{
     const email = (document.getElementById('sec-comm-email')?.value || '').trim();
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -21114,7 +21383,7 @@ export function buildWeeklySummary(week) {
   // Names resolve against ALL players, not the active-only `players` above: an
   // obligation outlives a player leaving the league, and a departed payer must
   // still be named, not rendered as "(unknown)".
-  const obligations = getActiveObligations(week.weekId);
+  const obligations = obligationsOnFor(week.weekId) ? getActiveObligations(week.weekId) : [];   // D2 lane 1 (DI-1017): a sport that plays for fun has no obligations block in the recap
   if (obligations.length) {
     const allPlayers = getPlayers();
     lines.push('');
@@ -21189,7 +21458,7 @@ function renderExportDataCardBody({ week, isMember = true }) {
           <p class="text-muted text-xs mb-md">CSV format opens in Excel / Google Sheets. JSON format preserves full state for backup/restore.</p>
           <div class="card-title mb-sm">Current Week (${week?escHtml(formatWeekLabel(week)):'no active week'})</div>
           <div class="flex gap-sm mb-md flex-wrap">
-            <button class="btn btn-secondary btn-sm" id="export-week-slate-csv-btn" ${week?'':'disabled'}>🏈 Week Slate CSV</button>
+            <button class="btn btn-secondary btn-sm" id="export-week-slate-csv-btn" ${week?'':'disabled'}>${escHtml(weekSlateEmoji(week))} Week Slate CSV</button>
           </div>
           ${pickShapedScope}
           <div class="divider"></div>
@@ -21240,53 +21509,140 @@ function renderRandomizePicksBody({ settings }) {
 }
 
 /**
- * Admin → Settings "Security & Settings" card (DI-320 §Settings) — relocated
- * whole (UX Revamp wiring pass 3a), unchanged body. Reads `getSettings()`
- * directly (not a param) — same pattern `commPasswordCardHTML()` already
- * follows, since this card mixes several independent settings blobs. Bare
- * content.
+ * D2 lane 6 (DI-759, DI-765): the "Security & Settings" card is gone. Its Commissioner Password, Site PIN and Welcome Screen Text blocks were the PIN system
+ * (D-108); its Commissioner Contact Email block is LIVE (the feedback mail address and the Weekly Summary helper read it) and moves to the League tab as its own
+ * card, `commissioner-contact-email` (data-comm-tab="rules").
  */
-function renderSecuritySettingsBody() {
+function commissionerContactEmailCardHTML() {
   const settings = getSettings();
-  return commPasswordCardHTML() + `
-          <div class="card-title mb-sm">Site PIN (front-door gate)</div>
-          <p class="text-muted text-xs mb-sm">The PIN required to open the app. Current: <strong class="font-display">${escHtml(getEffectiveSitePin())}</strong>. Players will need the new PIN on their next visit (existing unlocked devices stay unlocked).</p>
-          <div class="form-group">
-            <label class="form-label">New site PIN</label>
-            <input class="form-input" id="sec-site-pin-new" type="text" inputmode="numeric" maxlength="12" placeholder="4–12 characters" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Confirm new site PIN</label>
-            <input class="form-input" id="sec-site-pin-confirm" type="text" inputmode="numeric" maxlength="12" />
-          </div>
-          <button class="btn btn-primary btn-sm" id="sec-change-site-pin-btn">🚪 Change Site PIN</button>
-
-          <div class="divider"></div>
-          <div class="card-title mb-sm">Welcome Screen Text</div>
-          <p class="text-muted text-xs mb-sm">Shown above the PIN entry on the front gate. Title renders as two lines (small "welcome to" eyebrow + larger league name).</p>
-          <div class="form-group">
-            <label class="form-label">Title — top line</label>
-            <input class="form-input" id="sec-welcome-title-top" type="text" maxlength="40" placeholder="welcome to" value="${escHtml(settings.welcomeTitleTop||'')}" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Title — main line</label>
-            <input class="form-input" id="sec-welcome-title-main" type="text" maxlength="60" placeholder="irb pick 'ems" value="${escHtml(settings.welcomeTitleMain||'')}" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Welcome subtitle</label>
-            <input class="form-input" id="sec-welcome-subtitle" type="text" maxlength="80" placeholder="enter access pin" value="${escHtml(settings.welcomeSubtitle||'')}" />
-          </div>
-          <button class="btn btn-primary btn-sm" id="sec-save-welcome-btn">💾 Save Welcome Text</button>
-
-          <div class="divider"></div>
-          <div class="card-title mb-sm">Commissioner Contact Email</div>
-          <p class="text-muted text-xs mb-sm">Used by the Feedback form on the Rules tab and by the Weekly Summary helper. Leave blank to disable mailto-based features.</p>
+  return `
+      <div class="admin-section" data-comm-tab="rules" data-league-page="notifications" data-comm-card="commissioner-contact-email">
+        <div class="admin-section-title">Commissioner Contact Email</div>
+        <div class="card">
+          <p class="text-muted text-xs mb-sm">Used by the Feedback form and by the Weekly Summary helper. Leave blank to disable mailto-based features.</p>
           <div class="form-group">
             <label class="form-label">Email</label>
             <input class="form-input" id="sec-comm-email" type="email" placeholder="commissioner@example.com" value="${escHtml(settings.commissionerEmail||'')}" />
           </div>
-          <button class="btn btn-primary btn-sm" id="sec-save-comm-email-btn">💾 Save Email</button>`;
+          <button class="btn btn-primary btn-sm" id="sec-save-comm-email-btn">Save Email</button>
+        </div>
+      </div>`;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// D2 lane 6 (UN/PF-528, DI-757…764; mockup d2-admin-ia.html) — THE COMMISSIONER LEAGUE TAB (key `rules`, label "League")
+// ═══════════════════════════════════════════════════════════════════════════
+// js/comm-league-tab.js is the PURE half (rows model, the list card, the back bar, the page cards); THIS is its wiring: the live inputs, the cards that LEFT the Admin panel (their bodies are
+// the same functions the Admin panel called, so every handler still binds through bindCommEventListeners()), and the taps. A card moves; WHO MAY OPERATE it does not (DI-761): each moved
+// card is still gated by js/roles.js canOperateCard() against the verified role, and RLS still decides every write.
+/** The league's sports as the League > Sports page and the row value read them: [{ code, label, archived }]. Never throws. */
+function commLeagueSports() {
+  try {
+    const profiles = listProfiles();
+    // A league with NO competition rows yet (pre-backfill) is a one-sport league running its default sport: it reads the SAME as one with only the default row (S12: a one-sport Comm panel
+    // is byte-identical with and without competition rows), so the empty case is the default sport, not "no sports".
+    const comps = getLeagueCompetitions().filter(Boolean);
+    return (comps.length ? comps : [{ sport: getLeagueDefaultCompetition()?.sport || 'cfb', archivedAt: null }]).map((c) => {
+      const p = profiles.find((x) => x.key === c.sport) || null;
+      const code = p ? (p.code || p.label || String(c.sport).toUpperCase()) : String(c.sport).toUpperCase();
+      return { code, label: p ? (p.label || code) : code, archived: !!c.archivedAt };
+    });
+  } catch { return []; }
+}
+function commLeagueRows() {
+  const sports = commLeagueSports();
+  let accepting = null;
+  try { accepting = lsAcceptCached(getActiveLeagueId()); } catch { accepting = null; }
+  return CLT.leagueRowsModel({
+    leagueName: activeLeagueRow()?.leagueName || '',
+    accepting,
+    sportCodes: sports.filter((x) => !x.archived).map((x) => x.code),
+    sportCount: sports.length,
+    hasAlma: leagueHasAlmaAffinity(),
+    hasInvite: getAuthMode() === 'supabase',
+  });
+}
+function commLeagueTabHeadHTML() {
+  return CLT.renderLeagueBackBar({ escHtml, icon }) + CLT.renderLeagueListCard(commLeagueRows(), { escHtml, icon });
+}
+/** Is this moved card operable by THIS viewer? The roles table is the verified-membership gate; the credential-free local mode has no roles (and no shared data), so it shows them. */
+function commLeagueCanOperate(cardId, { viewer = null, league = null, supabase = getAuthMode() === 'supabase' } = {}) {
+  if (!supabase) return true;
+  try {
+    const m = activeLeagueRow();
+    const lg = league || (m ? { id: m.leagueId, name: m.leagueName, pilot: m.pilot === true } : null);
+    return canOperateCard(cardId, viewer || composeAdminViewer(), lg);
+  } catch { return false; }
+}
+/** Test seam (reviewer B4): the roles gate on the moved cards, with an injected viewer and league so a viewer who can OPEN the panel but is not commissioner of the active league is reachable. */
+export const _commLeagueCanOperateForTest = commLeagueCanOperate;
+/** The League tab's page cards that are not already inline in renderCommPage(): Competition & rules' Randomize shortcut, the Sports page, and Advanced (the creation facts, then the tools that used to live in Admin > Data). */
+function commLeagueCommissionerCardsHTML({ settings }) {
+  const out = [];
+  const card = (o) => CLT.leaguePageCard({ ...o, escHtml });
+  // Competition & rules: the Randomize Picks Shortcut (a league rule; commissioner scope). The obligations switch (F-1) has its OWN anchor in the League Rules card, so it
+  // survives this card being withheld.
+  if (commLeagueCanOperate('randomize-picks-shortcut')) {
+    out.push(card({ page: 'rules', cardId: 'randomize-picks-shortcut', title: 'Randomize Picks Shortcut', bodyHTML: renderRandomizePicksBody({ settings }) }));
+  }
+  // Sports: the league's sports with Active or Archived, and one line saying the sport's own settings (format, lines, obligations, archive) are on Comm > Week for now.
+  const sports = commLeagueSports();
+  if (sports.length) out.push(card({ page: 'sports', cardId: 'league-sports', title: 'Sports', flush: true, bodyHTML: CLT.sportsPageBody(sports, { escHtml }) }));
+  // Advanced: the creation facts that are actually on (read-only), then the commissioner tools in their existing confirmations, the destructive ones LAST (Data Management ends the page).
+  // Recalculate Finalized Weeks can only refuse in a shared league (finalize_week() is the one results writer), so it is left OFF the page there (DI-770: a dead control is not shown).
+  const facts = CLT.advancedFactsBody(newLeagueOnRows({ serverJobs: settings.serverJobs || {} }), { escHtml, icon });
+  if (facts) out.push(card({ page: 'advanced', cardId: 'league-facts', title: CLT.LEAGUE_TAB_COPY.advancedFactsTitle, bodyHTML: facts }));
+  const TOOLS = [
+    ['obligation-corrections', 'Obligation Corrections', () => renderObligationCorrectionsAdminSectionHTML(), true],
+    ['recalculate-finalized-weeks', 'Recalculate Finalized Weeks', () => renderRecalculateFinalizedWeeksAdminSectionHTML(), !isSupabaseDataMode()],
+    ['chat-retention', 'Chat Retention', () => renderChatRetentionAdmin(), true],
+    ['chat-history', 'Chat History', () => renderChatEpochAdmin(), true],
+    ['data-management', 'Data Management', () => renderDataManagementBody(), true],
+  ];
+  for (const [id, title, body, offered] of TOOLS) {
+    if (offered && commLeagueCanOperate(id)) out.push(card({ page: 'advanced', cardId: id, title, bodyHTML: body() }));
+  }
+  return out.join('\n');
+}
+/** Apply a League page to the panel: the data attribute CSS keys on, the back bar's title, and the focus (the title takes it, as a pushed screen's does). */
+function syncLeagueSwipeBack() { setSwipeBackSurface(state.commTab === 'rules' && state.leaguePage !== 'list'); }
+function applyLeaguePage(c, page) {
+  c.setAttribute('data-league-view', page);
+  syncLeagueSwipeBack();
+  const title = c.querySelector('[data-league-bar-title]');
+  if (title) title.textContent = CLT.leaguePageTitle(page) || '';
+}
+/** Open a page of the League tab (or 'list'). An unknown or no-longer-offered page is the list. Returns true when the panel changed. */
+export function setLeaguePage(page, { source = 'tap' } = {}) {
+  const c = document.getElementById('page-commissioner');
+  if (!c) return false;
+  const next = CLT.resolveLeaguePage(page, commLeagueRows());
+  if (state.leaguePage === next && c.getAttribute('data-league-view') === next) return false;
+  state.leaguePage = next;
+  applyLeaguePage(c, next);
+  if (source === 'tap') { window.scrollTo({ top: 0 }); haptic('selection'); }
+  // a pushed page's title takes focus (VoiceOver announces where you are); the list returns focus to the row that opened it
+  if (next !== 'list') { try { c.querySelector('[data-league-bar-title]')?.focus?.({ preventScroll: true }); } catch {} }
+  else { try { [...c.querySelectorAll('[data-league-nav]')].find((b) => b.getAttribute('data-league-nav') === (state.leaguePageFrom || 'details'))?.focus?.({ preventScroll: true }); } catch {} }
+  return true;
+}
+function onCommLeagueNav(key) {
+  if (key === 'details') { showLeaguePageOverlay({ view: 'settings' }); return; }
+  if (key === 'invite') {
+    // F-9 (release review): ONE component, two doors (DI-759 / DI-729 / DI-506): the row opens the same Invite sheet "Invite Friends" opens, not the Members tab.
+    haptic('light'); openInviteSheet();
+    return;
+  }
+  state.leaguePageFrom = key;
+  setLeaguePage(key);
+}
+function bindCommLeagueTab(c) {
+  state.leaguePage = CLT.resolveLeaguePage(state.leaguePage, commLeagueRows());
+  applyLeaguePage(c, state.leaguePage);
+  c.querySelectorAll('[data-league-nav]').forEach((btn) => btn.addEventListener('click', () => onCommLeagueNav(btn.getAttribute('data-league-nav'))));
+  c.querySelector('[data-league-back]')?.addEventListener('click', () => setLeaguePage('list'));
+}
+export const _setLeaguePageForTest = setLeaguePage;
 
 /**
  * Admin → Data "Data Management" card (DI-320 §Data) — relocated whole (UX
@@ -21300,7 +21656,7 @@ function renderDataManagementBody() {
           </div>
           <div class="divider"></div>
           <div class="form-group">
-            ${isSupabaseDataMode() ? `<p class="text-muted text-xs mb-sm" id="reset-demo-note">Full Factory Reset is not available on the live league — it would write demo data over everyone's real season.</p>` : `<p class="text-muted text-xs mb-sm">Full reset requires Commissioner password. Deletes ALL data.</p>`}
+            ${isSupabaseDataMode() ? `<p class="text-muted text-xs mb-sm" id="reset-demo-note">A full reset is not offered in a shared league: it would overwrite everyone's real season.</p>` : `<p class="text-muted text-xs mb-sm">Full reset deletes ALL data and asks you to confirm first.</p>`}
             ` + dataActionsRowHTML() + `
           </div>`;
 }
@@ -21671,12 +22027,353 @@ export function renderTiebreakerGuessesAdmin(week, players, actualTB) {
     </div>${blindNote}`;
 }
 
+// ═══ D2 lane 1 (UN-541 / PF-541, DI-1015..1021) — OBLIGATIONS ON OR OFF ═══════════════════════════════════════════════════════════════════════════════════�
+// `obligationsOn(competitionId)` (js/competition.js) is the ONE reader of the setting. An obligation belongs to a week (or to a competitive-week GROUP: its `weekId` is then the group id), and a week to its
+// competition, so "is this obligation shown" is `obligationsOn(that competition)`; an obligation with no week (a manual one, the 2K25 carryover) follows the league default. OFF hides every obligation-shaped
+// surface of that sport and stops finalize from creating any; nothing is deleted, voided or waived, so turning it back on shows what was there (DI-1018). The pinned entry points that call this are listed in
+// obligationstoggletest [6] (P-11): any other obligation render path fails there.
+/** The competition a week or a group id resolves to, or null (no such week: the league default answers). */
+function obligationCompetitionId(weekOrGroupId) {
+  const id = weekOrGroupId ? String(weekOrGroupId) : '';
+  if (!id) return null;
+  let w = null;
+  try { w = getWeek(id) || getWeeks().find((x) => getEffectiveGroupId(x) === id) || null; } catch { w = null; }
+  if (!w) return null;
+  try { return competitionForWeek(w)?.id || null; } catch { return null; }
+}
+/** Whether obligations are ON for the week (or group) with this id. */
+function obligationsOnFor(weekOrGroupId) { return obligationsOn(obligationCompetitionId(weekOrGroupId)); }
+/** An obligation list narrowed to the sports whose obligations are ON (the render paths' ONE filter). */
+const shownObligations = (list) => (Array.isArray(list) ? list : []).filter((o) => obligationsOnFor(o && o.weekId));
+/** The context sport's switch (Standings' Weekly History is one sport's). A league with one sport or none: the league default. */
+function contextObligationsOn() { let id = null; try { id = getContextCompetition()?.id || null; } catch { id = null; } return obligationsOn(id); }
+
 function currentSeasonObligations() {
   // v0.17.0 — demo-week obligations are excluded everywhere; anything a demo
   // finalize created in the past is invisible and purgeable below.
   const demoIds = new Set(getWeeks().filter(w=>w.dataSourceMode==='demo').map(w=>w.weekId));
-  return getObligations().filter(o=>!demoIds.has(o.weekId) && !String(o.obligationId).startsWith('ob_2025_'));
+  return shownObligations(getObligations().filter(o=>!demoIds.has(o.weekId) && !String(o.obligationId).startsWith('ob_2025_')));   // D2 lane 1 (DI-1017): only the sports whose obligations are ON
 }
+
+// ── the Obligations switch: the row, the confirmation and the write (DI-1015, 1016, 1018, 1020) ──────────────────────────────────────────────────────────────────────
+// The row is a pure builder (js/obligations-toggle.js) for the Competition & rules page's `data-league-slot="obligations"` (the league default) and a sport's page (`scope: 'sport'`); this block is its taps and its
+// write. COMMISSIONER ONLY (a player gets no row: the builder returns ''). A tap never flips anything: it opens the confirmation (DI-1018), and only the confirmed tap writes, through the settings seam (the league
+// default: `obligationsEnabled`, a shallow top-level key) or the competition row (`competitions.settings`), then waits for the SERVER to acknowledge it. A failed save leaves the switch where it was and says so.
+const _obtPhase = new Map();   // `${scope}:${competitionId}` -> 'saving' | 'failed'
+const obtKey = (scope, competitionId) => `${scope === 'sport' ? 'sport' : 'league'}:${competitionId || ''}`;
+let _obt = null;   // the open confirmation: { scope, competitionId, turningOff }
+const obtCanEdit = () => { try { return getSession()?.isAdmin === true && !isContentWithheld(); } catch { return false; } };
+function obtCompetition(id) { try { return getLeagueCompetitions().find((c) => c.id === id) || null; } catch { return null; } }
+/** The unpaid obligations a switch-off would hide, among those the TIER being switched controls (a sport's own; or every sport the league default still answers for). */
+function obtUnpaidCount(scope, competitionId) {
+  const demoIds = new Set(getWeeks().filter((w) => w.dataSourceMode === 'demo').map((w) => w.weekId));
+  return getObligations().filter((o) => {
+    if (!isObligationActive(o) || demoIds.has(o.weekId) || String(o.obligationId).startsWith('ob_2025_')) return false;
+    const st = o.status == null || o.status === '' ? 'unpaid' : o.status;
+    if (st !== 'unpaid' && st !== 'pending') return false;
+    const cid = obligationCompetitionId(o.weekId);
+    return scope === 'sport' ? cid === competitionId : obligationsSetBy(cid) !== 'competition';
+  }).length;
+}
+/** The row for a slot, finished and escaped: '' for anyone who may not change it. */
+export function obligationsSwitchRowHTML({ scope = 'league', competitionId = '' } = {}) {
+  const sc = scope === 'sport' ? 'sport' : 'league';
+  const comp = sc === 'sport' ? obtCompetition(competitionId) : null;
+  if (sc === 'sport' && !comp) return '';
+  const phase = comp && comp.archivedAt ? 'readonly' : (_obtPhase.get(obtKey(sc, competitionId)) || 'ready');
+  return OBT.rowHTML({ value: sc === 'sport' ? obligationsOn(competitionId) : obligationsOn(null), phase, canEdit: obtCanEdit(), scope: sc, competitionId }, { escHtml });
+}
+/** F-1 (release review): the league default's Obligations switch, in the open at the top of League > Competition & rules (its own card: a switch row is a card in the League Settings vocabulary). '' for anyone who may not change it, so the slot never renders empty. */
+function obtLeagueSlotHTML() {
+  const obtLeagueRowHTML = obligationsSwitchRowHTML({ scope: 'league' });
+  return obtLeagueRowHTML ? `<div data-league-slot="obligations" class="mb-sm">${obtLeagueRowHTML}</div>` : '';
+}
+/** Re-draws every Obligations row that is on screen, in place (the page around it is not repainted). */
+function obtRepaintBlocks() {
+  try {
+    for (const el of [...document.querySelectorAll('.obt-block')]) {
+      const html = obligationsSwitchRowHTML({ scope: el.getAttribute('data-obt-scope') || 'league', competitionId: el.getAttribute('data-obt-competition') || '' });
+      const tmp = document.createElement('div'); tmp.innerHTML = html;
+      const fresh = tmp.firstElementChild || tmp.children[0];
+      if (fresh && el.parentNode) el.parentNode.replaceChild(fresh, el);
+      else if (!fresh) el.remove();
+    }
+  } catch (e) { console.warn('[obligations] the switch could not repaint', e); }
+}
+function obtAsk(block) {
+  if (!obtCanEdit() || !block) return;
+  const scope = block.getAttribute('data-obt-scope') === 'sport' ? 'sport' : 'league';
+  const competitionId = block.getAttribute('data-obt-competition') || '';
+  if (scope === 'sport') { const c = obtCompetition(competitionId); if (!c || c.archivedAt) return; }
+  if (_obtPhase.get(obtKey(scope, competitionId)) === 'saving') return;
+  const turningOff = (scope === 'sport' ? obligationsOn(competitionId) : obligationsOn(null)) === true;
+  _obt = { scope, competitionId, turningOff };
+  let label = OBT.OBT_COPY.leagueScope;
+  if (scope === 'sport') { try { label = leagueSports().find((x) => x.competitionId === competitionId)?.label || label; } catch { /* the league wording */ } }
+  lsShowActionSheet('obt-confirm', OBT.confirmSheetHTML({ turningOff, scopeLabel: label, unpaid: turningOff ? obtUnpaidCount(scope, competitionId) : 0, escHtml }));
+}
+/** The write: the settings seam (league) or the competition row (sport); the SERVER's answer decides what the row says. Never throws. */
+async function obtWrite({ scope, competitionId, value }) {
+  try {
+    if (scope === 'sport') {
+      const c = obtCompetition(competitionId);
+      if (!c) return 'failed';
+      saveLeagueCompetition({ ...c, settings: { ...(c.settings || {}), [OBT.OBT_KEY]: value } });
+      return await confirmSeamKey('cfbp_competitions');
+    }
+    saveSetting(OBT.OBT_KEY, value);
+    return await confirmSeamKey('cfbp_settings');
+  } catch (e) { console.warn('[obligations] the switch could not be written', e); return 'failed'; }
+}
+async function obtConfirm() {
+  const ask = _obt; _obt = null;
+  lsHideActionSheet({ restoreFocus: false });
+  if (!ask || !obtCanEdit()) return;
+  const key = obtKey(ask.scope, ask.competitionId);
+  const before = ask.scope === 'sport' ? obligationsOn(ask.competitionId) : obligationsOn(null);
+  const next = !before;
+  _obtPhase.set(key, 'saving'); obtRepaintBlocks();
+  const r = await obtWrite({ scope: ask.scope, competitionId: ask.competitionId, value: next });
+  if (r === 'saved') {
+    _obtPhase.delete(key); haptic('success'); obtRepaintBlocks();
+    try { if (state.currentTab === 'commissioner') renderCommPage(); else if (state.currentTab === 'leaderboard') renderLeaderboard(); } catch (e) { console.warn('[obligations] the page could not repaint', e); }
+    return;
+  }
+  // refused or unconfirmed: the switch goes back to where it was (a local write the server did not take is undone) and the row says so
+  await obtWrite({ scope: ask.scope, competitionId: ask.competitionId, value: before });
+  _obtPhase.set(key, 'failed'); haptic('error'); obtRepaintBlocks();
+}
+function obtOnClick(e) {
+  const el = e && e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-obt-action]') : null;
+  if (!el || el.getAttribute('data-obt-action') !== 'obt-toggle' || el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true') return;
+  obtAsk(el.closest('.obt-block'));
+}
+let _obtBound = false;
+function bindObtDelegate(d = (typeof document !== 'undefined' ? document : null)) {
+  if (_obtBound || !d || typeof d.addEventListener !== 'function') return false;
+  _obtBound = true;
+  d.addEventListener('click', obtOnClick);
+  return true;
+}
+export const _bindObtDelegateForTest = (d) => bindObtDelegate(d);
+export function _resetObtForTest() { _obtBound = false; _obt = null; _obtPhase.clear(); }
+export const _obtWriteForTest = (o) => obtWrite(o);
+export const _obligationsOnForForTest = (id) => obligationsOnFor(id);
+export const _exportObligationsCSVForTest = () => exportObligationsCSV();
+
+// ═══ D2 lane 1 batch 3 (UN/PF-542; DI-1022..1030) — SEASON STAKES: the season-ender punishment vote on Standings ═══════════════════════════════════════════════════════════
+// The pure halves are js/season-punishment.js (the words, the majority arithmetic, the card model and markup) and js/season-punishment-store.js (the seven server calls and the cache); the server (migration
+// 0072) owns every rule. This block owns the taps: ONE card at the top of the sport's Standings, the propose sheet, the confirmations, and "Season ended" (the commissioner's app names last place from the
+// standings it computed and sends a hash of them, so a dispute can be checked). A vote never leaves the voter: the card shows how many have voted, never how anyone voted. Nothing here is a push or a
+// banner (in-app only). Silence is the failure mode of a read: no card appears when the server cannot say.
+const _stk = { sheet: null, phase: 'idle', failed: '', submit: null, confirm: null };
+configureSeasonStakes({ getClient: () => getSupabaseClient(), onChange: () => { try { stkRepaint(); } catch (e) { console.warn('[season-stakes] the card could not repaint', e); } } });
+const stkOn = () => { try { return getAuthMode() === 'supabase' && !isContentWithheld() && !!getAccountUserId() && !!getActiveLeagueId() && !!getContextCompetition(); } catch { return false; } };
+const stkIds = () => ({ leagueId: getActiveLeagueId() || '', competitionId: (getContextCompetition() || {}).id || '' });
+function stkSportLabel(comp) {
+  try { if (!isMultiSport()) return ''; return leagueSports().find((x) => x.competitionId === comp.id)?.label || ''; } catch { return ''; }
+}
+/** The sport's weeks are settled: at least one Final and none Open, Locked or Live (the server re-checks; this only decides whether the Season ended button is offered). */
+function stkSettled() {
+  try {
+    const ws = getContextWeeks().filter((w) => w.dataSourceMode !== 'demo');
+    return ws.some((w) => w.status === WEEK_STATUS.FINAL) && !ws.some((w) => w.status === WEEK_STATUS.OPEN || w.status === WEEK_STATUS.LOCKED || w.status === WEEK_STATUS.LIVE);
+  } catch { return false; }
+}
+function stkWhen(state) {
+  try {
+    const t = state && state.punishment && state.punishment.closesAt;
+    if (!t) return '';
+    return new Date(t).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: getTimezone() || undefined });
+  } catch { return ''; }
+}
+function stkEntry() { const { leagueId, competitionId } = stkIds(); return leagueId && competitionId ? SPS.getSeasonStakes(leagueId, competitionId) : null; }
+function stkModel() {
+  if (!stkOn()) return null;
+  const comp = getContextCompetition();
+  if (!comp || obligationsOn(comp.id) === false) return null;
+  const e = stkEntry();
+  if (!e || e.status !== 'ready' || !e.state) return null;
+  return SP.cardModel({ state: e.state, sport: stkSportLabel(comp), settled: stkSettled(), closesText: stkWhen(e.state), phase: _stk.phase });
+}
+/** Draws the card into its host (the top of Standings). Unchanged markup is not touched, so a repaint never lands under a finger. */
+function stkRepaint() {
+  const host = typeof document !== 'undefined' ? document.getElementById('stk-host') : null;
+  if (!host) return;
+  const html = SP.cardHTML(stkModel(), { escHtml, icon, failed: _stk.failed });
+  // keyed on the MARKUP ITSELF (reviewer B2): "3 of 6" and "4 of 6", Yes and No, are the same length, so a length key would drop the fresh read and leave the count one read behind
+  if (host._stkHtml === html && host.innerHTML) return;
+  host.innerHTML = html;
+  host._stkHtml = html;
+}
+/** Standings calls this after it paints: the cached card at once, then the fresh read (cached, then fresh). */
+function stkPaintHost() {
+  try {
+    stkRepaint();
+    if (!stkOn()) return;
+    SPS.loadSeasonStakes(stkIds()).catch(() => {});
+  } catch (e) { console.warn('[season-stakes] the card could not be painted', e); }
+}
+function stkFollows(event) { try { if (event === 'SIGNED_OUT' || event === 'SWITCH_START') { SPS.clearSeasonStakes(); stkRelease(); _stk.phase = 'idle'; _stk.failed = ''; } } catch (e) { console.warn('[season-stakes] could not follow the sign-out', e); } }
+function stkRelease() { const s = _stk.submit; _stk.submit = null; _stk.sheet = null; _stk.confirm = null; try { s && s.destroy(); } catch { /* gone */ } }
+const stkFailText = (kind) => (kind === 'not_open' ? SP.SP_COPY.notOpen : kind === 'season_not_final' ? SP.SP_COPY.notFinal : kind === 'correction_closed' || kind === 'already_corrected' ? SP.SP_COPY.correctionClosed : SP.SP_COPY.failedAction);
+
+// ── the propose sheet (mockup frame 3) ──────────────────────────────────────────────────────────────────────────────────────────────────────
+function stkEligibleNow() { const e = stkEntry(); return Number(e && e.state && e.state.eligibleNow) || 0; }
+function stkSheetHTML() {
+  const s = _stk.sheet || { text: '', hours: SP.SP_DEFAULT_WINDOW, error: '' };
+  return SP.proposeSheetHTML({ eligible: stkEligibleNow(), text: s.text, hours: s.hours, error: s.error, submitHTML: submitControlHTML({ id: 'stk-send', idleLabel: SP.SP_COPY.send, extraClass: 'btn-primary btn-block' }), icon, escHtml });
+}
+function stkOpenPropose() {
+  const m = stkModel();
+  if (!m || (m.kind !== 'propose' && !m.canProposeAgain) || _stk.phase === 'saving') return;
+  stkRelease();
+  _stk.sheet = { text: '', hours: SP.SP_DEFAULT_WINDOW, error: '' };
+  _stk.failed = '';
+  lsShowActionSheet('stk-propose', stkSheetHTML(), { noHaptic: true });
+  stkBindSend();
+  try { lsById(LS_ACTION_LAYER_ID)?.querySelector('#stk-text')?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+}
+function stkBindSend() {
+  const l = lsById(LS_ACTION_LAYER_ID);
+  const btn = l && l.querySelector('#stk-send');
+  if (!btn || !_stk.sheet) return;
+  try { _stk.submit && _stk.submit.destroy(); } catch { /* gone */ }
+  _stk.submit = attachSubmit({ button: btn, statusEl: l.querySelector('.ss-status') || null, idleLabel: SP.SP_COPY.send, id: 'stk-send', failedText: SP.SP_COPY.failedAction, dismissOnSaved: true, listen: false,
+    onDismiss: () => { stkRelease(); lsHideActionSheet({ restoreFocus: false }); stkRepaint(); }, run: () => stkRunSend() });
+}
+async function stkRunSend() {
+  const s = _stk.sheet;
+  if (!s) return 'unchanged';
+  const v = SP.validateText(s.text);
+  if (!v.ok) return 'unchanged';
+  const r = await SPS.sendProposal({ ...stkIds(), text: v.value, hours: s.hours });
+  if (r === 'saved') return 'saved';
+  if (r === 'bad_text') { s.error = SP.SP_COPY.errors.control; stkPatchError(); return 'unchanged'; }
+  return 'failed';
+}
+function stkPatchError() {
+  const l = lsById(LS_ACTION_LAYER_ID), s = _stk.sheet;
+  const el = l && l.querySelector('#stk-err');
+  if (!el || !s) return;
+  el.textContent = s.error || '';
+  if (s.error) el.removeAttribute('hidden'); else el.setAttribute('hidden', '');
+  try { l.querySelector('#stk-text')?.setAttribute('aria-invalid', s.error ? 'true' : 'false'); } catch { /* a courtesy */ }
+}
+function stkOnInput(el) {
+  const s = _stk.sheet;
+  if (!s) return;
+  s.text = String(el.value || '');
+  const l = lsById(LS_ACTION_LAYER_ID);
+  const c = l && l.querySelector('#stk-count');
+  if (c) c.textContent = SP.SP_COPY.textCount(Array.from(s.text).length);
+  if (s.error) { s.error = ''; stkPatchError(); }
+}
+function stkOnSendTap() {
+  const s = _stk.sheet;
+  if (!s || !_stk.submit) return;
+  const v = SP.validateText(s.text);
+  if (!v.ok) { s.error = v.message; stkPatchError(); haptic('error'); try { lsById(LS_ACTION_LAYER_ID)?.querySelector('#stk-text')?.focus?.({ preventScroll: true }); } catch { /* courtesy */ } return; }
+  if (v.value !== s.text) { s.text = v.value; try { const f = lsById(LS_ACTION_LAYER_ID)?.querySelector('#stk-text'); if (f) f.value = v.value; } catch { /* courtesy */ } }
+  _stk.submit.press();
+}
+function stkPickWindow(hours) {
+  const s = _stk.sheet;
+  if (!s || !SP.SP_WINDOWS.some((w) => w.hours === hours)) return;
+  s.hours = hours;
+  const l = lsById(LS_ACTION_LAYER_ID);
+  if (!l) return;
+  haptic('selection');
+  for (const b of [...l.querySelectorAll('[data-stk-action="stk-window"]')]) b.setAttribute('aria-checked', Number(b.getAttribute('data-hours')) === hours ? 'true' : 'false');
+}
+
+// ── the card's taps: vote, withdraw, Season ended, correct, carried out ────────────────────────────────────────────────────────────────────
+async function stkRun(task, { okHaptic = true, failedText = '' } = {}) {
+  if (_stk.phase === 'saving') return;
+  _stk.phase = 'saving'; _stk.failed = ''; stkRepaint();
+  let r = 'failed';
+  try { r = await task(); } catch { r = 'failed'; }
+  _stk.phase = 'idle';
+  if (r === 'saved') { if (okHaptic) haptic('success'); _stk.failed = ''; }
+  else {
+    haptic('error');
+    _stk.failed = r === 'not_open' || r === 'not_voting' || r === 'not_locked' ? SP.SP_COPY.notOpen : (r === 'failed' && failedText) || stkFailText(r);
+    if (r === 'not_open' || r === 'not_voting' || r === 'not_locked' || r === 'already_ended') { try { SPS.loadSeasonStakes({ ...stkIds(), force: true }).catch(() => {}); } catch { /* the next paint reads again */ } }
+  }
+  stkRepaint();
+}
+function stkVote(yes) {
+  const m = stkModel();
+  if (!m || m.kind !== 'voting' || !m.amEligible) return;
+  stkRun(() => SPS.castVote({ ...stkIds(), id: m.id, yes }), { failedText: SP.SP_COPY.failedVote });
+}
+/** The names and ids the commissioner's app would name as last place, read NOW from the standings the page shows. `ids` is [] when there are no standings to name from. */
+function stkLastPlace() {
+  const rows = seasonStandingsRows();
+  const ids = SP.lastPlaceIds(rows);
+  const names = ids.map((id) => (rows.find((r) => String(r.playerId) === String(id)) || {}).displayName || '').filter(Boolean);
+  return { rows, ids, names };
+}
+function stkAsk(kind) {
+  const m = stkModel();
+  if (!m || _stk.phase === 'saving') return;
+  if (kind === 'end' && !(m.kind === 'locked' && m.canEnd)) return;
+  if (kind === 'correct' && !(m.kind === 'ended' && m.canCorrect)) return;
+  if (kind === 'withdraw' && !(m.kind === 'voting' && m.isCommissioner)) return;
+  const lp = kind === 'withdraw' ? { ids: [], names: [] } : stkLastPlace();
+  if (kind !== 'withdraw' && lp.ids.length === 0) { _stk.failed = SP.SP_COPY.failedAction; stkRepaint(); return; }
+  stkRelease();
+  _stk.confirm = { kind, id: m.id };
+  lsShowActionSheet('stk-confirm', SP.confirmSheetHTML({ kind, names: SP.namesList(lp.names), escHtml }));
+}
+async function stkConfirm(kind) {
+  const ask = _stk.confirm; _stk.confirm = null;
+  lsHideActionSheet({ restoreFocus: false });
+  const m = stkModel();
+  if (!ask || ask.kind !== kind || !m || m.id !== ask.id) return;
+  if (kind === 'withdraw') { stkRun(() => SPS.withdrawProposal({ ...stkIds(), id: ask.id })); return; }
+  stkRun(async () => {
+    const lp = stkLastPlace();   // read again at the confirming tap: the hash is of the standings the commissioner's app named from NOW
+    if (!lp.ids.length) return 'failed';
+    const ids = stkIds();
+    const entry = SPS.getSeasonStakes(ids.leagueId, ids.competitionId);
+    const season = String((entry && entry.state && entry.state.season) || '');   // the SERVER's season label for this sport (reviewer N4), never the device's setting
+    const hash = await SP.standingsHash(lp.rows, { competitionId: ids.competitionId, season });
+    const args = { ...ids, id: ask.id, memberIds: lp.ids, hash };
+    return kind === 'correct' ? SPS.correctLastPlace(args) : SPS.endSeason(args);
+  });
+}
+function stkOnClick(e) {
+  const t = e && e.target;
+  if (!t || typeof t.closest !== 'function') return;
+  const send = t.closest('#stk-send');
+  if (send) { if (!send.hasAttribute('disabled')) stkOnSendTap(); return; }
+  const el = t.closest('[data-stk-action]');
+  if (!el || el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true') return;
+  switch (el.getAttribute('data-stk-action')) {
+    case 'stk-propose': stkOpenPropose(); break;
+    case 'stk-cancel': lsCancelPrompt(); break;
+    case 'stk-window': stkPickWindow(Number(el.getAttribute('data-hours'))); break;
+    case 'stk-yes': stkVote(true); break;
+    case 'stk-no': stkVote(false); break;
+    case 'stk-withdraw': stkAsk('withdraw'); break;
+    case 'stk-end': stkAsk('end'); break;
+    case 'stk-correct': stkAsk('correct'); break;
+    case 'stk-carried': { const m = stkModel(); if (m && m.kind === 'ended' && m.canMarkCarried) stkRun(() => SPS.markCarriedOut({ ...stkIds(), id: m.id })); break; }
+    default: break;
+  }
+}
+let _stkBound = false;
+function bindStkDelegate(d = (typeof document !== 'undefined' ? document : null)) {
+  if (_stkBound || !d || typeof d.addEventListener !== 'function') return false;
+  _stkBound = true;
+  d.addEventListener('click', stkOnClick);
+  d.addEventListener('input', (e) => { const t = e && e.target; if (t && typeof t.getAttribute === 'function' && t.getAttribute('data-stk-field') === 'text') stkOnInput(t); });
+  return true;
+}
+export const _bindStkDelegateForTest = (d) => bindStkDelegate(d);
+export function _resetStkForTest() { _stkBound = false; stkRelease(); _stk.phase = 'idle'; _stk.failed = ''; SPS._resetSeasonStakesForTest(); configureSeasonStakes({ getClient: () => getSupabaseClient(), onChange: () => { try { stkRepaint(); } catch { /* test */ } } }); }
+export const _stkForTest = { model: () => stkModel(), repaint: () => stkRepaint(), paintHost: () => stkPaintHost(), open: () => stkOpenPropose(), state: () => ({ ..._stk, submit: !!_stk.submit }), follows: (ev) => stkFollows(ev), confirm: (k) => stkConfirm(k), ask: (k) => stkAsk(k), vote: (y) => stkVote(y), lastPlace: () => stkLastPlace() };
 
 // ─── DEBT-PAYMENT APPROVAL (UN-89) ─────────────────────────────────────────
 // Badge + action markup shared by EVERY render path that shows an
@@ -21789,17 +22486,22 @@ export function obligationActionsHTML(status, ob, sess, opts) {
  *  store rather than trusting the caller — the UI hides buttons a viewer
  *  shouldn't see, but a sufficiently motivated person could DOM one in, and
  *  this is the actual permission boundary (existing pattern in this file). */
-function handleObligationAction(obId, action, { rerender = null } = {}) {
-  const ob = getObligations().find(o => o.obligationId === obId); if (!ob) return;
+function handleObligationAction(obId, action, { rerender = null, deferToast = false } = {}) {
+  // D2 lane 1 (UN-531 / DI-784): Mark Paid and Confirm Paid are the shared submission-state control now. A toast that says "Marked paid" before the server has said so would be the false reassurance
+  // the module exists to end, so with `deferToast` the transition is written and the toast is HANDED BACK ({ changed, toast: [message, kind] }) for the caller to show once the answer is Saved.
+  // Without it (every other caller, the test hook) the toast shows at once, exactly as before.
+  const out = { changed: false, toast: null };
+  const say = (message, kind) => { if (deferToast) out.toast = [message, kind]; else showToast(message, kind); };
+  const ob = getObligations().find(o => o.obligationId === obId); if (!ob) return out;
   // UN-126 — a voided/merged-away obligation is no longer a live debt; the
   // UI never renders an action button for one (see renderObligationsAdmin /
   // renderLeaderboard), but this is the actual permission boundary, same
   // reasoning as the role re-derivation two lines down.
-  if (!isObligationActive(ob)) { showToast('This obligation was voided — see Data → Obligation Corrections', 'error'); return; }
+  if (!isObligationActive(ob)) { showToast('This obligation was voided — see Data → Obligation Corrections', 'error'); return out; }
   const sess = getSession();
   const role = obligationRole(sess, ob);
   const next = obligationNextStatus(ob.status, role, action);
-  if (!next) { showToast("You don't have permission to do that", 'error'); return; }
+  if (!next) { showToast("You don't have permission to do that", 'error'); return out; }
   const payerName = getPlayer(ob.payerPlayerId)?.displayName || '?';
   const recipientName = getPlayer(ob.recipientPlayerId)?.displayName || '?';
 
@@ -21810,25 +22512,61 @@ function handleObligationAction(obId, action, { rerender = null } = {}) {
       payerName, recipientName, prize: ob.amountOrPrize || '', withReason: true,
       onConfirm: (reason) => applyObligationDeny(obId, reason, rerender),
     });
-    return;
+    return out;
   } else if (action === 'mark' && next === 'pending') {
     saveObligation({ ...ob, status: next, deniedReason: null });
-    showToast(`Marked as paid — waiting on ${recipientName} or the commissioner to confirm.`, 'warning');
+    out.changed = true;
+    say(`Marked as paid — waiting on ${recipientName} or the commissioner to confirm.`, 'warning');
   } else if (action === 'mark' && next === 'paid') {
     const settled = { ...ob, status: next, paidAt: new Date().toISOString(), deniedReason: null };
     saveObligation(settled);
+    out.changed = true;
     // Groups A/B (2026-09-10, DI-B4) — "settled," both parties.
     try { postObligationSettledNotice(settled); } catch (e) { console.warn('[lifecycle] obligation-settled hook failed', e); }
-    showToast(role === 'creditor' ? 'Confirmed — marked paid.' : 'Marked paid ✅', 'success');
+    say(role === 'creditor' ? 'Confirmed — marked paid.' : 'Marked paid ✅', 'success');
   } else if (action === 'confirm') {
     const settled = { ...ob, status: next, paidAt: new Date().toISOString(), deniedReason: null };
     saveObligation(settled);
+    out.changed = true;
     try { postObligationSettledNotice(settled); } catch (e) { console.warn('[lifecycle] obligation-settled hook failed', e); }
-    showToast(`Confirmed — ${payerName} paid ${recipientName}.`, 'success');
+    say(`Confirmed — ${payerName} paid ${recipientName}.`, 'success');
   } else if (action === 'undo') {
     // 0046 (F1, review): Undo puts a paid row back to Unpaid WITHOUT a reason — a reason from an earlier denial must never reappear.
     saveObligation({ ...ob, status: next, paidAt: null, deniedReason: null });
+    out.changed = true;
   }
+  return out;
+}
+
+/**
+ * D2 lane 1 (UN-531 / PF-531, DI-783/784/785) - Mark Paid / Confirm Paid on the CURRENT-SEASON obligations (Standings' Weekly History and the Comm Obligations card) bind to the shared submission-state
+ * control. Returns true when the button is one of those two actions (the caller then skips its own click wiring), false for Deny / Undo / anything else, which keep their existing paths.
+ *   - the tap writes the transition to the seam once; "Saving…" holds until the adapter says whether the SERVER has the obligations key (flushAndConfirm, via confirmSeamKey);
+ *   - Saved shows for 600 ms, then the page repaints with the new status and the toast the transition always showed (a toast before the server answered would be false reassurance);
+ *   - a refused write or an unreachable server leaves the button as Try Again with the sentence under it, and a Try Again re-asks about the SAME write, it never applies the transition twice;
+ *   - the machine is keyed by obligation and action, so a repaint that replaces the button (the page re-renders on a realtime update) re-binds the new button to the live machine.
+ */
+function bindObligationSubmit(btn, { repaint } = {}) {
+  const act = btn.dataset.obAction;
+  if (act !== 'mark' && act !== 'confirm') return false;
+  const obId = btn.dataset.obId;
+  const key = `ob:${act}:${obId}`;
+  const idleLabel = (btn.textContent || '').trim() || (act === 'confirm' ? 'Confirm' : 'Mark Paid');
+  let wrote = false;
+  let toast = null;
+  attachSubmit({
+    button: btn, idleLabel, id: key, listen: true, dismissOnSaved: true,
+    onDismiss: () => { if (toast) showToast(toast[0], toast[1]); if (typeof repaint === 'function') repaint(); },
+    run: async () => {
+      if (!wrote) {
+        const r = handleObligationAction(obId, act, { deferToast: true });
+        if (!r || !r.changed) return 'unchanged';   // not permitted / voided / gone: nothing was written, so nothing is saved or failed - the control goes back to idle (the toast already said why)
+        wrote = true; toast = r.toast;
+      }
+      return confirmSeamKey('cfbp_obligations');
+    },
+  });
+  return true;
 }
 
 /** The CONFIRMED Deny. Re-derived from the store at the moment of confirming: the sheet may have been open while
@@ -21980,6 +22718,7 @@ function obConfirmDeny() {
 function renderSeason2025OutstandingSection() {
   // N1 (DI-432 §7) — the 2K25 ledger is the PILOT league's; another league's Standings never carries it.
   if (!isPilotOnlyAllowed('season2025Record')) return '';
+  if (!obligationsOn(null)) return '';   // D2 lane 1 (DI-1017): a league that plays for fun shows no ledger of what is owed
   const paidMap = getSettings().ob2025 || {};
   const rows = season2025Obligations();
   // "Open" = anything not fully PAID — pending rows still owe the money, so
@@ -22085,12 +22824,10 @@ function bindSeason2025Sections(c) {
     const inFlight = _ob2025InFlight.get(btn.dataset.obId);
     if (inFlight) {
       // Every button on that row is disabled; only the one that was TAPPED says "Saving…" (the other keeps its label, quietly disabled).
+      // D2 lane 1 (DI-783): the tapped button is painted by the shared submission-state module (its spinner, copy and aria-busy), not by a hand-written label.
       btn.disabled = true;
       btn.setAttribute('aria-disabled', 'true');
-      if (btn.dataset.obAction === inFlight) {
-        btn.setAttribute('aria-busy', 'true');
-        btn.textContent = 'Saving…';
-      }
+      if (btn.dataset.obAction === inFlight) paintSubmitControl(btn, 'pending', (btn.textContent || '').trim() || 'Mark Paid');
       return;
     }
     btn.addEventListener('click',()=>{
@@ -22373,6 +23110,7 @@ export function renderObligationCorrectionsAdminSectionHTML() {
 export function renderSeason2025ObligationsAdmin() {
   // N1 (DI-432 §7) — the 2K25 carryover ledger is the PILOT league's; another league's Comm never carries it.
   if (!isPilotOnlyAllowed('season2025Record')) return '';
+  if (!obligationsOn(null)) return '';   // D2 lane 1 (DI-1017)
   const paidMap = getSettings().ob2025 || {};
   const rows = season2025Obligations();
   const sess = getSession();
@@ -22435,8 +23173,8 @@ function renderChatEpochAdmin() {
   return `
     <p class="text-muted text-xs mb-sm">${cleared
       ? `✅ Chat history before ${escHtml(fmtDate(getChatEpochSetAt()))} is hidden (${stats.hiddenCount} messages). Nothing is deleted — this only affects what renders.`
-      : `Full Locker Room history is visible, including anything sent during testing.`}</p>
-    <button class="btn btn-danger btn-sm" id="chat-epoch-clear-btn">${cleared ? '🧹 Clear Chat Again' : '🧹 Clear Chat History Before Launch'}</button>`;
+      : `The full Locker Room history is visible.`}</p>
+    <button class="btn btn-danger btn-sm" id="chat-epoch-clear-btn">${cleared ? '🧹 Hide Earlier Chat Again' : '🧹 Hide Earlier Chat History'}</button>`;
 }
 
 // ─── DI-425 (UN-380, coordinator addendum to the UX Revamp v0.27.2 batch,
@@ -22502,36 +23240,6 @@ function renderChatDiagnosticsBody() {
       <button class="btn btn-secondary btn-sm" id="chat-diag-btn">Run test</button>
       <span class="text-muted text-xs" id="chat-diag-out"></span>
     </div>`;
-}
-
-function renderCommLogin(c) {
-  // THIRD GUARD, and the outermost of the three is `renderCommPage()`'s own
-  // branch at the `!session.isAdmin` fork — in supabase mode it renders DI-182c's
-  // permission-denied card and returns, so nothing reaches here (Step 3b,
-  // DI-180g). This function is therefore already dead on the live league; the
-  // guard exists because what it protects is a `btoa(val) === …` comparison
-  // that, with the stored hash absent, compares against the published
-  // `btoa('admin123')` default — i.e. the one shape where "unreachable" and
-  // "grants commissioner to anybody who read the repo" are one edit apart.
-  // Rendering NOTHING rather than a broken form: an empty container is the
-  // honest output for a login that cannot log anybody in.
-  if (commReauthMode() === 'role') { c.innerHTML = ''; return; }
-  c.innerHTML=`
-    <div class="section-header"><h2>Commissioner</h2></div>
-    <div class="card admin-login-card">
-      <div class="text-center mb-md"><div style="font-size:2.5rem">🔐</div><h3>Commissioner Login</h3></div>
-      <div class="form-group"><label class="form-label">Password</label>
-        <input class="form-input" id="comm-password-input" type="password" placeholder="Password…" /></div>
-      <button class="btn btn-primary btn-block" id="comm-login-btn">Login</button>
-    </div>`;
-  document.getElementById('comm-login-btn')?.addEventListener('click', ()=>{
-    const val=document.getElementById('comm-password-input')?.value||'';
-    if(btoa(val)===getSettings().adminPasswordHash){
-      const s=getSession();setSession(s.playerId,true,s.playerVerified);
-      showToast('✅ Commissioner access granted','success');renderCommPage();
-    } else showToast('❌ Incorrect password','error');
-  });
-  document.getElementById('comm-password-input')?.addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('comm-login-btn')?.click();});
 }
 
 /**
@@ -23013,29 +23721,286 @@ export function _addSportActForTest({ pick = null, enrollment = null, announce =
 export function _addSportStateForTest() { return _addSport ? { pick: _addSport.pick, enrollment: _addSport.enrollment, done: _addSport.done, busy: _addSport.busy, closing: _addSport.closing } : null; }
 export function _resetAddSportForTest() { closeAddSportSheet({ immediate: true }); _addSport = null; }
 
-/** Archive the lens sport from Comm -> Week -> Sport options, behind a confirm sheet (the shared action-sheet). The league's main sport is not archivable here. */
-function confirmArchiveLensSport() {
-  const c = lensCompetition(); if (!c || c.isDefault) return;
-  const pr = commProfileFor(c); const label = pr ? (pr.code || pr.label) : c.sport;
-  const blocked = archiveBlocker({ weeks: getWeeksForCompetition(c.id), label });
-  if (blocked) { showToast(blocked, 'error'); return; }
-  // S7: the shared action sheet (never window.confirm). The archive runs from the sheet's destructive button, re-checking the sport and the blocker at that moment.
-  lsShowActionSheet('archive-sport', archiveSportSheetHTML({ label }, { escHtml }), { onConfirm: () => runArchiveLensSport(c.id) });
+// ── ARCHIVE AND RESTORE A SPORT (Deployment 2, thread 101826-D2, lane 3; UN/PF-518, DI-867…880) ───────────────────────────────────────────────────────
+// Archive and Restore write ONE field (`archivedAt`) through the storage seam (AD-02) and are then CONFIRMED by the server before anything looks changed (DI-869: "a sport that failed to
+// archive never looks archived"): `sb.flushAndConfirm('cfbp_competitions')`. Saved: the sheet closes, the toast, the success haptic, the announcement if asked, the repaint. Refused (0070's
+// main_sport / sport_in_progress / sport_archived, or the update policy) or still pending (the connection dropped): the previous row is written back — the key then has nothing left to save and
+// its refusal latch releases (the adapter's own rule, never a re-hydrate, which would re-send the refused edit) — and the sheet says so in the shipped words. Local mode: the local write is the record.
+const archiveCodeOf = (c) => { const pr = c ? commProfileFor(c) : null; return pr ? (pr.code || pr.label) : String((c && c.sport) || '').toUpperCase(); };
+function archiveOffline() {
+  try { return getBackendMode() === 'supabase' && sb.getState() !== 'ACTIVE'; } catch { return true; }
 }
-/** The archive itself, after the sheet's confirm: re-reads the sport and re-applies the rule (a week may have been opened while the sheet was up). */
-function runArchiveLensSport(competitionId) {
-  const c = liveLeagueCompetitions().find((x) => x.id === competitionId); if (!c || c.isDefault) return;
-  const pr = commProfileFor(c); const label = pr ? (pr.code || pr.label) : c.sport;
-  const res = archiveSportAction({ competition: c, weeks: getWeeksForCompetition(c.id), label, deps: { saveCompetition: saveLeagueCompetition } });
-  if (!res.ok) { showToast(res.error, 'error'); return; }
-  haptic('success'); showToast(MS_COPY.archived(label), 'success');
-  refreshHeader(); renderCommPage();   // (the lens is not reset here: getLensSport() forgets a local choice whose sport was archived, and the repaint reads it)
+/** DI-868: the sports a commissioner may archive right now — the league's live sports but its main one. */
+function archivableSports() { try { return liveLeagueCompetitions().filter((c) => c && c.id && !c.isDefault); } catch { return []; } }
+/** DI-876: this league's archived sports (the history's own read path; every active path keeps excluding them). */
+function archivedCompetitions() { try { return (getLeagueCompetitions() || []).filter((c) => c && c.id && c.archivedAt); } catch { return []; } }
+const commissionerNameNow = () => { try { const p = getPlayer(getSession()?.playerId); return (p && p.displayName) || 'The commissioner'; } catch { return 'The commissioner'; } };
+function setSheetButtonBusy(btn, busy, label) {
+  if (!btn) return;
+  btn.disabled = !!busy;
+  if (busy) btn.setAttribute('aria-disabled', 'true'); else btn.removeAttribute('aria-disabled');
+  btn.textContent = label;
+}
+function afterSportStateChange() {
+  try { refreshHeader(); } catch { /* the header is a courtesy */ }
+  try { if (state.currentTab === 'commissioner') renderCommPage(); } catch { /* the page repaints on its next visit */ }
+  try { if (state.currentTab === 'home' && _homeWiring && !isContentWithheld()) renderHomePage(); } catch { /* Home repaints on its next visit */ }
+  try { invalidateScreens(); } catch { /* no screen open */ }
+}
+let _sportWriteBusy = false;
+let _sportConfirmForTest = null;
+export const _setSportConfirmForTest = (o) => { _sportConfirmForTest = o && typeof o.flushAndConfirm === 'function' && typeof o.refusalOf === 'function' && typeof o.flush === 'function' ? o : null; };
+/** The ONE awaited write of archive and restore. `write()` is the pure action through the seam; `revert()` writes the row as it was. */
+async function writeSportStateAndConfirm({ write, revert, code, restoring = false }) {
+  let res = null;
+  try { res = write(); } catch { res = null; }
+  const failed = restoring ? ARCHIVE_COPY.restoreFailed(code) : ARCHIVE_COPY.archiveFailed(code);
+  if (!res || res.ok !== true) return { ok: false, error: (res && res.error) || failed };
+  const api = _sportConfirmForTest || sb;                         // test seam: the adapter's three calls, so a suite can answer saved / refused / pending
+  if (!_sportConfirmForTest && getBackendMode() !== 'supabase') return { ok: true };
+  let answer = 'pending';
+  try { answer = await api.flushAndConfirm('cfbp_competitions'); } catch { answer = 'pending'; }
+  if (answer === 'saved') return { ok: true };
+  let refusal = null;
+  try { refusal = answer === 'refused' ? api.refusalOf('cfbp_competitions') : null; } catch { refusal = null; }
+  try { revert(); void api.flush(); } catch { /* the next hydrate rebases it */ }
+  return { ok: false, error: answer === 'refused' ? archiveRefusalCopy(refusal && refusal.serverMessage, code, { restoring }) : failed };
+}
+
+/** The week that blocks an archive (open, locked, live or waiting on finalization), or null — its number names the blocked state's button. */
+function archiveBlockingWeek(c) {
+  return getWeeksForCompetition(c.id).find((w) => w && (['open', 'locked', 'live'].includes(w.status) || (w.pendingFinalization === true && w.status !== 'final'))) || null;
+}
+/**
+ * DI-869's blocked state (review fix 5: a way forward, not only a toast): no confirmation sheet — the shipped sentence and ONE button that opens that sport's week in Comm, IN PLACE,
+ * directly under the control that was tapped. A tap with no control on screen (never reached from the UI) keeps the calm toast.
+ */
+function showArchiveBlocked(c, message, anchor) {
+  if (!anchor || anchor.isConnected === false || typeof anchor.insertAdjacentHTML !== 'function') { showToast(message, 'error'); return; }
+  try { document.querySelectorAll('.ms-archive-blocked').forEach((n) => n.remove()); } catch { /* nothing shown yet */ }   // one at a time: a second tap replaces it
+  const wk = archiveBlockingWeek(c);
+  anchor.insertAdjacentHTML('afterend', archiveBlockedHTML({ competitionId: c.id, message, code: archiveCodeOf(c), weekNumber: wk ? wk.weekNumber : null }, { escHtml }));
+  const box = anchor.nextElementSibling;
+  const go = box && typeof box.querySelector === 'function' ? box.querySelector('[data-archive-open-week]') : null;
+  if (go) go.addEventListener('click', () => { haptic('light'); openSportWeekInComm(c.id); });
+  haptic('warning');
+}
+/** The blocked state's button: Comm -> Week, the lens on that sport (its week in progress is the one Comm shows). Re-resolved from live data at the tap. */
+function openSportWeekInComm(competitionId) {
+  if (!getSession()?.isAdmin || isContentWithheld()) return;
+  const c = liveLeagueCompetitions().find((x) => x && x.id === competitionId);
+  if (!c) return;
+  try { lsHideActionSheet({ restoreFocus: false }); } catch { /* no sheet */ }
+  try { closeLeagueOverview({ immediate: true, restoreFocus: false }); } catch { /* no overview */ }
+  try { setLensSport(c.sport); } catch (e) { console.warn('[sport] the lens could not move to the blocked sport', e); }
+  state.commTab = 'week';
+  if (state.currentTab === 'commissioner') { setCommTab('week'); renderCommPage(); } else navigateTo('commissioner');
+}
+/** DI-869: Archive a sport — the commissioner's confirmation (Comm -> Week -> Sport options, the league overview's "Archive a sport…", the Sports rows). `anchor`: the control tapped (the blocked state goes under it). */
+function confirmArchiveSport(competitionId, { anchor = null } = {}) {
+  if (!getSession()?.isAdmin || isContentWithheld()) return;
+  const c = liveLeagueCompetitions().find((x) => x && x.id === competitionId);
+  if (!c) return;
+  const code = archiveCodeOf(c);
+  if (c.isDefault) { showToast(ARCHIVE_COPY.mainSportReason, 'info'); return; }
+  const blocked = archiveBlocker({ weeks: getWeeksForCompetition(c.id), label: code });
+  if (blocked) { showArchiveBlocked(c, blocked, anchor); return; }
+  if (archiveOffline()) { showToast(ARCHIVE_COPY.offlineArchive, 'error'); return; }
+  // S7: the shared action sheet (never window.confirm). The archive runs from the sheet's destructive button, re-checking the sport and the blocker at that moment.
+  lsShowActionSheet('archive-sport', archiveSportConfirmHTML({ code, league: getActiveLeagueName() || '', announce: true }, { escHtml, switchHTML: switchRowHTML }), { onConfirm: () => runArchiveSport(c.id) });
+}
+/** Archive the lens sport from Comm -> Week -> Sport options. */
+function confirmArchiveLensSport() { const c = lensCompetition(); if (c) confirmArchiveSport(c.id); }
+/** The archive itself, after the sheet's confirm. The sheet STAYS while it saves (the button disabled, its words "Archiving NFL…"); it closes only when the server has it. */
+async function runArchiveSport(competitionId) {
+  if (_sportWriteBusy) return;                                   // a double tap archives once
+  const c = liveLeagueCompetitions().find((x) => x && x.id === competitionId);
+  if (!c || c.isDefault) { lsHideActionSheet(); return; }
+  const code = archiveCodeOf(c);
+  const layer = lsById(LS_ACTION_LAYER_ID);
+  const btn = layer ? layer.querySelector('[data-ls-action="confirm-archive-sport"]') : null;
+  const err = layer ? layer.querySelector('#ms-archive-error') : null;
+  const announce = !!layer && layer.querySelector('#ms-archive-announce')?.getAttribute('aria-checked') === 'true';
+  const blocked = archiveBlocker({ weeks: getWeeksForCompetition(c.id), label: code });   // re-checked at the tap: a week may have opened while the sheet was up
+  if (blocked) { if (err) err.textContent = blocked; return; }
+  if (archiveOffline()) { if (err) err.textContent = ARCHIVE_COPY.offlineArchive; return; }
+  _sportWriteBusy = true;
+  if (err) err.textContent = '';
+  setSheetButtonBusy(btn, true, ARCHIVE_COPY.archiving(code));
+  let out;
+  try {
+    out = await writeSportStateAndConfirm({ code, restoring: false,
+      write: () => archiveSportAction({ competition: c, weeks: getWeeksForCompetition(c.id), label: code, deps: { saveCompetition: saveLeagueCompetition } }),
+      revert: () => saveLeagueCompetition({ ...c }) });
+  } finally { _sportWriteBusy = false; }
+  if (!out.ok) {
+    setSheetButtonBusy(btn, false, ARCHIVE_COPY.archiveAction(code));
+    if (err && lsById(LS_ACTION_LAYER_ID)) err.textContent = out.error; else showToast(out.error, 'error');
+    afterSportStateChange();
+    return;
+  }
+  lsHideActionSheet({ restoreFocus: false });
+  if (announce) { try { postCommissionerAnnouncement(ARCHIVE_COPY.archiveAnnounce(commissionerNameNow(), code), getSession()?.playerId || null); } catch { /* the announcement is best effort, never a reason to fail */ } }
+  haptic('success'); showToast(ARCHIVE_COPY.archived(code), 'success');
+  afterSportStateChange();   // (the lens is not reset here: getLensSport() forgets a local choice whose sport was archived, and the repaint reads it)
 }
 function lsConfirmArchiveSport() {
   const p = _lsPrompt;
-  lsHideActionSheet({ restoreFocus: false });
-  if (p && typeof p.onConfirm === 'function') p.onConfirm();
+  if (p && typeof p.onConfirm === 'function') void p.onConfirm();
 }
+/** DI-868: "Archive a sport…" — one sport straight to its confirmation; several, a choice first. `anchor`: the overview's own control (a blocked single sport says so under it). */
+function startArchiveFromOverview({ anchor = null } = {}) {
+  const list = archivableSports();
+  if (!list.length) return;
+  if (list.length === 1) {
+    const one = list[0];
+    if (anchor && archiveBlocker({ weeks: getWeeksForCompetition(one.id), label: archiveCodeOf(one) })) { confirmArchiveSport(one.id, { anchor }); return; }   // DI-869: blocked — the overview stays, the way forward under the row
+    try { closeLeagueOverview({ immediate: true, restoreFocus: false }); } catch { /* no overview */ }
+    confirmArchiveSport(one.id); return;
+  }
+  try { closeLeagueOverview({ immediate: true, restoreFocus: false }); } catch { /* no overview */ }
+  lsShowActionSheet('archive-pick', archivePickHTML({ sports: list.map((c) => ({ competitionId: c.id, code: archiveCodeOf(c) })) }, { escHtml }), { noHaptic: true });
+}
+
+/** DI-875: Restore — the commissioner's confirmation (the Archived sports list, the history view). */
+function confirmRestoreSport(competitionId) {
+  if (!getSession()?.isAdmin || isContentWithheld()) return;
+  const c = archivedCompetitions().find((x) => x.id === competitionId);
+  if (!c) return;
+  const code = archiveCodeOf(c);
+  if (archiveOffline()) { showToast(ARCHIVE_COPY.offlineRestore, 'error'); return; }
+  lsShowActionSheet('restore-sport', restoreSportConfirmHTML({ code, league: getActiveLeagueName() || '', announce: true }, { escHtml, switchHTML: switchRowHTML }), { onConfirm: () => runRestoreSport(c.id), noHaptic: true });
+}
+/** The restore itself: `archivedAt = null` and nothing else (who plays, enrollment and every week untouched), confirmed by the server, then the offer to set up the first week. */
+async function runRestoreSport(competitionId) {
+  if (_sportWriteBusy) return;
+  const c = archivedCompetitions().find((x) => x.id === competitionId);
+  if (!c) { lsHideActionSheet(); return; }
+  const code = archiveCodeOf(c);
+  const layer = lsById(LS_ACTION_LAYER_ID);
+  const btn = layer ? layer.querySelector('[data-ls-action="confirm-restore-sport"]') : null;
+  const err = layer ? layer.querySelector('#ms-restore-error') : null;
+  const announce = !!layer && layer.querySelector('#ms-restore-announce')?.getAttribute('aria-checked') === 'true';
+  if (archiveOffline()) { if (err) err.textContent = ARCHIVE_COPY.offlineRestore; return; }
+  _sportWriteBusy = true;
+  if (err) err.textContent = '';
+  setSheetButtonBusy(btn, true, ARCHIVE_COPY.restoring(code));
+  let out;
+  try {
+    out = await writeSportStateAndConfirm({ code, restoring: true,
+      write: () => restoreSportAction({ competition: c, label: code, deps: { saveCompetition: saveLeagueCompetition } }),
+      revert: () => saveLeagueCompetition({ ...c }) });
+  } finally { _sportWriteBusy = false; }
+  if (!out.ok) {
+    setSheetButtonBusy(btn, false, ARCHIVE_COPY.restoreAction(code));
+    if (err && lsById(LS_ACTION_LAYER_ID)) err.textContent = out.error; else showToast(out.error, 'error');
+    afterSportStateChange();
+    return;
+  }
+  lsHideActionSheet({ restoreFocus: false });
+  if (announce) { try { postCommissionerAnnouncement(ARCHIVE_COPY.restoreAnnounce(commissionerNameNow(), code), getSession()?.playerId || null); } catch { /* best effort */ } }
+  haptic('success'); showToast(ARCHIVE_COPY.restored(code), 'success');
+  afterSportStateChange();
+  lsShowActionSheet('restore-setup', restoreSetupOfferHTML({ code }, { escHtml }), { noHaptic: true, dbCode: c.sport });
+}
+function lsConfirmRestoreSport() {
+  const p = _lsPrompt;
+  if (p && typeof p.onConfirm === 'function') void p.onConfirm();
+}
+function lsRestoreSetupWeek() {
+  const p = _lsPrompt;
+  lsHideActionSheet({ restoreFocus: false });
+  try { if (p && p.dbCode) setLensSport(p.dbCode); } catch { /* the wizard's Step 1 still lets the commissioner pick the sport */ }
+  try { closeAllScreens('navigate'); } catch { /* no screen open */ }
+  state.commTab = 'week'; navigateTo('commissioner'); openWeekWizardSheet({ forceNew: true });
+}
+
+/** DI-876: the Archived sports list (every member; the commissioner also sees Restore). A pushed screen. */
+function openArchivedSports() {
+  if (isContentWithheld()) return;
+  ensurePushedScreens();
+  clearReadingChain();
+  pushScreen({
+    id: 'archived-sports', title: ARCHIVE_COPY.listTitle, backLabel: 'Back', meta: { kind: 'archived-sports' },
+    render: () => archivedSportsListHTML(),
+    onClick: (e) => {
+      const t = e && e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-ar-open],[data-ar-restore]') : null;
+      if (!t) return;
+      const id = t.getAttribute('data-ar-open') || t.getAttribute('data-ar-restore') || '';
+      if (!archivedCompetitions().some((c) => c.id === id)) return;     // only an archived sport of this league (the DOM is untrusted)
+      haptic('light');
+      if (t.hasAttribute('data-ar-restore')) confirmRestoreSport(id); else openArchivedHistory(id);
+    },
+  });
+}
+/** A week of the record: finalized (its results were written at finalize) AND revealed (the shipped reveal predicate) — never a stored-status comparison of our own (weeklocktest [10]). */
+function archivedPlayedWeekIds() {
+  const withResults = new Set((getWeeklyResults() || []).map((r) => r && r.weekId).filter(Boolean));
+  return new Set((getWeeks() || []).filter((w) => w && withResults.has(w.weekId) && arePicksPublic(w)).map((w) => w.weekId));
+}
+const archivedDateOf = (iso) => { try { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: sportViewerZone().iana }); } catch { return ''; } };
+function archivedRowsNow() {
+  const comps = archivedCompetitions();
+  return archivedSportsRows({ competitions: comps, weeks: getWeeks(), playedWeekIds: archivedPlayedWeekIds(), profiles: comps.map((c) => { const p = commProfileFor(c); return p ? { key: c.sport, label: p.label, code: p.code } : null; }).filter(Boolean), formatDate: archivedDateOf });
+}
+function archivedSportsListHTML() {
+  const rows = archivedRowsNow();
+  const isComm = !!getSession()?.isAdmin;
+  if (!rows.length) return `<div class="ps-empty"><p class="ps-empty-title">${escHtml(ARCHIVE_COPY.listIntro)}</p></div>`;
+  const list = rows.map((r) => `<button type="button" class="lo-row" data-ar-open="${escHtml(r.competitionId)}"><span class="lo-row-tx"><b>${escHtml(r.code)}</b><span>${escHtml(r.subtitle)}</span></span>`
+    + `<span class="lo-row-chev" aria-hidden="true">${icon('chevronRight')}</span></button>`).join('');
+  const restore = isComm ? `<div class="ar-actions">${rows.map((r) => `<button type="button" class="btn btn-secondary ar-restore" data-ar-restore="${escHtml(r.competitionId)}">${escHtml(ARCHIVE_COPY.restoreAction(r.code))}</button>`).join('')}</div>`
+    + `<p class="ar-note">${escHtml(ARCHIVE_COPY.listFootnote)}</p>` : '';
+  return `<div class="ar-page"><p class="ar-note">${escHtml(ARCHIVE_COPY.listIntro)}</p><div class="lo-list">${list}</div>${restore}</div>`;
+}
+/** DI-876: one archived sport's read-only record — the banner, the standings of its final weeks, and its weeks (each opens the shipped week detail). No picks control, no join, no weekly operations. */
+function openArchivedHistory(competitionId) {
+  if (isContentWithheld()) return;
+  const c = archivedCompetitions().find((x) => x.id === competitionId);
+  if (!c) return;
+  ensurePushedScreens();
+  pushScreen({
+    id: `archived:${competitionId}`, title: `${getActiveLeagueName() || ''} · ${archiveCodeOf(c)}`, backLabel: ARCHIVE_COPY.listTitle, meta: { kind: 'archived-history' },
+    render: () => archivedHistoryHTML(competitionId),
+    onClick: (e) => {
+      const t = e && e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-ar-week],[data-ar-restore]') : null;
+      if (!t) return;
+      const h = getArchivedHistory(competitionId);
+      if (!h) return;
+      if (t.hasAttribute('data-ar-restore')) { if (t.getAttribute('data-ar-restore') === competitionId) confirmRestoreSport(competitionId); return; }
+      const wid = t.getAttribute('data-ar-week') || '';
+      if (!h.weeks.some((w) => w.weekId === wid && archivedPlayedWeekIds().has(w.weekId))) return;   // only a played, REVEALED week of this archived sport (the DOM is untrusted; nothing unrevealed opens)
+      haptic('light');
+      openWeekDetail(wid, { backLabel: archiveCodeOf(c) });
+    },
+  });
+}
+function archivedHistoryHTML(competitionId) {
+  const h = getArchivedHistory(competitionId);
+  if (!h) return `<div class="ps-empty"><p class="ps-empty-title">${escHtml("This sport isn't archived any more.")}</p></div>`;
+  const code = archiveCodeOf(h.competition);
+  const playedIds = archivedPlayedWeekIds();
+  const finals = h.weeks.filter((w) => playedIds.has(w.weekId));
+  const finalIds = new Set(finals.map((w) => w.weekId));
+  let rows = [];
+  try { rows = calculateSeasonStandings(h.players, getWeeklyResults().filter((r) => finalIds.has(r.weekId)), finals, seasonGroupTieContexts(finals, h.players)); } catch { rows = []; }
+  const banner = `<div class="card ar-banner"><span class="badge ar-badge">${escHtml(ARCHIVE_COPY.archivedBadge)}</span><p class="ar-banner-tx">${escHtml(ARCHIVE_COPY.historyBanner(code, finals.length))}</p></div>`;
+  const standings = finals.length && rows.length
+    ? `<section class="ar-group" aria-labelledby="ar-st"><h3 class="lo-lbl" id="ar-st">${escHtml(ARCHIVE_COPY.historyStandingsTitle)}</h3><div class="lo-list">${rows.map((r) => `<div class="lo-row ar-row"><span class="lo-row-tx"><b>${escHtml(`${r.currentRank}. ${r.displayName || ''}`)}</b></span><span class="lo-row-right">${escHtml(`${r.totalCorrect}–${r.totalIncorrect}`)}</span></div>`).join('')}</div></section>`
+    : `<p class="ar-note">${escHtml(ARCHIVE_COPY.historyEmpty)}</p>`;
+  const weeks = finals.length ? `<section class="ar-group" aria-labelledby="ar-wk"><h3 class="lo-lbl" id="ar-wk">${escHtml(ARCHIVE_COPY.historyWeeksTitle)}</h3><div class="lo-list">${finals.map((w) => `<button type="button" class="lo-row" data-ar-week="${escHtml(w.weekId)}"><span class="lo-row-tx"><b>${escHtml(formatWeekLabel(w))}</b><span>${escHtml('Final')}</span></span><span class="lo-row-chev" aria-hidden="true">${icon('chevronRight')}</span></button>`).join('')}</div></section>` : '';
+  const restore = getSession()?.isAdmin ? `<div class="ar-actions"><button type="button" class="btn btn-secondary ar-restore" data-ar-restore="${escHtml(competitionId)}">${escHtml(ARCHIVE_COPY.restoreAction(code))}</button></div>` : '';
+  return `<div class="ar-page">${banner}${standings}${weeks}${restore}</div>`;
+}
+export const _confirmArchiveSportForTest = confirmArchiveSport;
+export const _openSportWeekInCommForTest = openSportWeekInComm;
+export const _runArchiveSportForTest = runArchiveSport;
+export const _confirmRestoreSportForTest = confirmRestoreSport;
+export const _openArchivedSportsForTest = openArchivedSports;
+export const _openArchivedHistoryForTest = openArchivedHistory;
+export const _archivedSportsListHTMLForTest = archivedSportsListHTML;
+export const _archivedHistoryHTMLForTest = archivedHistoryHTML;
+export const _startArchiveFromOverviewForTest = startArchiveFromOverview;
 export const _confirmArchiveLensSportForTest = confirmArchiveLensSport;
 /** Test seam: press a button of the action-sheet layer by its `data-ls-action` (the layer's click handler, driven without a DOM event). */
 export function _pressActionSheetForTest(action) { return lsOnLayerClick({ target: { closest: () => ({ getAttribute: () => action }) } }); }
@@ -23261,8 +24226,7 @@ function showGameModal(game, week, onSave) {
           <div class="espn-input-row">
             <select class="form-select" id="m-espn-sport">
               <option value=""${!initEspnSport?' selected':''}>None (Manual entry only)</option>
-              <option value="college-football"${initEspnSport==='college-football'?' selected':''}>College Football</option>
-              <option value="nfl"${initEspnSport==='nfl'?' selected':''}>NFL</option>
+              ${Object.entries(ESPN_SPORT_ENDPOINTS).map(([k, m]) => `<option value="${escHtml(k)}"${initEspnSport===k?' selected':''}>${escHtml(m.label)}</option>`).join('\n              ')}
             </select>
             <input class="form-input" id="m-espn-eventid"
               placeholder="ESPN event ID or gamecast URL"
@@ -23275,6 +24239,27 @@ function showGameModal(game, week, onSave) {
         </div>
       </div>
       `;
+
+  // D2 lane 2 (DI-912): a pick-the-winner week shows "Pick the winner — no line" in place of the Favorite and Margin control (its line is the fixed 0); every other week keeps the control byte for byte.
+  const spreadFieldHTML = () => {
+    if (isPickTheWinner(week && week.format)) {
+      return `<div class="form-group"><label class="form-label">Spread</label>
+      <p class="text-muted text-sm" id="m-no-line">Pick the winner — no line</p>
+    </div>`;
+    }
+    return `<div class="form-group"><label class="form-label">Spread</label>
+      <div class="spread-input-row">
+        <select class="form-select" id="m-spread-fav">
+          <option value="">— Favorite —</option>
+          <option value="home"${initFav===game?.homeTeam?' selected':''}>Home favored</option>
+          <option value="away"${initFav===game?.awayTeam?' selected':''}>Away favored</option>
+          <option value="pk"${game?.spread===0?' selected':''}>Pick'em (PK)</option>
+        </select>
+        <input class="form-input" id="m-spread-margin" type="number" step="0.5" min="0" placeholder="margin (positive)" value="${initMargin}" />
+      </div>
+      <p class="text-muted text-xs mt-sm">Pick which team is favored and enter the spread as a positive number.</p>
+    </div>`;
+  };
 
   ov.innerHTML=`<div class="modal">
     <div class="modal-header"><h3>${game?'Edit Game':'Add Game'}</h3><button class="modal-close" id="mc">✕</button></div>
@@ -23290,18 +24275,7 @@ function showGameModal(game, week, onSave) {
     <div class="form-group"><label class="form-label">Kickoff (local time)</label>
       ${locks.staticLocked ? roText(game?.kickoff ? formatGameTime(game.kickoff, getTimezone(), game) : null) : `<input class="form-input" id="m-kickoff" type="datetime-local" value="${escHtml(shownKickoff)}" />`}</div>
 
-    <div class="form-group"><label class="form-label">Spread</label>
-      <div class="spread-input-row">
-        <select class="form-select" id="m-spread-fav">
-          <option value="">— Favorite —</option>
-          <option value="home"${initFav===game?.homeTeam?' selected':''}>Home favored</option>
-          <option value="away"${initFav===game?.awayTeam?' selected':''}>Away favored</option>
-          <option value="pk"${game?.spread===0?' selected':''}>Pick'em (PK)</option>
-        </select>
-        <input class="form-input" id="m-spread-margin" type="number" step="0.5" min="0" placeholder="margin (positive)" value="${initMargin}" />
-      </div>
-      <p class="text-muted text-xs mt-sm">Pick which team is favored and enter the spread as a positive number.</p>
-    </div>
+    ${spreadFieldHTML()}
 
     <!-- Scoring multiplier: 1x is a normal game, 2x etc. weights this game
          in the standings. Wins AND losses scale by the same factor.
@@ -23448,6 +24422,10 @@ function showGameModal(game, week, onSave) {
         multiplier = Number(multPreset.value) || 1;
       }
     }
+    // D2 lane 2 (DI-912): a pick-the-winner week has no Favorite and Margin control; its line is the fixed 0 with no favourite (the one writer, applyFormatToGame, says the same).
+    const ptwSave = isPickTheWinner(week && week.format);
+    if (ptwSave) { spread = 0; fav = null; }
+
     // Protect standings: prompt before applying a multiplier change to a game
     // whose scoring has already occurred.
     if (game && gameHasScored && multiplier !== originalMultiplier) {
@@ -23499,14 +24477,15 @@ function showGameModal(game, week, onSave) {
     // A cleared spread now yields null instead of leaving the old cover behind.
     const candidate = { ...(game || {}),
       homeTeam: ht, awayTeam: at, homeScore: hs, awayScore: as_, status, spread };
-    const atsWinner = calculateAtsWinner(candidate);
+    const keepGrade = keepsVoidGrade({ game, status });
+    const atsWinner = keepGrade ? game.atsWinner : calculateAtsWinner(candidate);   // D2 lane 2: editing a voided game never un-grades it
     onSave({homeTeam:ht,awayTeam:at,homeMascot:hMasc,awayMascot:aMasc,
       kickoff,spread,favorite:fav,venue,
       homeConference:hconf,awayConference:aconf,homeRank:hr,awayRank:ar,
       homeScore:hs,awayScore:as_,status,actualWinner,atsWinner,isAlmaMaterGame:isAlma,
       ...carryForwardBroadcastFields(game),
       multiplier, isManual, leagueLabel, espnSport, espnEventId,
-      timeWindow:tw,spreadSource:'manual',dataQuality:'manual',dataSource:'manual',
+      timeWindow:tw,spreadSource:ptwSave?'format':'manual',dataQuality:'manual',dataSource:'manual',
       // RG-286 — untouched: the stored flags, never re-derived (a TBD game
       // stays TBD). Edited: an explicitly typed time is a CONFIRMED time, in
       // exactly one state (RG-57's rule: never confirmed AND date-only).
@@ -23583,43 +24562,70 @@ function cachedEspnTeamsList() {
  */
 export function _resetEspnTeamsCacheForTest() { _espnTeamsCache = null; _almaCatalogFetchAttempted = false; _almaCatalogFetchFailed = false; _almaCatalogInFlight = false; _almaCatalogPartial = null; _almaPickerWasOnScreen = false; }
 
-/**
- * Builds the alma-mater <select>'s <option> list from whichever team source
- * is available (cached ESPN catalog or the ALMA_MATERS fallback — both
- * shaped `{ location, displayName }`). VALUE is always `location` — the
- * SAME field parseAndReport() stores as game.homeTeam/awayTeam, so
- * getAlmaMaterMatch()'s exact-equality-first path applies to whatever gets
- * saved (data-model.js). LABEL is `displayName`, which disambiguates the
- * handful of teams that share an identical `location` (Charlotte,
- * Roosevelt, Troy — see fetchEspnTeamsList()'s docstring); selecting either
- * still stores the same string, a known, documented, unresolved-at-the-
- * data-level collision (see the handoff report).
- *
- * ALWAYS includes an empty "— None —" option (alma mater is optional), and
- * — critically — if `currentValue` doesn't case-insensitively match any
- * option already being offered (a legacy free-text claim, or ANY claim
- * while only the 6-school fallback is showing because ESPN is unreachable),
- * one more option for it verbatim, pre-selected. Without this, opening the
- * modal to fix an unrelated field (name/email) and hitting Save would
- * silently blank or change an existing claim the dropdown doesn't happen to
- * list — the <select> forces SOME value, and browsers default an unmatched
- * value to the first <option> if nothing is marked selected.
- */
-function buildAlmaMaterOptions(currentValue, teamsList) {
-  const cur = (currentValue || '').trim();
-  const curLower = cur.toLowerCase();
-  const sorted = [...(teamsList || [])].sort((a, b) => (a.location||'').localeCompare(b.location||''));
-  const hasCurrent = !cur || sorted.some(t => (t.location||'').trim().toLowerCase() === curLower);
-  const opts = [`<option value="">— None —</option>`];
-  if (cur && !hasCurrent) {
-    opts.push(`<option value="${escHtml(cur)}" selected>${escHtml(cur)} (current — not in ESPN list)</option>`);
-  }
-  for (const t of sorted) {
-    const sel = cur && (t.location||'').trim().toLowerCase() === curLower ? ' selected' : '';
-    opts.push(`<option value="${escHtml(t.location)}"${sel}>${escHtml(t.displayName || t.location)}</option>`);
-  }
-  return opts.join('');
+// ═══ D2 lane 1 (UN-530 / PF-530 DI-779; UN-507A DI-1011..1014) — the school picker's catalog and the college football teams control ═══════════════════════════════════════════
+/** The ONE alma-mater catalog (the cached ESPN list; the short pilot fallback) as the school picker reads it: its status says whether the sheet shows the list, a skeleton, a partial note or the failed state. */
+function schoolCatalogNow() {
+  const teams = cachedEspnTeamsList() || [];
+  let status = 'loading';
+  if (teams.length && !_almaCatalogPartial) status = 'loaded';
+  else if (_almaCatalogInFlight) status = 'loading';
+  else if (teams.length && _almaCatalogPartial) status = 'partial';
+  else if (_almaCatalogFetchFailed) status = 'failed';
+  return { status, teams, fallback: almaMaterCatalogFallback(), got: _almaCatalogPartial ? _almaCatalogPartial.got : 0, expected: _almaCatalogPartial ? _almaCatalogPartial.expected : 0 };
 }
+/** Try Again in the picker: ask the catalog again (once per press), then repaint the open sheet. */
+function retrySchoolCatalog() { _almaCatalogFetchAttempted = false; maybeRefreshAlmaMaterCatalog(); }
+export const _schoolCatalogNowForTest = () => schoolCatalogNow();
+
+/** Does this league play a college sport? Alma mater and home team are offered only for sports with a college catalog (college football today). A league with no competitions yet is the classic CFB league. */
+function cfbOffered() {
+  try { const ls = leagueSports(); return !ls.length || ls.some((x) => x.dbCode === 'cfb'); } catch { return true; }
+}
+/**
+ * The guard on the teams control (DI-1012, confirmed by the coordinator 2026-10-19): the designated school is a TIEBREAK INPUT, so while a college football week is Locked or Live the control is
+ * disabled ("You can change this after the week finishes."); while one is Open it is editable with a one-line warning. Read from the EFFECTIVE week status (the auto-lock instant counts).
+ */
+function cfbTeamsGuardNow() {
+  try {
+    const weeks = getAllCurrentWeeks() || [];
+    const statuses = weeks.filter((w) => { let sp = 'cfb'; try { sp = competitionForWeek(w)?.sport || 'cfb'; } catch { sp = 'cfb'; } return sp === 'cfb'; })
+      .map((w) => String(getEffectiveWeekStatus(w) || w.status || ''));
+    return cfbTeamsGuard(statuses);
+  } catch { return 'free'; }
+}
+export const _cfbTeamsGuardNowForTest = () => cfbTeamsGuardNow();
+/** The control's markup for a player (Profile, Chat settings, Edit Player: one component). '' when the league plays no college sport. */
+function cfbTeamsHTMLFor(player, ids) {
+  if (!cfbOffered()) return '';
+  return cfbTeamsControlHTML({ escHtml, ids, teams: readCfbTeams(player), guard: cfbTeamsGuardNow() });
+}
+/**
+ * THE ONE WRITER of a player's college football teams (DI-1011): computes the patch (the designated school into `almaMater`, the other into preferences.cfbOtherTeam, the role into
+ * preferences.cfbDesignatedRole) and saves it in ONE patchPlayer() call, so scoring's single read (`almaMater`) can never see a half-applied change. A write that changes nothing is a success that
+ * writes nothing; a changing write while a college week is Locked or Live is refused (the control is disabled then; this is the second wall).
+ */
+function applyCfbTeams(playerId, input) {
+  const cur = getPlayer(playerId);
+  if (!cur || !input) return false;
+  const patch = cfbTeamsPatch(cur, input);
+  if (cfbTeamsPatchIsNoop(cur, patch)) return true;
+  if (cfbTeamsGuardNow() === 'locked') { showToast(CFB_TEAMS_COPY.lockedNote, 'warning'); return false; }
+  return patchPlayer(playerId, { almaMater: patch.almaMater, preferences: patch.preferences }) === true;
+}
+const cfbPrefsKey = (pr) => JSON.stringify([pr && pr.cfbOtherTeam ? pr.cfbOtherTeam : null, pr && pr.cfbDesignatedRole ? pr.cfbDesignatedRole : null]);
+/** True when `patch` (from cfbTeamsPatch) would change nothing on `cur`. */
+const cfbTeamsPatchIsNoop = (cur, patch) => String(cur.almaMater || '') === patch.almaMater && cfbPrefsKey(cur.preferences) === cfbPrefsKey(patch.preferences);
+/** THE WALL (DI-1012, reviewer 2026-10-19): a change to the designated school is a tiebreak input, so while a college week is Locked or Live NO writer commits it, whatever the control looks like. The Edit Player writer asks this too. */
+function cfbTeamsWriteWall(cur, patch) {
+  if (cfbTeamsPatchIsNoop(cur, patch)) return false;
+  if (cfbTeamsGuardNow() !== 'locked') return false;
+  showToast(CFB_TEAMS_COPY.lockedNote, 'warning');
+  return true;
+}
+export const _cfbTeamsWriteWallForTest = (cur, patch) => cfbTeamsWriteWall(cur, patch);
+export const _applyCfbTeamsForTest = (playerId, input) => applyCfbTeams(playerId, input);
+export const _cfbTeamsHTMLForForTest = (player, ids) => cfbTeamsHTMLFor(player, ids);
+
 
 /**
  * N1 (DI-430 §Invite, F1) — NEW LEAGUES NEVER INVITE BY E-MAIL. The e-mail auto-link (`link_member_by_email`) is a pilot-only door since migration 0032: a planted address on a
@@ -23631,104 +24637,67 @@ function emailEntryAllowed() {
 }
 export async function showEditPlayerModal(playerId) {
   const player=getPlayer(playerId); if(!player)return;
-  // ESPN-canonical <select>, not free text (Drew's ruling, 2026-09-04 —
-  // verbatim: "One way to protect the correct school naming (eg washington
-  // vs Washington state) would be for you to either pick from an approved
-  // list of schools as a drop down or for commissioner to ask to confirm
-  // which school you mean when you enter it." Then: "Do the dropdown.").
-  // Options come from the cached ESPN team catalog (near-static, fetched at
-  // most once PER PAGE LOAD — the cache is in memory, not the storage seam;
-  // see cachedEspnTeamsList()) or, if nothing is cached yet AND the
-  // background refresh below fails, the 6-school ALMA_MATERS fallback.
-  // A fetch failure NEVER blocks editing a player — Save always has a valid
-  // option list to choose from.
-  const cached = cachedEspnTeamsList();
-  const initialTeamsList = cached || almaMaterCatalogFallback();
+  // ESPN-canonical school list, never free text (Drew's ruling, 2026-09-04 - verbatim: "One way to protect the correct school naming (eg washington vs Washington state) would be for you to either
+  // pick from an approved list of schools as a drop down or for commissioner to ask to confirm which school you mean when you enter it." Then: "Do the dropdown."). D2 lane 1 (DI-779): the
+  // dropdown is the shared searchable school picker now, and a person's college football teams are the shared control (a Home team and an Alma mater, one designated; DI-1011..1012). The catalog
+  // is the ONE cached ESPN list (fetched at most once per page load, in memory: RG-55), asked for when the picker opens; a fetch failure never blocks editing a player.
   const ov=document.createElement('div');ov.className='modal-overlay centered';
   ov.innerHTML=`<div class="modal">
     <div class="modal-header"><h3>Edit Player</h3><button class="modal-close" id="ep-c">✕</button></div>
     <div class="form-group"><label class="form-label">Display Name</label><input class="form-input" id="ep-name" value="${escHtml(player.displayName)}" /></div>
     ${emailEntryAllowed() ? `<div class="form-group"><label class="form-label">Email</label><input class="form-input" id="ep-email" type="email" value="${escHtml(player.email||'')}" /></div>` : ''}
-    <div class="form-group"><label class="form-label">Alma Mater</label>
-      <select class="form-select" id="ep-alma">${buildAlmaMaterOptions(player.almaMater, initialTeamsList)}</select>
-      <p class="text-muted text-xs mt-sm" id="ep-alma-note">${cached ? `From ESPN's team catalog (${cached.length} schools).` : '⏳ Loading full ESPN school list…'}</p>
-    </div>
+    ${cfbTeamsHTMLFor(player, { home: 'ep-home', alma: 'ep-alma', desig: 'ep-desig' })}
     <p class="text-muted text-xs mb-md">Name changes keep all historical picks linked to this player.</p>
-    <button class="btn btn-primary btn-block" id="ep-save">Save</button>
+    <button class="btn btn-primary btn-block ss-btn" id="ep-save">Save</button>
+    <div class="ss-status" id="ep-status"></div>
   </div>`;
   document.body.appendChild(ov);
   ov.querySelector('#ep-c')?.addEventListener('click',()=>ov.remove());
   ov.addEventListener('click',e=>{if(e.target===ov)ov.remove();});
+  // D2 lane 1 (UN-531 / DI-781..785) - Save is the shared submission-state control: "Saving…" (no double submit), "Saved" only when the SERVER has acknowledged the player row (and the re-flagged games, when
+  // any changed), then the modal closes 600 ms later with the same toast it always showed; a refused or unreachable server leaves the modal open with the input kept and Try Again.
+  let epChanged = 0, epWritten = false;
+  const epRun = async () => {
+    const n=document.getElementById('ep-name')?.value.trim();
+    if(!n) return 'refused';
+    if (!epWritten) {
+      // D2 lane 1 (DI-1011): the teams come from the shared control through the ONE computation (cfbTeamsPatch): the designated school into `almaMater`, the other into preferences, both in this
+      // one savePlayer. A modal rendered with no control (a league with no college sport) leaves the player's teams exactly as they were.
+      const epAlmaEl = document.getElementById('ep-alma');
+      const teamsPatch = epAlmaEl || document.getElementById('ep-home')
+        ? cfbTeamsPatch(player, { home: document.getElementById('ep-home')?.value || '', alma: epAlmaEl?.value || '', designated: document.getElementById('ep-desig')?.value === 'home' ? 'home' : 'alma' })
+        : { almaMater: player.almaMater || '', preferences: player.preferences };
+      if (cfbTeamsWriteWall(player, teamsPatch)) return 'refused';   // the second wall (the first is the disabled control): nothing is written, the modal stays open with the toast and Try Again
+      // N1 (DI-430 F1): with the email field absent (a non-pilot Supabase league) the stored email is left exactly as it was — never blanked, never written.
+      const epEmail = document.getElementById('ep-email');
+      savePlayer({...player,displayName:n,email:epEmail ? (epEmail.value.trim()||'') : (player.email||''),almaMater:teamsPatch.almaMater,...(teamsPatch.preferences ? { preferences: teamsPatch.preferences } : {})});
+      // The roster is DERIVED from claims (claimedAlmaMaters()) — a changed
+      // claim must ripple to every open/upcoming week's ⭐ flag immediately,
+      // the same way the old commissioner add/remove buttons used to (Drew,
+      // 2026-09-04's ruling, applied to the one place claims actually change).
+      epChanged=Math.max(epChanged, recomputeAlmaMaterFlags(claimedAlmaMaters()));   // a Try Again re-writes the row; the games it already re-flagged stay counted
+      epWritten = true;
+    }
+    const answers = [await confirmSeamKey('cfbp_players')];
+    if (epChanged) answers.push(await confirmSeamKey('cfbp_games'));
+    return answers.includes('refused') ? 'refused' : (answers.every((a) => a === 'saved') ? 'saved' : 'pending');
+  };
+  const epBinding = attachSubmit({
+    button: ov.querySelector('#ep-save'), statusEl: ov.querySelector('#ep-status'), idleLabel: 'Save', run: epRun, listen: false, dismissOnSaved: true,
+    onDismiss: () => {
+      showToast(`Updated ✅${epChanged?` — ${epChanged} game${epChanged===1?'':'s'} in open/upcoming weeks re-flagged`:''}`,'success');
+      ov.remove();renderCommPage();
+    },
+  });
   ov.querySelector('#ep-save')?.addEventListener('click',()=>{
     const n=document.getElementById('ep-name')?.value.trim();
-    if(!n){showToast('Name required','error');return;}
-    const newAlma=document.getElementById('ep-alma')?.value.trim()||'';
-    // N1 (DI-430 F1): with the email field absent (a non-pilot Supabase league) the stored email is left exactly as it was — never blanked, never written.
-    const epEmail = document.getElementById('ep-email');
-    savePlayer({...player,displayName:n,email:epEmail ? (epEmail.value.trim()||'') : (player.email||''),almaMater:newAlma});
-    // The roster is DERIVED from claims (claimedAlmaMaters()) — a changed
-    // claim must ripple to every open/upcoming week's ⭐ flag immediately,
-    // the same way the old commissioner add/remove buttons used to (Drew,
-    // 2026-09-04's ruling, applied to the one place claims actually change).
-    const changed=recomputeAlmaMaterFlags(claimedAlmaMaters());
-    showToast(`Updated ✅${changed?` — ${changed} game${changed===1?'':'s'} in open/upcoming weeks re-flagged`:''}`,'success');
-    ov.remove();renderCommPage();
+    if(!n){showToast('Name required','error');return;}                  // a missing name is the person's to fix: no save is attempted, so no state is claimed
+    epWritten = false;                                                   // a fresh press writes what the fields say NOW (a Try Again after an edit is a new write)
+    epBinding.press();
   });
+  ov.addEventListener('input',()=>epBinding.dirty());
+  ov.addEventListener('change',()=>epBinding.dirty());
 
-  // Background refresh — only when nothing is cached yet. Never blocks the
-  // modal or Save, and never throws out of this function: this isn't the
-  // backend-sync seam AD-06 governs (a shared Sheet six people write picks
-  // to) — it's a public, read-only ESPN catalog with a static fallback
-  // already rendered above, so CONVENTIONS #7's "defensive at the boundary"
-  // applies, not AD-06's loud-fail banner.
-  if (!cached) {
-    try {
-      const fresh = await fetchEspnTeamsList();
-      if (Array.isArray(fresh) && fresh.length) {
-        // In-memory only — never through the storage seam. See
-        // cachedEspnTeamsList() above for why (RG-55).
-        _espnTeamsCache = { teams: fresh, fetchedAt: new Date().toISOString() };
-        // The modal may already be closed/saved by the time this resolves —
-        // guard every DOM touch. sel.value is READ, never reset, so a
-        // selection already made (by a person or a test) survives the
-        // options list being replaced underneath it.
-        const sel = document.getElementById('ep-alma');
-        if (sel) sel.innerHTML = buildAlmaMaterOptions(sel.value || player.almaMater, fresh);
-        const note = document.getElementById('ep-alma-note');
-        if (note) note.textContent = `From ESPN's team catalog (${fresh.length} schools).`;
-      }
-    } catch (err) {
-      console.warn('[app] fetchEspnTeamsList failed, staying on the ALMA_MATERS fallback:', err.message||err);
-      const note = document.getElementById('ep-alma-note');
-      if (note) note.textContent = '⚠️ Could not reach ESPN — showing a short list. You can still save.';
-    }
-  }
-}
-
-function showResetPinModal(playerId, displayName) {
-  const ov=document.createElement('div');ov.className='modal-overlay centered';
-  ov.innerHTML=`<div class="modal">
-    <div class="modal-header"><h3>Reset PIN — ${escHtml(displayName)}</h3><button class="modal-close" id="rp-c">✕</button></div>
-    <p class="text-secondary text-sm mb-md">Set a new PIN for ${escHtml(displayName)}. This does not affect their picks.</p>
-    <div class="form-group"><label class="form-label">New PIN (4–8 digits)</label>
-      <input class="form-input" id="rp-pin" type="password" inputmode="numeric" maxlength="8" placeholder="e.g. 1234"
-        style="letter-spacing:.2em;font-size:1.2rem" /></div>
-    <div class="form-group"><label class="form-label">Confirm PIN</label>
-      <input class="form-input" id="rp-pin2" type="password" inputmode="numeric" maxlength="8"
-        style="letter-spacing:.2em;font-size:1.2rem" /></div>
-    <button class="btn btn-primary btn-block" id="rp-save">Set PIN</button>
-  </div>`;
-  document.body.appendChild(ov);
-  ov.querySelector('#rp-c')?.addEventListener('click',()=>ov.remove());
-  ov.addEventListener('click',e=>{if(e.target===ov)ov.remove();});
-  ov.querySelector('#rp-save')?.addEventListener('click',()=>{
-    const pin=document.getElementById('rp-pin')?.value;
-    const pin2=document.getElementById('rp-pin2')?.value;
-    if(!pin||pin.length<4){showToast('PIN must be at least 4 digits','error');return;}
-    if(pin!==pin2){showToast('PINs do not match','error');return;}
-    setPlayerPin(playerId,pin);
-    showToast(`✅ PIN updated for ${displayName}`,'success');ov.remove();renderCommPage();
-  });
 }
 
 // ─── RULES PAGE ───────────────────────────────────────────────────────────────
@@ -23744,6 +24713,11 @@ function showResetPinModal(playerId, displayName) {
 /** Date input ceiling. Six months is "way ahead of time" (Drew) without
  *  offering dates ESPN has no concept of yet. */
 const GAME_REQUEST_MAX_DAYS_AHEAD = 180;
+
+/** D2 lane 2 (DI-927 #4): the sport's own emoji on the week-slate export button ('🏈' for college football and the NFL, '🏒' for the NHL); an unknown sport falls back to the football glyph the button always had. */
+function weekSlateEmoji(week) {
+  try { return (week && profileForWeek(week).emoji) || '🏈'; } catch { return '🏈'; }
+}
 
 /** 'YYYY-MM-DD' + n days, done in UTC-noon arithmetic so no DST boundary can
  *  move it. Same shape as storage.js's _dayDelta(), deliberately. */
@@ -23775,15 +24749,6 @@ function grDayLabel(key, { chip = false } = {}) {
               : `${get('weekday')}, ${get('month')} ${get('day')}`;
 }
 
-/** The next `n` Saturdays (today counts if today IS Saturday), Central. */
-function grNextSaturdays(n = 4, fromKey = centralDateKey()) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(fromKey || ''));
-  if (!m) return [];
-  const base = Date.UTC(+m[1], +m[2] - 1, +m[3], 12);
-  const delta = (6 - new Date(base).getUTCDay() + 7) % 7;
-  return Array.from({ length: n }, (_, i) => grDateAdd(fromKey, delta + i * 7));
-}
-
 /** 'Michigan at Ohio State' — school names only, from the request snapshot. */
 function grMatchupLabel(row) {
   return `${row?.awayTeam || '?'} at ${row?.homeTeam || '?'}`;
@@ -23811,8 +24776,9 @@ function grStatusChipHTML(status) {
 export function gameRequestChipHTML(game, folded = null) {
   const eid = game?.espnEventId != null ? String(game.espnEventId) : '';
   if (!eid) return '';
+  const gameKey = sportEventKey(game);   // D2 lane 2 (DI-923): sport and event id together
   const list = Array.isArray(folded) ? folded : foldGameRequests();
-  const hits = list.filter(r => (r.status === 'pending' || r.status === 'onSlate') && String(r.espnEventId) === eid);
+  const hits = list.filter(r => (r.status === 'pending' || r.status === 'onSlate') && gameKey !== null && sportEventKey(r) === gameKey);
   if (!hits.length) return '';
   const names = [...new Set(hits.map(r => r.playerName || r.playerId || ''))].filter(Boolean);
   return `<span class="gr-chip" aria-label="Requested by ${escHtml(names.join(', '))}">🙋 ${hits.length}</span>`;
@@ -23852,11 +24818,28 @@ export function renderGameRequestCardHTML() {
   </div>`;
 }
 
+/** D2 lane 2 (DI-923): the sports this member can request for, and the one the card is on. A league with one sport has no segment (`segment` is ''); the card is then that sport's, with its chips. */
+function grSportContext() {
+  let sports = [];
+  try { sports = isMultiSport() ? playedSports() : []; } catch { sports = []; }
+  let active = 'cfb';
+  try { active = getActiveSportKey(); } catch { active = 'cfb'; }
+  const chosen = state.gameRequest.sport;
+  const dbCode = sports.some(x => x.dbCode === chosen) ? chosen : active;
+  let profile = null;
+  try { profile = getProfile(dbCode); } catch { profile = null; }
+  return { sports, dbCode, profile, espnKey: requestEspnKey(dbCode) };
+}
+
 function renderGameRequestFormHTML(meId, folded) {
   const g = state.gameRequest;
+  const ctx = grSportContext();
   const today = centralDateKey();
-  const sats = grNextSaturdays(4, today);
-  return `
+  // The first chip counts from the sport's own "today": a hockey night is ESPN's US Eastern date, football's is the Central date every other request surface uses.
+  const chipToday = ctx.profile && isNightSport(ctx.profile) ? etDateOf(Date.now()) : today;
+  const sats = requestChips({ profile: ctx.profile, todayKey: chipToday });
+  const segment = ctx.sports.length >= 2 ? sportSwitcherHTML({ sports: ctx.sports.map(x => ({ dbCode: x.dbCode, code: x.code, label: x.label })), selected: ctx.dbCode, escHtml }) : '';
+  return `${segment ? `<div class="gr-sport" id="gr-sport">${segment}</div>` : ''}
     <div class="form-group gr-day">
       <label class="form-label" for="gr-date">Game day</label>
       <div class="gr-day-row">
@@ -23866,7 +24849,7 @@ function renderGameRequestFormHTML(meId, folded) {
         <button class="btn btn-primary btn-sm gr-find-btn" id="gr-find"${g.loading ? ' disabled' : ''}>🔎 Find games</button>
       </div>
       <div class="gr-sat-chips" id="gr-sat-chips">
-        ${sats.map((d, i) => `<button type="button" class="gr-sat-chip" data-date="${escHtml(d)}">${escHtml(i === 0 ? 'This Sat' : grDayLabel(d, { chip: true }))}</button>`).join('')}
+        ${sats.map(c => `<button type="button" class="gr-sat-chip" data-date="${escHtml(c.date)}">${escHtml(c.label)}</button>`).join('')}
       </div>
     </div>
     <div class="gr-results" id="gr-results"${g.loading ? ' aria-busy="true"' : ''}>${renderGameRequestResultsHTML(meId, folded)}</div>`;
@@ -23881,6 +24864,7 @@ function renderGameRequestResultsHTML(meId, folded = null) {
   // clearing them shrank the card by their height, and a drawer scrolled near its end jumped (158 px measured).
   const loadingLine = `<p class="text-secondary text-sm gr-loading-line">Checking ESPN for that day…</p>`;
   if (g.loading && !g.results.length) return loadingLine;
+  if (g.error === 'unsupported') return `<p class="text-secondary text-sm">${escHtml(REQUEST_COPY.unsupportedSearch)}</p>`;   // D2 lane 2 (DI-924)
   if (g.error === 'network') return `<p class="text-secondary text-sm">Couldn't reach ESPN just now. Tap Find games to try again.</p>`;
   // F3 review finding (2026-09-12) — THIS STATE IS TWO STATES AND THE COPY MUST
   // SAY SO. data-provider.js's resilientFetch() RETURNS `{games:[], error}`
@@ -23898,7 +24882,7 @@ function renderGameRequestResultsHTML(meId, folded = null) {
   const q = (g.filter || '').trim().toLowerCase();
   const rows = g.results.filter(x => !q || [x.homeTeam, x.awayTeam, x.homeMascot, x.awayMascot]
     .filter(Boolean).join(' ').toLowerCase().includes(q));
-  const slateIds = new Set(getGames().map(x => x?.espnEventId).filter(v => v != null).map(String));
+  const slateIds = new Set(getGames().map(x => sportEventKey(x)).filter(Boolean));   // D2 lane 2 (DI-923): sport and event id together
   const atCap = countOpenGameRequests(meId, list) >= GAME_REQUEST_CAP;
 
   const block = `
@@ -23915,10 +24899,11 @@ function renderGameRequestResultsHTML(meId, folded = null) {
 
 function grResultRowHTML(game, { meId, folded, slateIds, atCap }) {
   const eid = game?.espnEventId != null ? String(game.espnEventId) : '';
-  const onSlate = eid && slateIds.has(eid);
-  const mine = folded.some(r => r.playerId === meId && r.status === 'pending' && String(r.espnEventId) === eid);
+  const rowKey = sportEventKey({ espnSport: state.gameRequest.resultSport || 'none', espnEventId: eid });   // D2 lane 2 (DI-923): the sport these results were searched for ('none' = no search yet: no key, never college football)
+  const onSlate = eid && rowKey && slateIds.has(rowKey);
+  const mine = folded.some(r => r.playerId === meId && r.status === 'pending' && sportEventKey(r) === rowKey);
   const others = [...new Set(folded
-    .filter(r => r.status === 'pending' && String(r.espnEventId) === eid && r.playerId !== meId)
+    .filter(r => r.status === 'pending' && sportEventKey(r) === rowKey && r.playerId !== meId)
     .map(r => r.playerName || r.playerId || ''))].filter(Boolean);
   const action = onSlate
     ? `<span class="gr-state-chip">On the slate</span>`
@@ -23947,10 +24932,12 @@ function renderGameRequestMineHTML(meId, folded) {
         <div class="gr-row-matchup">${escHtml(grMatchupLabel(r))}</div>
         <div class="text-muted text-xs">${escHtml(grDayLabel(r.gameDate))}</div>
       </div>
-      <div class="gr-row-action">${grStatusChipHTML(r.status)}${
+      <div class="gr-row-action">${r.unrecognizedSport
+        ? `<span class="gr-status-chip gr-status-unrecognized">${escHtml(REQUEST_COPY.unrecognized)}</span>`   // D2 lane 2 (DI-923): a request for a sport this build does not know: said so, never drawn as college football, and not actionable
+        : `${grStatusChipHTML(r.status)}${
         r.status === 'pending'
           ? `<button class="btn btn-ghost btn-sm gr-withdraw-btn" data-request-id="${escHtml(r.id)}">Withdraw</button>`
-          : ''}</div>
+          : ''}`}</div>
     </div>`).join('') : `<p class="text-muted text-sm">You haven't requested any games yet.</p>`}
   </div>`;
 }
@@ -24044,6 +25031,17 @@ function bindGameRequestCard() {
       if (input) input.value = state.gameRequest.date;
     });
   });
+  // D2 lane 2 (DI-923): the sport segment (the shipped control; shown only with two or more sports). Choosing a sport clears the old sport's results and date chips, then repaints the card.
+  document.querySelectorAll('#gr-sport .sport-seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const next = btn.getAttribute('data-sport') || '';
+      if (next === grSportContext().dbCode) return;
+      haptic('selection');   // the shipped segment's tick (native shell only; haptic() is a no-op on the web)
+      const g = state.gameRequest;
+      g.sport = next; g.results = []; g.error = ''; g.filter = ''; g.date = ''; g.resultSport = '';
+      repaintGameRequestCard();
+    });
+  });
   document.getElementById('gr-find')?.addEventListener('click', runGameRequestSearch);
   document.querySelectorAll('.gr-withdraw-btn').forEach(btn => {
     btn.addEventListener('click', () => handleGameRequestWithdraw(btn.dataset.requestId));
@@ -24081,8 +25079,12 @@ async function runGameRequestSearch() {
     // player's own school does not carry the star. almatotaltest.mjs's scan
     // enforces "every call site, no exceptions" precisely so a NEW call site
     // cannot quietly reintroduce that split.
-    const res = await fetchByDateRange({ startDate: date, endDate: date, almaMaters: claimedAlmaMaters() });
+    // D2 lane 2 (DI-923): the search is the card's SPORT's (never college football by default); a sport this build cannot search is the named error, not another sport's games.
+    const ctx = grSportContext();
+    if (!ctx.espnKey) { g.results = []; g.error = 'unsupported'; g.loading = false; g.filter = ''; repaintGameRequestCard(); return; }
+    const res = await fetchByDateRange({ startDate: date, endDate: date, almaMaters: claimedAlmaMaters(), sport: ctx.dbCode });
     const games = (res?.games || []).filter(x => x?.espnEventId != null);
+    g.resultSport = ctx.espnKey;
     g.results = games;
     g.error = games.length ? '' : (typeof navigator !== 'undefined' && navigator.onLine === false ? 'network' : 'empty');
   } catch (e) {
@@ -24098,7 +25100,7 @@ function handleGameRequestSubmit(eventId) {
   const meId = (session.playerId && session.playerVerified) ? session.playerId : null;
   if (!meId) { showToast('Log in on the Picks tab to request a game.', 'error'); return; }
   const game = state.gameRequest.results.find(x => String(x.espnEventId) === String(eventId));
-  if (!game) { showToast('Could not match that game', 'error'); return; }
+  if (!game || !state.gameRequest.resultSport) { showToast('Could not match that game', 'error'); return; }
   const res = submitGameRequest({
     playerId: meId,
     playerName: getPlayer(meId)?.displayName || '',
@@ -24110,11 +25112,13 @@ function handleGameRequestSubmit(eventId) {
     gameDate: centralDateKey(game.kickoff || new Date()),
     season: getCurrentWeek()?.season ?? null,
     appVersion: APP_VERSION,
+    espnSport: state.gameRequest.resultSport,   // D2 lane 2 (DI-923): the request stores the sport it searched
   });
   if (!res.ok) {
     const msg = res.reason === 'onSlate' ? 'That game is already on this week\'s slate.'
       : res.reason === 'duplicate' ? 'You already requested that one.'
       : res.reason === 'cap' ? `You have ${GAME_REQUEST_CAP} open requests. Withdraw one before adding another.`
+      : res.reason === 'unknownSport' ? REQUEST_COPY.unsupportedSearch
       : 'Could not save that request.';
     showToast(msg, 'error');
     repaintGameRequestCard();
@@ -24164,21 +25168,32 @@ export function renderGameRequestsAdminSectionHTML(week, availGames = [], slateG
   const pool = Array.isArray(availGames) ? availGames : [];
   const slate = Array.isArray(slateGames) ? slateGames : [];
   const live = folded.filter(r => r.status === 'pending' || r.status === 'onSlate');
-  const thisWeek = week ? live.filter(r => gameRequestMatchesWeek(r, week, pool)) : [];
-  const later = live.filter(r => !(week && gameRequestMatchesWeek(r, week, pool)));
+  // D2 lane 2 (DI-923): a request belongs to a week of ITS sport (an NHL game on Oct 22 never appears on the college week built for that date).
+  let weekSport = null;
+  try { weekSport = week ? requestEspnKey(profileForWeek(week).key) : null; } catch { weekSport = null; }
+  const thisWeek = week ? live.filter(r => gameRequestMatchesWeek(r, week, pool, weekSport)) : [];
+  const later = live.filter(r => !(week && gameRequestMatchesWeek(r, week, pool, weekSport)));
   const past = folded.filter(r => r.status === 'withdrawn' || r.status === 'missed' || r.status === 'passed');
   const st = week ? String(getEffectiveWeekStatus(week) || week.status || '') : '';
   const readOnly = st === 'locked' || st === 'live' || st === 'final';
-  const slateIds = new Set(slate.map(x => x?.espnEventId).filter(v => v != null).map(String));
+  const slateIds = new Set(slate.map(x => sportEventKey(x)).filter(Boolean));   // D2 lane 2 (DI-923): sport and event id together
+  let multiCodes = false;
+  try { multiCodes = getLeagueCompetitions().filter(c => c && !c.archivedAt).length > 1; } catch { multiCodes = false; }
 
   const rowHTML = (grp, i) => {
     const eid = grp.espnEventId != null ? String(grp.espnEventId) : '';
-    const onSlate = (eid && slateIds.has(eid)) || grp.requests.some(r => r.status === 'onSlate');
-    const pooled = eid ? pool.find(x => x?.espnEventId != null && String(x.espnEventId) === eid) : null;
+    const grpKey = sportEventKey(grp.sample);
+    const onSlate = (grpKey && slateIds.has(grpKey)) || grp.requests.some(r => r.status === 'onSlate');
+    const pooled = eid && grpKey ? pool.find(x => x?.espnEventId != null && sportEventKey(x) === grpKey) : null;
+    const unknownSport = !!(grp.sample && grp.sample.unrecognizedSport);
+    let sportCode = '';
+    if (multiCodes && !unknownSport) { try { sportCode = getProfile(Object.keys(REQUEST_ESPN_KEYS).find(k => REQUEST_ESPN_KEYS[k] === sportKeyOfRecord(grp.sample)) || '').code || ''; } catch { sportCode = ''; } }
     // D1 (W-68 / W-69, 2026-10-14): the add goes through the SAME door as the Games list's Add (requestAddToSlate), built from the POOLED game object when it is TAPPED - never from the request
     // snapshot, which may be months old and carry a stale spread/kickoff. The button carries only the event id (the old `data-game` held the whole game as JSON). The row is KEYED so an add
     // patches this one row in place (patchGameRequestRows); `data-sig` is stamped on first paint by stampKeyedSigs().
-    const action = onSlate
+    const action = unknownSport
+      ? `<span class="text-muted text-xs">${escHtml(REQUEST_COPY.unrecognized)}</span>`
+      : onSlate
       ? `<span class="badge badge-open gr-onslate">${icon('check')} On slate</span>`
       : readOnly
         ? ''
@@ -24187,7 +25202,7 @@ export function renderGameRequestsAdminSectionHTML(week, availGames = [], slateG
           : `<span class="text-muted text-xs">Fetch ESPN for these dates to add</span>`;
     return `<div class="gr-comm-row" data-key="${escHtml(`gr:${eid || i}`)}">
       <div class="gr-row-main">
-        <div class="gr-row-matchup">${escHtml(grMatchupLabel(grp.sample))}</div>
+        <div class="gr-row-matchup">${sportCode ? `<span class="gr-sport-code">${escHtml(sportCode)}</span> ` : ''}${escHtml(grMatchupLabel(grp.sample))}</div>
         <div class="text-muted text-xs">${escHtml(fmtTime(grp.sample.kickoff))} · requested by ${escHtml(grp.names.join(', '))}</div>
       </div>
       <div class="gr-row-action">${action}</div>
@@ -24203,19 +25218,20 @@ export function renderGameRequestsAdminSectionHTML(week, availGames = [], slateG
     const wk = getWeeks().find(w => {
       const s = String(w?.startDate || ''), e = String(w?.endDate || '');
       const d = String(grp.sample.gameDate || '');
-      return s && e && d >= s && d <= e;
+      let wsk = null; try { wsk = requestEspnKey(profileForWeek(w).key); } catch { wsk = null; }
+      return s && e && d >= s && d <= e && wsk !== null && wsk === sportKeyOfRecord(grp.sample);   // D2 lane 2 (DI-923): the week built for THIS request's sport
     });
     return `<div class="gr-comm-row">
       <div class="gr-row-main">
         <div class="gr-row-matchup">${escHtml(grMatchupLabel(grp.sample))}</div>
-        <div class="text-muted text-xs">${escHtml(grDayLabel(grp.sample.gameDate))} · ${escHtml(wk ? formatWeekLabel(wk) : 'no week created yet')} · requested by ${escHtml(grp.names.join(', '))}</div>
+        <div class="text-muted text-xs">${escHtml(grDayLabel(grp.sample.gameDate))} · ${escHtml(wk ? formatWeekLabel(wk) : 'no week created yet')} · requested by ${escHtml(grp.names.join(', '))}${grp.sample.unrecognizedSport ? ` · ${escHtml(REQUEST_COPY.unrecognized)}` : ''}</div>
       </div>
     </div>`;
   });
   const pastRows = groupGameRequests(past).map(grp => `<div class="gr-comm-row">
     <div class="gr-row-main">
       <div class="gr-row-matchup">${escHtml(grMatchupLabel(grp.sample))}</div>
-      <div class="text-muted text-xs">${escHtml(grDayLabel(grp.sample.gameDate))} · requested by ${escHtml(grp.names.join(', '))}</div>
+      <div class="text-muted text-xs">${escHtml(grDayLabel(grp.sample.gameDate))} · requested by ${escHtml(grp.names.join(', '))}${grp.sample.unrecognizedSport ? ` · ${escHtml(REQUEST_COPY.unrecognized)}` : ''}</div>
     </div>
     <div class="gr-row-action">${grStatusChipHTML(grp.requests[0]?.status)}</div>
   </div>`);
@@ -24289,6 +25305,7 @@ export function renderFeedbackCardHTML() {
   return `<div class="card feedback-card">
       <h3 style="color:var(--maroon);margin-bottom:6px;font-size:.95rem">💡 Suggest a feature / report an issue</h3>
       <p class="text-muted text-xs mb-sm">Quick way to log an idea or a bug — it's recorded and the Commissioner reviews it. Auto-fills your name, the date, and the app version.</p>
+      <p class="mb-sm"><button type="button" class="fb-report-link" id="fb-report-photo-btn">${escHtml(AVATAR_COPY.reportPrefix)}</button></p>
       <div class="form-group" style="margin-bottom:8px">
         <label class="form-label" style="font-size:.7rem">Your name</label>
         <input class="form-input" id="fb-name" type="text" value="${escHtml(getCurrentPlayerName())}" />
@@ -24347,23 +25364,68 @@ export function renderWeeklyTiesRulesHTML() {
 }
 
 /** D1 / DI-536 - the NFL card of the Rules page: a heading and the bullets js/sport-rules.js composes (every number read from the profile and settings), each escaped here. */
-export function renderNflRulesHTML({ weeklyPrize = '', collegeToo = false } = {}) {
+export function renderNflRulesHTML({ weeklyPrize = '', collegeToo = false, playsForFun = false } = {}) {
+  const nflItems = nflRulesItems({ weeklyPrize: playsForFun ? '' : weeklyPrize, collegeToo });
+  if (playsForFun) nflItems.push(OBT.OBT_COPY.rulesNone);   // D2 lane 1 (DI-1017): obligations OFF for the NFL - "Prizes: none. This league plays for fun." in place of the weekly prize line
   return `<div class="rules-section"><h3>${escHtml(NFL_RULES_HEADING)}</h3>
-        <ul class="rules-list">${nflRulesItems({ weeklyPrize, collegeToo }).map(i => `<li>${escHtml(i)}</li>`).join('')}</ul>
+        <ul class="rules-list">${nflItems.map(i => `<li>${escHtml(i)}</li>`).join('')}</ul>
       </div>`;
+}
+
+/** D2 lane 2 / DI-906 - a generated sport card (the NHL, any format; the NFL's pick-the-winner variant): a heading and the bullets js/rules-model.js composes from the profile and the format, each escaped here. */
+export function renderSportRulesHTML({ profile, format = 'ats', weeklyPrize = '', collegeToo = false, playsForFun = false } = {}) {
+  if (!profile) return '';
+  // int/v0.31.0 (lane 2 x lane 1): a sport whose obligations are OFF plays for fun, exactly as renderNflRulesHTML does (DI-1017): no prize line, and "Prizes: none." in its place
+  const items = sportRulesItems({ profile, format, weeklyPrize: playsForFun ? '' : weeklyPrize, collegeToo });
+  if (playsForFun) items.push(OBT.OBT_COPY.rulesNone);
+  return `<div class="rules-section"><h3>${escHtml(profile.label)} rules</h3>
+        <ul class="rules-list">${items.map(i => `<li>${escHtml(i)}</li>`).join('')}</ul>
+      </div>`;
+}
+
+/** D2 lane 2 / DI-907 - the NHL card of the Rules page (with its divider when another card precedes it), or '' when the league plays no NHL. */
+function renderNhlCardHTML(show,hasOther){
+  if(!show)return '';
+  return `${hasOther?'\n      <div class="divider"></div>\n      ':''}${renderSportRulesHTML({profile:getProfile('nhl'),format:rulesFormatFor('nhl'),weeklyPrize:getSettings().weeklyPrize,collegeToo:hasOther,playsForFun:!obligationsOn(competitionForSport('nhl')?.id||null)})}`;
+}
+
+/** D2 lane 2 / DI-906 - the pick format of ONE live sport's competition ('ats' when the league has no row for it). */
+function rulesFormatFor(dbCode) {
+  try {
+    const comp = liveLeagueCompetitions().find((c) => c.sport === dbCode);
+    return resolveSportFormat({ profile: getProfile(dbCode), competition: comp || null }).format;
+  } catch { return 'ats'; }
+}
+
+/** D2 lane 2 / DI-909 - the pick format of every live sport of the league (a sport with no competition row, a local device: none, which reads as today's all-spread words). */
+function rulesFormatsInPlay() {
+  const out = [];
+  try {
+    for (const comp of liveLeagueCompetitions()) {
+      try { out.push(resolveSportFormat({ profile: getProfile(comp.sport), competition: comp }).format); } catch { /* an unknown sport has no format to state */ }
+    }
+  } catch { /* no competitions */ }
+  return out;
 }
 
 export function renderRulesPage() {
   const c=document.getElementById('page-rules'); if(!c)return;
   // D1 / DI-512: a league whose commissioner saved a copy of the rules still holds the old "Games lock at kickoff." default; it reads corrected here, at render time only (stored text untouched).
-  const rules=applyRulesLegacyReplacements(getSettings().customRules||DEFAULT_RULES).rules;
+  // D2 lane 2 (R-4, R-5, R-8): the PILOT's default is DEFAULT_RULES itself; another league's default reads its own prize lines and, with no claimed alma maters, the designated-game tiebreaker.
+  const pilotRules=isPilotOnlyAllowed('irbCopy');
+  const rules=applyRulesLegacyReplacements(getSettings().customRules||defaultRulesFor({pilot:pilotRules,hasClaims:claimedAlmaMaters().length>0,weeklyPrize:getSettings().weeklyPrize,seasonPrize:getSettings().seasonPrize})).rules;
+  const lw=lifecycleWords(rulesFormatsInPlay());
   // D1 / DI-536: the cards come from the league's sports. No NFL competition (every league today) = today's page, byte for byte. An NFL competition adds the NFL card (and, beside college football,
   // the opening line); an NFL-only league drops the college-football cards. The commissioner's OWN saved rules are the league's text and always render.
   const rs=rulesSports(liveLeagueCompetitions());
   const showCollegeRules=rs.hasCfb||!!getSettings().customRules;
+  // D2 lane 1 (UN-541, DI-1017): where college football's obligations are OFF its Prizes section reads "Prizes: none. This league plays for fun." (render time only: the stored text is untouched); the NFL card does the same for the NFL
+  const cfbObOn=obligationsOn(competitionForSport('cfb')?.id||null), nflObOn=obligationsOn(competitionForSport('nfl')?.id||null);
+  const rulesShown=cfbObOn?rules:rules.map(sec=>/^prizes$/i.test(String(sec&&sec.section||''))?{ ...sec, items:[OBT.OBT_COPY.rulesNone] }:sec);
   // D1 / DI-551: the side contest is NAMED by the league's sport. College football's is the Ischemic Extra Point; an NFL-only league's is the optional longest field goal (the NFL profile's own label), so its
   // page does not teach a college game. With college football in the league (alone or beside the NFL) every word below is today's, byte for byte. (Each use is its own ternary of literals.)
-  const rulesSportNote=rs.both?`<p class="rules-sport-note text-secondary text-sm mb-md">${escHtml(RULES_COLLEGE_NOTE)}</p>`:'';
+  const rc=rulesCards(liveLeagueCompetitions());
+  const rulesSportNote=rs.hasCfb&&rc.noteSports.length?`<p class="rules-sport-note text-secondary text-sm mb-md">${escHtml(rulesOpeningNote(rc.noteSports))}</p>`:'';
   c.innerHTML=`
     <div class="section-header"><h2>How to Play</h2><div class="subtitle">Rules · FAQ · Permissions</div></div>${rulesSportNote}
 
@@ -24374,13 +25436,13 @@ export function renderRulesPage() {
           <div class="faq-stage"><span class="badge badge-draft">DRAFT</span>
             <div><strong>Commissioner is building the slate.</strong> Players can't see or pick anything yet. Sit tight.</div></div>
           <div class="faq-stage"><span class="badge badge-open">OPEN</span>
-            <div><strong>Picks are open.</strong> Log in on the Picks tab, pick all games against the spread, answer the tiebreaker, ${rs.hasCfb?'and (optionally) enter your Ischemic Extra Point guess. Submit. <em>You can come back and edit everything — picks, tiebreaker, Extra Point — as many times as you want until lock.</em>':'and, in a week where the commissioner turns it on, (optionally) enter your longest-field-goal guess. Submit. <em>You can come back and edit everything — picks, tiebreaker, longest field goal — as many times as you want until lock.</em>'} Picks are blind: nobody sees anyone else's picks until they've submitted their own.</div></div>
+            <div><strong>Picks are open.</strong> Log in on the Picks tab, ${escHtml(lw.pick)}, answer the tiebreaker, ${rs.hasCfb?'and (optionally) enter your Ischemic Extra Point guess. Submit. <em>You can come back and edit everything — picks, tiebreaker, Extra Point — as many times as you want until lock.</em>':'and, in a week where the commissioner turns it on, (optionally) enter your longest-field-goal guess. Submit. <em>You can come back and edit everything — picks, tiebreaker, longest field goal — as many times as you want until lock.</em>'} Picks are blind: nobody sees anyone else's picks until they've submitted their own.</div></div>
           <div class="faq-stage"><span class="badge badge-locked">LOCKED</span>
-            <div><strong>The week has locked.</strong> No new picks, no edits — for anyone, including games that haven't kicked off yet. If you missed the deadline, that's a documented adverse event. The Commissioner can grant a per-game unlock in genuine emergencies (their call, on the record).</div></div>
+            <div><strong>The week has locked.</strong> No new picks, no edits — for anyone, including games that haven't kicked off yet. If you missed the deadline, that's a documented adverse event. The Commissioner can Re-open Picks in genuine emergencies (their call, on the record).</div></div>
           <div class="faq-stage"><span class="badge badge-live">LIVE</span>
             <div><strong>Games are being played.</strong> The Dashboard is public — everyone's picks are visible, scores stream in from ESPN, and each pick shows a soft "covering / trailing" state. Nothing is final until the game is final. This is prime chat time.</div></div>
           <div class="faq-stage"><span class="badge badge-final">FINAL</span>
-            <div><strong>The week is graded.</strong> ATS results are locked against the closing spread, ${rs.hasCfb?'the tiebreaker and Extra Point resolve':'the tiebreaker (and the longest field goal, in a week where it is on) resolve'}, standings update, and drink debts post to the ledger. The week becomes browsable read-only from the Picks tab (‹ › arrows).</div></div>
+            <div><strong>The week is graded.</strong> ${escHtml(lw.graded)}, ${rs.hasCfb?'the tiebreaker and Extra Point resolve':'the tiebreaker (and the longest field goal, in a week where it is on) resolve'}, standings update, and debts post to the ledger. The week becomes browsable read-only from the Picks tab (‹ › arrows).</div></div>
         </div>
       </div>
     </div>
@@ -24390,7 +25452,7 @@ export function renderRulesPage() {
       <div class="rules-section"><h3>🔑 Permissions — who can do what</h3>
         <table class="faq-perms"><thead><tr><th></th><th>Player</th><th>Commissioner</th></tr></thead><tbody>
           <tr><td>Make / edit own picks (while OPEN)</td><td>✅</td><td>✅</td></tr>
-          <tr><td>Edit picks after LOCK</td><td>❌</td><td>⚠️ per-game unlock only, logged</td></tr>
+          <tr><td>Edit picks after LOCK</td><td>❌</td><td>⚠️ Re-open Picks only, logged</td></tr>
           <tr><td>See others' picks before submitting</td><td>❌ never</td><td>✅ (admin view)</td></tr>
           <tr><td>${rs.hasCfb?'Change tiebreaker / Extra Point (while OPEN)':'Change tiebreaker / longest-field-goal guess (while OPEN)'}</td><td>✅</td><td>✅</td></tr>
           <tr><td>Build the slate, set spreads, lock the week</td><td>❌</td><td>✅</td></tr>
@@ -24399,9 +25461,9 @@ export function renderRulesPage() {
           <tr><td>Chat, react, reply</td><td>✅</td><td>✅</td></tr>
           <tr><td>Edit own chat message</td><td>✅ within 5 min</td><td>✅ within 5 min</td></tr>
           <tr><td>Delete own chat message</td><td>✅ (tombstone stays)</td><td>✅</td></tr>
-          <tr><td>Reset PINs, manage players, exports, resets</td><td>❌</td><td>✅</td></tr>
+          <tr><td>Manage players, exports, resets</td><td>❌</td><td>✅</td></tr>
         </tbody></table>
-        <p class="text-muted text-xs mt-sm">The app never leaks picks: automated posts announce <em>that</em> you locked picks (e.g. "Kevin locked 6/6") — never <em>what</em> you picked — until lock time.</p>
+        <p class="text-muted text-xs mt-sm">The app never leaks picks: automated posts announce <em>that</em> you locked picks (e.g. "Kevin locked 6/6") — never <em>what</em> you picked — until the first game starts.</p>
       </div>
     </div>
 
@@ -24424,18 +25486,18 @@ ${rs.hasCfb?`    <!-- v0.16.0 — Extra Point -->
         <ul class="rules-list">
           <li><strong>One Locker Room.</strong> Everything happens in the main chat. Any message can be tagged to a game — tap 💬 on a game card and your post shows up both in that game's thread and in the Locker Room. Replies inherit the tag, so conversations stay findable. Untag with one tap if the talk drifts.</li>
           <li>React, reply, pin to the 🏛 Hall of Records, edit your own messages within 5 minutes, withdraw with a tombstone. The log is append-only.</li>
-          <li>At lock, the Locker Room gets <strong>the reveal</strong> — everyone's picks posted at once. ${rs.hasCfb?'Game finals, standings, and Extra Point results file in automatically.':'Game finals and standings file in automatically.'} Nothing ever leaks a pick before lock.</li>
-          <li><strong>S.C.R.I.B.E. is the seventh member of this league.</strong> It keeps the receipts — lock times, bad beats, live-game swings, and who owes whom — and brings them up at the worst possible moment. It answers when you @ it. It is not summoned. It is on duty.</li>
-          <li>House rule, inherited and non-negotiable: savage about football, never about real life.</li>
+          <li>When the first game starts, the Locker Room gets <strong>the reveal</strong> — everyone's picks posted at once. ${rs.hasCfb?'Game finals, standings, and Extra Point results file in automatically.':'Game finals and standings file in automatically.'} Nothing ever leaks a pick before then.</li>
+          <li><strong>S.C.R.I.B.E. is an extra member of this league.</strong> It keeps the receipts — lock times, bad beats, live-game swings, and who owes whom — and brings them up at the worst possible moment. It answers when you @ it. It is not summoned. It is on duty.</li>
+          <li>House rule, inherited and non-negotiable: savage about the games, never about real life.</li>
         </ul>
       </div>
     </div>
 
     <div class="card mb-md">
-      ${showCollegeRules?rules.map(s=>`<div class="rules-section"><h3>${escHtml(s.section)}</h3>
+      ${showCollegeRules?rulesShown.map(s=>`<div class="rules-section"><h3>${escHtml(s.section)}</h3>
         <ul class="rules-list">${s.items.map(i=>`<li>${escHtml(i)}</li>`).join('')}</ul>
       </div><div class="divider"></div>`).join(''):''}
-      ${rs.hasCfb?renderWeeklyTiesRulesHTML():''}${rs.hasNfl&&rs.hasCfb?'\n      <div class="divider"></div>\n      ':''}${rs.hasNfl?renderNflRulesHTML({weeklyPrize:getSettings().weeklyPrize,collegeToo:rs.hasCfb}):''}
+      ${rs.hasCfb?renderWeeklyTiesRulesHTML():''}${rs.hasNfl&&rs.hasCfb?'\n      <div class="divider"></div>\n      ':''}${rs.hasNfl?(rulesFormatFor('nfl')==='moneyline'?renderSportRulesHTML({profile:getProfile('nfl'),format:'moneyline',weeklyPrize:getSettings().weeklyPrize,collegeToo:rs.hasCfb,playsForFun:!nflObOn}):renderNflRulesHTML({weeklyPrize:getSettings().weeklyPrize,collegeToo:rs.hasCfb,playsForFun:!nflObOn})):''}${renderNhlCardHTML(rc.nhl,rs.hasCfb||rs.hasNfl)}
       <!-- SP-54 / DI-470 (UN-403b, 2026-10-01) — the BUILT-IN "Weekly Ties" section sits right above, after the league's own sections and before the standalone divider
            that separates Debts & Bylaws; it adds no divider of its own. -->
       <!-- DI-423 (UN-378, 2026-09-28) — the Alma Maters section RETIRED off
@@ -24449,14 +25511,14 @@ ${rs.hasCfb?`    <!-- v0.16.0 — Extra Point -->
            redundant display is gone. The divider below (already between two
            sections) is kept unchanged — it still separates the mapped
            rules sections from Debts and Bylaws. -->
-      <div class="divider"></div>
+      ${anyObligationsOn()?`<div class="divider"></div>
       <div class="rules-section"><h3>🍺 Debts &amp; Bylaws</h3>
-        <ul class="rules-list">
+        ${pilotRules?`<ul class="rules-list">
           <li>Weekly loser owes the weekly winner. Season loser owes the season winner.</li>
           <li>All outstanding balances are settled <strong>IN PERSON only</strong>, per league bylaw. No exceptions, no Venmo.</li>
           <li>The ledger lives in the app. The ledger forgets nothing.</li>
-        </ul>
-      </div>
+        </ul>`:`<ul class="rules-list">${NEUTRAL_DEBTS_ITEMS.map(i=>`<li>${escHtml(i)}</li>`).join('')}</ul>`}
+      </div>`:''}
     </div>
     <!-- DI-365 (2026-09-27) — three items retired from this page, each
          already reachable one tap away through the control center: the
@@ -24542,6 +25604,14 @@ function getCurrentPlayerName() {
  * (chat-ui.js, security fix round NOTE 4). The drawer/Settings-page dual-
  * host call site (bindControlCenterBodies()) passes its own container.
  */
+function prefillPhotoReport(root) {
+  try {
+    const body = _fbField(root, 'fb-body');
+    if (body) { body.value = `${reportPhotoText('')}: `; body.focus?.(); try { body.setSelectionRange?.(body.value.length, body.value.length); } catch { /* a caret is a courtesy */ } }
+    _fbFields(root, '#fb-kind-group .pick-btn').forEach((b) => b.classList.toggle('selected', b.dataset.fbKind === 'bug'));
+  } catch (e) { console.warn('[avatar] the photo report prefill failed', e); }
+}
+export const _prefillPhotoReportForTest = (root) => prefillPhotoReport(root);
 export function submitFeedback(scopeEl = document) {
   const root = scopeEl && typeof scopeEl.querySelector === 'function' ? scopeEl : document;
   const fld = (id) => _fbField(root, id);
@@ -25133,14 +26203,13 @@ export function scribePacingUnlimitedWarning({ cooldownMinutes, capUsd = SCRIBE_
   return `Unlimited at a ${gap}-minute gap could post up to ${perHour} time${perHour === 1 ? '' : 's'} an hour — about ${scribeCostPhrase(perHour)}/hour at the high end. Your $${capUsd}/month budget still stops SCRIBE if it's reached.`;
 }
 
-/** DI-252 §2b.4 — the honest state, not a tooltip. Apps Script still runs
- *  SCRIBE's unprompted posts until Step 6 flips `serverJobs.scribeAutonomous`. */
+/** DI-252 §2b.4 — the honest state, not a tooltip. SCRIBE's unprompted posts run on the server only while `serverJobs.scribeAutonomous` is on. */
 export function isServerScribeAutonomousOn() {
   const jobs = getSettings().serverJobs;
   return !!(jobs && typeof jobs === 'object' && jobs.scribeAutonomous === true);
 }
 export const SCRIBE_PACING_SERVER_OFF_NOTE =
-  "These settings take effect once the server SCRIBE is switched on — Apps Script is still running SCRIBE's unprompted posts today, with its own fixed limits.";
+  "These settings take effect once SCRIBE's server jobs are on for this league.";
 
 /**
  * DI-252 §2b.8 — THE LOAD-BEARING PART, and the only reason this is a function
@@ -26018,6 +27087,8 @@ const SERVER_JOB_LABELS = Object.freeze({
   // D1 Lane C (DI-656) — `scribe-scan`'s two sub-jobs.
   scribeCallout: 'SCRIBE deadline call-outs',
   scribeScan: 'SCRIBE moment scan',
+  // D2 lane 4 batch 2 (DI-1078) - the followed-team data collector.
+  teamFacts: 'Team stats for followed teams',
 });
 /** The `job_runs.job` value each switch's function writes — snake/kebab,
  *  not the camelCase switch name (`_shared/runs.js`'s JOB_NAME constants). */
@@ -26031,6 +27102,7 @@ const SERVER_JOB_RUN_NAME = Object.freeze({
   // D1 Lane C — one function, two run names (each sub-job writes its own job_runs row).
   scribeCallout: 'scribe-callout',
   scribeScan: 'scribe-scan',
+  teamFacts: 'team-facts',
 });
 /** Which functions actually exist to deploy, as of this build. Everything
  *  else renders DISABLED with a stated reason (§0.3 item 2: deploying is not
@@ -26061,7 +27133,7 @@ const SERVER_JOB_RUN_NAME = Object.freeze({
 //  runbook says so in §S6F1-W3.
 //  `scribeCallout` / `scribeScan` (D1 Lane C, DI-652 / DI-653) join at this build: `scribe-scan`, its twin and migration 0056 (the cron and
 //  `job_week_completion`) exist. Both stay OFF until Drew has pasted 0056 and deployed the function (docs/runbook/0056_SCRIBE_SCAN.md).
-const SERVER_JOB_BUILT = Object.freeze({ notifyFanout: true, keepalive: true, reminders: true, scribeAsk: true, trainer: true, scribeClassify: true, scribeAutonomous: true, scoresRefresh: true, scribeLearn: true, scribeReact: true, scribeCallout: true, scribeScan: true, feedBuild: true });
+const SERVER_JOB_BUILT = Object.freeze({ notifyFanout: true, keepalive: true, reminders: true, scribeAsk: true, trainer: true, scribeClassify: true, scribeAutonomous: true, scoresRefresh: true, scribeLearn: true, scribeReact: true, scribeCallout: true, scribeScan: true, feedBuild: true, teamFacts: true });
 /** Expected cadence in minutes, for the staleness line — only for jobs that
  *  fire AT LEAST DAILY. `notify-fanout` and `scribeAsk` are both EVENT-DRIVEN
  *  (a webhook / a `functions.invoke()` per `@scribe` mention): their "last
@@ -26110,9 +27182,9 @@ const SERVER_JOB_CADENCE_MIN = Object.freeze({ reminders: 5, keepalive: 360, scr
  * staleness escalation — applies to it unchanged (bgjobscardtest.mjs [2]).
  */
 // D1 Lane C (DI-659): feed-build is project-wide too (one public card builder for every league); its runs carry league_id null like keepalive's.
-const SERVER_JOB_PLATFORM_SCOPED = Object.freeze({ keepalive: true, feedBuild: true });
+const SERVER_JOB_PLATFORM_SCOPED = Object.freeze({ keepalive: true, feedBuild: true, teamFacts: true });
 const PLATFORM_SCOPED_COPY = "runs project-wide, so its heartbeat isn't logged under this league and can't be shown here. Check it in Supabase (job_runs, job = 'keepalive').";
-const PLATFORM_SCOPED_COPY_BY_JOB = Object.freeze({ feedBuild: "runs project-wide (one card builder for every league), so its runs aren't logged under this league and can't be shown here. Check it in Supabase (job_runs, job = 'feed-build')." });
+const PLATFORM_SCOPED_COPY_BY_JOB = Object.freeze({ feedBuild: "runs project-wide (one card builder for every league), so its runs aren't logged under this league and can't be shown here. Check it in Supabase (job_runs, job = 'feed-build').", teamFacts: "runs project-wide (one collector of public team data for every league), so its runs aren't logged under this league and can't be shown here. Check it in Supabase (job_runs, job = 'team-facts')." });
 /**
  * ESPN-CLASS (DI note) (live, game day 2026-09-26) — WHICH ESPN FAILURE, in this file's own words.
  *
@@ -26131,6 +27203,7 @@ const ESPN_FAILURE_PHRASES = Object.freeze([
   ['failParse', "ESPN's reply was not readable"],
   ['failTooLarge', "ESPN's reply was over the size cap"],
   ['failNoEvents', 'ESPN returned no games'],
+  ['failUnsupportedSport', 'a sport this app does not support'],   // D2 sweep DI-1094 (W-162): a game tagged with a sport that has no scoreboard here, not a network failure
 ]);
 function espnFailureDetail(payload) {
   const p = payload && typeof payload === 'object' ? payload : {};
@@ -26303,7 +27376,7 @@ const SERVER_JOB_ON_WARNING = Object.freeze({
   // stopped moving at cutover, so its report is stale/near-empty rather than a copy of the real
   // one) — it is a genuine double-SPEND risk (two paid Anthropic calls, tracked in two unrelated
   // places) rather than a double-answer or double-push risk.
-  trainer: 'This spends money per run (Anthropic), on a one-per-hour floor. Before flipping this on, delete the Apps Script Monday Trainer trigger (§S6F4-P0) — that closes the SCHEDULED double-run, which fires every Monday regardless of any device’s version. The manual “Run Trainer now” button is commissioner-only and is closed structurally in this build already, so it only matters that YOUR OWN browser has this build — nobody else’s device.',
+  trainer: 'This spends money per run (Anthropic), on a one-per-hour floor. The manual “Run Trainer now” button is commissioner-only.',
   // ═══ END STEP 6 PHASE 4 ═══
   // ═══ BEGIN STEP 6 PHASE 5 (scribe-classify / scribe-autonomous) ═══
   // STALE-CLIENT ANALYSIS, done the way Phase 3/4 did it for scribeAsk/trainer (both comments
@@ -26336,8 +27409,8 @@ const SERVER_JOB_ON_WARNING = Object.freeze({
   // so a stale device's legacy call returns `{skipped:'retired_step6_f5'}` before it can ever reach
   // Apps Script's own cooldown or post anything, regardless of which release that device is on. No
   // device survey is required or sufficient; the closure is what makes the survey unnecessary.
-  scribeClassify: 'This spends money per classified message (Anthropic, capped by the daily classify cap and the shared monthly budget). A STALE cached device (has not loaded the current app version) still calls the old Apps Script classifier directly — a second paid call Apps Script tracks in its own log, invisible to this month’s Supabase spend cap. Before flipping this on, close the Apps Script scribeAutonomous/scribeClassify action (§S6F5-P0(a)) — a stale device’s legacy call then returns skipped, so no device’s app version matters.',
-  scribeAutonomous: 'This spends money per unprompted post (Anthropic) and posts to the room without being asked. A STALE cached device has no knowledge of this switch or of the Edge Function’s cooldown — it can independently score the same event and post a SECOND unprompted SCRIBE reply within the same ten minutes, which is the exact double-post this switch exists to prevent. Before flipping this on, close the Apps Script scribeAutonomous/scribeClassify action (§S6F5-P0(a)) — a stale device’s legacy call then returns skipped, so no device’s app version matters.',
+  scribeClassify: 'This spends money per classified message (Anthropic, capped by the daily classify cap and the shared monthly budget).',
+  scribeAutonomous: 'This spends money per unprompted post (Anthropic) and posts to the room without being asked. The Edge Function’s own cooldown limits how often it can post.',
   // ═══ END STEP 6 PHASE 5 ═══
   // ═══ SCRIBE v3 PACKAGE C (DI-273) ═══
   scribeLearn: 'This spends money PER PIECE OF FEEDBACK (Anthropic, drawn on the same monthly cap) and, at Fast, WRITES A RULE SCRIBE STARTS OBEYING WITHIN SECONDS with nobody clicking Approve. Two things must already be true or this switch does nothing: migration 0024 pasted (the function inserts a column it creates), and the cfbp_scribe_learn Database Webhook created (runbook §S6F1-W2) — without the webhook nothing ever calls the function at all. Every auto-applied rule is announced in the chat and can be switched off in this card; the Learning Rate dial on the Comm panel SCRIBE tab is the throttle, and Locked stops the instant path entirely.',
@@ -26403,7 +27476,7 @@ export function renderBackgroundJobsAdminSectionHTML({ now = Date.now(), pilot =
   const PILOT_ONLY_COPY = 'This feature is only available to the pilot league.';
 
   const rowsHtml = SERVER_JOB_NAMES.map((job) => {
-    const pilotLocked = (job === 'trainer' || job === 'feedBuild') && !pilot;   // D1 Lane C (review N6): the Home cards builder serves the pilot only (0055 C-1), so it locks the same way
+    const pilotLocked = (job === 'trainer' || job === 'feedBuild' || job === 'teamFacts') && !pilot;   // D1 Lane C (review N6): the Home cards builder serves the pilot only (0055 C-1), so it locks the same way
     const on = bag[job] === true;
     const built = !!SERVER_JOB_BUILT[job] && !pilotLocked;
     const label = SERVER_JOB_LABELS[job] || job;
@@ -26520,7 +27593,7 @@ export function renderBackgroundJobsAdminSectionHTML({ now = Date.now(), pilot =
 
   return `
         <div class="flex-between mb-sm" style="align-items:flex-start;gap:8px">
-          <p class="text-muted text-xs" style="margin:0">Server-side jobs on Supabase, replacing the old Google Sheet triggers one at a time. Off means the app's own client-side path is still doing the work.</p>
+          <p class="text-muted text-xs" style="margin:0">Server-side jobs on Supabase. Off means the app's own client-side path is still doing the work.</p>
           <button class="btn btn-secondary btn-sm" id="background-jobs-refresh-btn">🔄 Refresh</button>
         </div>
         ${rowsHtml}
@@ -27251,7 +28324,7 @@ function renderCommExtrasV16(week, games) {
     try {
       const { rows, unsupported } = await fetchChatMetrics(7);
       // Step 5 D-6: honest copy on a backend that has no Apps Script quota to meter.
-      if (unsupported) { out.textContent = 'Not applicable — the new backend has no Apps Script quota.'; return; }
+      if (unsupported) { out.textContent = 'Not applicable — the backend has no call quota to meter.'; return; }
       if (!rows.length) { out.textContent = 'No metrics yet — they accrue once chat traffic starts.'; return; }
       out.innerHTML = rows.map(r => {
         const total = r.execCount || 0;
@@ -27962,7 +29035,7 @@ export function finalizeWeek(week, { settling = false } = {}) {
   const scribeCid=weekCompetitionId(week);   // D1 (Part 2 item 2): SCRIBE's before/after standings are the WEEK'S sport's, not whichever sport this device's pointer is on
   const scribeStandingsBefore=seasonStandingsRows({ competitionId: scribeCid });
   games.forEach(g=>{
-    if(g.status===GAME_STATUS.FINAL&&g.lockedSpread!==null)
+    if(g.status===GAME_STATUS.FINAL&&g.lockedSpread!==null&&!isVoided(g))   // D2 lane 2: a voided game keeps its no_decision (its scores are null, calculateAtsWinner would clear it)
       saveGame({...g,atsWinner:calculateAtsWinner(g)});
   });
   const freshGames=getGames(week.weekId);
@@ -27972,6 +29045,10 @@ export function finalizeWeek(week, { settling = false } = {}) {
   // persists them (results.extra; no migration).
   const tie=buildWeekTieContext({ weeks:[week], players, getGames, liveRoster:claimedAlmaMaters(), almaApplicable:weekUsesAlmaAffinity(week), settlingNow:settling });
   const results=calculateWeeklyResults(week.weekId,players,picks,freshGames,week.actualTiebreakerValue,tie);
+  // D2 lane 2 (DI-896 / DI-909 #7): a slate whose EVERY game was voided is a NO CONTEST: nobody is its winner or its loser, no obligation is created and no winner is announced. js/scoring.js is not edited;
+  // the standings read isWinner / isLoser, so clearing them here is what makes the week count for nobody (a voided game is `final`, `noDecision`, 0 points).
+  const noContest = settlement(freshGames).noContest;
+  if (noContest) results.forEach((r) => { r.isWinner = false; r.isLoser = false; r.wonByTiebreaker = false; delete r.tieBreak; });
   saveAllWeeklyResults(week.weekId,results);
   if(tie&&tie.degraded&&tie.degraded.length){
     // The builder never throws out of a finalize (SC-K1): a half it could not read was SKIPPED and the week was still decided. Say so, once.
@@ -27986,9 +29063,10 @@ export function finalizeWeek(week, { settling = false } = {}) {
     // exactly-once even if several devices finalize/re-finalize).
     try {
       const ranked=[...results].sort((a,b)=>(a.rank??99)-(b.rank??99));
-      emitWeekFinalEvent(week, ranked);
+      if(!noContest) emitWeekFinalEvent(week, ranked);
       freshGames.forEach(g=>{
         const ats=g.atsWinner; if(!ats) return;
+        if(isVoided(g)) return;     // D2 lane 2 (DI-896): a voided game posts no final line
         const gp=picks.filter(p=>p.gameId===g.gameId);
         emitGameFinalEvent(g, ats,
           gp.filter(p=>p.selectedTeam===ats).map(p=>p.playerId),
@@ -28006,7 +29084,7 @@ export function finalizeWeek(week, { settling = false } = {}) {
     // finalization of a grouped week fires its OWN notification here, exactly
     // like emitWeekFinalEvent() above it — same "a part finalizing alone still
     // fires its own events" behavior this function already documents.
-    if (week.dataSourceMode !== 'demo') {
+    if (week.dataSourceMode !== 'demo' && !noContest) {
       try {
         const winner = results.find(r=>r.isWinner);
         const loser = results.find(r=>r.isLoser);
@@ -28053,7 +29131,7 @@ export function finalizeWeek(week, { settling = false } = {}) {
     const winner=results.find(r=>r.isWinner);
     const loser=results.find(r=>r.isLoser);
     // v0.17.0 — demo weeks NEVER generate real obligations
-    if(winner&&loser&&week.dataSourceMode !== 'demo'){
+    if(winner&&loser&&week.dataSourceMode !== 'demo'&&obligationsOnFor(week.weekId)){   // D2 lane 1 (DI-1017/1018): OFF creates no obligation (and no notice); no backfill when switched on later
       const created=reconcileWeeklyObligation(week.weekId, loser.playerId, winner.playerId, settings.weeklyPrize);
       if(created)obligationsCreated.push(created);
     }
@@ -28067,7 +29145,7 @@ export function finalizeWeek(week, { settling = false } = {}) {
     const groupResults = calculateGroupWeeklyResults(groupWeeks, players, groupPicks, groupGames, groupTie);
     const gWinner = groupResults.find(r=>r.isWinner);
     const gLoser  = groupResults.find(r=>r.isLoser);
-    if (gWinner && gLoser && week.dataSourceMode !== 'demo') {
+    if (gWinner && gLoser && week.dataSourceMode !== 'demo' && obligationsOnFor(gid)) {   // D2 lane 1 (DI-1017/1018)
       const created = reconcileWeeklyObligation(gid, gLoser.playerId, gWinner.playerId, settings.weeklyPrize);
       if (created) obligationsCreated.push(created);
     }
@@ -28391,6 +29469,15 @@ export function tickAutoTransition() {
       const { due, blocked, gate: gateForOpen, blurb: blurbForOpen } = dueForScheduledOpen({ // DI-404 (coordinator override, 2026-09-30): a due week with no valid blurb is BLOCKED (below), never opened
         week: w, now: Date.now(), gamesCount: wGames.length, missingSpreadCount: missingForOpen, timingConfigured: timingConfiguredForOpen,
       });
+      if (due && openBlockSentenceFor(w)) {
+        // D2 lane 2 (review 8, DI-886): ONE slate is pickable at a time per night sport: a due scheduled open is HELD (never opened) while another slate of the sport is open; it opens on the first tick
+        // after that one is locked or final. Said persistently (the Step 6 warning reads the reason) and once as a toast.
+        const sentence = openBlockSentenceFor(w);
+        _scheduledOpenBlockedReason.set(w.weekId, sentence);
+        const nk = `${w.weekId}|another_slate_open`;
+        if (!_scheduledOpenBlockedNoticeSent.has(nk)) { _scheduledOpenBlockedNoticeSent.add(nk); showToast(`Scheduled open is held: ${sentence}`, 'warning'); }
+        continue;
+      }
       if (due) {
         applyWeekStatusChange(w, WEEK_STATUS.OPEN);
         // BLOCK fix (d) (app-shell part 3A review, 2026-09-27) —
@@ -28638,7 +29725,8 @@ export function liveStatusDisplay(entry, nowMs = Date.now()) {
   if (!entry) return null;
   const isHalftime = entry.name === 'STATUS_HALFTIME';
   let text  = isHalftime ? 'Halftime' : (entry.detail || '');
-  let pulse = !isHalftime;
+  // D2 lane 2 (DI-884): an 18-minute hockey intermission (`intermission`, set by the NHL status mapping only) does not pulse, exactly as halftime does not; the text stays ESPN's own.
+  let pulse = !isHalftime && entry.intermission !== true;
   const ageMs = nowMs - (entry.capturedAt ?? nowMs);
   if (ageMs > LIVE_STATUS_STALE_MS) {
     const mins = Math.floor(ageMs / 60000);
@@ -28660,7 +29748,7 @@ export function liveStatusDisplayShort(entry, nowMs = Date.now()) {
   if (!entry) return null;
   const isHalftime = entry.name === 'STATUS_HALFTIME';
   const source = isHalftime ? 'Halftime' : (entry.shortDetail || entry.detail || '');
-  let pulse = !isHalftime;
+  let pulse = !isHalftime && entry.intermission !== true;
   const ageMs = nowMs - (entry.capturedAt ?? nowMs);
   if (ageMs > LIVE_STATUS_STALE_MS) pulse = false;
   const text = source.length <= LIVE_STATUS_SHORT_BUDGET
@@ -28679,7 +29767,7 @@ function gamePhaseOf(game) {
 /** The honest extra chip for a game in a phase that used to say nothing (or the wrong thing). '' for upcoming / live / final — those keep today's markup. `cls` is the surface's own pill class. */
 function gameStateChipHTML(game, cls) {
   const st = gameStateOf(game, { liveEntry: liveStatusById.get(game && game.gameId) });
-  if (st.phase !== 'live-stale' && st.phase !== 'awaiting' && st.phase !== 'no-score') return '';
+  if (st.phase !== 'live-stale' && st.phase !== 'awaiting' && st.phase !== 'no-score' && st.phase !== 'voided') return '';   // D2 lane 2 (DI-896): a voided game is a chip of its own ("Voided — no decision")
   return `<span class="${escHtml(cls)} gs-chip gs-chip--${escHtml(st.phase)}">${escHtml(st.label)}</span>`;
 }
 /** The viewer's game order for one week (DI-579): Kickoff (the default — every record in the database), Live first, or My order. NOT for the Picks page (UN-72). */
@@ -28738,7 +29826,7 @@ export function dashboardSortContext({ week, games, layout, session }) {
   const arranging = state.arrangeWeekId === week.weekId && layout === 'compact' && mode === 'manual' && !allSports && state.layoutEditing !== 'dashboard';
   const listHTML = listControlHTML({
     n: games.length, caption: dashSortCaption(week, games), mode, arranging,
-    weekN: week.weekNumber !== undefined && week.weekNumber !== null ? week.weekNumber : '', escHtml, numHtml,
+    weekN: week.weekNumber !== undefined && week.weekNumber !== null ? week.weekNumber : '', slate: week.slateLabel || '', escHtml, numHtml,
   });
   return { visible: true, arranging, listHTML, mode };
 }
@@ -29165,6 +30253,7 @@ function mayPersistGameGrading() {
 export function isEspnRefreshableGame(g) {
   if (!g?.espnEventId) return false;
   if (g.dataSource === 'demo') return false;
+  if (isVoided(g)) return false;                      // D2 lane 2 (DI-896): a voided game is the commissioner's call, never ESPN's: a poll that read it back as scheduled would undo the void
   if (!g.isManual) return true;                       // normal CFB path
   return !!g.espnSport && !!g.espnEventId;            // manual w/ full ESPN linking
 }
@@ -29266,7 +30355,10 @@ export async function doRefreshScores(week,games,{ displayOnly = false } = {}) {
     // closed the object below is byte-identical to the pre-backfill write.
     // Guards: refreshtest.mjs [8] (player, real adapter) and [7] (backfill).
     const logoBackfill = mayPersistGameGrading() ? logoBackfillOf(upd) : {};
-    saveGame({...stored,homeScore:upd.homeScore,awayScore:upd.awayScore,status:upd.status,actualWinner:upd.actualWinner,kickoff:upd.kickoff,kickoffConfirmed:upd.kickoffConfirmed,kickoffDateOnly:upd.kickoffDateOnly,lastUpdated:upd.lastUpdated,...logoBackfill});
+    // DI-1091 (W-102, RG-372): the time of the FINAL SCORE. Stamped once, at the first change to final, and only on the device that persists grading (a player device's overlay carries score
+    // fields only, and a stamp from its own clock would disagree with the commissioner's); a correction leaves it; a status that leaves final clears it. A spread of ONE key, after the allow-list.
+    const finalAtFix = mayPersistGameGrading() ? finalAtPatch(stored, upd.status) : {};
+    saveGame({...stored,homeScore:upd.homeScore,awayScore:upd.awayScore,status:upd.status,actualWinner:upd.actualWinner,kickoff:upd.kickoff,kickoffConfirmed:upd.kickoffConfirmed,kickoffDateOnly:upd.kickoffDateOnly,lastUpdated:upd.lastUpdated,...logoBackfill,...finalAtFix});
     // v0.17.0 — kickoff system event + SCRIBE live observations
     try {
       const fresh0=getGame(upd.gameId);
@@ -29391,7 +30483,7 @@ export function reconcileGameEvents(week) {
           if (getChatMessage(`sys_kick_${game.gameId}`)) out.kickoffs += 1;
         }
       }
-      if (game.status === GAME_STATUS.FINAL && !getChatMessage(`sys_final_${game.gameId}`)) {
+      if (game.status === GAME_STATUS.FINAL && !isVoided(game) && !getChatMessage(`sys_final_${game.gameId}`)) {
         const ats = game.atsWinner || calculateAtsWinner(game);
         if (!ats) continue;                       // not gradeable yet — no post, id stays free
         // The SAME winner/loser derivation doRefreshScores() uses, so a post
@@ -29601,7 +30693,8 @@ function exportWeekDashboardCSV(week) {
     const sv=g.lockedSpread??g.spread;
     const spreadStr=sv!==null&&sv!==undefined?fmtSpread(sv,g.favorite,g):(g.status===GAME_STATUS.FINAL?'Final':'TBD');
     const ats=g.atsWinner||(g.status===GAME_STATUS.FINAL?calculateAtsWinner(g):'');
-    const row=[`${td(g,'home')} vs ${td(g,'away')}`, spreadStr, g.status, ats||''];
+    // D2 lane 2 (DI-896 / DI-915): a voided game exports "Result: VOID" (no score, no winner), and a pick-the-winner game exports no line ('' where football exports "PK").
+    const row=[`${td(g,'home')} vs ${td(g,'away')}`, isVoided(g)?'':spreadStr, isVoided(g)?'void':g.status, isVoided(g)?'VOID':(ats||'')];
     for(const p of submitted){
       const pk=picks.find(pp=>pp.gameId===g.gameId&&pp.playerId===p.playerId);
       if(!pk){row.push('');continue;}
@@ -29782,7 +30875,7 @@ export function buildObligationsCsvRows(obs, playersById, weeksById, sportOfWeek
 }
 
 function exportObligationsCSV() {
-  const obs=getObligations();
+  const obs=shownObligations(getObligations());   // D2 lane 1 (DI-1017): the sports whose obligations are ON
   const players=Object.fromEntries(getPlayers().map(p=>[p.playerId,p.displayName]));
   const weeks=Object.fromEntries(getWeeks().map(w=>[w.weekId,w]));
   const sportOf = isMultiSport() ? ((weekId) => { try { return weeks[weekId] ? (profileForWeek(weeks[weekId]).code || '') : ''; } catch { return ''; } }) : null;
@@ -29933,13 +31026,13 @@ function parseRulesText(text) {
 
 /** Format spread for a game — always shows favored team with negative number.
  *  Accepts (spread, favorite) or (spread, favorite, game) for fallback derivation. */
-function fmtSpread(spread, favorite, game = null) { return formatSpread(spread, favorite, game); }
+function fmtSpread(spread, favorite, game = null) { return game && isPickTheWinnerGame(game) ? '' : formatSpread(spread, favorite, game); }   // D2 lane 2 (DI-915): pick the winner prints no line, never "PK"
 
 /** Format spread directly from a game object (preferred — handles all fallbacks). */
 function spreadFromGame(game) {
   if (!game) return 'TBD';
   const sv = game.lockedSpread !== null ? game.lockedSpread : game.spread;
-  return formatSpread(sv, game.favorite, game);
+  return lineText({ ...game, spread: sv }, undefined, { formatSpread });   // D2 lane 2 (DI-915)
 }
 
 /** Team display "School (Mascot)" — uses explicit mascot or TEAM_MASCOT_LOOKUP fallback. */
@@ -30239,51 +31332,8 @@ function showToast(msg,type='success',{html=false}={}){
 }
 
 
-// ─── SITE PIN GATE ────────────────────────────────────────────────────────────
-
-export function showSitePinGate() {
-  // v0.16.0 — the gate is now an OVERLAY on top of the (already booted) app,
-  // instead of nuking document.body and reloading on success. Killing the
-  // reload removes the entire second boot + second Apps Script hydrate that
-  // caused the old post-PIN blank screen. Background hydration continues while
-  // the user types, so by the time the PIN lands the data is usually fresh.
-  const s = getSettings();
-  const titleTop  = s.welcomeTitleTop  || 'welcome to';
-  const titleMain = s.welcomeTitleMain || (s.welcomeTitle ? s.welcomeTitle.replace(/^welcome to\s*/i,'') : "irb pick 'ems");
-  const subtitle  = s.welcomeSubtitle || 'enter access pin';
-  document.getElementById('site-gate-overlay')?.remove();
-  const wrap = document.createElement('div');
-  wrap.id = 'site-gate-overlay';
-  wrap.innerHTML = `
-    <div class="site-gate">
-      <div class="site-gate-inner">
-        <div class="site-gate-title-top">${escHtml(titleTop)}</div>
-        <div class="site-gate-title">${escHtml(titleMain)}</div>
-        <div class="site-gate-subtitle">${escHtml(subtitle)}</div>
-        <input class="site-gate-input" id="site-pin-input" type="password" inputmode="numeric"
-          maxlength="8" placeholder="_ _ _ _" autocomplete="off" />
-        <div class="site-gate-error" id="site-gate-error" style="display:none">incorrect pin</div>
-        <button class="site-gate-btn" id="site-gate-submit">enter</button>
-      </div>
-    </div>`;
-  document.body.appendChild(wrap);
-  const input = document.getElementById('site-pin-input');
-  const errEl = document.getElementById('site-gate-error');
-  const submit = () => {
-    const pin = input?.value || '';
-    if (verifySitePin(pin)) {
-      setSiteUnlocked(true);
-      wrap.remove();                                  // instant — no reload
-      navigateTo(state.currentTab || 'dashboard');
-    } else {
-      if (errEl) errEl.style.display = 'block';
-      if (input) { input.value = ''; input.focus(); }
-    }
-  };
-  document.getElementById('site-gate-submit')?.addEventListener('click', submit);
-  input?.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
-  setTimeout(() => input?.focus(), 100);
-}
+// D2 lane 6 (DI-765, D-108): the front-door site PIN gate (showSitePinGate, its welcome text, its PIN field) is deleted. #site-gate-overlay survives as the shell the sign-in
+// gate and the hold gate are painted into.
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Phase III Step 3a — DI-180 (Google sign-in gate), DI-181 (league flow),
@@ -30611,10 +31661,11 @@ export function authSignInAffordance() {
  */
 const AUTH_HOLD_COPY = {
   'config-unreadable': {
-    // A1 — the other two variants keep "One moment": they really can resolve by
-    // themselves, and the background re-check is what resolves them.
-    heading: 'One moment',
-    body: "We couldn't confirm you're signed in. Your picks and history are safe — nothing has changed.",
+    // D2 lane 6 (DI-765, D-108) — the "cannot reach Munera" screen. It is the ONLY thing a device that cannot read config.json
+    // ever shows (never a local app). The re-check below resolves it by itself once the file is readable, so the heading keeps
+    // the "resolves by itself" register; no PIN, no sign-in control, Retry only.
+    heading: "Can't reach Munera",
+    body: "Check your connection and try again. Your picks and history are safe — nothing has changed.",
   },
   'sdk-unavailable': {
     heading: 'One moment',
@@ -30839,6 +31890,7 @@ function tearDownRenderedContentForHold() {
   // D1 Lane B / DI-571: a pushed screen (a Home card detail) is closed through its own door FIRST — its stack, its Esc listener and its inert page are module state a bare DOM sweep would orphan.
   try { closeAllScreens('hold'); } catch {}
   try { document.querySelectorAll('[data-hold-teardown]').forEach(el => el.remove()); } catch {}
+  try { resetInsightSurfaces(); } catch {}   // D2 lane 4: the wire and the Ask sheet's state are the departed account's
   // S2-3 (full-app review, 2026-09-26) — the control-center drawer is a
   // persistent mount (#control-center-root), so it cannot be removed like the
   // overlays above; it is CLOSED instead, instantly, so it is neither left
@@ -31192,7 +32244,6 @@ export async function runAuthHoldCheck({ manual = false } = {}) {
     // screen (S-1: never anyone else's gate), put the PIN gate back for a locked
     // pins device, and repaint the page content this gate tore down.
     hideAuthHoldGate();
-    if (decision.authMode !== 'supabase' && !isSiteUnlocked()) showSitePinGate();
     // SECURITY F2 — the 'session-expired' re-hydrate that used to live here is
     // GONE, because this branch is now unreachable for it: AUTH_HOLD_RECOVERY
     // routes both Step-4 holds to the adapter path above, which returns. Left
@@ -33236,6 +34287,14 @@ export function hideSessionExpiredBanner() {
 // the other is exactly how the gate used to come down on a null session.
 const AUTH_SESSION_EVENTS = ['SIGNED_IN', 'SIGNED_OUT', 'INITIAL_SESSION', 'TOKEN_REFRESHED', 'USER_UPDATED', 'PASSWORD_RECOVERY', 'MFA_CHALLENGE_VERIFIED'];
 
+/** D2 lane 1 (DI-776): the league's photo directory follows the league. Kept OUT of wireAuthUIEvents() (a filter there is a path that skips the identity chokepoint, authtest's own rule): this one
+ *  only moves a picture cache, never an identity. Never throws. */
+function avatarDirectoryFollows(event) {
+  try {
+    if (event === 'SIGNED_OUT' || event === 'SWITCH_START') clearAvatarDirectory();
+    else if (event === 'MEMBERSHIPS_REFRESHED' || event === 'SWITCH_END') refreshAvatarDirectory().catch(() => {});
+  } catch (e) { console.warn('[avatar] directory refresh failed', e); }
+}
 let _authEventsWired = false;
 /**
  * Wires app.js's ONE auth listener. Idempotent. Split out of boot() (reviewer
@@ -33254,6 +34313,12 @@ export function wireAuthUIEvents() {
     // can never be the thing that breaks a session event.
     try { maybePromptPendingInvite(event); }
     catch (e) { console.warn('[league-create] pending-invite prompt failed', e); }
+    // D2 lane 1 (DI-776): the league's photo directory follows the league. Cleared when the identity or the league is leaving (the next render shows initials, never the old league's faces), read again
+    // once memberships are resolved or a switch has landed. It needs a client and an active league and is silent without them, so no boot-order precondition hangs on it.
+    avatarDirectoryFollows(event);
+    stkFollows(event);              // D2 lane 1 batch 3: the season-ender vote's cache is forgotten at sign-out and at a league switch
+    accountContextFollows(event);   // D2 lane 1: the owner-only account store follows the sign-in (read once per account, cleared at sign-out)
+    canCreateFollows(event);        // D2 lane 1 (DI-718): the server's answer to "may this account create a league" follows the sign-in and every membership refresh
   });
 }
 /**
@@ -33536,6 +34601,9 @@ function applyIdentityDeltaIfChanged(reason, { expiry = false, discard = false }
   // one chokepoint every identity change passes through; home.js's own identity tie (the module half) refuses a stale commit even when this call is missed. Never constructs the wiring
   // (nothing to reset before Home has ever painted).
   try { if (_homeWiring) { _homeWiring.homeNews.reset(); _homeWiring.homeView.resetNews(); } } catch (e) { console.warn('[home] the identity reset failed', e); }
+  // D2 DI-803: another ACCOUNT (or none) — the Peek store forgets every other league at once (a league switch alone keeps it: its entries are keyed by account and league, and the newly
+  // active league's own entry is dropped by the store itself).
+  try { if (_homeWiring && _homeWiring.peek && String(prevKey || '').split(IDENTITY_KEY_SEP)[0] !== key.split(IDENTITY_KEY_SEP)[0]) { _homeWiring.peek.clear('identity'); clearPeekWires(); } } catch (e) { console.warn('[home] the peek reset failed', e); }
   // SECURITY GATE, S-4 (2026-09-25) — the FIFTH cache this chokepoint resets.
   // Synchronous, zero network calls (js/auth.js's own header on this
   // function explains why it is not a re-fetch) — never leave a departed
@@ -33573,9 +34641,10 @@ function applyIdentityDeltaIfChanged(reason, { expiry = false, discard = false }
     // Page, now closed here too.
     const hadLeaguesHome = !!document.getElementById('leagues-home-overlay');
     const hadChatSheet = !!document.getElementById('chat-sheet-wrap');
+    resetInsightSurfaces();        // D2 lane 4: the analytics wire, Your numbers' state and the Ask sheet belong to the departed identity
     closeAllScreens('identity');   // D1 Lane B / DI-571: a card detail was built from the departed identity's data — closed through its own door (stack, Esc listener, page inert), before the DOM sweep
     // N1 (DI-430) — every surface but the New League sheet while the SAME account is mid-create or has just created (see leagueCreateSheetSurvivesIdentityChange()).
-    document.querySelectorAll('[data-hold-teardown]').forEach(el => { if (!leagueCreateSheetSurvivesIdentityChange(el)) el.remove(); });
+    document.querySelectorAll('[data-hold-teardown]').forEach(el => { if (!leagueCreateSheetSurvivesIdentityChange(el) && !ijSheetSurvivesIdentityChange(el) && !obSheetSurvivesIdentityChange(el)) el.remove(); });
     lcAbandonIfSwept();
     loAbandonIfSwept();   // D1 DI-538: the league overview sheet carries data-hold-teardown, so the sweep above removed its node; drop its state, timer and listener too
     if (hadLeaguePage) hideLeaguePageOverlay();
@@ -34363,21 +35432,17 @@ const SIGNUPS_CLOSED_COPY = "New leagues aren't being created right now — chec
  *  DI-181a's landing card below, and the header pill sheet's "Join a League"
  *  sheet (`showJoinLeagueSheet()`, REVIEWER ROUND 3 R1). Same ids in both, so
  *  `bindLeagueJoinForm()` binds either — never a second join implementation. */
-function leagueJoinFormHTML({ prefill = '' } = {}) {
+function leagueJoinFormHTML({ prefill = '', reassure = false } = {}) {
   const signupsOpen = getCachedSignupsOpen();
-  const disabledAttr = signupsOpen ? '' : 'disabled';
   const closedNotice = signupsOpen ? '' : `<div class="text-xs mb-sm" style="color:var(--text-muted)">${escHtml(SIGNUPS_CLOSED_COPY)}</div>`;
   // N1 (DI-430) — the placeholder is a neutral example of the real shape (8 characters, shown 4+4), no longer the pilot league's "IRB-4F2K"; `prefill` is the code from
   // a `?join=` invite link (already validated by js/league-create.js), shown 4+4 — joinLeague() strips the space. The value is escaped like every other attribute.
-  const prefillAttr = prefill ? `value="${escHtml(LC.formatInviteCode(prefill))}"` : '';
-  return `${closedNotice}
-        <div class="form-group">
-          <label for="league-join-code">Invitation code</label>
-          <input type="text" class="form-input" id="league-join-code" placeholder="e.g. K7QX 9M2P" autocomplete="off" maxlength="16" ${prefillAttr} ${disabledAttr} />
-          <p class="text-muted" style="font-size:.78rem;margin-top:4px">Ask your commissioner for this — it's how they add you, not a password.</p>
-        </div>
-        <div class="site-gate-error" id="league-join-error" style="display:none;color:var(--loss)"></div>
-        <button type="button" class="btn btn-primary btn-block" id="league-join-btn" ${disabledAttr}>Join League</button>`;
+  // D2 lane 1 (DI-725, DI-726): with a LINK the code is prefilled and the field is HIDDEN (the code is read-only text; the person's one job is to review and tap), and the form opens the join
+  // confirmation by itself, once; a typed code gets an explicit Paste button (never a silent clipboard read) and its errors stay under the field (the value, the focus and the keyboard are kept).
+  const shown = prefill ? LC.formatInviteCode(prefill) : '';
+  // D2 lane 1 (the approved mockup d2-invite-join.html frame 5, reviewer 2026-10-19): the markup is js/invite-join.js's codeFormHTML (the field with its OWN Paste button inside it, the red error banner under it, the rule
+  // line, and Continue: it only LOOKS UP the code, the confirmation's Join League is the single tap that joins), so the browser suite measures the very markup the app paints.
+  return IJ.codeFormHTML({ shown, linked: !!prefill, disabled: !signupsOpen, closedNoticeHTML: closedNotice, reassure }, { escHtml });
 }
 
 function leagueFlowLandingHTML() {
@@ -34402,7 +35467,7 @@ function leagueFlowLandingHTML() {
     <div class="league-flow-row">
       <div class="card">
         <h3>Join a League</h3>
-        ${leagueJoinFormHTML({ prefill: inv.code })}
+        ${leagueJoinFormHTML({ prefill: inv.code, reassure: true })}
       </div>
       <div class="card">
         <h3>Create a League</h3>
@@ -34512,7 +35577,21 @@ function bindLeagueSelectorRows(container, afterPick) {
  */
 function leagueCreationAvailable() {
   if (!getCachedLeagueCreationOpen()) return false;
+  // D2 lane 1 (UN-505 / DI-718): the SERVER's answer decides once it has been read (can_create_league(): the super admin, scope 'everyone', or scope 'approved' with this account on the list). Until then, and where the function
+  // is not installed yet (migration 0065 not applied), the rule that applied before it existed: it can only show the card to who the server already allowed (never a false "approved"). A failed lookup is never "approved".
+  const c = getCachedCanCreateLeague();
+  if (c.status === 'ready') return c.value === true;
   return getCachedLeagueCreationScope() === 'everyone' || getIsSuperAdmin() === true;
+}
+/** D2 lane 1 (DI-718, mockup d2-invite-join frame 7): the approved creator's landing replaces the claim screen's first view, for an account the server has told "yes", after a CLEAN "found nothing", and only until a code card is chosen. */
+function approvedLandingShown() {
+  if (_linkFlow.state !== 'unmatched') return false;
+  const c = getCachedCanCreateLeague();
+  if (c.status !== 'ready' || c.value !== true) return false;   // unknown, failed or "no": today's screen, byte for byte
+  if (_claimScreenTouched) return false;                         // a code card was chosen
+  if (getIsSuperAdmin() === true && !getCachedLeagueCreationOpen()) return false;   // the super admin under a closed gate keeps today's screen
+  try { if (resolvePendingInviteView().code) return false; } catch { /* no invite view: nothing to protect */ }   // an invite link opens its own card
+  return true;
 }
 const LEAGUE_RPC_ERROR_COPY = [
   ['invalid_code',      "That code doesn't match an open league. Double-check it with whoever invited you."],
@@ -34572,54 +35651,33 @@ export const _LEAGUE_RPC_ERROR_COPY_FOR_TEST = { map: LEAGUE_RPC_ERROR_COPY, con
  *  Leagues Home card tap takes. The zero-league landing keeps the plain
  *  joinLeague(code): there is no "from" league to tear down there. */
 function bindLeagueJoinForm(container, { onJoined = null, switchToJoined = false } = {}) {
+  void switchToJoined;   // D2 lane 1 (DI-728): joining NEVER moves the active league by itself; only "Go to {league}" does. Kept in the signature for the callers that still pass it.
   const joinBtn = container.querySelector('#league-join-btn');
   const joinErr = container.querySelector('#league-join-error');
   const codeInput = container.querySelector('#league-join-code');
+  const pasteBtn = container.querySelector('#league-join-paste');
+  const joinBox = container.querySelector('#league-join-error-box');
+  // the red banner of frame 5: an icon and the sentence. The sentence reaches the page through textContent ONLY (a server-supplied string never reaches an innerHTML sink); the box around it is shown and hidden.
+  const say = (text) => { if (joinErr) { joinErr.textContent = text || ''; joinErr.style.display = text ? 'block' : 'none'; if (joinBox) joinBox.style.display = text ? 'flex' : 'none'; try { codeInput?.parentElement?.classList?.toggle('is-error', !!text && !isLinkForm()); } catch { /* decoration */ } } };
+  const isLinkForm = () => !!codeInput && typeof codeInput.getAttribute === 'function' && codeInput.getAttribute('type') === 'hidden';
   const submit = async () => {
-    if (!joinBtn || joinBtn.disabled) return;   // in flight, or signups closed
-    const code = codeInput?.value || '';
-    if (joinErr) joinErr.style.display = 'none';
-    joinBtn.disabled = true; joinBtn.textContent = 'Joining…';
-    const welcome = (joined) => `You're in — welcome to ${joined?.leagueName || 'your new league'}.`;
-    try {
-      if (!switchToJoined) {
-        // The zero-league landing — unchanged: joinLeague() moves the pointer.
-        const joined = await joinLeague(code);
-        consumePendingInvite();   // N1 (DI-430): a successful join clears the `?join=` invite that may have prefilled this form
-        if (onJoined) onJoined(joined);
-        showToast(welcome(joined), 'success');
-        navigateTo(state.currentTab || 'dashboard');
-        return;
-      }
-      // SECURITY NOTE 3 (round 4 gate, 2026-09-29) — the league the player is
-      // switching FROM is read BEFORE the join. The post-refresh pointer is not
-      // evidence: if the returned list no longer holds A and B is its only row,
-      // the refresh auto-resolves the pointer to B through the identity path,
-      // and comparing against THAT would skip the switch and leave A's mirror
-      // under B's pill.
-      const fromLeagueId = getActiveLeagueId();
-      const joined = await joinLeague(code, { activate: false });
-      consumePendingInvite();   // N1 (DI-430): same as the landing path above
-      if (onJoined) onJoined(joined);
-      if (!joined?.leagueId) {
-        // The join went through but the refreshed list did not carry the row
-        // (a race) — nothing to switch to yet, and no league to welcome to.
-        showToast('Joined. Open Your Leagues to switch.', 'success');
-        navigateTo(state.currentTab || 'dashboard');
-      } else if (joined.leagueId === fromLeagueId) {
-        showToast(welcome(joined), 'success');
-        navigateTo(state.currentTab || 'dashboard');
-      } else {
-        // REVIEWER N1 — the welcome is said only once the player IS there: a
-        // failed switch shows doSwitchActiveLeague()'s own error toast instead.
-        const switched = await doSwitchActiveLeague(joined.leagueId);   // cover, adapter switch, its own repaint
-        if (switched) showToast(welcome(joined), 'success');
-      }
-    } catch (err) {
-      if (joinErr) { joinErr.textContent = leagueRpcErrorCopy(err); joinErr.style.display = 'block'; }
-    } finally {
-      joinBtn.disabled = false; joinBtn.textContent = 'Join League';
+    if (!joinBtn || joinBtn.disabled) return;   // checking, or signups closed
+    const code = LC.normalizeInviteCode(codeInput?.value || '');
+    say('');
+    // A value that is not even the shape of a code gets the same sentence a wrong code gets (never a word about which): the field keeps its value, its focus and the keyboard.
+    if (!code) { say(IJ.IJ_COPY.invalid); try { codeInput?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ } return; }
+    joinBtn.disabled = true; joinBtn.textContent = 'Checking…';
+    let known;
+    try { known = await ijPreview(code); }
+    finally { joinBtn.disabled = false; joinBtn.textContent = IJ.IJ_COPY.continue; }
+    if (known.phase === 'valid' || known.phase === 'already') {
+      // DI-725: the join confirmation names the league; Join League there is the ONLY way in. The host sheet (the pill sheet) closes as the confirmation opens.
+      if (onJoined) { try { onJoined(null); } catch (e) { console.warn('[invite] host close failed', e); } }
+      await openJoinConfirm({ code, known, source: isLinkForm() ? 'link' : 'typed' });
+      return;
     }
+    say(IJ.fieldErrorCopy(known.phase));
+    if (!isLinkForm()) { try { codeInput?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ } }
   };
   joinBtn?.addEventListener('click', submit);
   // Interaction Principles §Forms "Advance correctly" — Return/Go on the one
@@ -34627,6 +35685,21 @@ function bindLeagueJoinForm(container, { onJoined = null, switchToJoined = false
   codeInput?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault?.(); submit(); }
   });
+  // DI-726: an explicit Paste (a tap), never a silent clipboard read. A clipboard the browser will not hand over says so under the field.
+  pasteBtn?.addEventListener('click', async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      const c = LC.normalizeInviteCode(t);
+      if (codeInput) codeInput.value = c ? LC.formatInviteCode(c) : String(t || '').slice(0, 16);
+      say('');
+      try { codeInput?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+    } catch { say(IJ.IJ_COPY.pasteFailed); }
+  });
+  // DI-725: a link's form opens the confirmation by itself, ONCE per code (the screen repaints; the latch keeps it from opening again under the person).
+  if (isLinkForm() && joinBtn && !joinBtn.disabled) {
+    const c = LC.normalizeInviteCode(codeInput.value);
+    if (c && _ijAutoOpened !== c) { _ijAutoOpened = c; setTimeout(() => { try { submit(); } catch (e) { console.warn('[invite] auto-open failed', e); } }, 0); }
+  }
 }
 
 function bindLeagueFlowScreen(container) {
@@ -34860,6 +35933,10 @@ function resetLinkFlow() {
   _linkRedownloadUntil = 0;
 }
 export const _resetLinkFlowForTest = resetLinkFlow;
+export const _setLinkFlowStateForTest = (st) => { _linkFlow = { state: st, memberId: '', leagueId: '', displayName: '', error: '' }; };   // D2 lane 1 (DI-718): a suite puts the flow in 'unmatched' (a clean found-nothing)
+export const _claimScreenHTMLForTest = () => claimScreenHTML();
+export const _leagueCreationAvailableForTest = () => leagueCreationAvailable();
+export const _approvedLandingShownForTest = () => approvedLandingShown();
 
 /**
  * DI-180q's one-time re-download line — WHEN it may be shown.
@@ -35209,7 +36286,7 @@ function claimInviteCardHTML(inv) {
     <div class="card" id="link-invite-card">
       <h2>Enter your invitation code.</h2>
       ${inv.code ? LC.inviteLinkNoteHTML({ escHtml }) : ''}
-      ${leagueJoinFormHTML({ prefill: inv.code })}
+      ${leagueJoinFormHTML({ prefill: inv.code, reassure: true })}
       ${inv.code ? LC.claimInsteadHTML({ escHtml }) : ''}
     </div>`;
 }
@@ -35219,6 +36296,7 @@ function claimScreenHTML() {
   // account is offered the claim card and nothing else). A stored `?join=` invite is left alone (it expires by itself); nothing here reads or consumes it.
   // F-1 (reviewer, 2026-10-08; DI-550 says JOINING IS UNTOUCHED by who may create): the invite surface is behind the RELEASE GATE only - `getCachedLeagueCreationOpen()`, the ONE named exception to "ask leagueCreationAvailable()" -
   // never behind who may CREATE. A non-super-admin under scope "admins" with the gate open still gets the invite option, the code field and the `?join=` pre-fill; only the Create choice below asks the door.
+  if (approvedLandingShown()) return LC.approvedLandingHTML({ open: getCachedLeagueCreationOpen(), signupsOpen: getCachedSignupsOpen(), showInvite: getCachedLeagueCreationOpen(), escHtml });   // D2 lane 1 (DI-718): the approved creator's landing
   if (!getCachedLeagueCreationOpen()) return claimCodeScreenHTML();
   const inv = resolvePendingInviteView();
   const mode = (!_claimScreenTouched && inv.code) ? 'invite' : _claimScreenMode;
@@ -35502,7 +36580,7 @@ function leagueMembersCardHTML() {
     return `
     <div class="player-admin-row" data-member-row="${escHtml(m.memberId)}">
       <div class="player-admin-info">
-        <span class="player-admin-avatar${!m.active ? ' inactive' : ''}">${escHtml(m.initials || (m.displayName || '??').slice(0, 2).toUpperCase())}</span>
+        ${avatarHTML({ playerId: m.memberId }, 'md', { cls: `player-admin-avatar${!m.active ? ' inactive' : ''}`, initials: m.initials || (m.displayName || '??').slice(0, 2).toUpperCase() })}
         <div>
           <div class="font-display" style="font-size:.9rem">${escHtml(m.displayName || m.memberId)}${departed ? ` <em class="text-muted">${escHtml(departed)}</em>` : ''}
             ${m.role === 'commissioner' ? '<span class="badge badge-open">Commissioner</span>' : '<span class="badge badge-draft">Player</span>'}</div>
@@ -35709,62 +36787,6 @@ function bindLeagueMembersCard(container) {
 }
 
 /**
- * DI-183a-ii — THE "Set up your account" DASHBOARD BANNER (pre-cutover).
- *
- * Lives entirely on Sheets: `authMode` is still pre-cutover, the Sheet is still
- * authoritative, and tapping this performs the PRE-LINKING flow. It is a banner
- * ABOVE the ordered dashboard sections, never a new section within them —
- * RG-01's locked section order is untouched.
- *
- * IT MUST ROUTE THROUGH ensureSupabaseSdkLoaded(), FROM THIS TAP HANDLER.
- * boot() deliberately does not load the Supabase SDK in 'prelink' mode
- * (reviewer-B2: zero extra bytes for a mode that isn't using it), and the
- * SDK-loading comment in this file names THIS banner as the caller responsible
- * for awaiting it. If the SDK does not arrive inside its deadline, the tap
- * routes to showAuthHoldGate('sdk-unavailable') — DI-180l/A4's rule, "no button
- * that will only fail when tapped" — and NOT to a banner-local error message.
- * ONE hold-gate family, not two.
- */
-export function prelinkBannerHTML() {
-  if (getAuthMode() !== 'prelink') return '';
-  if (isContentWithheld()) return '';
-  return `
-    <div class="card" id="prelink-banner">
-      <div class="font-display" style="font-size:.95rem">🔑 New sign-in is coming.</div>
-      <p class="text-muted" style="font-size:.85rem;margin:4px 0 8px">You'll sign in with Google instead of a PIN. Linking now takes a moment and means nothing to do later.</p>
-      <button type="button" class="btn btn-primary btn-sm" id="prelink-banner-btn">Link My Account Now</button>
-    </div>`;
-}
-/** Test-only: shrink the banner's SDK deadline so authtest can prove the
- *  sdk-unavailable route in milliseconds instead of ten real seconds. Same
- *  convention push-onesignal.js's `_resetForTest({sdkReadyMs})` already uses.
- *  Production never sets it, so the deadline is the real one. */
-let _prelinkSdkTimeoutMsForTest = null;
-export function _setPrelinkSdkTimeoutForTest(ms) { _prelinkSdkTimeoutMsForTest = ms == null ? null : Number(ms); }
-export function bindPrelinkBanner(container) {
-  const btn = (container || document).querySelector('#prelink-banner-btn');
-  if (!btn) return;
-  btn.addEventListener('click', async () => {
-    btn.disabled = true; btn.textContent = 'Loading…';
-    try {
-      const ready = await ensureSupabaseSdkLoaded(
-        _prelinkSdkTimeoutMsForTest == null ? undefined : { timeoutMs: _prelinkSdkTimeoutMsForTest });
-      if (!ready) { showAuthHoldGate('sdk-unavailable'); return; }
-      showGoogleSignInGate();
-    } catch (err) {
-      // A THROW IS THE SAME ANSWER AS A FALSE. The SDK either arrived or it did
-      // not; how it failed to arrive is not a distinction the player can act on,
-      // and inventing a second error surface here is exactly the "two hold-gate
-      // families" A4 forbids.
-      console.warn('[auth] the pre-link banner could not load the Supabase SDK', err);
-      showAuthHoldGate('sdk-unavailable');
-    } finally {
-      btn.disabled = false; btn.textContent = 'Link My Account Now';
-    }
-  });
-}
-
-/**
  * DI-184's header pill and the Account sheet's "Switch League" button both
  * open this — a DISMISSIBLE sheet, reusing the SAME row-list markup/bind
  * logic DI-181's automatic full-page selector uses (DI-184f "no second
@@ -35807,12 +36829,27 @@ export function bindPrelinkBanner(container) {
  * is the real create_league flow — creating an ADDITIONAL league is the
  * coming-soon stub card this sheet already carries.
  */
+/**
+ * D2 Q5 (Drew, round 3, 2026-10-19: Home reads at most five leagues; a sixth is named in Your Leagues, never silently dropped). The leagues Home is NOT reading right now (beyond the active one and the
+ * Peek store's four), by name — empty for five or fewer.
+ */
+function homeOverflowNoteHTML() {
+  try {
+    const ms = getCachedMemberships();
+    if (!_homeWiring || !_homeWiring.peek || ms.length <= HOME_LEAGUE_CAP) return '';
+    const onHome = new Set([getActiveLeagueId(), ..._homeWiring.peek.targets().map((m) => m.leagueId)]);
+    const more = ms.filter((m) => !onHome.has(m.leagueId)).map((m) => m.leagueName).filter(Boolean);
+    if (!more.length) return '';
+    return `<p class="league-selector-note"><b>More leagues</b> — Home shows ${escHtml(String(HOME_LEAGUE_CAP))} at a time. Not on Home right now: ${escHtml(more.join(', '))}. Switch to one to see it there.</p>`;
+  } catch { return ''; }
+}
 function showLeagueSelectorSheet() {
   const ov = document.createElement('div');
   ov.className = 'modal-overlay centered';
   ov.innerHTML = `<div class="modal">
     <div class="modal-header"><h3>Choose a League</h3><button class="modal-close" id="league-selector-sheet-close">✕</button></div>
     ${leagueSelectorListHTML()}
+    ${homeOverflowNoteHTML()}
     ${renderCreateLeagueStubCard({ escHtml, icon, open: leagueCreationAvailable() })}
     <button type="button" class="btn btn-ghost btn-block mt-sm" id="league-selector-join-btn">Join a League</button>
   </div>`;
@@ -35837,18 +36874,20 @@ function showLeagueSelectorSheet() {
  *  the full adapter switch (R3, see bindLeagueJoinForm()'s `switchToJoined`),
  *  never joinLeague()'s own pointer move. */
 function showJoinLeagueSheet({ prefill = '' } = {}) {
+  // D2 lane 1 (frame 5 of the approved invite and join mockup): the code form is the mockup's sheet (a grab handle, "Cancel | Join League", the form), its own fixed layer on <body>, swept by a hold or an
+  // identity change; the scrim and Cancel close it, the confirmation sheet replaces it when the code is real.
   const ov = document.createElement('div');
-  ov.className = 'modal-overlay centered';
-  ov.innerHTML = `<div class="modal" id="league-join-sheet">
-    <div class="modal-header"><h3>Join a League</h3><button class="modal-close" id="league-join-sheet-close" aria-label="Close">✕</button></div>
-    ${prefill ? LC.inviteLinkNoteHTML({ escHtml }) : ''}
-    ${leagueJoinFormHTML({ prefill })}
-  </div>`;
+  ov.className = 'ij-formlayer';
+  ov.setAttribute('data-hold-teardown', '');
+  ov.innerHTML = IJ.formSheetHTML({ formHTML: leagueJoinFormHTML({ prefill }), noteHTML: prefill ? LC.inviteLinkNoteHTML({ escHtml }) : '' }, { escHtml });
   document.body.appendChild(ov);
-  const close = () => ov.remove();
+  let unbindSwipe = null;
+  const close = () => { try { unbindSwipe && unbindSwipe(); } catch { /* hygiene */ } ov.remove(); };
   ov.querySelector('#league-join-sheet-close')?.addEventListener('click', close);
-  ov.addEventListener('click', e => { if (e.target === ov) close(); });
+  ov.querySelector('.lc-scrim')?.addEventListener('click', close);
   bindLeagueJoinForm(ov, { onJoined: close, switchToJoined: true });
+  // the grab handle works (reviewer BLOCK 1): a swipe down is Cancel; the ghost of this node slides away and is removed after it (ijBindSheetSwipe, below lsHideActionSheet)
+  unbindSwipe = ijBindSheetSwipe(ov, { onDismiss: () => { try { unbindSwipe && unbindSwipe(); } catch { /* hygiene */ } } });
   // §Forms "Auto-focus appropriately" — the sheet's only job is this one
   // field, and this runs inside the row's tap, so iOS raises the keyboard.
   const codeInput = ov.querySelector('#league-join-code');
@@ -35861,11 +36900,14 @@ function showJoinLeagueSheet({ prefill = '' } = {}) {
  *  opaque overlay treatment (DI-181e), because a league switch must block
  *  every write surface, not just whichever tab happens to be open
  *  (DI-181h's blind-rule obligation). */
-function showLeagueSwitchOverlay() {
+function showLeagueSwitchOverlay(leagueName = '') {
   document.getElementById('league-switch-overlay')?.remove();
   const el = document.createElement('div');
   el.id = 'league-switch-overlay';
-  el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Switching leagues…</p></div>`;
+  // D2 DI-807 (lane 3; the approved mockup's switch cover, coordinator 2026-10-19): the cover names the league it is getting ready ("Getting Residency ready.") when the membership names
+  // it; otherwise the words it always had.
+  const words = typeof leagueName === 'string' && leagueName.trim() ? `Getting ${escHtml(leagueName.trim())} ready.` : 'Switching leagues…';
+  el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>${words}</p></div>`;
   document.body.appendChild(el);
 }
 function hideLeagueSwitchOverlay() {
@@ -35898,7 +36940,9 @@ function hideLeagueSwitchOverlay() {
 export async function doSwitchActiveLeague(leagueId) {
   if (!leagueId) return false;
   let switched = false;
-  showLeagueSwitchOverlay();
+  let toName = '';
+  try { toName = _leagueNameById(leagueId) || ''; } catch { toName = ''; }
+  showLeagueSwitchOverlay(toName);
   try {
     await switchActiveLeague(leagueId);
     switched = true;
@@ -35986,9 +37030,11 @@ function resolvePendingInviteView() {
   return _pendingInvite;
 }
 /** A successful join (or an explicit choice of the other card) — the invite is done: key removed, notice dropped. */
+let _ijAutoOpened = '';   // D2 lane 1: the code whose join confirmation a link's form already opened by itself
 function consumePendingInvite() {
   try { LC.clearPendingJoin(); } catch { /* an expiring key removes itself */ }
   _pendingInvite = { code: '', notice: '' };
+  _ijAutoOpened = '';
 }
 export const _resolvePendingInviteViewForTest = resolvePendingInviteView;
 export function _resetPendingInviteViewForTest() { _pendingInvite = { code: '', notice: '' }; _pendingInvitePrompted = false; }
@@ -36000,6 +37046,13 @@ function leagueCreateSheetSurvivesIdentityChange(el) {
   const lc = _lc;
   return !!lc && el?.id === LC_WRAP_ID && !!lc.accountId && lc.accountId === getAccountUserId()
     && (lc.state.phase === 'creating' || !!lc.state.created);
+}
+/** D2 lane 1 (DI-727): the join confirmation survives the ONE identity change it causes. A person with no league who joins one has the active league move from nothing to the new league (the zero-league
+ *  landing needs it): that is an identity change and would sweep the very sheet that is about to say "You're in {league}". Exempt only for the SAME account that opened the sheet, and only once the join has
+ *  been asked for; a sign-out, a different account or a hold still removes it (and the orphaned state is dropped by the next open). */
+function ijSheetSurvivesIdentityChange(el) {
+  const s = _ij;
+  return !!s && s.kind === 'join' && el?.id === LS_ACTION_LAYER_ID && !!s.accountId && s.accountId === getAccountUserId() && (!!s.joined || !!(s.submit && s.submit.machine && s.submit.machine.state !== 'idle'));
 }
 function lcAbandonIfSwept() {
   const lc = _lc;
@@ -36282,16 +37335,18 @@ async function ensureCreatedCode() {
   return false;
 }
 
+/**
+ * D2 lane 1 (UN-505 / DI-720): Invite Friends on the Created step opens THE Invite sheet (one implementation: the commissioner's Invite sheet, UN-506), not a second in-sheet invite step. The creation sheet closes
+ * WITHOUT landing, the new league's page comes up through the ordinary league switch, and the Invite sheet opens over it for the league that was just created.
+ */
 async function goLeagueCreateInvite(btn) {
+  const lc = _lc;
+  const created = lc && lc.state && lc.state.created;
+  if (!created || !created.leagueId) return;
   if (btn) btn.disabled = true;
-  const ok = await ensureCreatedCode();
-  if (!_lc) return;
-  if (!ok) {
-    if (btn) btn.disabled = false;
-    showToast("Couldn't load the league code — try again in a moment.", 'error');
-    return;
-  }
-  lcDispatch({ type: 'invite' });
+  closeLeagueCreateSheet({ landing: false });
+  await landOnCreatedLeague(created);
+  try { if (getActiveLeagueId() === created.leagueId) openInviteSheet(); } catch (e) { console.warn('[league-create] the Invite sheet could not open', e); }
 }
 
 async function copyLeagueInviteCode() {
@@ -36341,8 +37396,7 @@ async function submitLeagueCreate() {
   if (_lc !== lc) return;   // the sheet was torn down under the call (a hold gate); nothing left to paint
   if (!failure) {
     lcDispatch({ type: 'created', created: { leagueId, name, code: '' } });
-    haptic('success');
-    ensureCreatedCode();   // read the code while the person reads the Created screen
+    haptic('success');   // D2 lane 1 (DI-720): Invite Friends opens the Invite sheet, which reads its own code; the in-sheet Invite step (the fallback) reads it when IT opens
     return;
   }
   if (failure.kind === 'created_not_loaded') {
@@ -36392,6 +37446,12 @@ function settleLeagueCreateDrag(wrap, sheetEl, { dismissed, reducedMotion } = {}
 /** ONE document-level delegated handler for `[data-action="create-league"]`, the same shape as bindComingSoonDispatcher(). Deferred INTO boot(): importing this module
  *  registers no listener (nativeguardtest [8c]). */
 function bindCreateLeagueDispatcher() {
+  // D2 lane 1 (DI-730): "Your Leagues, then Join with a code" is the path the share message names; one delegated handler opens the same join sheet the header pill's "Join a League" opens.
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest?.('[data-action="league-join-with-code"]');
+    if (!el || el.disabled) return;
+    showJoinLeagueSheet();
+  });
   document.addEventListener('click', (e) => {
     const el = e.target.closest?.('[data-action="create-league"]');
     if (!el || el.disabled) return;
@@ -36402,6 +37462,9 @@ function bindCreateLeagueDispatcher() {
 }
 /** "Invite Friends" on the League Page's empty state (frame 6): the Invite step for the league that already exists. */
 function openLeagueInviteSheet() {
+  // D2 lane 1 (DI-729): ONE Invite sheet (the code, Share Invite, the Accepting new members switch, who has joined, Get a new code). The New League sheet's own Invite step stays as it was for the
+  // Created screen; every OTHER entry (the League page, the Comm invite card) opens this one.
+  if (openInviteSheet()) return;
   const leagueId = getActiveLeagueId();
   if (!leagueId) return;
   const m = getCachedMemberships().find(x => x.leagueId === leagueId);
@@ -36429,7 +37492,7 @@ function maybePromptPendingInvite(event, attempt = 0) {
     return;
   }
   _pendingInvitePrompted = true;
-  if (r.code) setTimeout(() => showJoinLeagueSheet({ prefill: r.code }), 0);
+  if (r.code) setTimeout(() => { openJoinConfirm({ code: r.code, source: 'link' }).catch((e) => console.warn('[invite] the link confirmation failed', e)); }, 0);   // D2 lane 1 (DI-725): a link opens the join confirmation (the preview first), never the bare form
   else if (r.notice) { showToast(r.notice, 'error'); _pendingInvite = { code: '', notice: '' }; }
 }
 export const _maybePromptPendingInviteForTest = maybePromptPendingInvite;
@@ -36444,7 +37507,7 @@ export function _leaguesHomeNoticeForTest() { return _leaguesHomeNotice; }
 export function _resetLeagueCreateForTest() {
   try { document.getElementById(LC_WRAP_ID)?.remove(); } catch { /* fixture hygiene */ }
   if (_lc) { clearTimeout(_lc.slowTimer); try { document.removeEventListener('keydown', _lc.onKey); } catch { /* same */ } }
-  _lc = null; _leaguesHomeNotice = null; _pendingInvite = { code: '', notice: '' }; _pendingInvitePrompted = false;
+  _lc = null; _leaguesHomeNotice = null; _pendingInvite = { code: '', notice: '' }; _pendingInvitePrompted = false; _ijAutoOpened = '';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -36645,16 +37708,23 @@ function buildLeagueOverviewModel({ focusSport = null, busy = _joinState.joining
       if (offered.length) commissioner.push({ action: 'comm-add-sport', title: 'Add a sport', subtitle: addSportRowSubtitle(offered) });
     }
     if (typeof _sportOps.manageSport === 'function') {
-      for (const c of cards) commissioner.push({ action: 'comm-manage', dbCode: c.entry.dbCode, title: `Manage ${c.entry.code}`, subtitle: `Set up Week ${c.text.nextWeekN} · publish · lock`, right: c.text.weekLabel });
+      for (const c of cards) commissioner.push({ action: 'comm-manage', dbCode: c.entry.dbCode, title: `Manage ${c.entry.code}`, subtitle: `${setupLabel({ weekN: c.text.nextWeekN }, c.entry.dbCode)} · publish · lock`, right: c.text.weekLabel });
     }
     if (typeof _sportOps.sportEntries === 'function' && other.length + played.length > 1) commissioner.push({ action: 'comm-entries', title: 'Sport entries', subtitle: 'Who plays each sport' });
+    // D2 DI-868 (lane 3): Archive a sport… (reachable without the Comm lens) and Archived sports (with a count) — each only while it has somewhere to go
+    const archivable = archivableSports();
+    if (archivable.length) commissioner.push({ action: 'comm-archive-sport', title: ARCHIVE_COPY.archiveRow, subtitle: ARCHIVE_COPY.archiveRowSub(archivable.map(archiveCodeOf).join(', ')) });
+    const archivedN = archivedCompetitions().length;
+    if (archivedN) commissioner.push({ action: 'archived-sports', title: ARCHIVE_COPY.archivedRow, subtitle: ARCHIVE_COPY.archivedRowSubComm(archivedN), right: String(archivedN) });
   }
+  const archivedCount = archivedCompetitions().length;   // D2 DI-876: every member sees the quiet row in the League group
   return {
     leagueName: getActiveLeagueName() || '',
     memberCount: getPlayers().filter((p) => p && p.active).length,
     sportsLine: cards.map((c) => c.entry.label).join(' · '),
     isCommissioner, focusSport,
     glance: glanceChips({ due, liveCount: leagueLiveGameCount() }),
+    leagueArchivedRows: archivedCount ? [{ action: 'archived-sports', title: ARCHIVE_COPY.archivedRow, subtitle: ARCHIVE_COPY.archivedRowSubMember(archivedCount), right: String(archivedCount) }] : [],
     played: played.map((c) => ({ dbCode: c.entry.dbCode, sportName: c.entry.label, glyphKey: c.entry.glyphKey, weekLabel: c.text.weekLabel, view: c.view })),
     other: other.map((c) => ({ dbCode: c.entry.dbCode, code: c.entry.code, sportName: c.entry.label, glyphKey: c.entry.glyphKey, weekLabel: c.text.weekLabel, view: c.view, busy: busy.has(c.entry.dbCode), error: failed.has(c.entry.dbCode) })),
     commissioner, leagueCount: memberships.length,
@@ -36976,6 +38046,8 @@ function onLeagueOverviewClick(e) {
     case 'comm-add-sport': haptic('selection'); if (typeof _sportOps.addSport === 'function') _sportOps.addSport({ source: 'overview' }); break;
     case 'comm-manage': haptic('selection'); closeLeagueOverview({ immediate: true, restoreFocus: false }); if (typeof _sportOps.manageSport === 'function') _sportOps.manageSport(sport); break;
     case 'comm-entries': haptic('selection'); closeLeagueOverview({ immediate: true, restoreFocus: false }); if (typeof _sportOps.sportEntries === 'function') _sportOps.sportEntries(); break;
+    case 'comm-archive-sport': haptic('selection'); startArchiveFromOverview({ anchor: t }); break;   // D2 DI-868 (it closes the overview itself, unless the one sport is blocked: DI-869)
+    case 'archived-sports': haptic('selection'); closeLeagueOverview({ immediate: true, restoreFocus: false }); openArchivedSports(); break;          // D2 DI-876
     default: break;
   }
 }
@@ -37415,7 +38487,7 @@ function _dismissBlockingSurfaceUp({ excludeWizard = false, excludeLeaguesHome =
   // D1 Lane B / DI-607 (2026-10-08) — the Dashboard's Sort sheet is a SEVENTH body-appended sheet of the same shape, with its own "OTHER surface" carve-out (excludeSort) so its own swipe-down can arm.
   if (!excludeSort && document.getElementById('sort-sheet-wrap')) return true;
   // D1 Lane B / DI-597 (2026-10-08) — the Share to chat sheet: one more body-appended sheet of the same shape, with its own "OTHER surface" carve-out (excludeShare) so its swipe-down can arm.
-  if (!excludeShare && document.getElementById('share-sheet-wrap')) return true;
+  if (!excludeShare && (document.getElementById('share-sheet-wrap') || document.getElementById('talk-league-wrap'))) return true;   // D2 DI-808: "Share to which Locker Room?" is the same recipe, under the same carve-out (the two never open together)
   // N1 (DI-430, 2026-09-30) — the New League sheet is a FOURTH surface on this list, with its own "OTHER surface" carve-out (excludeCreate), same shape as the wizard's.
   if (!excludeCreate && document.getElementById('league-create-sheet-wrap')) return true;
   // D1 (v0.30.0, DI-554) — the League Overview sheet is an EIGHTH body-appended sheet of the same shape, with its own "OTHER surface" carve-out (_loOwnSwipe, a module flag rather than a parameter so this signature stays the one the other branches also extend) so its own swipe-down can arm.
@@ -37448,6 +38520,8 @@ function _dismissBlockingSurfaceUp({ excludeWizard = false, excludeLeaguesHome =
   if (!_rivalOwnSwipe && document.getElementById('rival-picker-sheet-wrap')) return true;
   // D1 Lane C (DI-672): the News "Also from" sheet, with its own "OTHER surface" carve-out (a module flag, so this signature stays the one other branches extend).
   if (!_newsAlsoOwnSwipe && document.getElementById('news-also-sheet-wrap')) return true;
+  if (!_askOwnSwipe && document.getElementById('ask-sheet-wrap')) return true;   // D2 lane 4: the Ask SCRIBE sheet, with its own "OTHER surface" carve-out (a module flag, like the News sheet's)
+  if (!_gdiOwnSwipe && document.getElementById('gdi-sheet-wrap')) return true;   // D2 lane 4 third pass: the Game insights sheet, the same shape
   return false;
 }
 export const _dismissBlockingSurfaceUpForTest = _dismissBlockingSurfaceUp;
@@ -37695,7 +38769,7 @@ function lsOpenObligationCount() {
   if (!me) return 0;
   try {
     const list = currentSeasonObligations().slice();
-    if (isPilotOnlyAllowed('season2025Record')) {
+    if (isPilotOnlyAllowed('season2025Record') && obligationsOn(null)) {
       const map = getSettings().ob2025 || {};
       for (const r of season2025Obligations()) list.push({ payerPlayerId: r.payerPlayerId, recipientPlayerId: r.recipientPlayerId, status: ob2025Status(map, r.obligationId) });
     }
@@ -38004,6 +39078,7 @@ function lsShowActionSheet(kind, html, ctx = {}) {
   document.body.appendChild(el);
   _lsPrompt = { kind, invoker: document.activeElement || null, ...ctx };
   el.addEventListener('click', lsOnLayerClick);
+  _lsPromptUnbindSwipe = ijBindSheetSwipe(el, { onDismiss: lsCancelPrompt });   // D2 lane 1: the invite, join, membership and onboarding sheets (.ij-sheet) swipe down like Cancel / the scrim
   lsSyncKeys();
   lsSyncInert();
   if (ctx.noHaptic !== true) haptic('warning');   // a confirmation: the warning notification as the sheet appears (D1 W-68: a CHOICE - add or swap, the More list - is not a warning, so it passes noHaptic)
@@ -38011,33 +39086,1062 @@ function lsShowActionSheet(kind, html, ctx = {}) {
 }
 function lsHideActionSheet({ restoreFocus = true } = {}) {
   const p = _lsPrompt;
+  if (p && p.kind === 'fmt') _fmtSheet = null;      // D2 lane 2: the pick-format / lines sheet's own state ends with the sheet
   _lsPrompt = null;
+  const unbindSwipe = _lsPromptUnbindSwipe; _lsPromptUnbindSwipe = null;
+  try { unbindSwipe && unbindSwipe(); } catch { /* an unbind is hygiene */ }
   try { lsById(LS_ACTION_LAYER_ID)?.remove(); } catch { /* already gone */ }
   lsSyncKeys();
   lsSyncInert();
   if (restoreFocus && p && p.invoker && p.invoker.isConnected !== false) { try { p.invoker.focus?.({ preventScroll: true }); } catch { /* courtesy */ } }
 }
+// ── D2 lane 1 (reviewer BLOCK 1, third pass): the .ij-sheet sheets swipe down ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// Interaction Principles, Sheets: "Support interactive swipe dismissal". The invite, join, membership and onboarding sheets (the approved mockups' grab handle) follow the finger down and settle through the
+// sheet's OWN close path (the scrim's and Cancel's: lsCancelPrompt, which lets the onboarding and invite state go; the join form's close). The wizard sheet's recipe (bindSwipeToDismiss, axis y, 40% of the
+// height or a 0.3 px/ms flick, a backward flick cancels), bound to the SHEET node (a patch replaces its inside, never the node) and started only on the grab handle or the nav bar, so the body's own scroll
+// and its fields never compete. W-70: `allowWeb`, so the handle the web app shows on a touch device works there too (touch listeners only: a mouse is unaffected; Cancel, Skip, the scrim and Esc stay on
+// both front ends). From 600 px the sheet is a centred dialog with no handle and nothing arms. The exit never holds the screen: the sheet closes at once and a GHOST of its node (no id, inert, click-through)
+// slides away, so a new touch or a new sheet during the 300 ms works (P-3). PARITY-BY-DESIGN: identical on both front ends except that a desktop pointer has no swipe.
+let _lsPromptUnbindSwipe = null;
+const IJ_SWIPE_SEL = '.lc-actionsheet.ij-sheet';
+function ijSheetDragCanStart(e, sheetEl) {
+  const t = e && e.target;
+  if (!t || t.nodeType !== 1 || typeof t.closest !== 'function') return false;
+  try { if (typeof window.matchMedia === 'function' && window.matchMedia('(min-width: 600px)').matches) return false; } catch { /* no media query: the phone form */ }
+  const head = t.closest('.ij-grab, .ij-nav');
+  return !!head && sheetEl.contains(head);
+}
+/** Something ELSE is on top of the sheet (a picker, a gate, a modal, the "Get a new code?" confirmation, a later body-appended surface): the swipe neither starts nor dismisses. */
+function ijSheetCovered(layerEl) {
+  if (!layerEl || layerEl.isConnected === false || layerEl.classList.contains('ij-leaving')) return true;
+  try { if (isContentWithheld()) return true; } catch { /* no hold */ }
+  if (layerEl.querySelector('#ij-confirm')) return true;
+  if (document.getElementById('site-gate-overlay') || document.getElementById('school-picker') || document.querySelector('.modal-overlay')) return true;
+  for (let n = layerEl.nextElementSibling; n; n = n.nextElementSibling) if (n.hasAttribute && n.hasAttribute('data-hold-teardown') && !n.classList.contains('ij-leaving')) return true;
+  return false;
+}
+function ijBindSheetSwipe(layerEl, { onDismiss } = {}) {
+  const sheetEl = layerEl && typeof layerEl.querySelector === 'function' ? layerEl.querySelector(IJ_SWIPE_SEL) : null;
+  if (!sheetEl || typeof onDismiss !== 'function') return null;
+  layerEl.setAttribute('data-ij-swipe', '');
+  const clear = () => { sheetEl.removeAttribute('data-dragging'); layerEl.removeAttribute('data-dragging'); };
+  return bindSwipeToDismiss(sheetEl, {
+    axis: 'y',
+    allowWeb: true,
+    canStart: (e) => ijSheetDragCanStart(e, sheetEl),
+    claimForwardOnly: true,
+    getBlocked: () => ijSheetCovered(layerEl),
+    getDistancePx: () => sheetEl.getBoundingClientRect().height || window.innerHeight || 1,
+    onProgress: (progress) => { sheetEl.setAttribute('data-dragging', 'true'); layerEl.setAttribute('data-dragging', 'true'); layerEl.style.setProperty('--ij-drag-y', String(progress)); },
+    onSettle: ({ dismissed, reducedMotion } = {}) => {
+      clear();
+      if (!dismissed || ijSheetCovered(layerEl)) { layerEl.style.setProperty('--ij-drag-y', '0'); return; }
+      ijGhostOut(layerEl, { reduced: reducedMotion === true });
+      onDismiss();
+    },
+  });
+}
+/** The dismissed sheet's node leaves the way it arrived (300 ms on --ease-native; a Reduce Motion crossfade) as a ghost: no id, inert, click-through; removed only THEN (that node and no other). */
+function ijGhostOut(layerEl, { reduced = false } = {}) {
+  try {
+    layerEl.removeAttribute('id');
+    layerEl.classList.add('ij-leaving');
+    layerEl.setAttribute('inert', ''); layerEl.setAttribute('aria-hidden', 'true');
+    layerEl.setAttribute('data-closing', reduced ? 'fade' : 'slide');
+    if (!reduced) layerEl.style.setProperty('--ij-drag-y', '1');
+  } catch { /* decoration */ }
+  let done = false;
+  const fin = () => { if (done) return; done = true; try { layerEl.remove(); } catch { /* already gone */ } };
+  try { layerEl.addEventListener('transitionend', (e) => { if (!e || !e.target || e.target === layerEl || e.target === layerEl.querySelector(IJ_SWIPE_SEL)) fin(); }); } catch { /* the timer below */ }
+  if (typeof setTimeout === 'function') setTimeout(fin, (reduced ? LS_EXIT_FADE_MS : LS_EXIT_SLIDE_MS) + 80); else fin();
+}
+export const _ijSheetSwipeBoundForTest = () => !!_lsPromptUnbindSwipe;
+
 /** Cancel / Keep Editing / the scrim / Esc: the safe choice. Keep Editing returns to the field; every other cancel returns focus to the control that raised the sheet. */
 function lsCancelPrompt() {
   const kind = _lsPrompt && _lsPrompt.kind;
+  if (_ij && _ij.kind === 'invite' && lsById(LS_ACTION_LAYER_ID)?.querySelector('#ij-confirm')) { ijCloseConfirm(); return; }   // D2 lane 1: Cancel (or Esc, or the scrim) on "Get a new code?" removes only the confirmation; the Invite sheet stays
+  if (typeof kind === 'string' && kind.startsWith('ij-')) ijRelease();   // the join / membership / Invite sheet is done: its submission binding and state are let go
+  if (kind === 'stk-propose' || kind === 'stk-confirm') stkRelease();   // D2 lane 1 batch 3: the proposal draft and its submission binding are let go with the sheet
+  if (kind === 'ob-sheet') obRelease();   // D2 lane 1: the onboarding sheet is done: its submission binding and draft are let go
+  if (kind === 'avatar-preview') avReleasePreview();   // D2 lane 1: the preview's object URL is let go with the sheet
   lsHideActionSheet({ restoreFocus: kind !== 'discard' });
   if (kind === 'discard') { try { lsById('ls-name-input')?.focus?.({ preventScroll: true }); } catch { /* courtesy */ } }
 }
 function lsOnLayerClick(e) {
+  // D2 DI-869 / DI-875: the archive and restore sheets' announcement switch flips in place (it is not an action of the sheet)
+  const sw = e && e.target && typeof e.target.closest === 'function' ? e.target.closest('#ms-archive-announce, #ms-restore-announce') : null;
+  if (sw && (sw.id === 'ms-archive-announce' || sw.id === 'ms-restore-announce') && typeof sw.setAttribute === 'function') { toggleSwitchRow(sw); return; }   // the element's OWN id (a match, not any truthy answer)
   const el = e && e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-ls-action]') : null;
   if (!el) return;
   const p = _lsPrompt;
-  switch (el.getAttribute('data-ls-action')) {
+  if (p && p.kind === 'fmt' && fmtSheetAction(el.getAttribute('data-ls-action'))) return;   // D2 lane 2: the pick-format and lines sheets keep the layer up and repaint in place
+  const act = el.getAttribute('data-ls-action') || '';
+  if (act.startsWith('archive-pick:')) {                                         // DI-868: the chosen sport (re-resolved from live data)
+    const pickId = act.slice('archive-pick:'.length);
+    const pick = liveLeagueCompetitions().find((x) => x && x.id === pickId);
+    if (pick && archiveBlocker({ weeks: getWeeksForCompetition(pick.id), label: archiveCodeOf(pick) })) { confirmArchiveSport(pickId, { anchor: el }); return; }   // DI-869: blocked — the choice stays, the way forward under the row
+    lsHideActionSheet({ restoreFocus: false }); confirmArchiveSport(pickId); return;
+  }
+  switch (act) {
     case 'cancel': case 'keep-editing': lsCancelPrompt(); break;
     case 'discard': { const then = p && p.then; lsHideActionSheet({ restoreFocus: false }); if (typeof then === 'function') then(); break; }
     case 'confirm-leave': lsRunLeave({ archive: false }); break;
     case 'confirm-leave-archive': lsRunLeave({ archive: true }); break;
     case 'confirm-waive': lsConfirmWaive(); break;
     case 'confirm-deny': obConfirmDeny(); break;   // R-19 follow-up (0046): the Deny sheet, current season and 2K25
-    case 'confirm-archive-sport': lsConfirmArchiveSport(); break;   // D1 (S7): Comm -> Week -> Sport options -> Archive
+    case 'confirm-archive-sport': lsConfirmArchiveSport(); break;   // D1 (S7): Comm -> Week -> Sport options -> Archive; D2 DI-869: the sheet stays while it saves
+    case 'rules-read-all': lsHideActionSheet({ restoreFocus: false }); navigateTo('rules'); break;   // D2 lane 2 (DI-907): "Read all the NHL rules" opens the Rules tab
+    case 'confirm-void': { const c = p || {}; lsHideActionSheet({ restoreFocus: false }); void runVoidGame({ weekId: c.weekId, gameId: c.gameId }); break; }   // D2 lane 2 (DI-896)
+    case 'confirm-restore-sport': lsConfirmRestoreSport(); break;   // D2 DI-875
+    case 'restore-setup-week': lsRestoreSetupWeek(); break;          // D2 DI-875: the offer after a restore
+    case 'ij-go': ijGo(); break;   // D2 lane 1 (UN-506): the join confirmation, the membership confirmation and the Invite sheet
+    case 'ij-setup': ijGo({ setup: true }); break;
+    case 'ij-retry': ijRetry(); break;
+    case 'ij-copy': ijCopyCode(); break;
+    case 'ij-share': ijShare(); break;
+    case 'ij-rotate': ijRotateAsk(); break;
+    case 'ij-rotate-confirm': ijRotateConfirm(); break;
+    case 'ij-reload-code': ijLoadInviteCode(); break;
+    case 'toggle-accepting': if (_ij && _ij.kind === 'invite') ijToggleAccepting(); break;   // the League Settings row's own action, hosted by the Invite sheet
+    case 'retry-accepting': if (_ij && _ij.kind === 'invite') ijLoadAccepting(); break;
+    case 'stk-withdraw-confirm': stkConfirm('withdraw'); break;   // D2 lane 1 batch 3 (DI-1022..1030): the season-ender vote's confirmations
+    case 'stk-end-confirm': stkConfirm('end'); break;
+    case 'stk-correct-confirm': stkConfirm('correct'); break;
+    case 'obt-confirm': obtConfirm(); break;   // D2 lane 1 (DI-1018): the Obligations switch's confirmation
+    case 'ob-remove-all-confirm': obRemoveAllConfirm(); break;   // D2 lane 1 (DI-750): Remove everything I told Munera
+    case 'avatar-choose': case 'avatar-different': avChoose(); break;   // D2 lane 1 (DI-773): the profile photo sheet and its preview
+    case 'avatar-remove': avRemove(); break;
     default: slateSheetAction(el.getAttribute('data-ls-action'), p); break;   // D1 (W-68 / W-69): the add-or-swap choice, the remove confirm, the More list (every `slate-*` action)
   }
 }
+
+// ═══ D2 lane 1 (UN-506 / PF-506, DI-724..731) — INVITE AND JOIN ═══════════════════════════════════════════════════════════════════════════════════
+// The invitee: a typed code (or a pasted one) or a `?join=` link is looked up FIRST (invite_preview: the league's name and sports, nothing else), then the join confirmation names the league and Join League
+// is the only way in (one visible tap, never automatic). Joining never moves the active league; a compact "You're in {league}" sheet replaces the toast and offers Set Up My Profile and Go to {league}.
+// The commissioner: ONE Invite sheet (the code and Copy Code, Share Invite, the Accepting new members switch, who has joined, Get a new code). Everything rides the action-sheet layer the league sheets use
+// (its own fixed layer on <body>, swept by a hold or an identity change); a state change PATCHES the sheet's groups in place, so the sheet never replays its entrance.
+let _ij = null;   // the one open invite / join sheet's state
+const ijLabelOf = (code) => { try { const p = listProfiles().find((x) => x.key === code); return p ? p.label : code; } catch { return code; } };
+const ijDeps = () => ({ escHtml, labelOf: ijLabelOf });
+function ijSheet() { const l = lsById(LS_ACTION_LAYER_ID); return l ? l.querySelector('.lc-actionsheet') : null; }
+/** Replaces the open sheet's groups. Focus moves to the title (the confirmation's heading is its first focus) unless `keepFocus` names a control that survives. */
+function ijPatch(inner, phase, { keepFocus = '' } = {}) {
+  const sh = ijSheet();
+  if (!sh) return false;
+  sh.innerHTML = inner;
+  sh.setAttribute('data-ij-phase', phase);
+  try {
+    const keep = keepFocus ? [...sh.querySelectorAll('[data-ls-action]')].find((n) => n.getAttribute('data-ls-action') === keepFocus) : null;
+    (keep || sh.querySelector('#ij-title') || sh.querySelector('.lc-as-bold'))?.focus?.({ preventScroll: true });
+  } catch { /* focus is a courtesy */ }
+  return true;
+}
+function ijRelease() {
+  const s = _ij;
+  _ij = null;
+  try { s && s.submit && s.submit.destroy(); } catch { /* gone */ }
+}
+export const _ijStateForTest = () => (_ij ? { ..._ij, submit: !!_ij.submit } : null);
+export const _ijRunJoinForTest = () => ijRunJoin();   // the function the Join League button runs (a harness whose element tree cannot parse the sheet drives the write through it)
+export const _openJoinConfirmForTest = (o) => openJoinConfirm(o);
+export const _openInviteSheetForTest = () => openInviteSheet();
+export const _ijShowJoinedForTest = () => ijShowJoined();
+export const _ijGoForTest = (o) => ijGo(o);
+export const _leagueJoinFormHTMLForTest = (o) => leagueJoinFormHTML(o);
+export const _bindLeagueJoinFormForTest = (el, o) => bindLeagueJoinForm(el, o);
+export const _showJoinLeagueSheetForTest = (o) => showJoinLeagueSheet(o);
+export function _resetInviteJoinForTest() { ijRelease(); _ijAutoOpened = ''; }
+
+/** `{ phase, preview }`: what the lookup said, in the words of the sheet. Never throws: a server that could not be asked is 'offline'. */
+async function ijPreview(code) {
+  try {
+    const r = await previewInvite(code);
+    // F-2 (security read of batch 1): the lookup is a courtesy, join_league is the real gate. A THROTTLED lookup (an account's own tries, or the platform-wide window a crowd of throwaway accounts could fill)
+    // must never leave a person with an invite and no Join control: it falls back to the unnamed "Join this league?" confirmation, and the tap runs the same join_league as ever.
+    if (r && r.ok === false && r.error === 'invite_throttled') return { phase: 'valid', preview: { ok: true, throttled: true, alreadyMember: false, leagueName: '', sports: [], leagueId: '' } };
+    return { phase: IJ.joinPhaseOf(r), preview: r };
+  } catch (e) {
+    if (!(e instanceof InviteLookupError)) console.warn('[invite] the preview failed', e);
+    return { phase: 'offline', preview: null };
+  }
+}
+const ijJoinModel = () => { const s = _ij; const p = s.preview; return { phase: s.phase, code: s.code, leagueName: p ? p.leagueName : '', sports: p ? p.sports : [], memberships: s.memberships, note: s.note || '', unnamed: !!(p && p.throttled) }; };
+function ijRepaintJoin() {
+  if (!_ij || _ij.kind !== 'join') return;
+  ijPatch(IJ.joinConfirmInnerHTML(ijJoinModel(), ijDeps()), _ij.phase);
+  ijBindJoinButton();
+}
+/** The join confirmation. `known` is a result already in hand (the typed path looks first so a wrong code stays on its field); without one the sheet opens in its loading state and the lookup patches it. */
+async function openJoinConfirm({ code, known = null, source = 'typed' } = {}) {
+  const c = LC.normalizeInviteCode(code);
+  if (!c || isContentWithheld()) return false;
+  ijRelease();
+  _pendingInvitePrompted = true;   // a confirmation is on screen for a code: the memberships refresh a join causes must never re-offer the same stored link under it
+  const token = {};
+  // `fromLeagueId` is the league the person is IN when the sheet opens, read BEFORE the join (SECURITY NOTE 3, round 4): a refresh after the join can move the pointer on its own (the person's old league gone,
+  // the new one the only row), so "did the league change" is judged against THIS, never against the post-join pointer.
+  _ij = { kind: 'join', token, code: c, source, memberships: getCachedMemberships().length, fromLeagueId: getActiveLeagueId() || '', accountId: getAccountUserId() || '', phase: known ? known.phase : 'loading', preview: known ? known.preview : null, joined: null, note: '', submit: null };
+  lsShowActionSheet('ij-join', IJ.joinConfirmHTML(ijJoinModel(), ijDeps()), { noHaptic: true });
+  ijBindJoinButton();
+  if (!known) {
+    const r = await ijPreview(c);
+    if (_ij && _ij.token === token) { _ij.phase = r.phase; _ij.preview = r.preview; ijRepaintJoin(); }
+  }
+  return true;
+}
+function ijBindJoinButton() {
+  const s = _ij;
+  const l = lsById(LS_ACTION_LAYER_ID);
+  const btn = l && l.querySelector('[data-action="ij-join"]');
+  if (!s || !btn) return;
+  try { s.submit && s.submit.destroy(); } catch { /* gone */ }
+  s.submit = attachSubmit({ button: btn, statusEl: l.querySelector('.ss-status') || null, idleLabel: IJ.IJ_COPY.join, id: 'ij-join', failedText: IJ.IJ_COPY.joinFailed, savedText: IJ.IJ_COPY.joinSaved, dismissOnSaved: true,
+    onDismiss: () => ijShowJoined(), run: () => ijRunJoin() });
+}
+/** The ONE write: join_league, from the person's own tap. A person already in a league keeps their active league (`activate:false`); with none, the join makes this one active. */
+async function ijRunJoin() {
+  const s = _ij;
+  if (!s) return 'unchanged';
+  try {
+    const joined = await joinLeague(s.code, { activate: s.memberships < 1 });
+    consumePendingInvite();   // the `?join=` invite that opened this is done
+    s.joined = joined;
+    return 'saved';
+  } catch (err) {
+    const raw = `${err?.message || ''} ${err?.code || ''}`;
+    if (/invalid_code/.test(raw)) { s.phase = 'invalid'; ijRepaintJoin(); return 'unchanged'; }   // replaced or closed between the lookup and the tap: the same one sentence
+    if (LEAGUE_RPC_ERROR_COPY.some(([c]) => raw.includes(c))) { s.note = leagueRpcErrorCopy(err); ijRepaintJoin(); return 'unchanged'; }   // signups closed, the re-entry bound: their own words
+    console.warn('[invite] the join failed', err);
+    return 'failed';   // "Couldn't join. Nothing was changed. Try again." with Try Again
+  }
+}
+/** The compact confirmation that replaces the toast: "You're in {league}", the commissioner's line once the roster read lands, Set Up My Profile and Go to {league}. */
+function ijShowJoined() {
+  const s = _ij;
+  if (!s || s.kind !== 'join') return;
+  const j = s.joined;
+  ijPatch(IJ.membershipInnerHTML({ leagueName: (j && j.leagueName) || (s.preview && s.preview.leagueName) || '', commissionerName: '' }, ijDeps()), 'joined');
+  if (j && j.leagueId) {
+    listLeagueMembers(j.leagueId).then((members) => {
+      const who = IJ.commissionerNameOf(members);
+      const el = _ij === s ? ijSheet()?.querySelector('#ij-commissioner') : null;
+      if (el && who) { el.textContent = IJ.IJ_COPY.commissionerLine(who); el.removeAttribute('hidden'); el.hidden = false; }
+    }).catch(() => { /* the line is a courtesy: a roster that cannot be read leaves it out */ });
+  }
+}
+async function ijRetry() {
+  const s = _ij;
+  if (!s || s.kind !== 'join') return;
+  s.phase = 'loading'; ijRepaintJoin();
+  const r = await ijPreview(s.code);
+  if (_ij === s) { s.phase = r.phase; s.preview = r.preview; ijRepaintJoin(); }
+}
+/** Go to {league} / Set Up My Profile. The ONLY places the active league moves. An already-member's id comes from the preview (a member holds it); a new member's from the join. */
+async function ijGo({ setup = false } = {}) {
+  const s = _ij;
+  const target = (s && s.joined && s.joined.leagueId) || (s && s.preview && s.preview.leagueId) || '';
+  lsHideActionSheet({ restoreFocus: false });
+  ijRelease();
+  // A person who was in NO league had the join make this one active (the zero-league landing): nothing to switch from. Otherwise the switch runs when the league differs from the one they were in BEFORE the join.
+  const needsSwitch = !!target && !!s && s.memberships >= 1 && target !== s.fromLeagueId;
+  if (needsSwitch) { const ok = await doSwitchActiveLeague(target); if (!ok) return; }
+  else { try { navigateTo(state.currentTab || 'dashboard'); } catch (e) { console.warn('[invite] repaint failed', e); } }
+  if (setup) {
+    // D2 lane 1 (UN-507 / DI-732): "Set Up My Profile" opens the About you sheet (skippable at every point); where the account store is not available (migration 0066 not applied, local mode) it opens Profile as before.
+    try { if (!openOnboarding({ source: 'join' })) controlCenterApi?.openProfile?.({ instant: true }); } catch (e) { console.warn('[invite] the profile could not be opened', e); }
+  }
+}
+
+// ── the commissioner's Invite sheet ───────────────────────────────────────────────────────────────────────────────�
+const ijInviteModel = () => { const s = _ij; return { leagueName: s.name, code: s.code, codePhase: s.codePhase, accepting: s.accept, joined: s.joined, rotatePhase: s.rotatePhase, rotateError: s.rotateError, ready: !!s.ready }; };
+function ijPaintInvite({ keepFocus = '' } = {}) {
+  if (!_ij || _ij.kind !== 'invite') return;
+  ijPatch(IJ.inviteInnerHTML(ijInviteModel(), ijDeps()), 'invite', { keepFocus });
+}
+function ijPaintAccept() {
+  const s = _ij; const sh = ijSheet();
+  if (!s || s.kind !== 'invite' || !sh) return;
+  const box = sh.querySelector('#ij-accept');
+  if (box) box.innerHTML = LSV.acceptingRowHTML(s.accept, { escHtml });
+  const closed = sh.querySelector('#ij-closed');
+  if (closed) { const off = s.accept.value === false; closed.textContent = off ? IJ.IJ_COPY.closedLine : IJ.IJ_COPY.inviteHelper; }   // frame 1's helper; off, frame 2's note says new members cannot join
+}
+/** Opens the Invite sheet for the ACTIVE league. Commissioners only: a player sees "Invite Friends" nowhere (DI-731). */
+function openInviteSheet() {
+  if (!lsIsCommissioner() || isContentWithheld()) return false;
+  const m = lsActiveMembership();
+  if (!m) return false;
+  const paused = isLeaguePaused({ status: m.status });
+  const cachedAcc = lsAcceptCached(m.leagueId);
+  const cachedCode = _joinCodeCache.leagueId === m.leagueId && _joinCodeCache.code ? _joinCodeCache.code : '';
+  ijRelease();
+  _ij = { kind: 'invite', token: {}, leagueId: m.leagueId, name: m.leagueName || '', code: cachedCode, codePhase: cachedCode ? 'ready' : 'loading',
+    accept: typeof cachedAcc === 'boolean' ? { phase: paused ? 'paused' : (cachedAcc ? 'on' : 'off'), value: cachedAcc } : { phase: 'loading', value: null },
+    paused, joined: null, rotatePhase: 'idle', rotateError: false, submit: null };
+  lsShowActionSheet('ij-invite', IJ.inviteSheetHTML(ijInviteModel(), ijDeps()), { noHaptic: true });
+  if (!cachedCode) ijLoadInviteCode();
+  if (typeof cachedAcc !== 'boolean') ijLoadAccepting();
+  ijLoadJoined();
+  return true;
+}
+async function ijLoadInviteCode() {
+  const s = _ij;
+  if (!s || s.kind !== 'invite') return;
+  if (s.codePhase !== 'loading') { s.codePhase = 'loading'; ijPaintInvite(); }
+  try {
+    const code = await getLeagueJoinCode(s.leagueId);
+    if (!code) throw new Error('the league has no code');
+    _joinCodeCache = { leagueId: s.leagueId, code, loading: false, error: null };   // the Comm card shares it
+    if (_ij === s) { s.code = code; s.codePhase = 'ready'; ijPaintInvite(); }
+  } catch (e) {
+    console.warn('[invite] the code could not be read', e);
+    if (_ij === s) { s.codePhase = 'failed'; ijPaintInvite(); }
+  }
+}
+async function ijLoadAccepting() {
+  const s = _ij;
+  if (!s || s.kind !== 'invite') return;
+  s.accept = { phase: 'loading', value: null }; ijPaintAccept();
+  let value = null;
+  try { value = (await getLeagueSettings(s.leagueId)).acceptingMembers; }
+  catch (e) { console.warn('[invite] the accepting-members value could not be read', e); if (_ij === s) { s.accept = { phase: 'failed', value: null }; ijPaintAccept(); } return; }
+  lsAcceptStore(s.leagueId, value);
+  if (_ij === s) { s.accept = { phase: s.paused ? 'paused' : (value ? 'on' : 'off'), value }; ijPaintAccept(); }
+}
+/** The switch, the League Settings row itself and the same wrapper (setAcceptingMembers): no optimistic flip, the knob moves when the server confirms. */
+async function ijToggleAccepting() {
+  const s = _ij;
+  if (!s || s.kind !== 'invite' || s.paused || s.accept.phase === 'toggling' || typeof s.accept.value !== 'boolean') return;
+  const current = s.accept.value;
+  s.accept = { phase: 'toggling', value: current }; ijPaintAccept();
+  haptic('selection');
+  const outcome = await setAcceptingMembers(s.leagueId, !current, { role: lsActiveMembership()?.role || null });
+  const copy = LS.acceptingOutcomeCopy(outcome);
+  if (outcome.status === 'done') {
+    lsAcceptStore(s.leagueId, outcome.open);
+    if (_ij === s) { s.accept = { phase: outcome.open ? 'on' : 'off', value: outcome.open }; ijPaintAccept(); }
+    return;
+  }
+  if (_ij === s) { s.accept = { phase: s.paused ? 'paused' : (current ? 'on' : 'off'), value: current }; ijPaintAccept(); }
+  showToast(copy.text, 'error'); haptic('error');
+}
+/** "Joined so far": the active, linked seats other than the commissioner's own. A count only; no name of anyone who is not in the league. */
+async function ijLoadJoined() {
+  const s = _ij;
+  if (!s || s.kind !== 'invite') return;
+  try {
+    const members = await listLeagueMembers(s.leagueId);
+    const me = getSession()?.playerId || '';
+    if (_ij !== s) return;
+    s.joined = (members || []).filter((m) => m.active && m.linked && m.memberId !== me).length;
+    const el = ijSheet()?.querySelector('#ij-joined');
+    if (el) el.textContent = IJ.IJ_COPY.joinedCount(s.joined);
+  } catch (e) { console.warn('[invite] the member count could not be read', e); }
+}
+async function ijCopyCode() {
+  const code = LC.normalizeInviteCode(_ij && _ij.code);
+  if (!code) return;
+  if (await lcCopyText(code)) { haptic('light'); showToast(IJ.IJ_COPY.codeCopied, 'success'); }
+  else showToast(LC_COPY_FAILED, 'warning');
+}
+/** Share Invite — PARITY-BY-DESIGN, exactly as the New League sheet's: the system share sheet in the native shell WITH the share plugin, else the LINK is copied ("Invite link copied"). `navigator.share` is never used. */
+async function ijShare() {
+  const s = _ij;
+  if (!s || s.kind !== 'invite' || !s.code) return;
+  const r = await LC.shareInvite({ leagueName: s.name, code: s.code, isNative: isNativeShell(), plugins: typeof window !== 'undefined' ? window.Capacitor?.Plugins : null, copyText: lcCopyText });
+  if (r.via === 'copy') { if (r.ok) { haptic('light'); showToast(IJ.IJ_COPY.linkCopied, 'success'); } else showToast(LC_COPY_FAILED, 'warning'); }
+  else if (r.via === 'share' && r.ok) haptic('light');
+}
+/** "Get a new code?" (frame 2): the standard action sheet laid OVER the Invite sheet, which stays on screen, dimmed and inert, behind it. Cancel removes only the confirmation. */
+function ijRotateAsk() {
+  const s = _ij;
+  const layer = lsById(LS_ACTION_LAYER_ID);
+  if (!s || s.kind !== 'invite' || s.rotatePhase === 'working' || !layer || layer.querySelector('#ij-confirm')) return;
+  const host = document.createElement('div');
+  host.id = 'ij-confirm';
+  host.innerHTML = IJ.rotateSheetHTML({ escHtml });
+  layer.appendChild(host);
+  try { ijSheet()?.setAttribute('inert', ''); } catch { /* inert is a courtesy where supported */ }
+  haptic('warning');
+  try { host.querySelector('.lc-as-bold')?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+}
+/** Removes the confirmation and gives the Invite sheet back (focus returns to its Get a new code row). */
+function ijCloseConfirm({ focus = true } = {}) {
+  const layer = lsById(LS_ACTION_LAYER_ID);
+  const host = layer && layer.querySelector('#ij-confirm');
+  if (host) host.remove();
+  const sh = ijSheet();
+  if (sh) { try { sh.removeAttribute('inert'); } catch { /* none */ } if (focus) { try { sh.querySelector('.ij-rotate')?.focus?.({ preventScroll: true }); } catch { /* courtesy */ } } }
+}
+/** The new code replaces the old in place and says "New code ready"; a failed rotate keeps the old one ("Your old code still works"). */
+async function ijRotateConfirm() {
+  const s = _ij;
+  if (!s || s.kind !== 'invite') return;
+  s.rotatePhase = 'working'; s.rotateError = false; s.ready = false;
+  ijCloseConfirm({ focus: false });
+  ijPaintInvite();
+  try {
+    const code = await rotateJoinCode(s.leagueId);
+    if (!code) throw new Error('the server returned no code');
+    _joinCodeCache = { leagueId: s.leagueId, code, loading: false, error: null };
+    s.rotatePhase = 'idle';
+    if (_ij === s) { s.code = code; s.codePhase = 'ready'; s.ready = true; ijPaintInvite(); haptic('success'); }
+  } catch (e) {
+    console.warn('[invite] the rotate failed', e);
+    s.rotatePhase = 'idle'; s.rotateError = true;
+    if (_ij === s) { ijPaintInvite(); haptic('error'); }
+  }
+}
+
+// ═══ D2 lane 1 (UN-530 / DI-773..778) — THE PROFILE PHOTO FLOW ═══════════════════════════════════════════════════════════════════════════════════════
+// Profile > the 72 pt avatar (Edit) -> the standard action sheet (Choose Photo, Remove Photo only when one exists, Cancel) -> the system chooser (a file input that accepts any image: no Capacitor camera
+// plugin) -> the picture is checked, center-cropped and re-encoded ON THE DEVICE (js/avatar.js: at most 512 px, JPEG 0.82, at most 512 KB, EXIF and location stripped) -> a circular preview with Use Photo
+// and Choose Different -> Use Photo is the shared submission control (Saving…, Saved, or "Couldn't upload your photo. Nothing was changed. Try again.") -> "Photo updated". Everything is its own
+// fixed layer on <body> (the action-sheet layer the other sheets use), swept by a hold or an identity change.
+let _avNativeBuild;   // undefined: not asked yet; null: asked and unreadable (the control stays hidden); a number once read
+function avatarAvailableNow() {
+  const native = isNativeShell();
+  if (native && _avNativeBuild === undefined) {
+    _avNativeBuild = null;
+    readNativeBuild().then((n) => { _avNativeBuild = n; try { refreshControlCenterAndSettingsPage(); } catch { /* the control appears at the next paint */ } }).catch(() => {});
+  }
+  return avatarGate({ native, buildNumber: _avNativeBuild === undefined ? null : _avNativeBuild });
+}
+export const _avatarAvailableNowForTest = () => avatarAvailableNow();
+export function _setAvatarNativeBuildForTest(v) { _avNativeBuild = v; }
+let _avFlow = null;   // { blob, url, submit } while the preview is up
+function avSay(text) { try { const n = document.getElementById('cc-photo-note'); if (n) n.textContent = text || ''; } catch { /* a status line is a courtesy */ } }
+function avReleasePreview() {
+  const f = _avFlow;
+  _avFlow = null;
+  if (!f) return;
+  try { f.submit && f.submit.destroy(); } catch { /* gone */ }
+  try { URL.revokeObjectURL(f.url); } catch { /* gone */ }
+}
+function openAvatarSheet() {
+  if (!avatarAvailableNow() || isContentWithheld()) return;
+  const has = !!ownAvatarPath();
+  const actions = [{ label: AVATAR_COPY.choose, action: 'avatar-choose' }];
+  if (has) actions.push({ label: AVATAR_COPY.remove, action: 'avatar-remove', danger: true });
+  lsShowActionSheet('avatar', LC.actionSheetHTML({ escHtml, titleId: 'avatar-sheet-title', title: AVATAR_COPY.sheetTitle, actions, cancel: { label: AVATAR_COPY.cancel, action: 'cancel' }, scrimAction: 'cancel', actionAttr: 'data-ls-action' }), { noHaptic: true });
+}
+/** The system chooser. Raised from the tap itself (a user activation), so iOS and every browser let it open. */
+function avChoose() {
+  lsHideActionSheet({ restoreFocus: false });
+  avReleasePreview();
+  try { document.querySelectorAll('.av-file-input').forEach((n) => n.remove()); } catch { /* none */ }
+  const input = document.createElement('input');
+  // 'image' + slash + star, written as an escape: authtest's source-blanking lint reads a slash-star pair inside a string as the start of a comment.
+  input.setAttribute('type', 'file'); input.setAttribute('accept', 'image/\u002a');
+  input.className = 'av-file-input'; input.setAttribute('tabindex', '-1');
+  input.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(input);
+  const cleanup = () => { try { input.remove(); } catch { /* gone */ } };
+  input.addEventListener('change', () => { const f = input.files && input.files[0]; cleanup(); if (f) avHandleFile(f); }, { once: true });
+  input.addEventListener('cancel', cleanup, { once: true });
+  input.click();
+}
+async function avHandleFile(file) {
+  avSay(AVATAR_COPY.working);
+  const r = await processAvatarFile(file);
+  if (!r.ok) { avSay(''); showToast(r.reason === 'too_big' ? AVATAR_COPY.tooBig : AVATAR_COPY.notPhoto, 'error'); return; }
+  avOpenPreview(r.blob);
+}
+function avOpenPreview(blob) {
+  const url = URL.createObjectURL(blob);
+  const html = avatarPreviewHTML({ url, submitHTML: submitControlHTML({ idleLabel: AVATAR_COPY.use, action: 'avatar-use', extraClass: 'btn-primary btn-block' }) });
+  avSay('');
+  lsShowActionSheet('avatar-preview', html, { noHaptic: true });
+  const layer = document.getElementById(LS_ACTION_LAYER_ID);
+  const btn = layer && layer.querySelector('[data-action="avatar-use"]');
+  if (!btn) { try { URL.revokeObjectURL(url); } catch { /* gone */ } return; }
+  _avFlow = { blob, url, submit: null };
+  _avFlow.submit = attachSubmit({
+    button: btn, statusEl: layer.querySelector('.ss-status') || null, idleLabel: AVATAR_COPY.use, id: 'avatar-use', failedText: AVATAR_COPY.uploadFailed, dismissOnSaved: true,
+    onDismiss: () => { lsHideActionSheet({ restoreFocus: false }); avReleasePreview(); avSay(AVATAR_COPY.updated); try { refreshControlCenterAndSettingsPage(); } catch { /* repaints at the next open */ } },
+    run: async () => {
+      const r = await uploadOwnAvatar(blob);
+      if (r.ok) return 'saved';
+      if (r.reason === 'unavailable') { lsHideActionSheet({ restoreFocus: false }); avReleasePreview(); showToast(AVATAR_COPY.unavailable, 'warning'); return 'unchanged'; }
+      return 'failed';
+    },
+  });
+}
+async function avRemove() {
+  lsHideActionSheet({ restoreFocus: false });
+  avSay('');
+  const r = await removeOwnAvatar();
+  if (r.ok) { avSay(AVATAR_COPY.removed); try { refreshControlCenterAndSettingsPage(); } catch { /* repaints at the next open */ } }
+  else showToast(AVATAR_COPY.removeFailed, 'error');
+}
+export const _avatarFlowForTest = { open: () => openAvatarSheet(), choose: () => avChoose(), remove: () => avRemove(), handleFile: (f) => avHandleFile(f), openPreview: (b) => avOpenPreview(b), say: (t) => avSay(t) };
+
+// ═══ D2 lane 1 (UN-507 / UN-507A; DI-732..756, DI-800, DI-1001..1010, DI-1031..1040) — ONBOARDING, ABOUT YOU, TIPS AND THE GETTING STARTED CARD ═══════════════════════════════════════════
+// The pure halves are js/profile-questions.js (the catalog), js/tips.js (tips, the checklist, the first-picks states) and js/onboarding-ui.js (markup); the store is js/account-context.js (the owner-only
+// `account_context` row: answers, tips seen, the master switch, the Getting started "hidden" flag; it follows the PERSON, never one league). This block owns the taps, the sheet layer and the facts. The two
+// tier-1 team answers (a home team per sport; the college football teams) are player-record data exactly as before and are written through the same writers (patchPlayer / applyCfbTeams: the Locked/Live wall
+// stands). Nothing here is a blocker: every button works, every screen can be skipped, closing mid-flow keeps what was saved (DI-751, DI-1010).
+configureAccountContext({ getClient: () => getSupabaseClient(), getUserId: () => getAccountUserId() || '', onChange: () => { try { obAccountChanged(); } catch (e) { console.warn('[onboarding] the repaint after the account store changed failed', e); } } });
+/** The account store follows the SIGN-IN, not the league: read once per account (idempotent), cleared at sign-out. Silent without a client or a session. Never throws. */
+/** DI-718: asks the server once per sign-in / membership refresh whether THIS account may create a league, then repaints the one screen that draws the door if the answer changed it. Silent without a client; never throws. */
+function canCreateFollows(event) {
+  try {
+    if (!(event === 'MEMBERSHIPS_REFRESHED' || event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'SWITCH_END')) return;
+    const before = leagueCreationAvailable() + '|' + approvedLandingShown();
+    refreshCanCreateLeague().then(() => { if ((leagueCreationAvailable() + '|' + approvedLandingShown()) !== before) _repaintMaintenanceBannerSurface(); }).catch(() => {});
+  } catch (e) { console.warn('[league-create] the creation lookup could not follow the sign-in', e); }
+}
+function accountContextFollows(event) {
+  try {
+    if (event === 'SIGNED_OUT') { clearAccountContext(); obRelease(); }
+    else if (event === 'MEMBERSHIPS_REFRESHED' || event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'SWITCH_END') { loadAccountContext().catch(() => {}); obRefreshPush(); }
+  } catch (e) { console.warn('[onboarding] the account store could not follow the sign-in', e); }
+}
+/** Tips, the Getting started card and About you exist only in a shared (supabase) league with the account store read: otherwise silence (DI-741). */
+const obOn = () => { try { return !isContentWithheld() && getAuthMode() === 'supabase' && accountContextAvailable(); } catch { return false; } };
+let _obPush = null;   // whether this device is opted in to push, read once per sign-in (async); only the Getting started reminder row reads it
+function obRefreshPush() { try { isPushOptedIn().then((v) => { const on = v === true; if (_obPush !== on) { _obPush = on; obRepaintHome(); } }).catch(() => {}); } catch { /* push is a courtesy here */ } }
+export const _obPushForTest = (v) => { _obPush = v; };
+
+// ── the facts (read fresh, never cached beyond a paint; a completion is DERIVED from them, never self-reported) ───────────────────────────────────────────────────────────────────────────────────────
+function obViewer() {
+  const s = getSession(), m = lsActiveMembership();
+  return { playerId: s?.playerId || '', player: s?.playerId ? getPlayer(s.playerId) : null, leagueId: getActiveLeagueId() || '', leagueName: (m && m.leagueName) || '', isComm: lsIsCommissioner() };
+}
+function obWeekStatuses() { try { return (getAllCurrentWeeks() || []).map((w) => String(getEffectiveWeekStatus(w) || w.status || '')); } catch { return []; } }
+function obHasFinalWeek() { try { return getWeeks().some((w) => String(getEffectiveWeekStatus(w) || w.status || '').toLowerCase() === 'final'); } catch { return false; } }
+function obSlateHasGames() { try { return (getAllCurrentWeeks() || []).some((w) => getGames(w.weekId).length > 0); } catch { return false; } }
+function obProfileSaved(v) {
+  const p = getAccountProfile();
+  const answered = PQ.ACCOUNT_IDS.some((id) => p[id] !== undefined);
+  const prefs = (v.player && v.player.preferences) || {};
+  const homes = prefs.homeTeams && typeof prefs.homeTeams === 'object' && Object.values(prefs.homeTeams).some(Boolean);
+  return answered || !!homes || !!(v.player && String(v.player.almaMater || '').trim());
+}
+/** The first-picks step's weeks: one entry per current week, with its EFFECTIVE status, number, sport label and lock time. Reads no pick. */
+function obFirstPicksWeeks() {
+  try {
+    const tz = getTimezone() || DEFAULT_TZ;
+    // A several-sport league: only the sports the viewer PLAYS count (an opt-in sport they have not joined has no picks for them to make; Make My Picks would only open its Join).
+    let played = null;
+    try { if (isMultiSport()) played = new Set(playedSports().map((x) => x.dbCode)); } catch { played = null; }
+    return (getAllCurrentWeeks() || []).filter((w) => { if (!played) return true; let c = null; try { c = competitionForWeek(w); } catch { c = null; } return !!c && played.has(c.sport); }).map((w) => {
+      let sport = '';
+      try { sport = ijLabelOf(competitionForWeek(w)?.sport || 'cfb'); } catch { sport = ''; }
+      let locksText = '';
+      try { if (w.picksLockAt) locksText = formatGameTime(w.picksLockAt, tz); } catch { locksText = ''; }
+      return { number: Number(w.weekNumber) || w.weekNumber, status: String(getEffectiveWeekStatus(w) || w.status || ''), sport, locksText, weekId: w.weekId };
+    });
+  } catch { return []; }
+}
+const obFirstPicksNow = () => { const v = obViewer(); return TP.firstPicks({ league: v.leagueName || null, weeks: obFirstPicksWeeks() }); };
+
+// ── tips: ONE host, outside the page sections (a page repaint never destroys it) ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const OB_SURFACE = Object.freeze({ picks: 'picks', dashboard: 'dashboard', leaderboard: 'standings', chat: 'chat', commissioner: 'commissioner' });
+function obTipFor(surface) {
+  if (!obOn()) return null;
+  const v = obViewer();
+  if (!v.playerId) return null;
+  const tips = getAccountTips();
+  return TP.eligibleTip({ surface, role: v.isComm ? 'commissioner' : 'player', weekClass: TP.weekClassOf(obWeekStatuses()), hasFinalWeek: obHasFinalWeek(), seen: tips.seen || {}, off: tips.off === true, available: true });
+}
+/** Mounts (or clears) the tip for the tab on screen. The Locker Room's tip rides chat-ui's own render (it places the card at the top of the room), so the host is empty there. */
+function obSyncTips(tab = state.currentTab) {
+  const host = document.getElementById('tip-host');
+  if (!host) return;
+  const surface = OB_SURFACE[tab];
+  const tip = surface && surface !== 'chat' ? obTipFor(surface) : null;
+  const key = tip ? tip.id : '';
+  if ((host.getAttribute('data-ob-tip') || '') === key && (key === '' || host.innerHTML)) return;   // unchanged: nothing is repainted under a finger
+  host.innerHTML = tip ? OB.tipCardHTML(tip, { escHtml }) : '';
+  if (key) host.setAttribute('data-ob-tip', key); else host.removeAttribute('data-ob-tip');
+}
+/** Got it: 200 ms height-and-fade (a plain removal under Reduce Motion), a light haptic (native only), then the seen mark is written and the card is gone for good. */
+function obDismissTip(id, card) {
+  const tip = TP.tipById(id);
+  if (!tip) return;
+  haptic('light');
+  const finish = () => {
+    const seen = { ...(getAccountTips().seen || {}), [id]: tip.v };
+    patchAccountTips({ seen }).catch(() => {});
+    obSyncTips();
+    if (id === 'locker_room') { try { renderChatPage(); } catch { /* repaints at the next open */ } }
+  };
+  if (!card || prefersReducedMotion() || typeof setTimeout !== 'function') { finish(); return; }
+  try { card.style.maxHeight = `${card.offsetHeight || 0}px`; void card.offsetWidth; card.classList.add('is-leaving'); } catch { finish(); return; }
+  setTimeout(finish, 200);
+}
+/** The first submitted pick ends the Picks tip by itself (DI-734): it is marked seen without a tap. */
+function obNoteFirstPick() {
+  if (!obOn()) return;
+  const seen = { ...(getAccountTips().seen || {}) };
+  if (!(Number(seen.picks_how) >= 1)) { seen.picks_how = 1; patchAccountTips({ seen }).catch(() => {}); }
+  obSyncTips(); obRepaintHome();
+}
+export const _obNoteFirstPickForTest = () => obNoteFirstPick();
+
+// ── the Getting started card (Home) ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+function obGsModel() {
+  if (!obOn()) return null;
+  const v = obViewer();
+  if (!v.playerId || !v.leagueId || !v.leagueName) return null;
+  const tips = getAccountTips();
+  const statuses = obWeekStatuses();
+  let facts;
+  if (v.isComm) {
+    facts = { memberCount: getPlayers().filter((p) => p.active).length, weekExists: getWeeks().length > 0, gamesOnSlate: obSlateHasGames(), weekOpen: statuses.some((s) => ['open', 'locked', 'live', 'final'].includes(s.toLowerCase())) };
+  } else {
+    // reviewer note 9: the pick row and the first-picks step read the SAME weeks (only the sports the viewer plays), so an open week in a sport they have not joined never says "open" on one and "later" on the other
+    const fpWeeks = obFirstPicksWeeks();
+    const open = fpWeeks.find((w) => String(w.status).toLowerCase() === 'open');
+    facts = { joined: true, profileSaved: obProfileSaved(v), pickSubmitted: getPicks(null, v.playerId).length > 0, weekClass: TP.weekClassOf(fpWeeks.map((w) => w.status)), pushOn: _obPush === true,
+      pickSub: open ? [v.leagueName, open.sport, open.locksText ? `locks ${open.locksText}` : ''].filter(Boolean).join(' · ') : '' };
+  }
+  const model = TP.gettingStarted({ role: v.isComm ? 'commissioner' : 'member', leagueName: v.leagueName, facts });
+  const stateName = TP.gettingStartedState({ model, hidden: tips.gsHidden === true, off: tips.off === true, available: true });
+  return { v, model, state: stateName };
+}
+/** Home's `renderGettingStarted` dependency: the finished, escaped card, or '' (tips off, the store unavailable, complete). */
+function obGettingStartedHTML() {
+  const g = obGsModel();
+  if (!g || (g.state !== 'full' && g.state !== 'collapsed')) return '';
+  return OB.gettingStartedHTML({ model: g.model, state: g.state, title: g.v.isComm ? TP.GS_COPY.commissionerTitle(g.v.leagueName) : TP.GS_COPY.memberTitle(g.v.leagueName), leagueId: g.v.leagueId }, { escHtml });
+}
+export const _obGettingStartedHTMLForTest = () => obGettingStartedHTML();
+function obRepaintHome() { try { if (state.currentTab === 'home' && _homeWiring) _homeWiring.homeView.renderHome(); } catch (e) { console.warn('[onboarding] Home could not repaint', e); } }
+function obAccountChanged() {
+  if (_obPane && !_obPane.dirty) _obPane = null;   // the stores moved under a pane with nothing unsaved: it is re-read, never left stale
+  obSyncTips();
+  obRepaintHome();
+  try { if (controlCenterApi) controlCenterApi.update(buildControlCenterCtx()); } catch { /* the drawer repaints at its next open */ }
+}
+/** Make My Picks / the Getting started pick row: Picks on the OPEN week the step named, in that week's own sport (the one door the card details use), never a sport the week is not in. No open week: Picks as it stands. */
+function obOpenPicks() {
+  try {
+    const open = obFirstPicksWeeks().find((w) => String(w.status).toLowerCase() === 'open');
+    if (open && open.weekId) { openSportWeek('picks', open.weekId, { source: 'onboarding' }); return; }
+  } catch (e) { console.warn('[onboarding] the open week could not be resolved', e); }
+  navigateTo('picks');
+}
+/** A Getting started row's destination, with the league and sport as they are now. */
+function obGsAct(act) {
+  if (act === 'ob-about') { openOnboarding({ source: 'gs' }); return; }
+  if (act === 'ob-picks') { obOpenPicks(); return; }
+  if (act === 'ob-invite') { openInviteSheet(); return; }
+  if (act === 'ob-setup-week' || act === 'ob-open-picks') { state.commTab = 'week'; navigateTo('commissioner'); return; }
+  if (act === 'ob-push') {
+    enablePushOnThisDevice(getSession()?.playerId || null).then((r) => { showToast(r.message || 'Push is on for this device.', r.ok ? 'success' : 'warning'); obRefreshPush(); }).catch(() => showToast('Could not turn on notifications.', 'warning'));
+  }
+}
+
+// ── the school / team catalogs the pickers read (one picker, one list per sport) ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+function obCatalogFor(key) {
+  if (!key || key === 'cfb') return schoolCatalogNow();
+  if (key === 'nfl') return { status: 'loaded', teams: Object.keys(NFL_TEAM_ABBR).map((n) => ({ location: n, displayName: n })), fallback: [] };
+  return { status: 'failed', teams: [], fallback: [] };
+}
+/** The sports of THIS league that have a team list to choose a home team from (college football and the NFL today; a sport with no list shows no row: DI-752). */
+function obTeamSports() {
+  let codes = [];
+  try { codes = leagueSports().map((x) => x.dbCode); } catch { codes = []; }
+  if (!codes.length) codes = ['cfb'];
+  return codes.filter((c) => c === 'cfb' || c === 'nfl').map((c) => ({ key: c, label: ijLabelOf(c) }));
+}
+function obSportChoices() {
+  let list = [];
+  try { list = listProfiles().map((p) => ({ key: p.key, label: p.label })); } catch { list = []; }
+  let offered = null;
+  try { offered = getCachedOfferedSports(); } catch { offered = null; }
+  if (Array.isArray(offered) && offered.length) list = list.filter((p) => offered.includes(p.key));
+  return list;
+}
+
+// ── the draft and the form model (the same form in the sheet and the Profile pane) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const obClone = (o) => JSON.parse(JSON.stringify(o && typeof o === 'object' ? o : {}));
+function obDraftFromStores() {
+  const v = obViewer();
+  const prof = getAccountProfile();
+  const homes = (v.player && v.player.preferences && v.player.preferences.homeTeams && typeof v.player.preferences.homeTeams === 'object') ? obClone(v.player.preferences.homeTeams) : {};
+  const sh = prof.shareWithLeague && typeof prof.shareWithLeague === 'object' ? prof.shareWithLeague : {};
+  return { sports: Array.isArray(prof.sports_followed) ? [...prof.sports_followed] : [], other: obClone(prof.other_teams), schools: Array.isArray(prof.schools_attended) ? [...prof.schools_attended] : [],
+    career: typeof prof.career_text === 'string' ? prof.career_text : '', more: typeof prof.anything_else_text === 'string' ? prof.anything_else_text : '', master: prof.scribeMaster === true,
+    share: { career_text: sh.career_text === true, anything_else_text: sh.anything_else_text === true }, homes, errors: { career: '', more: '' } };
+}
+function obSummaryOf(id, v) {
+  if (Array.isArray(v)) return v.join(', ');
+  if (v && typeof v === 'object') return Object.values(v).flat().join(', ');
+  const opt = (PQ.OPTIONS[id] || []).find(([k]) => k === v);
+  return opt ? opt[1] : String(v == null ? '' : v);
+}
+function obFormModel(draft, mode) {
+  const prof = getAccountProfile();
+  const enabled = [...PQ.ONBOARDING_ENABLED_IDS].filter((id) => PQ.questionById(id) && PQ.questionById(id).store === 'account');
+  const teamSports = obTeamSports();
+  const has = {}; for (const id of PQ.ACCOUNT_IDS) has[id] = prof[id] !== undefined;
+  return { mode, enabled, sports: obSportChoices().map((s) => ({ ...s, on: draft.sports.includes(s.key) })),
+    other: teamSports.map((s) => ({ key: s.key, label: s.label, teams: draft.other[s.key] || [], max: PQ.OTHER_TEAMS_MAX })),
+    schools: draft.schools, career: draft.career, more: draft.more, errors: draft.errors, master: draft.master, share: draft.share, has,
+    answeredOff: mode === 'pane' ? PQ.answeredQuestions(prof).map((q) => ({ id: q.id, label: q.label, summary: obSummaryOf(q.id, prof[q.id]) })) : [] };
+}
+/** The answers a draft would save, as a profile patch (a key set to undefined is removed). `errors` carries a refusal under its field; `ok` is false while any text is refused. */
+function obProfilePatch(draft) {
+  const patch = {}; const errors = { career: '', more: '' };
+  const on = (id) => PQ.ONBOARDING_ENABLED_IDS.includes(id);
+  if (on('sports_followed')) patch.sports_followed = PQ.normalizeAnswer('sports_followed', draft.sports).value;
+  if (on('other_teams')) patch.other_teams = PQ.normalizeAnswer('other_teams', draft.other).value;
+  if (on('schools_attended')) patch.schools_attended = PQ.normalizeAnswer('schools_attended', draft.schools).value;
+  if (on('career_text')) { const r = PQ.normalizeAnswer('career_text', draft.career); if (r.ok) patch.career_text = r.value; else errors.career = r.message; }
+  if (on('anything_else_text')) { const r = PQ.normalizeAnswer('anything_else_text', draft.more); if (r.ok) patch.anything_else_text = r.value; else errors.more = r.message; }
+  patch.scribeMaster = draft.master === true ? true : undefined;
+  const share = {};
+  if (draft.master === true) for (const qid of ['career_text', 'anything_else_text']) if (on(qid) && draft.share[qid] === true && patch[qid] !== undefined) share[qid] = true;
+  const prior = getAccountProfile().shareWithLeague || {};
+  for (const [k, val] of Object.entries(prior)) if (val === true && !['career_text', 'anything_else_text'].includes(k) && draft.master === true) share[k] = true;
+  patch.shareWithLeague = Object.keys(share).length ? share : undefined;
+  return { patch, errors, ok: !errors.career && !errors.more };
+}
+const obProfileChanged = (patch) => { const cur = getAccountProfile(); return Object.keys(patch).some((k) => JSON.stringify(patch[k]) !== JSON.stringify(cur[k])); };
+
+/** The shared submission control, addressed by THIS block's own delegate (`data-onb-action`, never the global `data-action` table): the same markup the shared machine paints, one attribute renamed. */
+const obSubmitHTML = ({ idleLabel, action }) => submitControlHTML({ idleLabel, action, extraClass: 'btn-primary btn-block' }).replace(' data-action=', ' data-onb-action=');
+// ── the onboarding sheet (Teams, Background, Your first picks) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+let _ob = null;   // the one open onboarding sheet: { token, screens, i, draft, accountId, submit, remindOn }
+const obSheet = () => { const l = lsById(LS_ACTION_LAYER_ID); return l ? l.querySelector('.ob-sheet') : null; };
+function obRelease() { const s = _ob; _ob = null; try { s && s.submit && s.submit.release(); } catch { /* gone */ } }   // release, not destroy: a sheet closed mid-save must not leave its machine locked for the next opening
+/** The identity chokepoint sweeps every body-appended layer; the onboarding sheet of the SAME account survives it (the first join moves the active league under it). */
+function obSheetSurvivesIdentityChange(el) { return !!_ob && !!el && el.id === LS_ACTION_LAYER_ID && _ob.accountId === (getAccountUserId() || '') && !!el.querySelector('.ob-sheet'); }
+export const _obStateForTest = () => (_ob ? { screens: [..._ob.screens], i: _ob.i, draft: obClone(_ob.draft), remindOn: _ob.remindOn } : null);
+export function _obResetForTest() { obRelease(); _obPush = null; _obPane = null; }
+function obScreens(v) {
+  const screens = [];
+  if (obTeamSports().length) screens.push('teams');
+  screens.push('background');
+  if (!v.isComm && obFirstPicksNow().state !== 'hidden') screens.push('picks');
+  return screens;
+}
+function obCanOnboard() { const v = obViewer(); return obOn() && !!v.playerId && !!v.leagueId; }
+/** Opens About you as a sheet: after a join ("Set Up My Profile"), from the Getting started row, or from Profile. Never a blocker, never opened by itself. */
+function openOnboarding({ source = 'join' } = {}) {
+  if (!obCanOnboard()) return false;
+  const v = obViewer();
+  obRelease();
+  _ob = { token: {}, source, screens: obScreens(v), i: 0, draft: obDraftFromStores(), accountId: getAccountUserId() || '', submit: null, remindOn: false };
+  lsShowActionSheet('ob-sheet', OB.sheetHTML(obScreenModel(), { escHtml }), { noHaptic: true });
+  obBindScreen();
+  return true;
+}
+export const _openOnboardingForTest = (o) => openOnboarding(o);
+function obTitleOf(screen) { return screen === 'picks' ? TP.FIRST_PICKS_COPY.title : PQ.ABOUT_COPY.title; }
+function obScreenModel() {
+  const s = _ob, screen = s.screens[s.i];
+  const total = s.screens.length;
+  const e = { escHtml };
+  const prog = `<span class="ob-prog">${escHtml(PQ.ABOUT_COPY.progress(s.i + 1, total))}</span>`;
+  const prev = s.i > 0 ? (s.screens[s.i - 1] === 'teams' ? PQ.ABOUT_COPY.teamsHeading : PQ.ABOUT_COPY.back) : '';
+  const left = s.i > 0 ? OB.navButtonHTML(prev, 'ob-back', e) : OB.navButtonHTML(PQ.ABOUT_COPY.skip, 'ob-close', e);
+  const last = s.i === total - 1;
+  let bodyHTML = '', footerHTML = '';
+  if (screen === 'teams') {
+    const v = obViewer();
+    const teams = obTeamSports().map((sp) => ({ key: sp.key, label: sp.label, html: sp.key === 'cfb'
+      ? cfbTeamsHTMLFor(v.player || {}, { home: 'ob-home-cfb', alma: 'ob-alma-cfb', desig: 'ob-desig-cfb' })
+      : `<div class="form-group"><label class="form-label">${escHtml(PQ.ABOUT_COPY.homeTeam)}</label>${schoolFieldHTML({ id: 'ob-home-' + sp.key, value: s.draft.homes[sp.key] || '', label: `${sp.label} ${PQ.ABOUT_COPY.homeTeam.toLowerCase()}`, title: PQ.ABOUT_COPY.homeTeam, catalog: sp.key, placeholder: PQ.ABOUT_COPY.chooseNone })}</div>` }));
+    bodyHTML = OB.teamsBodyHTML({ teams, leagueName: v.leagueName }, e);
+    footerHTML = `${obSubmitHTML({ idleLabel: PQ.ABOUT_COPY.next, action: 'ob-next' })}${OB.textButtonHTML(PQ.ABOUT_COPY.skipForNow, 'ob-skip', e)}`;
+  } else if (screen === 'background') {
+    bodyHTML = `<p class="ob-intro">${escHtml(PQ.ABOUT_COPY.privatePage)}</p><div id="ob-form">${OB.aboutFormHTML(obFormModel(s.draft, 'sheet'), e)}</div>`;
+    footerHTML = `${obSubmitHTML({ idleLabel: last ? PQ.ABOUT_COPY.done : PQ.ABOUT_COPY.next, action: 'ob-next' })}${last ? '' : OB.textButtonHTML(PQ.ABOUT_COPY.skipForNow, 'ob-skip', e)}`;
+  } else {
+    const fp = obFirstPicksNow();
+    const r = OB.firstPicksHTML(fp, { escHtml, remindOn: s.remindOn });
+    bodyHTML = r.bodyHTML; footerHTML = r.footerHTML;
+  }
+  return { title: obTitleOf(screen), left, right: prog, bodyHTML, footerHTML, phase: screen };
+}
+/** Replaces the sheet's inside for the current screen (the sheet itself, its scrim and its entrance are not replayed), then binds the screen's Next. */
+function obRender() {
+  const sh = obSheet();
+  if (!_ob || !sh) return;
+  const m = obScreenModel();
+  sh.innerHTML = OB.innerHTML(m, { escHtml });
+  sh.setAttribute('data-ob-phase', m.phase);
+  obBindScreen();
+  try { (sh.querySelector('#ob-title') || sh.querySelector('.ij-nav-t'))?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+}
+function obBindScreen() {
+  const s = _ob, sh = obSheet();
+  if (!s || !sh) return;
+  try { s.submit && s.submit.destroy(); } catch { /* gone */ }
+  s.submit = null;
+  const btn = sh.querySelector('[data-onb-action="ob-next"]');
+  if (!btn) return;
+  const screen = s.screens[s.i];
+  s.submit = attachSubmit({ button: btn, statusEl: sh.querySelector('.ss-status') || null, idleLabel: btn.textContent.trim() || PQ.ABOUT_COPY.next, id: `ob-next-${screen}`, listen: false, failedText: PQ.ABOUT_COPY.saveFailed,
+    dismissOnSaved: true, onDismiss: () => obAdvance(), run: () => (screen === 'teams' ? obRunTeams() : obRunBackground()) });
+}
+function obAdvance() {
+  const s = _ob;
+  if (!s) return;
+  if (s.i >= s.screens.length - 1) { lsHideActionSheet({ restoreFocus: false }); obRelease(); return; }
+  s.i += 1;
+  obRender();
+}
+/** Teams: the college football teams (one writer, the wall stands) and a home team for each other sport with a list, in ONE pass; nothing to write is 'unchanged' (the screen simply advances). */
+async function obRunTeams() {
+  const s = _ob, sh = obSheet(), v = obViewer();
+  if (!s || !sh || !v.player) return 'failed';
+  let wrote = false;
+  const cfbRoot = sh.querySelector('[data-cfb-teams]');
+  if (cfbRoot) {
+    const input = readCfbTeamsControl(cfbRoot);
+    const cur = readCfbTeams(v.player);
+    if (input.home !== cur.home || input.alma !== cur.alma || input.designated !== cur.designated) {
+      if (!applyCfbTeams(v.playerId, input)) return 'failed';   // the Locked/Live wall refused (toasted by the writer)
+      wrote = true;
+    }
+  }
+  const homes = { ...(((getPlayer(v.playerId) || {}).preferences || {}).homeTeams || {}) };
+  let homesChanged = false;
+  for (const sp of obTeamSports()) {
+    if (sp.key === 'cfb') continue;
+    const el = [...sh.querySelectorAll('input')].find((x) => x.id === 'ob-home-' + sp.key);   // found by id comparison: no selector is built from a key
+    if (!el) continue;
+    const val = String(el.value || '').trim();
+    if (val !== String(homes[sp.key] || '')) { if (val) homes[sp.key] = val; else delete homes[sp.key]; homesChanged = true; }
+  }
+  if (homesChanged) {
+    const prefs = { ...(((getPlayer(v.playerId) || {}).preferences) || {}) };
+    if (Object.keys(homes).length) prefs.homeTeams = homes; else delete prefs.homeTeams;
+    if (patchPlayer(v.playerId, { preferences: prefs }) !== true) return 'failed';
+    wrote = true;
+  }
+  if (!wrote) { obAdvance(); return 'unchanged'; }
+  return confirmSeamKey('cfbp_players');
+}
+/** Background: the answers go to the account store (the catalog twin checks them first). A refused text keeps what was typed and says why under its field; nothing is sent. */
+async function obRunBackground() {
+  const s = _ob;
+  if (!s) return 'failed';
+  const { patch, errors, ok } = obProfilePatch(s.draft);
+  s.draft.errors = errors;
+  if (!ok) { obPaintMeta(); try { (errors.career ? obSheet()?.querySelector('#ob-career') : obSheet()?.querySelector('#ob-more'))?.focus?.({ preventScroll: true }); } catch { /* courtesy */ } return 'unchanged'; }
+  if (!obProfileChanged(patch)) { obAdvance(); return 'unchanged'; }
+  const r = await patchAccountProfile(patch);
+  return r === 'saved' ? 'saved' : 'failed';
+}
+const OB_COUNT_SEL = Object.freeze({ career: '#ob-count-career', more: '#ob-count-more' });
+function obPaintMeta() {
+  const root = _ob && obSheet() || document.getElementById('cc-body-about');
+  if (!root) return;
+  const d = (_ob && _ob.draft) || (_obPane && _obPane.draft);
+  if (!d) return;
+  for (const [id, qid] of [['career', 'career_text'], ['more', 'anything_else_text']]) {
+    const meta = root.querySelector(OB_COUNT_SEL[id])?.parentNode;
+    if (meta) meta.innerHTML = OB.textMetaHTML({ id, value: d[id], cap: PQ.TEXT_RULES[qid].cap, error: d.errors[id] }, { escHtml });
+  }
+}
+/** The form's chip, switch and picker sections are re-drawn from the draft; the two text fields are NEVER re-drawn (a repaint under a typing finger would lose the caret and the keyboard). */
+function obRepaintForm() {
+  const d = (_ob && _ob.draft) || (_obPane && _obPane.draft);
+  if (!d) return;
+  const root = _ob ? obSheet() : document.getElementById('cc-body-about');
+  if (!root) return;
+  const mode = _ob ? 'sheet' : 'pane';
+  if (!_ob && _obPane) _obPane.dirty = true;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = OB.aboutFormHTML(obFormModel(d, mode), { escHtml });
+  for (const id of ['ob-chips-sports', 'ob-other-teams', 'ob-colleges', 'ob-consent']) {
+    const fresh = tmp.querySelector(`#${id}`), cur = root.querySelector(`#${id}`);
+    if (fresh && cur) { cur.innerHTML = fresh.innerHTML; }
+  }
+}
+function obOnInput(el) {
+  const d = (_ob && _ob.draft) || (_obPane && _obPane.draft);
+  if (!d || !el) return;
+  const qid = el.getAttribute('data-ob-field');
+  const key = qid === 'career_text' ? 'career' : qid === 'anything_else_text' ? 'more' : '';
+  if (!key) return;
+  d[key] = String(el.value || '');
+  d.errors[key] = '';
+  if (!_ob && _obPane) _obPane.dirty = true;
+  const cap = PQ.TEXT_RULES[qid].cap;
+  const meta = (_ob && obSheet() || document.getElementById('cc-body-about'))?.querySelector(OB_COUNT_SEL[key])?.parentNode;
+  if (meta) meta.innerHTML = OB.textMetaHTML({ id: key, value: d[key], cap, error: '' }, { escHtml });
+  if (_obPane && _obPane.submit && _obPane.submit.machine.state !== 'idle') _obPane.submit.machine.reset();
+}
+function obPickSchool({ title, catalog = '', exclude = [], onPick }) { try { openSchoolPicker({ value: '', title, catalog, exclude, onPick }); } catch (e) { console.warn('[onboarding] the picker could not open', e); } }
+/** One delegate for every onboarding tap (the sheet, the tip card, Getting started, the About you pane, Tips & Help). Each action re-validates what it acts on; nothing is trusted from the DOM beyond a name it then checks. */
+function obOnClick(e) {
+  const el = e && e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-onb-action]') : null;
+  if (!el) return;
+  const act = el.getAttribute('data-onb-action');
+  const d = (_ob && _ob.draft) || (_obPane && _obPane.draft);
+  switch (act) {
+    case 'tip-got': obDismissTip(el.getAttribute('data-tip-id') || '', el.closest('.tip-card')); break;
+    case 'gs-hide': haptic('light'); patchAccountTips({ gsHidden: true }).catch(() => {}); break;
+    case 'gs-show': haptic('light'); patchAccountTips({ gsHidden: undefined }).catch(() => {}); break;
+    case 'gs-row': haptic('light'); obGsAct(el.getAttribute('data-gs-act') || ''); break;
+    case 'gs-noop': break;
+    case 'ob-close': lsHideActionSheet({ restoreFocus: false }); obRelease(); break;
+    case 'sheet-close': lsHideActionSheet({ restoreFocus: false }); break;
+    case 'ob-back': if (_ob && _ob.i > 0) { _ob.i -= 1; obRender(); } break;
+    case 'ob-skip': obAdvance(); break;
+    case 'ob-next': if (_ob && _ob.submit) _ob.submit.press(); break;
+    case 'fp-done': lsHideActionSheet({ restoreFocus: false }); obRelease(); break;
+    case 'fp-make': { lsHideActionSheet({ restoreFocus: false }); obRelease(); obOpenPicks(); break; }
+    case 'remind-toggle': obRemindToggle(); break;
+    case 'chip-sport': {
+      if (!d) break;
+      const k = el.getAttribute('data-sport') || '';
+      if (!obSportChoices().some((s) => s.key === k)) break;
+      d.sports = d.sports.includes(k) ? d.sports.filter((x) => x !== k) : [...d.sports, k].slice(0, PQ.SPORTS_FOLLOWED_MAX);
+      haptic('selection'); obRepaintForm(); break;
+    }
+    case 'team-add': {
+      if (!d) break;
+      const sp = el.getAttribute('data-sport') || '';
+      if (!obTeamSports().some((s) => s.key === sp)) break;
+      obPickSchool({ title: PQ.ABOUT_COPY.addTeam, catalog: sp === 'cfb' ? '' : sp, exclude: d.other[sp] || [], onPick: (loc) => { if (!loc) return; const list = d.other[sp] || []; if (!list.includes(loc) && list.length < PQ.OTHER_TEAMS_MAX) { d.other[sp] = [...list, loc]; obRepaintForm(); } } });
+      break;
+    }
+    case 'team-remove': { if (!d) break; const sp = el.getAttribute('data-sport') || '', t = el.getAttribute('data-team') || ''; d.other[sp] = (d.other[sp] || []).filter((x) => x !== t); if (!d.other[sp].length) delete d.other[sp]; haptic('light'); obRepaintForm(); break; }
+    case 'college-add': {
+      if (!d) break;
+      obPickSchool({ title: PQ.ABOUT_COPY.addCollege, catalog: '', exclude: d.schools, onPick: (loc) => { if (loc && !d.schools.includes(loc) && d.schools.length < PQ.SCHOOLS_ATTENDED_MAX) { d.schools = [...d.schools, loc]; obRepaintForm(); } } });
+      break;
+    }
+    case 'college-remove': { if (!d) break; const t = el.getAttribute('data-team') || ''; d.schools = d.schools.filter((x) => x !== t); haptic('light'); obRepaintForm(); break; }
+    case 'master-toggle': { if (!d) break; d.master = !d.master; if (!d.master) d.share = { career_text: false, anything_else_text: false }; haptic('selection'); obRepaintForm(); if (_obPane) obPaneDirty(); break; }
+    case 'share-toggle': {
+      if (!d || !d.master) break;
+      const q = el.getAttribute('data-qid') || '';
+      if (!['career_text', 'anything_else_text'].includes(q)) break;
+      d.share[q] = !d.share[q]; haptic('selection'); obRepaintForm(); if (_obPane) obPaneDirty(); break;
+    }
+    case 'answer-remove': obRemoveAnswer(el.getAttribute('data-qid') || ''); break;
+    case 'answers-remove-all': obAskRemoveAll(); break;
+    case 'ob-pane-save': if (_obPane && _obPane.submit) _obPane.submit.press(); break;
+    case 'tips-toggle': { const t = getAccountTips(); haptic('selection'); patchAccountTips({ off: t.off === true ? undefined : true }).then(() => obAfterTipsPane()).catch(() => {}); break; }
+    case 'tip-reread': { const tip = TP.tipById(el.getAttribute('data-tip-id') || ''); if (tip) lsShowActionSheet('ob-tip', OB.tipSheetHTML(tip, { escHtml }), { noHaptic: true }); break; }
+    case 'gs-again': haptic('light'); patchAccountTips({ gsHidden: undefined, off: undefined }).then(() => { showToast('Getting started is back on Home.', 'success'); obAfterTipsPane(); }).catch(() => {}); break;
+    case 'tips-reset': haptic('light'); patchAccountTips({ seen: undefined, gsHidden: undefined }).then(() => { showToast('Tips reset.', 'success'); obAfterTipsPane(); }).catch(() => {}); break;
+    default: break;
+  }
+}
+function obOnChange(e) {
+  const el = e && e.target;
+  if (!el || typeof el.getAttribute !== 'function') return;
+  const id = el.getAttribute('id') || '';
+  if (_ob && /^ob-home-/.test(id)) { _ob.draft.homes[id.slice('ob-home-'.length)] = String(el.value || ''); }
+}
+function obAfterTipsPane() { try { obSyncTips(); obRepaintHome(); if (controlCenterApi) controlCenterApi.update(buildControlCenterCtx()); } catch { /* the pane repaints at its next open */ } }
+async function obRemindToggle() {
+  const s = _ob;
+  if (!s) return;
+  if (s.remindOn) return;   // a granted permission is switched off in the device's own settings, not here
+  const r = await enablePushOnThisDevice(getSession()?.playerId || null).catch(() => ({ ok: false, message: 'Could not turn on notifications.' }));
+  if (_ob !== s) return;
+  s.remindOn = r.ok === true;
+  if (!r.ok) showToast(r.message || 'Could not turn on notifications.', 'warning');
+  obRefreshPush();
+  obRender();
+}
+
+// ── About you in the Profile pane (DI-750, DI-1036): the same form, saved with its own submission control ─────────────────────────────────────────────────────────────────────────────────────────────
+let _obPane = null;   // { draft, submit }: the pane's draft survives the drawer's repaints (unsaved text is never lost to one)
+function obPaneHTML() {
+  if (!obOn() || !obViewer().playerId) return '';
+  if (!_obPane) _obPane = { draft: obDraftFromStores(), submit: null };
+  const e = { escHtml };
+  return `<section class="ob-about" id="cc-body-about"><div class="admin-section-title">${escHtml(PQ.ABOUT_COPY.title)}</div><p class="ob-private">${escHtml(PQ.ABOUT_COPY.privatePage)}</p>`
+    + `<div id="ob-form">${OB.aboutFormHTML(obFormModel(_obPane.draft, 'pane'), e)}</div>`
+    + `${obSubmitHTML({ idleLabel: 'Save About you', action: 'ob-pane-save' })}`
+    + `<div class="ob-about-actions"><button type="button" class="btn btn-ghost btn-block" data-onb-action="answers-remove-all">${escHtml(PQ.ABOUT_COPY.removeAll)}</button></div></section>`;
+}
+function obPaneDirty() { try { if (_obPane && _obPane.submit && _obPane.submit.machine.state !== 'idle') _obPane.submit.machine.reset(); } catch { /* courtesy */ } }
+function obBindPane(el) {
+  if (!_obPane) return;
+  const btn = el.querySelector('[data-onb-action="ob-pane-save"]');
+  try { _obPane.submit && _obPane.submit.destroy(); } catch { /* gone */ }
+  _obPane.submit = null;
+  if (!btn) return;
+  _obPane.submit = attachSubmit({ button: btn, statusEl: el.querySelector('.ss-status') || null, idleLabel: 'Save About you', id: 'ob-pane-save', listen: false, failedText: PQ.ABOUT_COPY.saveFailed, run: async () => {
+    const d = _obPane && _obPane.draft; if (!d) return 'failed';
+    const { patch, errors, ok } = obProfilePatch(d);
+    d.errors = errors;
+    if (!ok) { obPaintMeta(); return 'unchanged'; }
+    if (!obProfileChanged(patch)) return 'unchanged';
+    const r = await patchAccountProfile(patch);
+    if (r === 'saved' && _obPane) _obPane.dirty = false;
+    return r === 'saved' ? 'saved' : 'failed';
+  } });
+}
+/** Remove one answer: deleted on the server at once (a hard delete: the key leaves the block), then the pane shows what is left. */
+async function obRemoveAnswer(qid) {
+  if (!obOn() || !PQ.ACCOUNT_IDS.includes(qid)) return;
+  const prof = getAccountProfile();
+  const share = { ...(prof.shareWithLeague || {}) }; delete share[qid];
+  haptic('light');
+  const r = await patchAccountProfile({ [qid]: undefined, shareWithLeague: Object.keys(share).length ? share : undefined });
+  if (r !== 'saved') { showToast(PQ.ABOUT_COPY.saveFailed, 'warning'); return; }
+  _obPane = null;
+  try { if (controlCenterApi) controlCenterApi.update(buildControlCenterCtx()); } catch { /* repaints at the next open */ }
+}
+/** The college football home team or alma mater is set AND the Locked/Live wall is up: Remove everything keeps them (and says so). */
+function obCfbTeamsHeld(v) {
+  if (!v || !v.playerId) return false;
+  const t = readCfbTeams(getPlayer(v.playerId) || {});
+  return !!(t.home || t.alma) && cfbTeamsGuardNow() === 'locked';
+}
+function obAskRemoveAll() {
+  const A = PQ.ABOUT_COPY;
+  const v = obViewer();
+  const message = A.removeAllConfirmBody({ league: v.leagueName || '', cfbLocked: obCfbTeamsHeld(v) });
+  lsShowActionSheet('ob-confirm', LC.actionSheetHTML({ escHtml, titleId: 'ob-confirm-title', title: A.removeAllConfirmTitle, message, danger: { label: A.removeAllConfirm, action: 'ob-remove-all-confirm' }, cancel: { label: 'Cancel', action: 'cancel' }, scrimAction: 'cancel', actionAttr: 'data-ls-action' }));
+}
+/** Remove everything: the account answers are cleared at once; the tier-1 team answers (home teams, the college football teams) are cleared through their own writers (the Locked/Live wall stands). */
+async function obRemoveAllConfirm() {
+  lsHideActionSheet({ restoreFocus: false });
+  const v = obViewer();
+  const r = await removeAllAccountProfile();
+  // reviewer note 10: ONE toast, and a true one. The college football teams are behind the Locked/Live wall: asked first (no writer is called, so the writer's own wall toast never fires before "Removed."),
+  // kept, and the result says so; the confirmation already said they would stay.
+  let cfbKept = false;
+  if (v.playerId) {
+    const prefs = { ...(((getPlayer(v.playerId) || {}).preferences) || {}) };
+    if (prefs.homeTeams) { delete prefs.homeTeams; patchPlayer(v.playerId, { preferences: prefs }); }
+    if (obCfbTeamsHeld(v)) cfbKept = true;
+    else if (readCfbTeams(getPlayer(v.playerId) || {}).home || readCfbTeams(getPlayer(v.playerId) || {}).alma) cfbKept = !applyCfbTeams(v.playerId, { home: '', alma: '', designated: 'alma' });
+  }
+  if (r !== 'saved') showToast(PQ.ABOUT_COPY.saveFailed, 'warning');
+  else showToast(cfbKept ? PQ.ABOUT_COPY.removedAllCfbKept : PQ.ABOUT_COPY.removedAll, cfbKept ? 'warning' : 'success');
+  _obPane = null;
+  try { if (controlCenterApi) controlCenterApi.update(buildControlCenterCtx()); } catch { /* repaints at the next open */ }
+}
+export const _obRemoveAllConfirmForTest = () => obRemoveAllConfirm();
+/** Control Center > Tips & Help (the finished markup the drawer's fourth pane renders). */
+function obTipsPaneHTML() {
+  if (!obOn() || !obViewer().playerId) return '';
+  const t = getAccountTips();
+  return OB.tipsPaneHTML({ role: obViewer().isComm ? 'commissioner' : 'player', seen: t.seen || {}, off: t.off === true }, { escHtml });
+}
+let _obBound = false;
+function bindOnboardingDelegates(d = (typeof document !== 'undefined' ? document : null)) {
+  if (_obBound || !d || typeof d.addEventListener !== 'function') return false;
+  _obBound = true;
+  d.addEventListener('click', obOnClick);
+  d.addEventListener('change', obOnChange);
+  d.addEventListener('input', (e) => { const t = e && e.target; if (t && typeof t.getAttribute === 'function' && t.getAttribute('data-ob-field')) obOnInput(t); });
+  return true;
+}
+export const _bindOnboardingDelegatesForTest = (d) => bindOnboardingDelegates(d);
+export function _resetOnboardingDelegatesForTest() { _obBound = false; }
+export const _obClickForTest = (e) => obOnClick(e);
+export const _obSyncTipsForTest = (tab) => obSyncTips(tab);
+export const _obPaneHTMLForTest = () => obPaneHTML();
+export const _obBindPaneForTest = (el) => obBindPane(el);
+export const _obTipsPaneHTMLForTest = () => obTipsPaneHTML();
 
 // ── LEAVE (DI-460) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 function lsPatchLeave() {
@@ -38579,6 +40683,16 @@ export function _appContentInertForTest() { return _appContentInert; }
  * budget; named here rather than silently presented as byte-identical.
  */
 let _weekWizardApi = null;
+export const _wizardStepHTMLForTest = { step1: renderWeekWizardStep1HTML, step3: renderWeekWizardStep3HTML, step6: renderWeekWizardStep6HTML, extras: wizardSportExtrasHTML, nightCard: wizardNightCardHTML, nightLight: wizardNightLight, openBlock: openBlockSentenceFor };
+
+/** D2 lane 2 (DI-886): the refusal sentence when opening `week` would put a second slate of the SAME sport Open (null for football and every sport that does not say oneOpenAtATime). */
+function openBlockSentenceFor(week) {
+  if (!week) return null;
+  try {
+    return openBlock({ weeks: getWeeks(), week, profile: profileForWeek(week), weekCompetitionOf: (w) => { const c = competitionForWeek(w); return c ? c.id : null; } });
+  } catch { return null; }
+}
+
 function weekWizardApi() {
   if (_weekWizardApi) return _weekWizardApi;
   _weekWizardApi = createWeekWizard({
@@ -38902,6 +41016,35 @@ function commAllSportsCardHTML() {
   </div>`;
 }
 
+/**
+ * D2 DI-868 (lane 3): the Sports rows. One row per sport of the league (main first, then active, then archived, newest archive first): the code, the state badge, one line, and the row's ONE
+ * action. The main sport has no action and says why; an active sport with a week in progress shows Archive… disabled with the shipped sentence; an archived sport shows Restore…. '' with fewer
+ * than two sports (a one-sport league has nothing to archive). Every dynamic part is escaped here; ids are the competitions' own (the handlers re-resolve them from live data).
+ */
+function commSportsStateCardHTML() {
+  let comps = [];
+  try { comps = (getLeagueCompetitions() || []).filter((c) => c && c.id); } catch { comps = []; }
+  if (comps.length < 2) return '';
+  const main = comps.filter((c) => c.isDefault), active = comps.filter((c) => !c.isDefault && !c.archivedAt);
+  const archived = comps.filter((c) => !c.isDefault && c.archivedAt).sort((a, b) => String(b.archivedAt).localeCompare(String(a.archivedAt)));
+  const rows = [
+    ...main.map((c) => ({ competitionId: c.id, code: archiveCodeOf(c), badge: ARCHIVE_COPY.mainSportBadge, note: ARCHIVE_COPY.mainSportReason, noteId: `comm-sport-main-${c.id}` })),
+    ...active.map((c) => {
+      const code = archiveCodeOf(c);
+      const blocker = archiveBlocker({ weeks: getWeeksForCompetition(c.id), label: code });
+      const wk = blocker ? archiveBlockingWeek(c) : null;
+      return { competitionId: c.id, code, badge: ARCHIVE_COPY.activeBadge, note: blocker || '', noteId: `comm-sport-arch-note-${c.id}`, action: { kind: 'archive', label: `${ARCHIVE_COPY.archiveAction(code)}…`, disabled: !!blocker },
+        ...(blocker ? { go: { label: ARCHIVE_COPY.openBlockedWeek(code, wk ? wk.weekNumber : null) } } : {}) };   // DI-869: the blocked row's way forward (that sport's week in Comm)
+    }),
+    ...archived.map((c) => {
+      const code = archiveCodeOf(c);
+      return { competitionId: c.id, code, badge: ARCHIVE_COPY.archivedBadge, line: `Archived ${archivedDateOf(c.archivedAt)} · history kept`, action: { kind: 'restore', label: `${ARCHIVE_COPY.restoreAction(code)}…` } };
+    }),
+  ];
+  return sportsStateCardHTML(rows, { escHtml });
+}
+export const _commSportsStateCardHTMLForTest = commSportsStateCardHTML;
+
 /** The Sport options card (Comm -> Week, under the lens): Archive for a NON-default sport. The league's main sport is never archived from here. */
 function commSportOptionsCardHTML() {
   const c = lensCompetition();
@@ -38917,6 +41060,198 @@ function commSportOptionsCardHTML() {
     </div>
   </div>`;
 }
+
+// ─── D2 lane 2 (DI-896): voiding a game nobody played ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const _voidPromptSnoozed = new Set();   // "Not yet": this session only; the prompt returns on the next session (never automatic, never silently dropped)
+/** A quiet chip for a game ESPN says was postponed, cancelled or suspended (the transient note on the live-status map). '' otherwise. */
+function espnNoteChipHTML(g) {
+  const note = g && liveStatusById.get(g.gameId) ? liveStatusById.get(g.gameId).note : null;
+  const label = { postponed: 'Postponed', cancelled: 'Cancelled', suspended: 'Suspended' }[note];
+  return label ? `<span class="badge badge-draft games-note-chip">${escHtml(label)}</span>` : '';
+}
+function voidDeps() { return { ...slateDeps(), now: () => new Date().toISOString() }; }
+/** The confirmation (a modal, because it changes results): "Void Rangers at Bruins?". */
+function askVoidGame({ weekId, gameId, invoker }) {
+  const g = getGames(weekId).find((x) => x.gameId === gameId);
+  if (!g) { showToast(SLATE_COPY.swapGone, 'error'); return; }
+  lsShowActionSheet('void-game', LC.actionSheetHTML({
+    escHtml, titleId: 'void-game-title', title: VOID_COPY.confirmTitle(`${g.awayTeam} at ${g.homeTeam}`), message: VOID_COPY.confirmBody,
+    danger: { label: VOID_COPY.confirmAction, action: 'confirm-void' }, cancel: { label: VOID_COPY.cancel, action: 'cancel' }, scrimAction: 'cancel', actionAttr: 'data-ls-action',
+  }), { weekId, gameId, invoker });
+}
+async function runVoidGame({ weekId, gameId }) {
+  const before = getGames(weekId).find((x) => x.gameId === gameId);
+  const res = voidGame({ weekId, gameId, reason: 'void', deps: voidDeps() });
+  if (!res.ok) { haptic('error'); showToast(VOID_COPY.failed, 'error'); return; }
+  const saved = await confirmGamesWrite();
+  if (saved !== 'saved') {
+    try { if (before) saveGame(before); } catch { /* the mirror keeps the voided row; the failure toast still says nothing changed on the server */ }
+    haptic('error'); showToast(VOID_COPY.failed, 'error'); afterSlateChange(); return;
+  }
+  haptic('success');
+  showToast(VOID_COPY.voided(`${before.awayTeam} at ${before.homeTeam}`), 'success');
+  if (res.tiebreakerMovedTo) showToast(VOID_COPY.tiebreakerMoved(`${res.tiebreakerMovedTo.awayTeam} at ${res.tiebreakerMovedTo.homeTeam}`), 'info');
+  afterSlateChange(); if (state.currentTab === 'commissioner') renderCommPage();
+}
+function runUndoVoidGame({ weekId, gameId }) {
+  const res = undoVoidGame({ weekId, gameId, deps: voidDeps() });
+  if (!res.ok) { haptic('error'); showToast(VOID_COPY.undoFailed, 'error'); return; }
+  const g = res.game; haptic('success'); showToast(VOID_COPY.undone(`${g.awayTeam} at ${g.homeTeam}`), 'success');
+  afterSlateChange(); if (state.currentTab === 'commissioner') renderCommPage();
+}
+/** Has the SERVER acknowledged the games write? 'saved' | 'refused' | 'pending' (sb.flushAndConfirm, PF-467). Local mode: the local write is the write. */
+async function confirmGamesWrite() {
+  if (_fmtSheetHooksForTest.confirm) return _fmtSheetHooksForTest.confirm();
+  if (!isSupabaseDataMode()) return 'saved';
+  try { return await sb.flushAndConfirm('cfbp_games'); } catch { return 'pending'; }
+}
+/** The prompt card on Comm > Week: "Rangers at Bruins is listed as postponed. Void it?" with Void game / Not yet; the same prompt 36 hours after the slate's last start with no result. Never automatic. */
+function commVoidPromptsHTML() {
+  const week = commWeek(); if (!week) return '';
+  const games = getGames(week.weekId);
+  const notes = {}; for (const g of games) { const e = liveStatusById.get(g.gameId); if (e && e.note) notes[g.gameId] = e.note; }
+  const prompts = voidPrompts({ week, games, nowMs: Date.now(), notes }).filter((p) => !_voidPromptSnoozed.has(`${week.weekId}:${p.gameId}`));
+  if (!prompts.length) return '';
+  return `<div class="admin-section" data-comm-tab="week">
+    <div class="card" id="comm-void-prompts">${prompts.map((p) => `<div class="void-prompt" data-void-game="${escHtml(p.gameId)}"><p class="text-sm">${escHtml(p.text)}</p><p class="text-muted text-xs">${escHtml(VOID_COPY.confirmBody)}</p><div class="flex gap-sm mt-sm"><button type="button" class="btn btn-primary" data-void-action="void">${escHtml(VOID_COPY.rowAction)}</button><button type="button" class="btn btn-ghost" data-void-action="snooze">${escHtml(VOID_COPY.promptKeep)}</button></div></div>`).join('')}</div>
+  </div>`;
+}
+function bindCommVoidPrompts() {
+  document.querySelectorAll('#comm-void-prompts [data-void-action]').forEach((b) => b.addEventListener('click', () => {
+    const host = b.closest('[data-void-game]'); const gid = host && host.getAttribute('data-void-game'); const week = commWeek();
+    if (!gid || !week) return;
+    if (b.getAttribute('data-void-action') === 'snooze') { _voidPromptSnoozed.add(`${week.weekId}:${gid}`); renderCommPage(); return; }
+    askVoidGame({ weekId: week.weekId, gameId: gid, invoker: b });
+  }));
+}
+/** Test seam (D2 lane 2, DI-923): the Request a Game card's search, request and sport context, which the harness cannot reach through a DOM. */
+export const _gameRequestForTest = { state: () => state.gameRequest, search: () => runGameRequestSearch(), submit: (id) => handleGameRequestSubmit(id), context: () => grSportContext() };
+export const _voidForTest = { calcAts: (weekId) => gamesCalcAts(weekId), ask: askVoidGame, run: runVoidGame, undo: runUndoVoidGame, prompts: commVoidPromptsHTML, snoozed: _voidPromptSnoozed };
+
+// ─── D2 lane 2 (DI-914 / DI-918): the sport's pick format and the lines shown on Picks ─────────────────────────────────────────────────────────────────────────────────────────────────────
+/** The Sport settings card (Comm -> Week, under the lens): Pick format, Lines shown on Picks, Rules. Shown when the league runs several sports or the lens sport offers more than one format; a one-sport, one-format league (IRB) sees nothing new. */
+function commSportSettingsCardHTML() {
+  const c = lensCompetition(); if (!c) return '';
+  const pr = commProfileFor(c); if (!pr) return '';
+  if (!isMultiSportLeague() && offeredFormats(pr).length < 2) return '';
+  const fmt = resolveSportFormat({ profile: pr, competition: c }).format;
+  const shown = marketsShown({ profile: pr, format: fmt, stored: c.settings ? c.settings.markets : undefined });
+  return `<div class="admin-section" data-comm-tab="week">
+    <div class="admin-section-title">${escHtml(pr.label)} settings</div>
+    <div class="card" id="comm-sport-settings-card">${settingsRowsModel({ profile: pr, format: fmt, shown, canEdit: true }).map((r) => (r.editable
+      ? `<button type="button" class="settings-row" id="${escHtml(r.id)}" data-sport-setting="${escHtml(r.id)}"><span class="settings-row-label">${escHtml(r.label)}</span><span class="settings-row-value text-muted">${escHtml(r.value)}</span>${icon('chevronRight')}</button>`
+      : `<div class="settings-row settings-row-static"><span class="settings-row-label">${escHtml(r.label)}</span><span class="settings-row-value text-muted">${escHtml(r.value)}</span></div>`)).join('')}</div>
+    ${obligationsSwitchRowHTML({ scope: 'sport', competitionId: c.id })}
+  </div>`;   // F-1 (release review): this sport's Obligations switch (its own card and helper line, DI-1016) sits with its format and lines rows
+}
+let _fmtSheet = null;   // { competitionId, selected, applyDraft, phase } while the pick-format sheet is up; { kind:'lines', competitionId, phase } for the lines sheet
+export const _fmtSheetHooksForTest = { confirm: null };
+/** Has the SERVER acknowledged the competitions write? 'saved' | 'refused' | 'pending' (sb.flushAndConfirm, PF-467). Local mode has no server: the local write is the write. */
+async function confirmCompetitionsWrite() {
+  if (_fmtSheetHooksForTest.confirm) return _fmtSheetHooksForTest.confirm();
+  if (!isSupabaseDataMode()) return 'saved';
+  try { return await sb.flushAndConfirm('cfbp_competitions'); } catch { return 'pending'; }
+}
+function fmtDraftWeek(c) {
+  const drafts = getWeeksForCompetition(c.id).filter((w) => w.status === 'draft').sort((a, b) => (b.weekNumber || 0) - (a.weekNumber || 0));
+  return drafts[0] || null;
+}
+function fmtSheetHTMLNow() {
+  const st = _fmtSheet; const c = st && liveLeagueCompetitions().find((x) => x.id === st.competitionId); const pr = c && commProfileFor(c);
+  if (!st || !c || !pr) return '';
+  const current = resolveSportFormat({ profile: pr, competition: c }).format;
+  if (st.kind === 'lines') {
+    const wk = getCurrentWeekFor(c.id);
+    const games = wk ? getGames(wk.weekId) : [];
+    const available = { spread: games.some((g) => typeof g.spread === 'number' && g.spreadSource !== 'format' || (g.markets && g.markets.spread)), total: games.some((g) => g.markets && g.markets.total), moneyline: games.some((g) => g.markets && g.markets.moneyline) };
+    return linesSheetHTML({ escHtml, profile: pr, format: current, shown: marketsShown({ profile: pr, format: current, stored: c.settings ? c.settings.markets : undefined }), available: games.length ? available : {}, phase: st.phase });
+  }
+  const dw = fmtDraftWeek(c);
+  return formatSheetHTML({ escHtml, profile: pr, current, selected: st.selected, phase: st.phase, draft: dw ? { label: formatWeekLabelParts(dw).name, count: getGames(dw.weekId).length } : null, applyDraft: st.applyDraft, canEdit: true });
+}
+function fmtSheetRepaint() {
+  const layer = lsById(LS_ACTION_LAYER_ID); if (!layer || !_fmtSheet) return;
+  layer.innerHTML = fmtSheetHTMLNow();
+}
+function openFormatSheet(invoker) {
+  const c = lensCompetition(); if (!c) return;
+  const pr = commProfileFor(c); if (!pr) return;
+  lsHideActionSheet({ restoreFocus: false });      // a sheet already up ends first (its hide clears the sheet state, so it must come BEFORE this one's is set)
+  _fmtSheet = { kind: 'format', competitionId: c.id, selected: resolveSportFormat({ profile: pr, competition: c }).format, applyDraft: true, phase: 'choose' };
+  lsShowActionSheet('fmt', fmtSheetHTMLNow(), { noHaptic: true, invoker });
+}
+function openLinesSheet(invoker) {
+  const c = lensCompetition(); if (!c) return;
+  lsHideActionSheet({ restoreFocus: false });
+  _fmtSheet = { kind: 'lines', competitionId: c.id, phase: 'idle' };
+  lsShowActionSheet('fmt', fmtSheetHTMLNow(), { noHaptic: true, invoker });
+}
+/** Rewrite the Draft slate's games for a new format through the ONE writer (DI-914): pick the winner clears the lines to 0; back to the spread reads each game's markets (a game with none is flagged "Set spread"). Open, Locked, Live and Final slates are never touched. */
+function applyFormatToDraftSlate(week, format) {
+  if (!week || week.status !== 'draft') return;
+  saveWeek({ ...week, format, rules: { key: ruleSetKeyForWeek({ sport: profileForWeek(week).key, format }), v: 1 }, updatedAt: new Date().toISOString() });
+  for (const g of getGames(week.weekId)) {
+    const patch = applyFormatToGame(g, format);
+    if (Object.keys(patch).length) saveGame({ ...g, ...patch, updatedAt: new Date().toISOString() });
+  }
+}
+async function runFormatSave() {
+  const st = _fmtSheet; if (!st || st.kind !== 'format' || st.phase === 'saving') return;
+  const c = liveLeagueCompetitions().find((x) => x.id === st.competitionId); if (!c) return;
+  const prior = c;
+  let priorWeek = null, priorGames = [];
+  st.phase = 'saving'; fmtSheetRepaint();
+  try {
+    saveLeagueCompetition({ ...c, settings: { ...(c.settings || {}), format: st.selected } });
+    const dw = st.applyDraft ? fmtDraftWeek(c) : null;
+    if (dw) { priorWeek = getWeek(dw.weekId) ? { ...getWeek(dw.weekId) } : null; priorGames = getGames(dw.weekId).map((g) => ({ ...g })); }   // review 2: the Draft slate is rewritten below, so what it was is kept to put back
+    if (dw) applyFormatToDraftSlate(dw, st.selected);
+    const res = await confirmCompetitionsWrite();
+    if (res !== 'saved') throw new Error('not_saved');
+    if (_fmtSheet !== st) return;                      // the sheet was dismissed meanwhile: the write stands, nothing to paint
+    st.phase = 'saved'; haptic('success');
+    const pr = commProfileFor(c);
+    showToast(FORMAT_SHEET_COPY.toast(pr.label, st.selected, formatLabel(pr, st.selected)), 'success');
+    fmtSheetRepaint(); renderCommPage();
+  } catch (e) {
+    try { saveLeagueCompetition(prior); } catch { /* the mirror keeps the prior row */ }
+    // the sheet says "The format was not changed": so the Draft slate (its week and every game the change rewrote) goes back too
+    try { if (priorWeek) saveWeek(priorWeek); for (const g of priorGames) saveGame(g); } catch { /* the mirror keeps what it has */ }
+    if (_fmtSheet === st) { st.phase = 'failed'; haptic('error'); fmtSheetRepaint(); }
+  }
+}
+async function runLinesToggle(market) {
+  const st = _fmtSheet; if (!st || st.kind !== 'lines' || st.phase === 'saving') return;
+  const c = liveLeagueCompetitions().find((x) => x.id === st.competitionId); const pr = c && commProfileFor(c); if (!c || !pr) return;
+  const format = resolveSportFormat({ profile: pr, competition: c }).format;
+  if (marketLocked(format, market)) return;
+  const now = marketsShown({ profile: pr, format, stored: c.settings ? c.settings.markets : undefined });
+  const next = now.includes(market) ? now.filter((m) => m !== market) : [...now, market];
+  const prior = c;
+  st.phase = 'saving'; fmtSheetRepaint();
+  try {
+    saveLeagueCompetition({ ...c, settings: { ...(c.settings || {}), markets: marketsShown({ profile: pr, format, stored: next }) } });
+    const res = await confirmCompetitionsWrite();
+    if (res !== 'saved') throw new Error('not_saved');
+    if (_fmtSheet !== st) return;
+    st.phase = 'saved'; haptic('light'); fmtSheetRepaint(); markPicksStale();
+  } catch (e) {
+    try { saveLeagueCompetition(prior); } catch { /* keep */ }
+    if (_fmtSheet === st) { st.phase = 'failed'; haptic('error'); fmtSheetRepaint(); }
+  }
+}
+function fmtSheetAction(act) {
+  const st = _fmtSheet; if (!st || typeof act !== 'string') return false;
+  if (act.startsWith('fmt-select:') && st.kind === 'format') { const f = act.slice(11); if (st.phase === 'saved') return true; st.selected = f; st.phase = 'choose'; haptic('selection'); fmtSheetRepaint(); return true; }
+  if (act === 'fmt-draft-toggle' && st.kind === 'format') { st.applyDraft = !st.applyDraft; fmtSheetRepaint(); return true; }
+  if (act === 'fmt-save') { void runFormatSave(); return true; }
+  if (act === 'fmt-change' && st.kind === 'format') { st.phase = 'choose'; fmtSheetRepaint(); return true; }
+  if (act.startsWith('lines-toggle:') && st.kind === 'lines') { void runLinesToggle(act.slice(13)); return true; }
+  return false;
+}
+export const _formatSheetForTest = { open: openFormatSheet, openLines: openLinesSheet, act: (a) => fmtSheetAction(a), state: () => (_fmtSheet ? { ..._fmtSheet } : null), html: fmtSheetHTMLNow, card: commSportSettingsCardHTML };
+/** Display-only: a line setting changes what Picks shows at once. The next Picks paint reads it; nothing else to mark. */
+function markPicksStale() { try { if (state.currentTab === 'picks') renderPicksPage(); } catch { /* the next paint reads the setting */ } }
 
 /** The weeks of the lens sport that are in progress (open / locked / live): the ones a removal must not pull a member out of. */
 function commSportWeeksInProgress() {
@@ -38987,16 +41322,17 @@ function runSportNextAction({ kind, sport }) {
   if (kind === 'finalize') { openFinalizeWeekFlow(getWeek(week.weekId) || week); return; }
   if (kind === 'lock') {
     const statusResult = applyWeekStatusChange(week, 'locked');
-    refreshHeader(); showToast(`${code ? code + ' ' : ''}Week ${week.weekNumber} is locked.`, 'success');
+    refreshHeader(); showToast(`${code ? code + ' ' : ''}${weekSlateName(week)} is locked.`, 'success');   // D2 lane 2 (Q-C3): a game night is named by its label
     notifySpreadLockRefusals(week.weekId, statusResult?.spreadLockRefusals);   // S4: a spread refused at the freeze is as loud here as on every other Lock button
     renderCommPage(); return;
   }
   if (kind === 'open') {
-    const r = weekWizardApi().openForPicks({ week, gamesCount: games.length, missingSpreadCount: countMissingSpreads(games), timingConfigured: !!computeEffectiveLockAt(week, games) });
+    const r = weekWizardApi().openForPicks({ week, gamesCount: games.length, missingSpreadCount: countMissingSpreads(games), timingConfigured: !!computeEffectiveLockAt(week, games), openBlockSentence: openBlockSentenceFor(week) });   // review 8: one slate open at a time
+    if (r && r.ok === false && r.reason === 'another_slate_open') { showToast(r.message, 'error'); return; }
     if (!r || r.ok === false) {
       const gate = (r && r.gate) || {};
       const why = !gate.gamesOk ? 'it has no games yet' : !gate.spreadsOk ? `${countMissingSpreads(games)} game${countMissingSpreads(games) === 1 ? '' : 's'} need${countMissingSpreads(games) === 1 ? 's' : ''} a spread` : !gate.timingOk ? 'its lock time is not set' : 'it needs a weekly blurb';
-      showToast(`${code ? code + ' ' : ''}Week ${week.weekNumber} can't open yet: ${why}.`, 'error');
+      showToast(`${code ? code + ' ' : ''}${weekSlateName(week)} can't open yet: ${why}.`, 'error');
       openWeekWizardSheet();        // the wizard names exactly what is missing, for THIS sport's week (the lens is on it)
       return;
     }
@@ -39266,21 +41602,36 @@ function renderWeekWizardTrackerHTML(activeStep) {
 // 'espn_live' (see bindWeekWizardStep1()'s own read of this form), matching
 // this function's own prior in-form default — the commissioner can change it
 // afterward only via Admin → Week if genuinely needed.
-function weekCreateFormFieldsHTML(nextNum, { idPrefix = 'wiz-', defaults = {}, sports = null } = {}) {
+function weekCreateFormFieldsHTML(nextNum, { idPrefix = 'wiz-', defaults = {}, sports = null, night = null } = {}) {
   const season = defaults.season ?? (getSettings().season || '2026');
   const weekNumber = defaults.weekNumber ?? nextNum;
   // D1 (DI-533 #1): the Sport field, FIRST, shown only in a multi-sport league. A NEW week chooses its sport (default: the lens sport); a week that already exists shows its sport as
   // plain text (a sport is not changed under a slate that may already hold games). `sports` is null in a one-sport league, so the form below is byte-identical to v0.29.0's.
   const sportField = !sports ? '' : (sports.locked
     ? `<div class="form-group"><span class="form-label">Sport</span><div class="form-static" id="${escHtml(idPrefix)}cw-sport-static">${escHtml(sports.lockedLabel || '')}</div></div>`
-    : `<div class="form-group"><label class="form-label" for="${escHtml(idPrefix)}cw-sport">Sport</label><select class="form-select" id="${escHtml(idPrefix)}cw-sport">${sports.options.map((o) => `<option value="${escHtml(o.dbCode)}" data-next-num="${escHtml(String(o.nextNum))}"${o.dbCode === sports.selected ? ' selected' : ''}>${escHtml(o.label)}</option>`).join('')}</select></div>`);
-  return `
-    ${sportField}
+    : `<div class="form-group"><label class="form-label" for="${escHtml(idPrefix)}cw-sport">Sport</label><select class="form-select" id="${escHtml(idPrefix)}cw-sport">${sports.options.map((o) => `<option value="${escHtml(o.dbCode)}" data-next-num="${escHtml(String(o.nextNum))}"${o.night ? ' data-night="1"' : ''}${o.dbCode === sports.selected ? ' selected' : ''}>${escHtml(o.label)}</option>`).join('')}</select></div>`);
+  // D2 lane 2 (DI-887): when the league can build a slate for a sport that plays by the NIGHT, the form carries a "Which night?" block beside the week fields, shown for that sport only. A league with no such
+  // sport renders the form exactly as before (no wrapper, no block).
+  const normalFields = `
     <div class="form-group"><label class="form-label">Season</label><input class="form-input" id="${escHtml(idPrefix)}cw-season" value="${escHtml(String(season))}" /></div>
     <div class="form-group"><label class="form-label">Week Number</label><input class="form-input" id="${escHtml(idPrefix)}cw-num" type="number" value="${escHtml(String(weekNumber))}" /></div>
     <div class="form-group"><label class="form-label">Custom Round Label <span class="text-muted text-xs">(added after the week number, e.g. "Part 2" — leave blank to use week number)</span></label><input class="form-input" id="${escHtml(idPrefix)}cw-round" placeholder="e.g. Part 2" value="${escHtml(defaults.roundLabel || '')}" /></div>
     <div class="form-group"><label class="form-label">Start Date</label><input class="form-input" id="${escHtml(idPrefix)}cw-start" type="date" value="${escHtml(defaults.startDate || '')}" /></div>
     <div class="form-group"><label class="form-label">End Date</label><input class="form-input" id="${escHtml(idPrefix)}cw-end" type="date" value="${escHtml(defaults.endDate || '')}" /></div>`;
+  if (!night) return `
+    ${sportField}${normalFields}`;
+  const chips = night.chips.map((c) => `<button type="button" class="btn btn-secondary wiz-night-chip${c.date === night.selectedDate ? ' selected' : ''}" data-night-date="${escHtml(c.date)}" role="radio" aria-checked="${c.date === night.selectedDate ? 'true' : 'false'}"><span>${escHtml(c.label)}</span><span class="wiz-night-count text-muted text-xs" data-night-count="${escHtml(c.date)}">${c.count === null ? '' : escHtml(` · ${c.count} ${c.count === 1 ? 'game' : 'games'}`)}</span></button>`).join('');
+  return `
+    ${sportField}
+    <div id="${escHtml(idPrefix)}cw-normal"${night.visible ? ' hidden' : ''}>${normalFields}</div>
+    <div id="${escHtml(idPrefix)}cw-night" data-night-active="${night.visible ? '1' : '0'}"${night.visible ? '' : ' hidden'}>
+      <div class="admin-section-title">${escHtml(NIGHT_COPY.title)}</div>
+      <p class="text-muted text-xs mb-sm">${escHtml(NIGHT_COPY.helper)}</p>
+      <div class="wiz-night-chips" role="radiogroup" aria-label="${escHtml(NIGHT_COPY.title)}">${chips}</div>
+      <div class="form-group mt-sm"><label class="form-label" for="${escHtml(idPrefix)}cw-night-date">Or a date</label><input class="form-input" id="${escHtml(idPrefix)}cw-night-date" type="date" value="${escHtml(night.selectedDate || '')}" max="${escHtml(night.maxDate || '')}" /></div>
+      <div class="form-group"><label class="form-label" for="${escHtml(idPrefix)}cw-night-name">Slate name <span class="text-muted text-xs">(optional)</span></label><input class="form-input" id="${escHtml(idPrefix)}cw-night-name" maxlength="24" placeholder="${escHtml(night.selectedDate ? nightLabel(night.selectedDate) : 'e.g. Rivalry Night')}" value="${escHtml(night.name || '')}" /></div>
+      <div id="${escHtml(idPrefix)}night-status" class="text-sm text-muted" role="status" aria-live="polite"></div>
+    </div>`;
 }
 
 function renderWeekWizardStep1HTML(week) {
@@ -39295,12 +41646,24 @@ function renderWeekWizardStep1HTML(week) {
   let sports = null;
   if (multi) {
     const comps = liveLeagueCompetitions();
-    const info = (c) => { const pr = listProfiles().find((x) => x.key === c.sport); return { dbCode: c.sport, label: pr ? pr.label : c.sport, nextNum: nextWeekNumberFor(getWeeksForCompetition(c.id)) }; };
+    const info = (c) => { const pr = listProfiles().find((x) => x.key === c.sport); return { dbCode: c.sport, label: pr ? pr.label : c.sport, nextNum: nextWeekNumberFor(getWeeksForCompetition(c.id)), night: isNightSport(pr) }; };
     if (week) { const wc = competitionForWeek(week); sports = { locked: true, lockedLabel: wc ? info(wc).label : '' }; }
     else { sports = { locked: false, selected: getLensSport(), options: comps.map(info) }; }
   }
+  // D2 lane 2 (DI-887): the "Which night?" block, when this league has a night sport (or this week is one).
+  let night = null;
+  try {
+    const wp = week ? profileForWeek(week) : null;
+    const hasNightSport = liveLeagueCompetitions().some((c) => { try { return isNightSport(getProfile(c.sport)); } catch { return false; } });
+    if (hasNightSport || isNightSport(wp)) {
+      const lensProf = (() => { try { const lc = multi ? lensCompetition() : null; return lc ? getProfile(lc.sport) : null; } catch { return null; } })();
+      const visible = week ? isNightSport(wp) : isNightSport(lensProf) || (!multi && liveLeagueCompetitions().length === 1 && hasNightSport);
+      const today = etDateOf(Date.now());
+      night = { chips: nightChips({ nowMs: Date.now() }), selectedDate: week && isNightSport(wp) ? (week.startDate || '') : '', name: week && week.slateLabel && week.slateLabel !== nightLabel(week.startDate) ? week.slateLabel : '', visible, maxDate: today ? addDays(today, 180) : '' };
+    }
+  } catch { night = null; }
   return `<div class="admin-section-title">Create</div>
-    ${weekCreateFormFieldsHTML(nextNum, { defaults, sports })}
+    ${weekCreateFormFieldsHTML(nextNum, { defaults, sports, night })}
     <button type="button" class="btn btn-primary btn-block mt-md" id="wiz-step1-create">${week ? 'Save & Continue' : 'Create Week'}</button>`;
 }
 /** REVIEWER BLOCK item 2 (2026-09-25) — `week` is NEW: the current draft
@@ -39316,7 +41679,32 @@ function bindWeekWizardStep1(bodyEl, week) {
     const n = opt && opt.dataset ? opt.dataset.nextNum : null;
     const numEl = bodyEl.querySelector('#wiz-cw-num');
     if (n && numEl) numEl.value = n;
+    // D2 lane 2 (DI-887): a night sport shows "Which night?" in place of the week fields.
+    const isNight = !!(opt && opt.dataset && opt.dataset.night === '1');
+    const nightEl = bodyEl.querySelector('#wiz-cw-night'), normalEl = bodyEl.querySelector('#wiz-cw-normal');
+    if (nightEl) { nightEl.hidden = !isNight; nightEl.setAttribute('data-night-active', isNight ? '1' : '0'); }
+    if (normalEl) normalEl.hidden = isNight;
   });
+  // D2 lane 2 (DI-887): a night chip selects that night and reads it from ESPN ONCE for its game count ("Checking ESPN for that night…"); a failed read says so and tapping the chip again retries.
+  // The date field and the chips are one value; the count never blocks (a commissioner may Create without it).
+  const selectNight = (date) => {
+    Array.from(bodyEl.querySelectorAll('.wiz-night-chip') || []).forEach((b) => { const on = b.getAttribute('data-night-date') === date; b.classList.toggle('selected', on); b.setAttribute('aria-checked', on ? 'true' : 'false'); });
+    const dateEl = bodyEl.querySelector('#wiz-cw-night-date'); if (dateEl) dateEl.value = date;
+    const nameEl = bodyEl.querySelector('#wiz-cw-night-name'); if (nameEl) nameEl.placeholder = nightLabel(date) || 'e.g. Rivalry Night';
+  };
+  Array.from(bodyEl.querySelectorAll('.wiz-night-chip') || []).forEach((chip) => chip.addEventListener('click', async () => {
+    const date = chip.getAttribute('data-night-date'); if (!date) return;
+    selectNight(date);
+    const status = bodyEl.querySelector('#wiz-night-status'), countEl = bodyEl.querySelector(`[data-night-count="${cssId(date)}"]`);
+    if (status) status.textContent = NIGHT_COPY.loading;
+    try {
+      const r = await fetchByDateRange({ startDate: date, endDate: date, sport: 'nhl', almaMaters: [] });
+      const n = r && Array.isArray(r.games) ? r.games.length : 0;
+      if (countEl) countEl.textContent = ` · ${n} ${n === 1 ? 'game' : 'games'}`;
+      if (status) status.textContent = r && r.error && !n ? NIGHT_COPY.empty : '';
+    } catch { if (status) status.textContent = NIGHT_COPY.error; }
+  }));
+  bodyEl.querySelector('#wiz-cw-night-date')?.addEventListener('change', (e) => { const d = e.target.value; if (d) selectNight(d); });
   bodyEl.querySelector('#wiz-step1-create')?.addEventListener('click', () => {
     // D1 (DI-533 #2): the week's competition and its PROFILE - whether that competition is the default or not (so a league whose main sport is the NFL builds NFL weeks).
     // A new week of the default competition carries NO competitionId (absent), so a college week stays byte-identical.
@@ -39326,6 +41714,29 @@ function bindWeekWizardStep1(bodyEl, week) {
       const live = liveLeagueCompetitions();
       wizSport = (picked && live.find((c) => c.sport === picked)) || (isMultiSportLeague() ? lensCompetition() : (live.find((c) => c.isDefault) || live[0] || null));
     }
+    // D2 lane 2 (DI-887 / DI-886): "Which night?" is visible for a night sport: the slate is that night (start = end), labelled "Thu, Oct 22" or the commissioner's own name, numbered within its competition.
+    const nightPanel = bodyEl.querySelector('#wiz-cw-night');
+    const nightMode = !!nightPanel && typeof nightPanel.getAttribute === 'function' && nightPanel.getAttribute('data-night-active') === '1';   // set at render and flipped by the Sport select
+    let nightFields = {};
+    if (nightMode) {
+      const date = (bodyEl.querySelector('#wiz-cw-night-date')?.value || '').trim();
+      if (!date || !nightLabel(date)) { showToast('Pick a night first.', 'warning'); return; }
+      const compWeeks = wizSport ? getWeeksForCompetition(wizSport.id) : getWeeks();
+      const win = slateWindow({ date });
+      nightFields = {
+        season: seasonOfNight(date), weekNumber: nextWeekNumberFor(compWeeks), roundLabel: '', startDate: win.startDate, endDate: win.endDate,
+        slateLabel: (bodyEl.querySelector('#wiz-cw-night-name')?.value || '').trim() || nightLabel(date),
+      };
+    }
+    // D2 lane 2 (DI-903 / DI-911 / DI-905): a NEW week is stamped with its pick format and rule set, and a college week in a league with no claimed alma maters defaults its tiebreaker to the designated game.
+    let stampFields = {};
+    if (wizSport && !week) {
+      try {
+        const sp = getProfile(wizSport.sport);
+        const fmt = resolveSportFormat({ profile: sp, competition: wizSport }).format;
+        stampFields = wizardStampFields({ profile: sp, format: fmt, claimedCount: claimedAlmaMaters().length });
+      } catch { stampFields = {}; }
+    }
     const fields = {
       ...(wizSport ? { competitionId: wizSport.isDefault ? null : wizSport.id, profile: (() => { try { return getProfile(wizSport.sport); } catch { return null; } })() } : {}),
       season: bodyEl.querySelector('#wiz-cw-season')?.value || '2026',
@@ -39333,6 +41744,7 @@ function bindWeekWizardStep1(bodyEl, week) {
       roundLabel: bodyEl.querySelector('#wiz-cw-round')?.value.trim() || '',
       startDate: bodyEl.querySelector('#wiz-cw-start')?.value || '',
       endDate: bodyEl.querySelector('#wiz-cw-end')?.value || '',
+      ...nightFields, ...stampFields,
       // DI-353 (UN-311) — the Data Source field is gone from this form
       // entirely (Admin → Week's own control is the one surviving place to
       // change it); the key is left OUT of `fields` (not read from the DOM
@@ -39362,6 +41774,31 @@ function bindWeekWizardStep1(bodyEl, week) {
   });
 }
 
+/** D2 lane 2 (DI-887, RPF-C3): the slates a commissioner chose to KEEP light ("Keep these 2"), for this session: the card does not ask again. */
+const _wizNightKept = new Set();
+/** The light-night decision for a draft slate of a night sport, or null (football, a slate that is not light, a light night already extended to the sport's maximum or kept). */
+function wizardNightLight(week) {
+  if (!week) return null;
+  let prof = null; try { prof = profileForWeek(week); } catch { prof = null; }
+  if (!isNightSport(prof) || _wizNightKept.has(week.weekId)) return null;
+  const games = getGames(week.weekId);
+  const start = week.startDate || '', end = week.endDate || start;
+  const nights = start && end && end > start ? 2 : 1;
+  const d = nightDecision({ games, nights, profile: prof });
+  return d.kind === 'light' ? { ...d, start, end, label: nightLabel(start), nextDate: addDays(end || start, 1) } : null;
+}
+/** The inline light-night card above the list: "Only 2 games are scheduled on Sun, Oct 18." with "Add Mon, Oct 19" and "Keep these 2" (never padded). */
+function wizardNightCardHTML(week) {
+  const d = wizardNightLight(week);
+  if (!d) return '';
+  const next = nightLabel(d.nextDate);
+  return `<div class="card mt-sm" id="wiz-night-card" role="group" aria-label="Light night">
+    <p class="text-sm">${escHtml(NIGHT_COPY.lightTitle(d.count, d.label))}</p>
+    <p class="text-muted text-xs mt-xs">${escHtml(NIGHT_COPY.lightHelper)}</p>
+    <div class="flex gap-sm mt-sm"><button type="button" class="btn btn-secondary" id="wiz-night-add">${escHtml(NIGHT_COPY.addNight(next))}</button><button type="button" class="btn btn-ghost" id="wiz-night-keep">${escHtml(NIGHT_COPY.keepThese(d.count))}</button></div>
+  </div>`;
+}
+
 function renderWeekWizardStep2HTML(week) {
   if (!week) {
     return `<p class="text-muted text-sm">Create the week first (Step 1).</p>
@@ -39383,6 +41820,7 @@ function renderWeekWizardStep2HTML(week) {
     <button type="button" class="btn btn-primary btn-block" id="wiz-fetch-apply-btn">Fetch Games</button>
     <button type="button" class="btn btn-ghost btn-sm wiz-slate-btn mt-sm" id="wiz-step2-add-manual">Add a game manually</button>
     <div id="wiz-fetch-status" class="text-sm mt-sm text-muted" role="status" aria-live="polite">${escHtml(note)}</div>
+    ${wizardNightCardHTML(week)}
     <div class="wiz-slate-count text-sm mt-sm" id="wiz-step2-count">${hasGames ? `<span>${escHtml(`${n} ${plural(n, 'game', 'games')} on your slate`)}</span> <button type="button" class="btn btn-ghost btn-sm wiz-slate-btn wiz-review-slate" id="wiz-step2-review">Review slate</button>` : '<span class="text-muted">No games on your slate yet.</span>'}</div>
     <div id="wiz-fetch-skeleton" class="week-wizard-skeleton-rows" style="display:none" aria-busy="true">${Array.from({ length: 10 }, () => '<div class="week-wizard-skeleton-row"></div>').join('')}</div>
     ${hasGames ? '' : '<p class="text-muted text-xs mt-sm">Add at least one game to continue.</p>'}
@@ -39409,6 +41847,19 @@ function bindWeekWizardStep2(bodyEl, week) {
   bodyEl.querySelector('#wiz-step2-review')?.addEventListener('click', () => {
     if (getGames(week.weekId).length === 0) return;
     _weekWizardStep = 3;
+    renderWeekWizardSheetBody();
+  });
+  // D2 lane 2 (DI-887): the light-night card. "Add <next night>" extends the slate's end date by one night and reads that night too (one slate, two nights); "Keep these n" accepts the light slate.
+  bodyEl.querySelector('#wiz-night-keep')?.addEventListener('click', () => { _wizNightKept.add(week.weekId); renderWeekWizardSheetBody(); });
+  bodyEl.querySelector('#wiz-night-add')?.addEventListener('click', async (e) => {
+    const cur = getWeek(week.weekId) || week;
+    const d = wizardNightLight(cur); if (!d) return;
+    const btn = e.currentTarget; btn.disabled = true;
+    try {
+      saveWeek({ ...cur, endDate: d.nextDate, updatedAt: new Date().toISOString() });
+      const r = await weekWizardApi().fetchAndApplySuggestedSlate(getWeek(week.weekId) || cur);
+      _weekWizardStep2Note = r && r.ok ? `Added ${nightLabel(d.nextDate)}.` : NIGHT_COPY.error;
+    } catch { _weekWizardStep2Note = NIGHT_COPY.error; }
     renderWeekWizardSheetBody();
   });
   const fetchBtn = bodyEl.querySelector('#wiz-fetch-apply-btn');
@@ -39462,7 +41913,7 @@ function bindWeekWizardStep2(bodyEl, week) {
       // D1 (W-68, DI-W68.6): a fetch that HELD games back (the slate is at its size) stays on this step so the commissioner reads why - "The slate is at 10; add more one at a time." - and the
       // status line is carried through the repaint (it used to be wiped by it).
       if (status && status.textContent) _weekWizardStep2Note = status.textContent;
-      if (getGames(week.weekId).length > 0 && !(result.held > 0)) {
+      if (getGames(week.weekId).length > 0 && !(result.held > 0) && !wizardNightLight(getWeek(week.weekId) || week)) {   // D2: a light night waits on its card
         _weekWizardStep = 3;
       }
       renderWeekWizardSheetBody();
@@ -39496,6 +41947,8 @@ function spreadFindUI() {
       return fetchByDateRange({ startDate: week.startDate, endDate: week.endDate || week.startDate, season: week.season, almaMaters: [], ...(other ? { sport: prof.key } : {}) });
     },
     lookup: (weekId) => callOddsLookup(weekId),
+    // D2 lane 2 (DI-916): the Odds API fallback is football's (supabase/functions/odds-lookup/vendor.mjs SPORT_KEYS); a pick-the-winner slate has no line to find and the NHL's puck line is not looked up.
+    lookupSupported: (week) => { try { const p = profileForWeek(week); return (p.key === 'cfb' || p.key === 'nfl') && !isPickTheWinner(formatForWeek(week)); } catch { return true; } },
     toast: (msg, kind) => showToast(msg, kind), haptic: (kind) => haptic(kind), now: () => new Date().toISOString(), reducedMotion: () => prefersReducedMotion(),
     // A write changed the rows and the banner count: the screens repaint.
     // The ONE slate-change door (W-69): the Games section patches in place (scroll, filters and focus survive), a wizard on Step 2/3 repaints, the other Comm tabs are marked stale.
@@ -39516,19 +41969,40 @@ function wizardSportExtrasHTML(week, games) {
   if (prof.key === 'cfb' || prof.affinity) return '';
   const opts = tiebreakerGameOptions(games, { nameOf: (g) => `${g.awayTeam} at ${g.homeTeam}` });
   if (!opts.length) return '';
-  const chosen = opts.some((o) => o.gameId === week.tiebreakerGameId) ? week.tiebreakerGameId : opts[0].gameId;
+  const tbcDefault = isNightSport(prof) ? tiebreakerChoice(games) : null;
+  const chosen = opts.some((o) => o.gameId === week.tiebreakerGameId) ? week.tiebreakerGameId : (tbcDefault ? tbcDefault.defaultGameId : opts[0].gameId);
   const optionsHTML = opts.map((o) => `<option value="${escHtml(o.gameId)}"${o.gameId === chosen ? ' selected' : ''}>${escHtml(o.label)}</option>`).join('');
   const fgLabel = prof.sideContest && prof.sideContest.label ? prof.sideContest.label : 'Side contest';
+  // D2 lane 2 (DI-887 / DI-927 #1, #6): the unit word is the sport's ("points", "goals"); the side-contest switch draws ONLY when the profile has one (hockey has none); when several games share the last
+  // puck drop the select says so and defaults to the lowest game id.
+  const unit = prof.copy && prof.copy.scoreMany ? prof.copy.scoreMany : 'points';
+  const tbc = isNightSport(prof) ? tiebreakerChoice(games) : null;
+  // D2 lane 2 (DI-887): the lock sentence of a night slate, in the VIEWER's zone (CONVENTIONS #19), with the short-notice warning (Open stays allowed).
+  const first = isNightSport(prof) ? computeFirstKickoff(games) : null;
+  const ll = isNightSport(prof) ? lockLine({ firstKickoffMs: first ? first.getTime() : null, offsetMinutes: getAutoLockOffsetMinutes(week), nowMs: Date.now(), formatTime: (ms) => formatGameTime(new Date(ms).toISOString(), getTimezone()), startWord: prof.copy.start.toLowerCase() }) : null;
+  const lockHTML = ll ? `<p class="text-sm mt-sm" id="wiz-night-lock">${escHtml(ll.text)}</p>${ll.short ? `<p class="text-muted text-xs mt-xs">${escHtml(ll.short)}</p>` : ''}` : '';
+  const sideHTML = prof.sideContest
+    ? `<div class="form-group" data-wiz-autosave>${switchRowHTML({ id: 'wiz-ep-enabled', label: fgLabel + ' contest (optional)', on: week.extraPointEnabled === true })}
+      <p class="text-muted text-xs mt-sm">A side bet that only comes into play in Weekly Ties. It never changes anyone's correct-pick count.</p></div>`
+    : '';
   return `<div class="admin-section-title mt-md">Tiebreaker game</div>
     <div class="form-group"><select class="form-select" id="wiz-tb-game" aria-label="Tiebreaker game" data-wiz-autosave>${optionsHTML}</select>
-      <p class="text-muted text-xs mt-sm">The tiebreaker is the total combined points scored in this game. Closest guess wins, over or under.</p></div>
-    <div class="form-group" data-wiz-autosave>${switchRowHTML({ id: 'wiz-ep-enabled', label: fgLabel + ' contest (optional)', on: week.extraPointEnabled === true })}
-      <p class="text-muted text-xs mt-sm">A side bet that only comes into play in Weekly Ties. It never changes anyone's correct-pick count.</p></div>`;
+      <p class="text-muted text-xs mt-sm">${escHtml(`The tiebreaker is the total ${prof.copy ? unit : 'combined points'} scored in this game. Closest guess wins, over or under.`)}</p>
+      ${tbc && tbc.together ? `<p class="text-muted text-xs mt-sm">${escHtml(tbc.note)}</p>` : ''}</div>
+    ${sideHTML}${lockHTML}`;
+}
+/** Step 3's per-row line cell: nothing for a pick-the-winner slate; otherwise the line (with its source) or the red "Set spread". D2 lane 2 (DI-887 / DI-915). */
+function wizRowSpreadHTML(g, hasSpread, ptw) {
+  if (ptw) return '';
+  if (!hasSpread) return '<span class="week-wizard-spread-missing">Set spread</span>';
+  return `<span class="text-muted">${escHtml(formatSpread(g.spread, g.favorite, g) || 'Spread set')} <em class="games-row-src">${escHtml(SF.spreadSourceLabel(g))}</em></span>`;
 }
 function renderWeekWizardStep3HTML(games, week = null) {
-  const missing = countMissingSpreads(games);
+  // D2 lane 2 (DI-887 / DI-915): a pick-the-winner slate has no line: no missing-spread banner, no spread on a row, and the Find-spreads control is not offered.
+  const ptw = !!week && isPickTheWinner(week.format);
+  const missing = ptw ? 0 : countMissingSpreads(games);
   const banner = games.length && missing > 0 ? `<div class="warning-box mb-sm">${escHtml(WIZARD_COPY.MISSING_SPREADS(missing))}</div>` : '';
-  const spreadFind = week ? spreadFindUI().hostHTML(week, games) : '';   // W-71: "Find spreads" under the count line, and a card per line another source has
+  const spreadFind = week && !ptw ? spreadFindUI().hostHTML(week, games) : '';   // W-71: "Find spreads" under the count line, and a card per line another source has
   // D1 (W-69, DI-W69.7): each row is the existing tap target (matchup and spread; tap opens the unchanged game modal) with a Remove text button beside it. They are SIBLINGS, never a button
   // inside a button; the Remove button carries `data-wiz-remove` (not `data-game-id`, which stays the row's alone).
   const rows = games.map((g) => {
@@ -39536,7 +42010,7 @@ function renderWeekWizardStep3HTML(games, week = null) {
     return `<div class="week-wizard-game-item" data-item-game="${escHtml(g.gameId)}">
       <button type="button" class="card week-wizard-game-row" data-game-id="${escHtml(g.gameId)}">
         <span>${escHtml(g.awayTeam)} @ ${escHtml(g.homeTeam)}</span>
-        <span class="${hasSpread ? 'text-muted' : 'week-wizard-spread-missing'}">${hasSpread ? `${escHtml(formatSpread(g.spread, g.favorite, g) || 'Spread set')} <em class="games-row-src">${escHtml(SF.spreadSourceLabel(g))}</em>` : 'Set spread'}</span>
+        ${wizRowSpreadHTML(g, hasSpread, ptw)}
       </button>
       <button type="button" class="btn btn-ghost week-wizard-game-remove" data-wiz-remove="${escHtml(g.gameId)}" aria-label="${escHtml(`Remove ${g.awayTeam} @ ${g.homeTeam}`)}">Remove</button>
     </div>`;
@@ -39630,7 +42104,7 @@ function bindWeekWizardStep3(bodyEl, week, games) {
       // mirror's CURRENT row (RG-256 class: `game` is this render's closure).
       showGameModal(game, week, (data) => {
         const current = getGames(week.weekId).find((g) => g.gameId === game.gameId) || game;
-        saveGame({ ...current, ...data, updatedAt: new Date().toISOString() });
+        saveGame(stampFinalAt(current, { ...current, ...data, updatedAt: new Date().toISOString() }));   // DI-1091
         renderWeekWizardSheetBody();
       });
     });
@@ -39995,9 +42469,12 @@ function bindWeekWizardStep5(bodyEl, week) {
  *  checklist. Neither addition touches `gatingChecklist()` itself (Ruling 4:
  *  a blank tiebreaker question is visible/editable, never a gate). */
 function renderWeekWizardStep6HTML(week, games) {
-  const missing = countMissingSpreads(games);
+  const ptw6 = isPickTheWinner(week.format);
+  const missing = ptw6 ? 0 : countMissingSpreads(games);
   const timingConfigured = !!computeEffectiveLockAt(week, games);
-  const gate = weekWizardApi().gatingChecklist({ gamesCount: games.length, missingSpreadCount: missing, timingConfigured });
+  const gate = weekWizardApi().gatingChecklist({ gamesCount: games.length, missingSpreadCount: missing, timingConfigured, pickTheWinner: ptw6 });
+  // D2 lane 2 (DI-886, RPF-C3): one slate is pickable at a time per sport. For a sport that says so, a second Open slate is a BLOCK with a sentence naming both (football keeps its DI-416 notice below).
+  const nightBlock = openBlockSentenceFor(week);
   const row = (ok, label) => `<div class="week-wizard-check-row${ok ? ' ok' : ''}"><span aria-hidden="true">${ok ? '✓' : '○'}</span> ${escHtml(label)}</div>`;
 
   // DI-416 (UN-371) — general awareness, not a checklist item: rendered near
@@ -40005,9 +42482,11 @@ function renderWeekWizardStep6HTML(week, games) {
   // `finishDisabled` below. A NOTICE, never a block (DI-406 N1's own flag) —
   // running two weeks open at once is unusual but occasionally intentional
   // (overlapping bowl-season weeks), so this warns rather than refuses.
-  const otherOpenWeek = anotherWeekAlreadyOpen(getWeeks(), week.weekId);
-  const otherWeekNoticeHTML = otherOpenWeek
-    ? `<div class="warning-box mb-sm">⚠️ Week ${escHtml(String(otherOpenWeek.weekNumber))} is already ${escHtml(otherOpenWeek.status)} — opening this week too may cause players to see the wrong week.</div>`
+  const otherOpenWeek = nightBlock ? null : anotherWeekAlreadyOpen(getWeeks(), week.weekId);
+  const otherWeekNoticeHTML = nightBlock
+    ? `<div class="warning-box mb-sm" id="wiz-night-block">⚠️ ${escHtml(nightBlock)}</div>`
+    : otherOpenWeek
+    ? `<div class="warning-box mb-sm">⚠️ ${escHtml(otherOpenWeek.slateLabel || ('Week ' + String(otherOpenWeek.weekNumber)))} is already ${escHtml(otherOpenWeek.status)} — opening this week too may cause players to see the wrong week.</div>`
     : '';
 
   // DI-357 — tiebreaker question + calc-basis caption, reusing the exact
@@ -40092,7 +42571,7 @@ function renderWeekWizardStep6HTML(week, games) {
   // Ruling: "Keep as draft" is exempt from the gating checklist entirely
   // (DI-358 — nothing is being opened); Now/Scheduled both still require it
   // — and, DI-404, the weekly blurb.
-  const finishDisabled = mode !== OPEN_MODES.DRAFT && (!gate.canOpen || blurbBlocked);
+  const finishDisabled = mode !== OPEN_MODES.DRAFT && (!gate.canOpen || blurbBlocked || !!nightBlock);
   const finishDescribedBy = (finishDisabled && blurbBlocked) ? ' aria-describedby="wiz-blurb-reason"' : '';
 
   return `<div class="admin-section-title">Open for picks</div>
@@ -40157,7 +42636,10 @@ function bindWeekWizardStep6(bodyEl, week, games) {
   bodyEl.querySelector('#wiz-open-btn')?.addEventListener('click', () => {
     if (!week) return;
     const cur = getWeek(week.weekId) || week;
-    const missing = countMissingSpreads(games);
+    const missing = isPickTheWinner(cur.format) ? 0 : countMissingSpreads(games);
+    // D2 lane 2 (DI-886): the backstop for a second open slate (the disabled button normally makes this unreachable); Keep-as-draft is exempt.
+    const blockNow = (_weekWizardOpenMode || OPEN_MODES.NOW) !== OPEN_MODES.DRAFT ? openBlockSentenceFor(cur) : null;
+    if (blockNow) { const el = bodyEl.querySelector('#wiz-schedule-refusal'); if (el) el.textContent = blockNow; return; }
     const timingConfigured = !!computeEffectiveLockAt(cur, games);
     const mode = _weekWizardOpenMode || OPEN_MODES.NOW;
     const refusalEl = bodyEl.querySelector('#wiz-schedule-refusal');
@@ -40367,8 +42849,10 @@ function renderWeekWizardManageHTML(week, games) {
     const allWeeks = getWeeks();
     return allWeeks.length ? Math.max(...allWeeks.map((w) => w.weekNumber)) + 1 : 1;
   })();
+  let setupNextName = `Set up Week ${nextWeekNum}`;   // D2 lane 2: a night sport has no next week NUMBER to name ("Set up the next slate")
+  try { setupNextName = setupLabel({ weekN: nextWeekNum }, profileForWeek(week)); } catch { /* an unknown sport keeps the football wording */ }
   const setupNextHTML = `<div class="admin-section-title mt-md">Next week</div>
-    <button type="button" class="btn btn-primary btn-block" id="wiz-manage-setup-next">Set up Week ${escHtml(String(nextWeekNum))}</button>`;
+    <button type="button" class="btn btn-primary btn-block" id="wiz-manage-setup-next">${escHtml(setupNextName)}</button>`;
   // D1 / DI-510 row 9 — the commissioner sees the STORED status (the buttons below act on it) and, when the lock time has passed on a week still stored open, one calm line saying
   // so. The server job (when its switch is on) or a commissioner's open device then moves the stored status; the badge players see already reads LOCKED.
   // (Integration, 2026-10-07: reads the same server-confirmed status the row above is built from, `confirmedStatus`, FB-027.)
@@ -40394,7 +42878,7 @@ export const _renderWeekWizardManageHTMLForTest = renderWeekWizardManageHTML;
  *  one (non-archived) competition. A competition read that throws (an unregistered sport) degrades to the single-sport label, never to no button. */
 function weekWizardFinalizeEntry(week, games, status) {
   const { multiSport, sportCode } = weekSportLabelContext(week);
-  return finalizeEntry({ status, games, sportCode, weekNumber: week?.weekNumber ?? null, multiSport });
+  return finalizeEntry({ status, games, sportCode, weekNumber: week?.weekNumber ?? null, multiSport, slate: week?.slateLabel || '' });
 }
 /** FB-027 / DI-518 — does the league run more than one (non-archived) competition, and which sport code names `week`? Shared by the Manage screen's
  *  Finalize button and the draft view's live-week row. */
@@ -40416,7 +42900,7 @@ function weekWizardLiveWeekBehind(week) {
   return liveWeekBehindDraft({ draft: week, weeks: getWeeks(), statusOf: serverConfirmedWeekStatus, sameSport: (a, b) => compId(a) === compId(b) });
 }
 function renderLiveWeekFinalizeRowHTML(liveWeek) {
-  const copy = liveWeekRowCopy({ weekNumber: liveWeek.weekNumber, ...weekSportLabelContext(liveWeek) });
+  const copy = liveWeekRowCopy({ weekNumber: liveWeek.weekNumber, slate: liveWeek.slateLabel || '', ...weekSportLabelContext(liveWeek) });
   return `<div class="wiz-live-week-row" id="wiz-live-week-row">
       <span class="wiz-live-week-text">${escHtml(copy.text)}</span>
       <button type="button" class="btn btn-primary btn-sm" id="wiz-live-finalize-btn">${escHtml(copy.button)}</button>
@@ -40839,7 +43323,7 @@ function bindFinalizeStep4(bodyEl, week) {
     _finalizeOutcome = null;
     // The coordinator's copy decision (2026-10-08): a success that will reload says "Refreshing…", so the reload does not look like a crash.
     const reloading = finalizeWeeksWriteRefused();
-    showToast((reloading ? FINALIZE_COPY.SUCCESS_REFRESHING : FINALIZE_COPY.SUCCESS)((getWeek(weekId) || week).weekNumber), 'success');
+    { const fw = getWeek(weekId) || week; showToast((reloading ? FINALIZE_COPY.SUCCESS_REFRESHING : FINALIZE_COPY.SUCCESS)(fw.weekNumber, fw.slateLabel || ''), 'success'); }
     haptic('success');
     if (stillHere(weekId)) { _finalizeStep = null; closeWeekWizardSheet(); }
     renderCommPage();
@@ -40889,12 +43373,14 @@ function renderWeekWizardContinuePickerHTML() {
   const drafts = weekWizardContinuableDrafts();
   const allWeeks = getWeeks();
   const nextNum = allWeeks.length ? Math.max(...allWeeks.map((w) => w.weekNumber)) + 1 : 1;
+  let setupPickName = `Set up Week ${nextNum}`;
+  try { setupPickName = setupLabel({ weekN: nextNum }, profileForWeek(drafts[0])); } catch { /* football wording */ }
   const rows = drafts.map((w) => `<button type="button" class="week-wizard-check-row wiz-continue-pick" data-week-id="${escHtml(w.weekId)}" style="width:100%;text-align:left;background:none;border:none;cursor:pointer;color:inherit;font:inherit">
       <span>${escHtml(formatWeekLabel(w))}</span><span class="text-muted">›</span>
     </button>`).join('');
   return `<div class="admin-section-title">More than one draft is set up — which one?</div>
     ${rows}
-    <button type="button" class="btn btn-secondary btn-block mt-md" id="wiz-continue-pick-new">Set up Week ${escHtml(String(nextNum))} instead</button>
+    <button type="button" class="btn btn-secondary btn-block mt-md" id="wiz-continue-pick-new">${escHtml(setupPickName)} instead</button>
     <button type="button" class="btn btn-ghost btn-block mt-sm" id="wiz-continue-pick-cancel">Cancel</button>`;
 }
 function bindWeekWizardContinuePicker(bodyEl) {
@@ -41250,7 +43736,8 @@ function closeNewsAlsoSheet({ immediate = false } = {}) {
 }
 function openNewsAlsoSheet(item) {
   if (isContentWithheld() || !item || !Array.isArray(item.alsoFrom) || !item.alsoFrom.length) return;
-  const body = renderAlsoFromSheet(item);
+  // D2 DI-1092 (W-160): the rows' times say the day in the PLAYER's zone (getTimezone() is a KEY; the IANA name is TIME_ZONES' own), like the card the sheet came from
+  const body = renderAlsoFromSheet(item, { formatDate: makeDateFormatter((TIME_ZONES.find((z) => z.key === (getTimezone() || DEFAULT_TZ)) || TIME_ZONES[0]).iana) });
   if (!body) return;
   closeNewsAlsoSheet({ immediate: true });
   _newsAlsoSheet = { item, onKey: null };
@@ -41354,9 +43841,97 @@ function onContentDetailClick(e, api, id) {
   if (act === 'share') { void shareContentSpotlight(row); return; }
   if (act === 'talk') { api.close('navigate'); talkAboutContent(row); }
 }
+/**
+ * D2 DI-808 / DI-862 (lane 3, 2026-10-19): an External card belongs to NO league, so for a member of two or more leagues "Talk about it" first asks WHICH Locker Room — every
+ * league listed (the shipped league card: full name, role, Pilot), NOTHING preselected (no row is aria-current, the active league included) — and only after an explicit choice
+ * routes into that league through the one router (routeToLeague: membership checked, the switch cover, the native selection haptic) and pre-fills ITS composer, where the member
+ * sends it under that league's header pill. One league: unchanged (straight to the composer). A League card never comes here: it shares only into its own league (shareRefLeagueOk).
+ */
+export const TALK_PICK_COPY = Object.freeze({ title: 'Share to which Locker Room?', subtitle: "Choose the league you're talking to. Nothing is posted until you send it." });
+const TALK_PICK_WRAP_ID = 'talk-league-wrap', TALK_PICK_SHEET_ID = 'talk-league-sheet';
+let _talkPick = null;
+function talkLeagueChoices() {
+  try {
+    if (getBackendMode() !== 'supabase' || isContentWithheld() || !hasResolvedMemberships()) return [];
+    return getCachedMemberships().filter((m) => m && isLeagueUuid(m.leagueId));
+  } catch { return []; }
+}
+export function talkPickerBodyHTML(leagues) {
+  return `<div class="league-card-list talk-pick-list" role="list">${asArrayOf(leagues).map((m) => `<div role="listitem">${leagueCardHTML(m, { activeLeagueId: null, isPilotLeague: isMembershipPilot, escHtml, icon, roleBadgeHTML: leagueRoleBadgeHTML })}</div>`).join('')}</div>`;
+}
+const asArrayOf = (v) => (Array.isArray(v) ? v : []);
+function talkAboutContent(row) {
+  const leagues = talkLeagueChoices();
+  if (leagues.length >= 2) { openTalkLeaguePicker(row, leagues); return; }
+  prefillTalk(row);
+}
+function openTalkLeaguePicker(row, leagues) {
+  closeTalkLeaguePicker({ immediate: true });
+  let opener = null;
+  try { opener = document.activeElement && document.activeElement !== document.body ? document.activeElement : null; } catch { opener = null; }
+  const tp = { row, leagues, unbind: null, onKey: null, closing: false, choosing: false, opener };
+  _talkPick = tp;
+  const { wrap, unbind } = mountSheetShell({
+    wrapId: TALK_PICK_WRAP_ID,
+    sheetId: TALK_PICK_SHEET_ID,
+    sheetAttrs: ' role="dialog" aria-modal="true" aria-labelledby="talk-league-title" aria-describedby="talk-league-sub"',
+    headerInnerHTML: `<div class="share-head-text"><div class="chat-sheet-title" id="talk-league-title" tabindex="-1">${escHtml(TALK_PICK_COPY.title)}</div><div class="chat-sheet-sub" id="talk-league-sub">${escHtml(TALK_PICK_COPY.subtitle)}</div></div><button type="button" class="chat-sheet-close" id="talk-league-close" aria-label="Close">${icon('close')}</button>`,
+    bodyId: 'talk-league-body',
+    closeId: 'talk-league-close',
+    onBackdrop: () => closeTalkLeaguePicker(),
+    renderBody: () => { const b = document.getElementById('talk-league-body'); if (b) b.innerHTML = talkPickerBodyHTML(tp.leagues); },
+    drag: { getBlocked: () => _dismissBlockingSurfaceUp({ excludeShare: true, excludePushed: true }), onProgress: shareSheetDragProgress, onSettle: (w, el, o) => settleTalkPickDrag(w, el, o) },
+  });
+  tp.unbind = unbind;
+  wrap.addEventListener('click', onTalkPickClick);
+  tp.onKey = (e) => { if (e && e.key === 'Escape' && _talkPick === tp && !document.querySelector('.modal-overlay, #site-gate-overlay')) closeTalkLeaguePicker(); };
+  document.addEventListener('keydown', tp.onKey);
+  try { wrap.querySelector('#talk-league-title')?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+}
+async function onTalkPickClick(e) {
+  const card = e && e.target && typeof e.target.closest === 'function' ? e.target.closest('[data-action="switch-league"]') : null;
+  const tp = _talkPick;
+  if (!card || !tp || tp.closing || tp.choosing) return;
+  const leagueId = card.getAttribute('data-league-id') || '';
+  if (!tp.leagues.some((m) => m.leagueId === leagueId)) return;                    // only a league this sheet listed (the DOM is untrusted)
+  tp.choosing = true;                                                              // one choice per sheet: a double tap routes once
+  const row = tp.row;
+  closeTalkLeaguePicker({ immediate: true });
+  let outcome = null;
+  try { outcome = await routeToLeague(leagueId, { tab: 'chat' }); } catch { outcome = null; }
+  if ((outcome === 'same' || outcome === 'switched') && String(getActiveLeagueId() || '').toLowerCase() === leagueId.toLowerCase()) prefillTalk(row);   // never into a league we did not reach
+}
+function settleTalkPickDrag(wrap, sheetEl, { dismissed, reducedMotion } = {}) {
+  sheetEl.removeAttribute('data-dragging');
+  wrap.removeAttribute('data-dragging');
+  if (!dismissed) { wrap.style.setProperty('--share-drag-y', '0'); return; }
+  finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--share-drag-y', '1'), reducedMotion: !!reducedMotion, done: () => closeTalkLeaguePicker({ immediate: true }) });
+}
+function closeTalkLeaguePicker({ immediate = false } = {}) {
+  const tp = _talkPick;
+  const wrap = document.getElementById(TALK_PICK_WRAP_ID);
+  if (tp) {
+    if (tp.closing && !immediate) return;
+    tp.closing = true;
+    try { tp.unbind?.(); } catch { /* the drag teardown is a courtesy */ }
+    tp.unbind = null;
+    if (tp.onKey) { try { document.removeEventListener('keydown', tp.onKey); } catch { /* courtesy */ } tp.onKey = null; }
+  }
+  const finish = () => {
+    document.getElementById(TALK_PICK_WRAP_ID)?.remove();
+    if (_talkPick === tp) _talkPick = null;
+    try { if (tp && !tp.choosing && tp.opener && tp.opener.isConnected && typeof tp.opener.focus === 'function') tp.opener.focus({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+  };
+  if (!wrap || immediate) { finish(); return; }
+  const sheetEl = wrap.querySelector('#talk-league-sheet');   // = TALK_PICK_SHEET_ID, as a literal (xsstest [18c]: no raw id interpolated into a selector)
+  let reduced = false; try { reduced = prefersReducedMotion(); } catch { reduced = false; }
+  finishSlideThenRemove({ listenEl: sheetEl, apply: () => wrap.style.setProperty('--share-drag-y', '1'), reducedMotion: reduced, done: finish });
+}
+export const _talkAboutContentForTest = talkAboutContent;
+export const _talkPickStateForTest = () => (_talkPick ? { leagues: _talkPick.leagues.map((m) => m.leagueId), choosing: _talkPick.choosing } : null);
 /** DI-666: Chat opens with the composer PREFILLED by the deterministic line; the member edits it and taps Send themselves (never automatic). The same line already sent by this
  *  member in the last 10 minutes answers "Already shared." instead. An existing draft is kept: the line is added after it. */
-function talkAboutContent(row) {
+function prefillTalk(row) {
   if (!isChatEnabled()) { showToast('Chat has been turned off by the commissioner.', 'warning'); return; }   // review N4: the house copy (navigateTo's own chat-off rule)
   const line = talkLine(row, { timeZone: contentTimeOpts().timeZone });
   if (!line) return;

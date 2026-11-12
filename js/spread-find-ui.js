@@ -22,7 +22,8 @@ export function createSpreadFindUI(deps) {
   };
 
   /** Check runs only on a week that can still take a spread: not demo, and no later than open. */
-  const canRun = (week) => !!week && week.dataSourceMode !== 'demo' && (week.status === 'draft' || week.status === 'open');
+  // D2 lane 2 (DI-916 / DI-927 #12): and only where the Odds API fallback covers the sport (`lookupSupported`, injected; absent = yes, the shipped behaviour): the NHL's puck line comes from ESPN or by hand.
+  const canRun = (week) => !!week && week.dataSourceMode !== 'demo' && (week.status === 'draft' || week.status === 'open') && (typeof deps.lookupSupported !== 'function' || deps.lookupSupported(week) !== false);
 
   function blockHTML(week, games) {
     if (!canRun(week)) return '';
@@ -85,6 +86,8 @@ export function createSpreadFindUI(deps) {
     else if (o.status === 'paused') st.note = SF.SPREAD_COPY.PAUSED;
     // DI-W71.10: the league's daily limit is a calm line (muted, no Try again) after a tapped Find; the AUTOMATIC check says nothing about it.
     else if (o.status === 'daily_limit') st.note = auto ? '' : SF.SPREAD_COPY.DAILY_LIMIT;
+    // DI-926 (W-79): the platform's shared daily cap - the same calm, final line after a tapped Find; the automatic check says nothing
+    else if (o.status === 'platform_limit') st.note = auto ? '' : SF.SPREAD_COPY.PLATFORM_LIMIT;
     else if (o.status === 'error') { if (!auto) { st.note = SF.SPREAD_COPY.ERROR; st.noteKind = 'error'; } }
     st.noLine = o.noLine || 0;
     if (out.stage1.added > 0) deps.repaintHost(weekId); else paint(weekId);

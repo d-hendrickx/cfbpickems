@@ -15,60 +15,102 @@
   </style>
 </head>
 <body>
+  <main data-rd01-version="5.1.0">
   <h1>Privacy</h1>
-  <p class="muted">Munera (irbfootball.com and the Munera iPhone app) · last updated 2026-10-15</p>
+  <p class="muted">Munera (irbfootball.com and the Munera iPhone app) · last updated 2026-10-21</p>
 
   <p>Munera, first built as IRB Pick 'Ems, is a pick'em app for private leagues of friends. Leagues are private: you see a league only if you are a member, and you become a member only when its commissioner adds you or you use a code shared from inside the league. This page says plainly what the app stores, who can see it, and who helps us run it.</p>
 
   <h2>What we collect</h2>
   <ul>
     <li><strong>Your sign-in details.</strong> If you sign in with Google: your Google account name and email address. We never see your Google password. If you create an account with an email address instead: that email address and a password. Your password is handled by our sign-in provider (Supabase), and the app does not store it.</li>
-    <li><strong>How we use your email address:</strong> to sign you in, to match you to your league record, and so your league's commissioners can manage membership. If you sign in with Google, your Google account name becomes your starting league nickname when you join a league with an invite code; you can change it.</li>
-    <li><strong>What you do in the league</strong>: your picks, tiebreaker and Extra Point guesses, chat messages and reactions, wagers you log in chat, league nickname, initials, alma mater, and your display, notification and News preferences. League records such as results, standings and obligations (who owes whom) are built from these.</li>
-    <li><strong>Optional contact details</strong> you enter yourself, such as a phone number for reminders.</li>
+    <li><strong>How we use your email address:</strong> to sign you in, to match you to your league record, and so your league's commissioners can manage membership. If you sign in with Google, your Google account name becomes your starting league nickname when you join a league with an invite code; you can change it. If the administrator approves you to create leagues, your email address is also kept on the list of people allowed to create one.</li>
+    <li><strong>What you do in the league</strong>: your picks, tiebreaker and Extra Point guesses, chat messages and reactions, wagers you log in chat, your votes in league votes such as a season-ender vote, league nickname, initials, alma mater, and your display, notification and News preferences. League records such as results, standings, obligations (who owes whom) and a league's season-ender punishment are built from these.</li>
+    <li><strong>Changes to your picks</strong>: each time one of your picks is made or changed, at any time and by anyone (you, or a commissioner or the administrator correcting it), the app records what it changed from and to, who made the change, and when, so it can show you whether your first choice or your final choice did better. Changes made before this feature was added were not recorded.</li>
+    <li><strong>Your sports profile</strong>, if you fill it in, as described under "Your sports profile" below.</li>
+    <li><strong>Your profile photo</strong>, if you add one. You choose it with your device's own photo picker, so the app never has access to the rest of your photos. The app shrinks it on your device and removes the photo's location and camera details before uploading it.</li>
+    <li><strong>A phone number</strong>, only if one is already on your league record. The app does not currently ask for one.</li>
     <li><strong>SCRIBE's notes</strong>: SCRIBE keeps notes about league moments and about each player, such as running jokes, along with the limits you set on what it says about you. Where your league shows My SCRIBE File, you and your league's commissioners can see the notes about you there, and you can delete any of them except those worked out automatically from league results.</li>
+    <li><strong>League memory</strong>: a league's commissioners can add notes and jokes from the league's past seasons, approving each one. These notes can name members.</li>
     <li><strong>Push notifications</strong>: your notification preferences and, while you are signed in, an identifier we assign and give to our push provider (OneSignal) so the right notifications reach you. That identifier is not your name or email address. If you turn on push notifications, OneSignal also receives a device token.</li>
     <li><strong>App version</strong>: which version of the app each of your devices is running, so a commissioner can tell who needs an update.</li>
     <li><strong>Invite links</strong>: if you open an invite link, its code is kept on that device for up to 30 minutes so it survives signing in.</li>
+    <li><strong>Records that limit abuse</strong>: each time an account joins or creates a league, the app keeps a scrambled code, made with a secret key, so it can limit how often that happens. The code cannot be turned back into your email address or account.</li>
     <li><strong>Feedback</strong> you send through the app.</li>
   </ul>
+
   <p>We do not collect payment information or your contacts, and we collect nothing from your Google account beyond your name and email address. The app does not ask for your device's location. There are no ads, and we do not track you across other companies' apps or websites, so the app does not respond differently to a browser's "Do Not Track" signal.</p>
+
+  <h2>Your sports profile</h2>
+  <p>When you join, Munera can ask you a few questions about yourself, and you can answer or change them later in Profile, under About you. Every question is optional and says why it is asked:</p>
+  <ul>
+    <li>the sports you follow and, for each sport, your home team and other teams you follow, chosen from a list;</li>
+    <li>your alma mater and, for college football, whether your home team or your alma mater counts for your league's Alma Mater Watch;</li>
+    <li>the colleges you attended, chosen from a list;</li>
+    <li>your work, in your own words;</li>
+    <li>anything else you would like Munera to know about you, in your own words.</li>
+  </ul>
+
+  <p>Two of these answers are your own words. Please leave out sensitive details, such as your health, religion, politics, ethnicity, sexuality or finances, and other people's private information. We don't ask for that kind of information. If you include it anyway, it is kept and used only as this section describes, and you can remove it at any time.</p>
+  <ul>
+    <li><strong>Who can see it:</strong> your alma mater, the team that counts for your league's Alma Mater Watch, and your home team for each sport are part of your league profile in each league, which that league's members can see. In the app, everything else in your sports profile is visible only to you.</li>
+    <li><strong>How we use it:</strong> to choose what your Home shows first and, only if you allow it, to let SCRIBE know you better. It is not used for advertising, it is never sold, and it is never added to SCRIBE's notes.</li>
+    <li><strong>SCRIBE's use of it is off until you turn it on.</strong> SCRIBE uses your sports profile only if you turn on "Let SCRIBE use my profile". It mentions an answer in league chat only if you also turn on "Let SCRIBE mention this in league chat" for that answer. A chat message in which SCRIBE mentioned an answer stays in the league's chat history like any other message, even if you later remove the answer.</li>
+    <li><strong>Keeping and removing it:</strong> the answers only you can see are kept until you remove them or delete your account. Removing an answer, or using "Remove everything I told Munera", deletes it from our servers straight away. Earlier values of your league profile, such as your alma mater, can stay in the league's history of membership changes.</li>
+  </ul>
 
   <h2>Who can see it</h2>
   <ul>
-    <li><strong>Members of your league</strong> see your name, picks (only after games go live), records, chat, standings, obligations, and your league profile (nickname, initials, alma mater, and notification, display and News preferences). Nobody in your league, including the commissioner, can see another player's picks while a week is still open.</li>
-    <li><strong>Your league's commissioners</strong> can see your email address, any phone number you provide, the app version on your devices, and the league's history of membership changes, in order to manage membership. They can also see your SCRIBE notes.</li>
+    <li><strong>Members of your league</strong> see your name, profile photo, picks (only after games go live), records, chat, standings, obligations, statistics the app works out from these, and your league profile (nickname, initials, alma mater, home teams, and notification, display and News preferences). Nobody in your league, including the commissioner, can see another player's picks while a week is still open. In the app, only you can see the record of changes to your picks; your league sees your final picks.</li>
+    <li><strong>Members of your league</strong> also see the notes its commissioners add to league memory.</li>
+    <li><strong>Your league's commissioners</strong> can see your email address, any phone number on your league record, the app version on your devices, and the league's history of membership changes, in order to manage membership. They can also see your SCRIBE notes.</li>
+    <li><strong>If you create a league</strong>, you become its commissioner, so you can see what a commissioner sees about its members.</li>
+    <li><strong>If you belong to more than one league</strong>, your Home can bring them together for you. Nothing from one league is shown to the members of another.</li>
     <li><strong>The app's administrator</strong> (the person who runs the service) can see league data to fix problems.</li>
     <li><strong>SCRIBE</strong>, the league's AI character, uses league content as described below.</li>
   </ul>
+
   <p>Your information is never sold, shared with advertisers, or shown to people outside your league. It is shared only with the service providers listed under "Who helps us run the app", so that they can run it.</p>
 
   <h2>AI features (SCRIBE)</h2>
-  <p>SCRIBE is an AI character that posts in league chat and answers when someone mentions it. Its messages are written by an AI model from Anthropic, not by a person. To write them, the app sends Anthropic the league content SCRIBE needs: recent chat messages and who posted them (by league nickname), and league information such as nicknames, initials, alma maters, picks once they are visible to the league, results and standings, and SCRIBE's notes, including the limits players have set. The app does not send Anthropic your email address or phone number. When SCRIBE looks something up, the search runs through Anthropic's web search tool. Anthropic's commercial terms do not allow it to train its models on this content. A league's commissioner can stop SCRIBE from joining conversations on its own; it still answers when someone mentions it.</p>
+  <p>SCRIBE is an AI character that posts in league chat and answers when someone mentions it. Its messages are written by an AI model from Anthropic, not by a person. To write them, the app sends Anthropic the league content SCRIBE needs: recent chat messages and who posted them (by league nickname), and league information such as nicknames, initials, alma maters, picks once they are visible to the league, results and standings, and SCRIBE's notes, including the limits players have set. It can also send statistics the app works out from league records, and notes from league memory when SCRIBE refers to them. When you ask SCRIBE about your own numbers, those numbers, including what the record of changes to your picks shows, are sent for your question only. The app does not send Anthropic your email address, phone number or profile photo, or any post from Reddit or X. When SCRIBE looks something up, the search runs through Anthropic's web search tool. Anthropic's commercial terms do not allow it to train its models on this content. A league's commissioner can stop SCRIBE from joining conversations on its own; it still answers when someone mentions it.</p>
+
+  <p>Your sports profile is sent to Anthropic only while "Let SCRIBE use my profile" is on, and only the answers SCRIBE needs when it writes about you or answers you. If you turn the switch off, the app stops sending your answers. Anything already sent is handled under Anthropic's commercial terms, as above.</p>
+
   <p>SCRIBE also writes short Home cards from public sports information, such as team records and player statistics. No league messages, picks or member information are sent for those cards. When someone asks SCRIBE a current sports question, only that question, without names or league content, is used for the web search.</p>
 
   <h2>Who helps us run the app</h2>
   <ul>
-    <li><strong>Supabase</strong> hosts the database, sign-in and the app's server functions. All league data is stored there.</li>
+    <li><strong>Supabase</strong> hosts the database, sign-in, profile photos and the app's server functions. All league data is stored there.</li>
     <li><strong>Google</strong> signs you in, if you choose Google sign-in.</li>
     <li><strong>OneSignal</strong> delivers push notifications. It receives the identifier we assign, your device token if you turn push on, and each notification, which can include a league's name, the sender's nickname and a short preview of a chat message. Its software also collects technical information it needs to deliver notifications and to count how many are opened.</li>
     <li><strong>Anthropic</strong> provides the AI model behind SCRIBE, as described above.</li>
     <li><strong>GitHub Pages</strong> hosts the website.</li>
-    <li><strong>ESPN</strong> provides live scores and team logos through its public scoreboard. Your browser or phone asks ESPN for these directly, so ESPN sees your IP address as any website would; nothing about your account is sent. If the app can't reach ESPN's scoreboard or team list directly, the request may be relayed through a public relay service (allorigins, corsproxy.io or codetabs), which likewise sees your IP address and the address requested, and nothing about your account. Our server also fetches scores from ESPN on the league's behalf.</li>
+    <li><strong>ESPN</strong> provides live scores and team logos through its public scoreboard. Your browser or phone asks ESPN for these directly, so ESPN sees your IP address as any website would; nothing about your account is sent. If the app can't reach ESPN's scoreboard directly, the request may be relayed through a public relay service (allorigins, corsproxy.io or codetabs), which likewise sees your IP address and the address requested, and nothing about your account. Our server also fetches scores from ESPN on the league's behalf.</li>
     <li><strong>Sports publishers</strong> — When News is on, our servers collect public headline feeds from sports publishers (ESPN, CBS Sports, Yahoo Sports, Sports Illustrated, NBC Sports, NCAA.com and Fox News) and keep each headline, link and picture address for 14 days. Nothing about you is sent in those requests. Your phone reads the headlines from our servers, not from the publishers. Pictures on a headline load directly from the publisher's own servers while the headline is on screen, so that publisher sees your device's address. Tapping a headline opens the publisher's website (on iPhone, inside the app) under that publisher's own privacy policy. Turning News off stops the headline and picture requests.</li>
+    <li><strong>Reddit</strong> — When Reddit posts are switched on for Home, our servers collect public posts from a fixed list of sports communities on Reddit and keep each post's title, link, community and author's Reddit username, with details such as its score, for up to 72 hours. A post removed on Reddit stops showing once our servers see that it was removed. Nothing about you is sent to Reddit in those requests, and these posts are never sent to Anthropic. Each post shows its author's username and links to the original, as Reddit requires. Tapping one opens Reddit under Reddit's own privacy policy.</li>
+    <li><strong>Reddit and X posts shared in chat</strong> — If a member pastes a link to a public Reddit or X post into chat, the app can show that post using Reddit's or X's own embed. When it loads on your device, that service receives your device's address and may set cookies or collect information under its own privacy policy. Where the service offers a setting that asks it not to use an embed to personalise ads or suggestions, the app turns it on. The app keeps only the link, as part of the chat message, not a copy of the post.</li>
   </ul>
+
   <p>Before September 2026, IRB Pick 'Ems kept its league data in a private Google Sheet. That Sheet is now a read-only archive and receives no new data.</p>
 
   <h2>How long we keep it</h2>
   <ul>
     <li>League history (picks, results, standings, obligations, chat) is kept for as long as the league exists, because it is the record of the competition. If you leave a league, your history stays in that league's record but your account is no longer linked to it.</li>
+    <li>If you leave a league yourself, your email address and phone number are also removed from that league's records, including its history of membership changes. If a commissioner removes you instead, that history can still show them.</li>
+    <li>The record of changes to your picks is kept with the league's records, like your picks.</li>
     <li>Withdrawing a chat message hides it from the league, but the original text stays in the league's history.</li>
+    <li>A note retired from league memory stops appearing, but stays in the league's records.</li>
+    <li>The parts of your sports profile only you can see, and your profile photo, are kept until you remove them or delete your account. Removing your photo deletes it from our servers.</li>
+    <li>The scrambled codes that limit abuse are kept even after a league or your account is deleted, so that the limits cannot be reset.</li>
+    <li>If you were approved to create leagues, your email address stays on that list until the administrator removes it.</li>
     <li>An archived league is kept, read-only.</li>
   </ul>
 
   <h2>Your choices</h2>
   <ul>
     <li>You can edit your league nickname, initials, alma mater, and notification and News settings in the app at any time.</li>
+    <li>You can see, change or remove your sports profile and your profile photo in the app at any time, and turn SCRIBE's use of your profile on or off.</li>
     <li>You can turn push notifications off on your device or in the app.</li>
     <li>You can delete your account yourself in the app, under Profile → Delete Account.</li>
     <li>You can ask the commissioner to unlink your account, or ask the administrator to delete your account and personal details. Email the address below.</li>
@@ -76,8 +118,8 @@
 
   <h2>When you delete your account</h2>
   <ul>
-    <li><strong>What is deleted:</strong> your sign-in account, your profile, our record of the push identifier we assigned you, and the email address and phone number on each of your league records. You are unlinked from every league.</li>
-    <li><strong>What stays:</strong> your league nickname and initials stay on the league records you were part of (picks, results, standings, obligations and chat messages), because they are the league's history; they are no longer linked to any account. SCRIBE's notes about you stay with those records. The league's history of membership changes, which its commissioners and the administrator can see, can still show the email address and phone number that were on your league record before the deletion. OneSignal, our push provider, may keep the identifiers we gave it for you, your device's push subscription and its delivery records under its own retention rules; to ask for their removal there, email the address below.</li>
+    <li><strong>What is deleted:</strong> your sign-in account, your profile, your profile photo, the parts of your sports profile only you can see, our record linking you to the push identifier we assigned you, and the email address and phone number on each of your league records, including in each league's history of membership changes. You are unlinked from every league.</li>
+    <li><strong>What stays:</strong> your league nickname and initials stay on the league records you were part of (picks and the record of changes to them, votes, results, standings, obligations and chat messages), because they are the league's history, and so can the rest of your league profile, such as your alma mater; they are no longer linked to any account. SCRIBE's notes about you stay with those records, and so do chat messages in which SCRIBE mentioned something from your profile. The league's history of membership changes can still show earlier values of your league profile, such as your alma mater. The scrambled codes that limit abuse stay, and cannot be linked back to you. If you were approved to create leagues, your email address stays on that list until the administrator removes it; email the address below to ask. OneSignal, our push provider, may keep the identifiers we gave it for you, your device's push subscription and its delivery records under its own retention rules; to ask for their removal there, email the address below.</li>
     <li><strong>If you are the only commissioner of a league</strong>, you first choose a new commissioner from its members or, where the app offers it, archive the league. A league with no other members is archived automatically.</li>
   </ul>
 
@@ -91,5 +133,6 @@
   <p>Questions, removal requests, or reports of abuse: <a href="mailto:hendricksdrew1@gmail.com">hendricksdrew1@gmail.com</a>.</p>
 
   <p class="muted"><a href="index.html">← Back to the app</a></p>
+  </main>
 </body>
 </html>

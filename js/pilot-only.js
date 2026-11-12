@@ -48,6 +48,7 @@ export const PILOT_ONLY_REGISTRY = Object.freeze({
       { file: 'js/app.js', marker: 'renderSeason2025RecordSection() — the 2K25 Historical Record (Standings)' },
       { file: 'js/app.js', marker: 'renderSeason2025ObligationsAdmin() — the 2K25 carryover ledger (Comm)' },
       { file: 'js/app.js', marker: 'getHomeWiring() — pilotHistoryAllowed: the Home "A year ago" card and its detail (D1 Lane B, security O1)' },
+      { file: 'js/home.js', marker: 'deriveHomeCards({ pilotLeague }) — the "A year ago" card of ANOTHER league on a two-league Home, asked with that league\'s own membership record (D2 lane 3, security F2)' },
     ]),
     server: Object.freeze([]),
   }),

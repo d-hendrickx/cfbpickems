@@ -78,6 +78,16 @@ export const LC_COPY = Object.freeze({
   commissionerLine: "You're the commissioner.",
   onHeading: 'Already on for your league',
   onHelper: 'Change any of this later in Comm.',
+  // D2 lane 1 (UN-505 / DI-720, the approved d2-onboarding mockup frame 7): the Created step is three NEXT STEPS, not five facts (the five move to League > Advanced, DI-758).
+  nextHeading: 'Next steps',
+  stepCreated: 'League created',
+  stepInvite: 'Invite your friends',
+  stepWeek: 'Set up your first week',
+  nextHelper: 'You will see these again on Home until they are done. Everything already on for your league is listed in Comm.',
+  // D2 lane 1 (UN-505 / DI-718, the d2-invite-join mockup frame 7): the zero-league landing for an approved creator.
+  approvedTitle: 'Start your league',
+  approvedLine: "You've been approved to create a Munera league during the private pilot.",
+  approvedOr: 'or',
   inviteFriends: 'Invite Friends',
   notNow: 'Not Now',
   // invite step
@@ -126,7 +136,8 @@ export const INVITE_ORIGIN = 'https://irbfootball.com';
  * `K7QX 9M2P`, `k7qx-9m2p` and `K7QX9M2P` all yield `K7QX9M2P`; a wrong-shaped value yields ''. The server still decides whether the code is real.
  */
 export function normalizeInviteCode(raw) {
-  const s = String(raw == null ? '' : raw).toUpperCase().replace(/[\s-]+/g, '');
+  // DI-726 (D2 lane 1): neither digit can occur in a code (the server alphabet is A-Z and 2-9), so a typed 0 is an O and a typed 1 is an I: no ambiguity, and one slip fewer.
+  const s = String(raw == null ? '' : raw).toUpperCase().replace(/[\s-]+/g, '').replace(/0/g, 'O').replace(/1/g, 'I');
   return JOIN_CODE_RE.test(s) ? s : '';
 }
 /** `K7QX9M2P` → `K7QX 9M2P` (two groups of four, for reading aloud). Anything not a code is returned as given. */
@@ -139,11 +150,13 @@ export function inviteLink(code) {
   const c = normalizeInviteCode(code);
   return c ? `${INVITE_ORIGIN}/?join=${c}` : '';
 }
-/** The share message: carries the league name, the link AND the code (a friend on a phone with no app installed still has something to read out). */
-export function inviteMessage({ leagueName, code } = {}) {
+/**
+ * The share message (DI-730, D2 lane 1): the link, then the code and where to type it in the iPhone app (a friend with the app installed taps Your Leagues, then Join with a code). Two lines, plain text;
+ * the share plugin and the clipboard take it as is. `leagueName` is accepted and ignored (the message says "my league": the preview names the league when the link is opened).
+ */
+export function inviteMessage({ code } = {}) {
   const c = normalizeInviteCode(code);
-  const name = String(leagueName || '').trim() || 'my league';
-  return c ? `Join ${name} on Munera: ${inviteLink(c)} — or enter the code ${formatInviteCode(c)}` : '';
+  return c ? `Join my league on Munera: ${inviteLink(c)}\nCode: ${formatInviteCode(c)}. In the iPhone app, tap Your Leagues, then Join with a code.` : '';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -508,17 +521,23 @@ export function sportsStepHTML(state, groups, { escHtml, icon = noIcon } = {}) {
     </div>`;
 }
 
-/** Frame 4 — Created. The five rows come from NEW_LEAGUE_DEFAULTS, read-only; success is a screen, not a toast (the role changed and the screen states what is already on). */
-export function createdStepHTML(state, { escHtml, icon = noIcon, defaults = NEW_LEAGUE_DEFAULTS } = {}) {
+/**
+ * Frame 4 — Created, AMENDED (D2 lane 1, UN-505 / DI-720; the approved mockup d2-onboarding.html frame 7). The five "Already on for your league" rows are replaced by the three NEXT STEPS: League created (done), Invite your
+ * friends, Set up your first week (the last two muted with an empty tick). One primary (Invite Friends, which opens the Invite sheet) and one text button (Not Now). Success is a screen, not a toast. `defaults` is
+ * accepted for the call sites that still pass it; the five facts now live in League > Advanced.
+ */
+export function createdStepHTML(state, { escHtml, icon = noIcon } = {}) {
   requireEscHtml(escHtml, 'createdStepHTML');
   const c = state.created || {};
-  const rows = newLeagueOnRows(defaults).map((r) => `<div class="lc-on-row" data-lc-on="${escHtml(r.id)}"><span class="lc-on-ic" aria-hidden="true">${icon('check')}</span><span>${escHtml(r.text)}</span></div>`).join('');
+  const todo = (id, text) => `<div class="lc-on-row lc-on-row-todo" data-lc-step-row="${escHtml(id)}"><span class="lc-on-tick" aria-hidden="true"></span><span>${escHtml(text)}</span></div>`;
+  const rows = `<div class="lc-on-row" data-lc-step-row="created"><span class="lc-on-ic" aria-hidden="true">${icon('check')}</span><span>${escHtml(LC_COPY.stepCreated)}</span></div>`
+    + todo('invite', LC_COPY.stepInvite) + todo('week', LC_COPY.stepWeek);
   return `<div class="lc-body lc-step" data-lc-step="created">
       <div class="lc-hero"><div class="lc-seal" aria-hidden="true">${icon('check')}</div>
         <h2 class="lc-hero-title">${escHtml(readyTitle(c.name || state.name))}</h2><p class="lc-hero-sub">${escHtml(LC_COPY.commissionerLine)}</p></div>
-      <div class="lc-sec">${escHtml(LC_COPY.onHeading)}</div>
+      <div class="lc-sec">${escHtml(LC_COPY.nextHeading)}</div>
       <div class="lc-card">${rows}</div>
-      <div class="lc-helper">${escHtml(LC_COPY.onHelper)}</div>
+      <div class="lc-helper">${escHtml(LC_COPY.nextHelper)}</div>
       <div class="lc-footer">
         <button type="button" class="lc-btn lc-btn-primary" data-lc-action="invite">${escHtml(LC_COPY.inviteFriends)}</button>
         <button type="button" class="lc-btn lc-btn-text" data-lc-action="not-now">${escHtml(LC_COPY.notNow)}</button>
@@ -616,6 +635,26 @@ export function landingCreateCardHTML({ open, signupsOpen = true, escHtml } = {}
         <p class="text-muted" style="font-size:.78rem;margin-top:8px">${escHtml(LC_COPY.landingClosed)}</p>`;
   }
   return `<button type="button" class="btn btn-primary btn-block" id="league-create-open-btn" data-action="create-league"${signupsOpen ? '' : ' disabled aria-disabled="true"'}>${escHtml(LC_COPY.create)}</button>`;
+}
+
+/**
+ * D2 lane 1 (UN-505 / DI-718, the approved mockup d2-invite-join.html frame 7) - THE ZERO-LEAGUE LANDING FOR AN APPROVED CREATOR: "Start your league", one line saying why, one primary "Create League", "or", and the two
+ * code rows (the same `data-lc-seg` switches the two-segment control uses, so tapping one lands on today's claim / invite card). Rendered ONLY for an account the SERVER says may create (can_create_league()); everyone else gets
+ * today's screen, byte for byte. `open` is the release gate: closed, the primary is disabled and "Creating leagues isn't available yet" says so (DI-722, approved but gate closed). `showInvite` is false while the gate is
+ * closed (the invite surface is behind the gate); `signupsOpen` false disables the primary with the signups-closed sentence the caller supplies.
+ */
+export function approvedLandingHTML({ open, signupsOpen = true, showInvite = true, escHtml } = {}) {
+  requireEscHtml(escHtml, 'approvedLandingHTML');
+  const primary = open
+    ? `<button type="button" class="lc-btn lc-btn-primary" id="league-create-open-btn" data-action="create-league"${signupsOpen ? '' : ' disabled aria-disabled="true"'}>${escHtml(LC_COPY.create)}</button>`
+    : `<button type="button" class="lc-btn lc-btn-primary" id="league-create-open-btn" disabled aria-disabled="true">${escHtml(LC_COPY.create)}</button><p class="lc-approved-closed" role="status">${escHtml(LC_COPY.landingClosed)}</p>`;
+  const row = (key, label) => `<button type="button" class="lc-approved-row" data-lc-seg="${escHtml(key)}">${escHtml(label)}</button>`;
+  return `<div class="lc-approved" data-lc-landing="approved">
+      <div class="lc-hero"><h2 class="lc-hero-title" id="lc-approved-title">${escHtml(LC_COPY.approvedTitle)}</h2><p class="lc-hero-sub">${escHtml(LC_COPY.approvedLine)}</p></div>
+      <div class="lc-approved-cta">${primary}</div>
+      <div class="lc-approved-or" aria-hidden="true">${escHtml(LC_COPY.approvedOr)}</div>
+      <div class="card ls-card">${showInvite ? row('invite', LC_COPY.segInvite) : ''}${row('claim', LC_COPY.segClaim)}</div>
+    </div>`;
 }
 
 /**

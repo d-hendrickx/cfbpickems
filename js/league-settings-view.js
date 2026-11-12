@@ -25,6 +25,7 @@
 
 import { actionSheetHTML, bannerHTML as lcBannerHTML, NAME_MAX } from './league-create.js';
 import * as AX from './account-exit.js';
+import { viewFor } from './submit-state.js';   // D2 lane 1 (DI-783): the rename card's saving / saved states are the shared submission-state views
 import { LS_COPY, leagueLabel, leaveFooterCopy, leaveSheetCopy, leaveBlockedSentence, canSaveName, trimmedName, weeksInProgressForMember } from './league-settings.js';
 
 function requireEscHtml(escHtml, who) {
@@ -50,8 +51,8 @@ export const LSV_COPY = Object.freeze({
   nameHelper: "Everyone in the league sees this name. They'll see the new one the next time they open the app.",
   clearName: 'Clear name',
   save: 'Save Name',
-  saving: 'Saving…',
-  saved: 'Saved',
+  saving: viewFor('pending').label,   // D2 lane 1 (DI-783): ONE source for the words - the shared submission-state copy ("Saving…", "Saved"); unchanged in effect
+  saved: viewFor('saved').label,
   factSports: 'Sports',
   factRole: 'Your role',
   roleCommissioner: 'Commissioner',
@@ -135,8 +136,10 @@ export function nameCardView({ draft = '', stored = '', phase = 'idle', paused =
   const count = String(draft == null ? '' : draft).length;
   const base = { enabled: false, label: LSV_COPY.save, busy: false, ok: false, fieldDisabled: false, count };
   if (paused) return { ...base, state: 'paused', fieldDisabled: true };
-  if (phase === 'saving') return { ...base, state: 'saving', label: LSV_COPY.saving, busy: true, fieldDisabled: true };
-  if (phase === 'saved') return { ...base, state: 'saved', label: LSV_COPY.saved, ok: true };
+  // The card's phases ARE the shared module's states (saving = pending, saved = saved): the busy and ok flags and the label come from the module's own view model, so the words and the
+  // disabled-while-saving rule cannot drift from every other form.
+  if (phase === 'saving') { const v = viewFor('pending', { idleLabel: LSV_COPY.save }); return { ...base, state: 'saving', label: v.label, busy: v.busy, fieldDisabled: true }; }
+  if (phase === 'saved') { const v = viewFor('saved', { idleLabel: LSV_COPY.save }); return { ...base, state: 'saved', label: v.label, ok: v.state === 'saved' }; }
   if (trimmedName(draft) === '') return { ...base, state: 'empty' };
   return canSaveName(draft, stored) ? { ...base, state: 'edited', enabled: true } : { ...base, state: 'pristine' };
 }

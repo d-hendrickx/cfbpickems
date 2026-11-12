@@ -18,8 +18,9 @@
  *      free text can reach it.
  *   5. The output is balanced markup, or '' on bad input (a non-object, a missing id / headline / source, an unknown sport, an unparseable time).
  *
- * Import allow-list (DI-382, asserted by newstest): ./haptics.js, ./platform.js, ./newsRules.js (the shared URL / picture validators) and, since W-92 (2026-10-17),
- * ./feed-time.js (the shared, pure time vocabulary). Nothing else.
+ * Import allow-list (DI-382, asserted by newstest): ./haptics.js, ./platform.js, ./newsRules.js (the shared URL / picture validators), since W-92 (2026-10-17)
+ * ./feed-time.js (the shared, pure time vocabulary). Nothing else. (D2 DI-852's outbound arrow is written into the template as literal markup — icons.js's arrowUpRight, byte for byte,
+ * pinned equal by familytest — so this file keeps its zero-interpolation sweep and its import list.)
  *
  * ── D1 (DI-671…673, C10, C18; 2026-10-08) ─────────────────────────────────────────────────────────────────────────────
  *   · An item from the SERVER carries its source's own `linkHosts` / `imageHosts` (news_sources_for): the article URL is re-validated against THOSE at render-adjacent
@@ -36,7 +37,7 @@
 import { haptic } from './haptics.js';
 import { openExternalUrl } from './platform.js';
 import { parseArticleUrl as parseArticleUrlFor, isAllowedImageUrl } from './newsRules.js';
-import { relativeTime } from './feed-time.js';   // W-92 (DI-W92-7/9): the ONE shared vocabulary; re-exported under its old name below (newstest imports it from here)
+import { relativeTime, makeDateFormatter } from './feed-time.js';   // W-92 (DI-W92-7/9): the ONE shared vocabulary; re-exported under its old name below (newstest imports it from here). D2 DI-1092: makeDateFormatter is the viewer's-zone builder newsFeed.js hands every card
 
 // ─── escaping: ONE local, quote-complete escaper (S-C3) ───────────────────────────────────────────────────────────────
 
@@ -115,7 +116,7 @@ export function isAllowedNewsImageUrl(raw, hosts = null) {
  * "Just now" / "12m ago" / "2h ago" / "Yesterday" / "3d ago" / "Oct 9". W-92 (2026-10-17): this was a private helper; it is now js/feed-time.js's,
  * shared with every Home card, and re-exported here under the same name. Past a week it says the date instead of "8d ago".
  */
-export { relativeTime };
+export { relativeTime, makeDateFormatter };
 
 // ─── the card ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -123,11 +124,30 @@ export { relativeTime };
  * One NewsItem -> one card's HTML, or '' on bad input. See the contract in the header. The metadata row (publisher, time, sport chip) is
  * ALWAYS present: the publisher is never conditional (UN-344). No image -> no <img> and no placeholder box; the headline moves to the top.
  */
-/** "Oct 6" in the viewer's zone — the "Updated" caption's date (DI-672). */
-function shortDate(iso) {
+/** "Oct 6" in the viewer's zone — the "Updated" caption's date (DI-672). D2 DI-1092 (W-160): with a `formatDate` (feed-time.js makeDateFormatter(the player's zone)) it is the player's day, the same
+ *  one relativeTime() uses, so the two never disagree about the day; with none it is the device's zone (the pure default, unchanged for every existing caller). */
+function shortDate(iso, formatDate = null) {
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return '';
+  if (typeof formatDate === 'function') { try { return String(formatDate(ms, { month: 'short', now: Date.now() }) || ''); } catch { return ''; } }
   try { return new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); } catch { return ''; }
+}
+
+/** D2 DI-797 (W-130, FB-049): lower case, accents folded, every run of anything else one space (padded so a name matches whole words only). */
+function foldForMatch(v) {
+  let t = String(v === null || v === undefined ? '' : v);
+  try { t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch { /* no normalize: the text as it is */ }
+  return ` ${t.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+}
+/** D2 DI-797: the team names a storyline tag holds: "Alabama at Georgia · Sat" -> Alabama, Georgia; "Texas" -> Texas. */
+export function storylineTagTeams(tag) {
+  const head = String(tag === null || tag === undefined ? '' : tag).split('·')[0];
+  return head.split(/\s+(?:at|vs\.?|v\.?|@)\s+/i).map((t) => t.trim()).filter((t) => t.length >= 2);
+}
+/** D2 DI-797: does the headline already name a team of the tag (case and accents ignored, whole words)? Then the tag says nothing new and is not shown. */
+export function headlineNamesTag(headline, tag) {
+  const h = foldForMatch(headline);
+  return storylineTagTeams(tag).some((team) => { const f = foldForMatch(team); return f.trim().length > 1 && h.indexOf(f) >= 0; });
 }
 /** A publisher's later update counts only when it is at least this long after publication (DI-672). */
 export const NEWS_UPDATED_MIN_MS = 30 * 60 * 1000;
@@ -147,7 +167,7 @@ export function bylineOf(item) {
 }
 
 /** The shared card body (one sink for the news card and the storyline card). `tag` is the DI-663 storyline tag or ''. */
-function newsCardHTML(item, { tag = '' } = {}) {
+function newsCardHTML(item, { tag = '', formatDate = null } = {}) {
   if (!item || typeof item !== 'object') return '';
   const id = cleanText(item.id, ID_MAX);
   const headline = cleanText(item.headline, HEADLINE_MAX);
@@ -159,33 +179,38 @@ function newsCardHTML(item, { tag = '' } = {}) {
   if (!Number.isFinite(pubMs)) return '';
   const reason = !tag && NEWS_CARD_REASONS.indexOf(item.reason) >= 0 ? item.reason : '';
   const allowedSrc = isAllowedNewsImageUrl(item.imageUrl, Array.isArray(item.imageHosts) ? item.imageHosts : null);
-  const imageSrc = allowedSrc && !failedPictures.has(allowedSrc) ? allowedSrc : null;   // W-105 (DI-W105-4): a picture that already failed here is not drawn again (no box, no request, no jump on a repaint)
-  const when = relativeTime(item.publishedAt);
+  const imageSrc = allowedSrc && !pictureStillFailed(allowedSrc) ? allowedSrc : null;   // W-105 (DI-W105-4): a picture that failed here is not drawn again inside its wait (no box, no request, no jump on a repaint); D2 DI-1096: past the wait this paint is the retry
+  const when = relativeTime(item.publishedAt, Date.now(), { formatDate });   // D2 DI-1092: the player's zone (a card with no formatter keeps the device zone)
   const updMs = Date.parse(item.updatedAt);
-  const updated = Number.isFinite(updMs) && updMs - pubMs >= NEWS_UPDATED_MIN_MS ? shortDate(item.updatedAt) : '';
+  const updated = Number.isFinite(updMs) && updMs - pubMs >= NEWS_UPDATED_MIN_MS ? shortDate(item.updatedAt, formatDate) : '';
   const tagText = cleanText(tag, 120);
+  const showTag = !!tagText && !headlineNamesTag(headline, tagText);   // D2 DI-797 (W-130): the tag is shown only when the headline does not already name its team
   const pill = reason ? `<span class="national-tv-badge news-card__reason">${esc(reason)}</span>` : '';
-  const eyebrow = tagText ? `<p class="news-card__eyebrow"><span class="news-card__kind">Storyline</span><span aria-hidden="true">·</span><span class="news-card__tag">${esc(tagText)}</span></p>` : '';
   const image = imageSrc ? `<img class="news-card__image" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" src="${esc(imageSrc)}">` : '';
   const upd = updated ? `<span aria-hidden="true">·</span><span class="news-card__updated">Updated ${esc(updated)}</span>` : '';
   const also = alsoFromLabel(Array.isArray(item.alsoFrom) ? item.alsoFrom.map((a) => a && a.publisher) : []);
-  const label = `${tagText ? `Storyline, ${tagText}: ` : ''}${headline}, ${byline}`;
-  const main = `${image}<div class="news-card__body">${eyebrow}${pill}<p class="news-card__headline">${esc(headline)}</p><div class="news-card__meta"><span class="news-card__pub">${esc(byline)}</span><span aria-hidden="true">·</span><span class="news-card__time" data-feed-time="${esc(new Date(pubMs).toISOString())}">${esc(when)}</span>${upd}<span class="national-tv-badge news-card__sport">${esc(sportLabel)}</span></div></div>`;
-  const kindClass = tagText ? ' news-card--storyline' : '';
+  const label = `Sports news from ${byline}. ${showTag ? `${tagText}: ` : ''}${headline}`;   // D2 DI-797: no "Storyline," in what VoiceOver reads   // D2 DI-852 (4): the External family is named FIRST; the publisher moves to the front
+  // D2 DI-852 (2, 3), matching the approved mockup (extNews): the eyebrow LEADS with the source and ENDS with the outbound arrow at its trailing edge (the tap leaves Munera);
+  // the sport chip follows the lead (the mockup's preview pattern), the time (and Updated) sit in the trailing group before the arrow. A storyline keeps its kind and tag after the lead.
+  const story = showTag ? `<span class="news-card__tag">${esc(tagText)}</span>` : '';   // D2 DI-797 (W-130): no "Storyline" word and no separator dot; the tag is a plain eyebrow part, and only when it adds something
+  const out = '<span class="news-card__out" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="8 7 17 7 17 16"/></svg></span>';
+  const eyebrow = `<p class="news-card__eyebrow"><span class="news-card__pub">${esc(byline)}</span>${story}<span class="national-tv-badge news-card__sport">${esc(sportLabel)}</span><span class="news-card__trail"><span class="news-card__time" data-feed-time="${esc(new Date(pubMs).toISOString())}">${esc(when)}</span>${upd}${out}</span></p>`;
+  const main = `${image}<div class="news-card__body">${eyebrow}${pill}<p class="news-card__headline">${esc(headline)}</p></div>`;
+  const kindClass = tagText ? ' news-card--storyline news-card--ext fam-ext' : ' news-card--ext fam-ext';   // D2 DI-852 / DI-854: the External edge (the family's one modifier pair, shared with the feed card's fam-lg)
   if (!also) return `<div class="card news-card${kindClass}" data-news-id="${esc(id)}" role="link" tabindex="0" aria-label="${esc(label)}">${main}</div>`;
   // DI-672: the grouped card. The link role moves to the main block, so the "Also from" button is a SIBLING (never a control nested inside a link).
   return `<div class="card news-card news-card--grouped${kindClass}"><div class="news-card__main" data-news-id="${esc(id)}" role="link" tabindex="0" aria-label="${esc(label)}">${main}</div><div class="news-card__also-row"><button type="button" class="news-card__also" data-news-also="${esc(id)}">${esc(also)}</button></div></div>`;
 }
 
-export function renderNewsCard(item) {
-  try { return newsCardHTML(item); } catch { return ''; }
+export function renderNewsCard(item, { formatDate = null } = {}) {
+  try { return newsCardHTML(item, { formatDate: typeof formatDate === 'function' ? formatDate : null }); } catch { return ''; }
 }
 
 /** DI-663 / C18: a storyline card (a news item with its deterministic tag). '' when the tag is missing — the item is then an ordinary News card, drawn by renderNewsCard. */
-export function renderStorylineCard(item) {
+export function renderStorylineCard(item, { formatDate = null } = {}) {
   try {
     const tag = item && item.storyline && typeof item.storyline.tag === 'string' ? item.storyline.tag : '';
-    return tag ? newsCardHTML(item, { tag }) : '';
+    return tag ? newsCardHTML(item, { tag, formatDate: typeof formatDate === 'function' ? formatDate : null }) : '';
   } catch { return ''; }
 }
 
@@ -193,13 +218,13 @@ export function renderStorylineCard(item) {
  * DI-672 / C10: the "Also from" sheet's body — one 44 pt row per OTHER source in the group: its headline, publisher, time and "Open". Built HERE through `esc()` so
  * the caller never interpolates a publisher or headline. Each row carries only the alternate's id; a tap resolves it against the group the sheet was opened for.
  */
-export function renderAlsoFromSheet(item) {
+export function renderAlsoFromSheet(item, { formatDate = null } = {}) {   // D2 DI-1092: each row's time says the day in the player's zone, like the card it came from
   try {
     const rows = (item && Array.isArray(item.alsoFrom) ? item.alsoFrom : []).slice(0, 8).map((a) => {
       if (!a || typeof a !== 'object') return '';
       const aid = cleanText(a.id, ID_MAX), h = cleanText(a.headline, HEADLINE_MAX), pub = bylineOf(a);
       if (!aid || !h || !pub || !Number.isFinite(Date.parse(a.publishedAt))) return '';
-      return `<li class="news-also-item"><button type="button" class="news-also-open" data-news-also-open="${esc(aid)}" aria-label="${esc(h)}, ${esc(pub)}, open"><span class="news-also-text"><span class="news-also-headline">${esc(h)}</span><span class="news-also-meta">${esc(pub)} · ${esc(relativeTime(a.publishedAt))}</span></span><span class="news-also-go">Open</span></button></li>`;
+      return `<li class="news-also-item"><button type="button" class="news-also-open" data-news-also-open="${esc(aid)}" aria-label="${esc(h)}, ${esc(pub)}, open"><span class="news-also-text"><span class="news-also-headline">${esc(h)}</span><span class="news-also-meta">${esc(pub)} · ${esc(relativeTime(a.publishedAt, Date.now(), { formatDate: typeof formatDate === 'function' ? formatDate : undefined }))}</span></span><span class="news-also-go">Open</span></button></li>`;
     }).filter(Boolean);
     if (!rows.length) return '';
     return '<ul class="news-also-list">' + rows.join('') + '</ul>';   // every row was built above through esc(); joined, never re-interpolated
@@ -248,7 +273,10 @@ export function openNewsArticle(href) {
 // overflow-anchor:none: nothing else does it). A card that is partly on screen with its picture already scrolled above the top counts as ABOVE: removing that picture by
 // collapsing it would slide the text the reader is looking at (the DI's "Fails if: the visible content jumps when a picture above the reader fails").
 // A picture that failed is remembered for this page's life (URLs only, in memory, capped, never persisted; nothing is remembered while the device is offline), and the
-// card is drawn without it from then on, so Home's next repaint does not bring the empty box back. No timer, no new import, no inline handler, no style attribute in markup.
+// card is drawn without it, so Home's next repaint does not bring the empty box back. D2 DI-1096 (W-110): not FOR EVER — a brief outage must not hide a picture until the app is reloaded.
+// An entry is forgotten after FAILED_PICTURE_RETRY_MS (15 minutes, the news cache's own NEWS_STALE_MS) and a SECOND failure of the same address waits FAILED_PICTURE_RETRY_AGAIN_MS (60 minutes);
+// the retry happens ONLY when that card is next painted (no timer, no background request); a picture that is back simply loads and is forgotten; coming back online forgets every entry.
+// No timer, no new import, no inline handler, no style attribute in markup.
 const PICTURE_CLASS = 'news-card__image';
 const PICTURES_BOUND_CLASS = 'news-images-bound';
 const PICTURE_LOADED = 'is-loaded';
@@ -256,9 +284,25 @@ const PICTURE_INSTANT = 'news-card__image--instant';
 const PICTURE_COLLAPSING = 'news-card__image--collapsing';
 const PICTURE_FAILED = 'news-card__image--failed';
 export const FAILED_PICTURES_CAP = 200;
-const failedPictures = new Set();
+/** D2 DI-1096: how long a failed picture stays out of the card after its FIRST failure (home.js NEWS_STALE_MS, pinned equal by newspicturestest: this leaf may not import home.js). */
+export const FAILED_PICTURE_RETRY_MS = 15 * 60 * 1000;
+/** …and after a SECOND (or later) failure of the same address. */
+export const FAILED_PICTURE_RETRY_AGAIN_MS = 60 * 60 * 1000;
+/** address -> { at (the failure's ms), count (how many times it has failed in a row) }. An entry past its wait is not "forgotten" from the map until the picture loads or the device comes back
+ *  online: its count is what makes the second failure wait longer. */
+const failedPictures = new Map();
 /** Test seam: the remembered failures (read-only use in tests; `clear()` between cases). */
 export const _failedPicturesForTest = failedPictures;
+let clock = () => Date.now();
+/** Test seam: the clock the retry waits are measured on (pass nothing to restore the real one). */
+export function _setPictureClockForTest(fn) { clock = typeof fn === 'function' ? fn : () => Date.now(); }
+/** Is this address still hidden from the card? True only inside its wait; past it the card draws the picture again (the retry), on this paint. */
+function pictureStillFailed(src) {
+  const e = failedPictures.get(src);
+  if (!e) return false;
+  return clock() - e.at < (e.count >= 2 ? FAILED_PICTURE_RETRY_AGAIN_MS : FAILED_PICTURE_RETRY_MS);
+}
+function forgetFailedPicture(src) { if (typeof src === 'string' && src) failedPictures.delete(src); }
 
 const hasClass = (el, c) => !!el && !!el.classList && typeof el.classList.contains === 'function' && el.classList.contains(c);
 const isPicture = (el) => hasClass(el, PICTURE_CLASS);
@@ -269,7 +313,10 @@ function rememberFailedPicture(img) {
   try {
     if (typeof navigator !== 'undefined' && navigator && navigator.onLine === false) return;   // offline: every picture fails; none of them is broken
     const src = typeof img.getAttribute === 'function' ? img.getAttribute('src') : null;
-    if (typeof src === 'string' && src && failedPictures.size < FAILED_PICTURES_CAP) failedPictures.add(src);
+    if (typeof src !== 'string' || !src) return;
+    const prior = failedPictures.get(src);
+    if (prior) failedPictures.set(src, { at: clock(), count: prior.count + 1 });                  // a repeat failure: the longer wait
+    else if (failedPictures.size < FAILED_PICTURES_CAP) failedPictures.set(src, { at: clock(), count: 1 });
   } catch { /* nothing to remember */ }
 }
 function prefersLessMotion() {
@@ -365,8 +412,13 @@ export function bindNewsCardEvents(rootEl, { items, onOpen, onAlsoFrom, onPictur
   };
   const onImageLoad = (e) => {
     const img = e && e.target;
-    if (isPicture(img) && !hasClass(img, PICTURE_FAILED) && !hasClass(img, PICTURE_COLLAPSING)) addClass(img, PICTURE_LOADED);   // the 150 ms fade (css), or nothing to do for an instant one
+    if (isPicture(img) && !hasClass(img, PICTURE_FAILED) && !hasClass(img, PICTURE_COLLAPSING)) {
+      addClass(img, PICTURE_LOADED);   // the 150 ms fade (css), or nothing to do for an instant one
+      try { forgetFailedPicture(typeof img.getAttribute === 'function' ? img.getAttribute('src') : null); } catch { /* nothing to forget */ }   // D2 DI-1096: it is back: the next failure is a first one again
+    }
   };
+  // D2 DI-1096: coming back online forgets every failure (they were not the pictures' fault). Armed by the real bind below, removed by the unbind.
+  const onOnline = () => { failedPictures.clear(); };
   // A picture that fails to load is REMOVED, never left as a grey box or a broken-image glyph, and never with a visible jump.
   const onImageError = (e) => {
     const img = e && e.target;
@@ -408,7 +460,9 @@ export function bindNewsCardEvents(rootEl, { items, onOpen, onAlsoFrom, onPictur
   rootEl.addEventListener('keydown', onKeydown);
   rootEl.addEventListener('load', onImageLoad, true);
   rootEl.addEventListener('error', onImageError, true);
+  try { if (typeof window !== 'undefined' && window && typeof window.addEventListener === 'function') window.addEventListener('online', onOnline); } catch { /* no window */ }
   const unbind = () => {
+    try { if (typeof window !== 'undefined' && window && typeof window.removeEventListener === 'function') window.removeEventListener('online', onOnline); } catch { /* no window */ }
     try { rootEl.removeEventListener('click', onClick); rootEl.removeEventListener('keydown', onKeydown); rootEl.removeEventListener('load', onImageLoad, true); rootEl.removeEventListener('error', onImageError, true); } catch { /* detached */ }
     try { if (observer) observer.disconnect(); } catch { /* detached */ }
     removeClass(rootEl, PICTURES_BOUND_CLASS);                               // a root without the binder shows its pictures as before (progressive enhancement)

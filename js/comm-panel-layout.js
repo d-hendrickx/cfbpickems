@@ -60,8 +60,9 @@
 export const COMM_TABS = Object.freeze([
   { key: 'week', label: 'Week', icon: 'calendarWeek' },
   { key: 'games', label: 'Games', icon: 'sportFootball' },
-  { key: 'players', label: 'Players', icon: 'playersGroup' },
-  { key: 'rules', label: 'Rules', icon: 'rulebook' },
+  // D2 lane 6 (UN/PF-528, DI-757): LABELS only. The keys `players` and `rules` (and every data-comm-tab value, the roles table, the saved-tab state) are unchanged.
+  { key: 'players', label: 'Members', icon: 'playersGroup' },
+  { key: 'rules', label: 'League', icon: 'rulebook' },
   { key: 'scribe', label: 'SCRIBE', icon: 'scribeSpark' },
 ]);
 
@@ -86,7 +87,8 @@ export const COMM_CARD_TAB = Object.freeze({
                                                // FIELD, extracted to Admin → Week
                                                // ('data-source-mode', a roles.js id).
                                                // The card itself is not removed.
-  'weekly-summary-email': 'week',             // app.js:10769
+  // D2 lane 6 (DI-759): the Weekly Summary Email leaves Week for League > Notifications (it is the league's mail, not a per-week control); it still renders only once every game is final.
+  'weekly-summary-email': 'rules',
   'tiebreaker': 'week',                       // app.js:10895
   'extra-point': 'week',                      // app.js:17294 (Ischemic Extra Point wrapper;
                                                // title at :17296)
@@ -112,11 +114,7 @@ export const COMM_CARD_TAB = Object.freeze({
   'invite-to-league': 'players',              // NEW card (DI-319 §Copy) — no prior id
   'league-members': 'players',                // app.js:11002
   'obligations': 'players',                   // app.js:11073
-  // Legacy PIN-mode-only card (`getAuthMode() !== 'supabase'`, app.js:11010)
-  // — never renders in production (supabase mode), but IS an existing card
-  // id and stays mapped so it is never an untagged/unmapped card (RG-10
-  // discipline extended to the legacy path too).
-  'players-pins-contact': 'players',
+  // D2 lane 6 (DI-759, D-108): 'players-pins-contact' (the legacy PIN-mode card) is removed with the PIN system.
   // ── Players (leaves) ──
   // AMENDMENT 2026-09-25: Account Linking is ADMIN-ONLY. DI-319's ORIGINAL
   // card table listed this on Commissioner → Players ("this league's own
@@ -126,6 +124,10 @@ export const COMM_CARD_TAB = Object.freeze({
 
   // ── Rules (stays, renamed from 'settings') ──
   'league-rules': 'rules',                    // app.js:11138
+  // D2 lane 6 (DI-758): the League tab's own cards — the rows card, the Sports page, and the read-only creation facts (Advanced). `renderCommPage()` tags every one data-comm-tab="rules" + data-league-page.
+  'league-list': 'rules',
+  'league-sports': 'rules',
+  'league-facts': 'rules',
   // AMENDMENT 2026-09-25: copy renamed "Alma maters & home teams" — same
   // card id, same tab, no placement change.
   'alma-maters': 'rules',                     // app.js:10272
@@ -147,16 +149,20 @@ export const COMM_CARD_TAB = Object.freeze({
 
   // ── Old 'settings' tab cards that leave entirely (not Rules, not SCRIBE) ──
   'auto-refresh': 'admin',                    // app.js:11098 — roles.js id, scope:'commissioner'
-  'randomize-picks-shortcut': 'admin',        // app.js:11124 — roles.js id, scope:'commissioner'
-  'security-settings': 'admin',               // app.js:11189 — roles.js id, scope:'commissioner'
+  // D2 lane 6 (DI-759/761): Randomize Picks Shortcut is a league rule (commissioner scope): it moves from Admin > Settings to League > Competition & rules, so a commissioner who is not a platform admin can reach it.
+  'randomize-picks-shortcut': 'rules',
+  // D2 lane 6 (DI-759, D-108): 'security-settings' is removed (site PIN, welcome text, commissioner password). Its one live control, the contact email, is its own card:
+  'commissioner-contact-email': 'rules',
 
-  // ── Old 'data' tab cards, all relocated whole ──
+  // ── Old 'data' tab cards ──
   'export-data': 'admin',                     // app.js:10830 — roles.js id, scope:'admin' (see note)
-  'data-management': 'admin',                 // app.js:11234 — roles.js id, scope:'commissioner'
-  'chat-retention': 'admin',                  // app.js:11251 — roles.js id, scope:'commissioner'
-  'chat-history': 'admin',                    // app.js:11262 — roles.js id, scope:'commissioner'
-  'recalculate-finalized-weeks': 'admin',     // app.js:13943 — roles.js id, scope:'commissioner'
-  'obligation-corrections': 'admin',          // app.js:13967 — roles.js id, scope:'commissioner'
+  // D2 lane 6 (DI-759/761, coordinator ruling 2026-10-19): the five commissioner-scope tools move from Admin > Data to League > Advanced. A card moves; WHO MAY OPERATE IT does not (roles.js
+  // CARD_OPERABILITY is unchanged: 'commissioner'), each keeps its existing confirmations, and RLS scopes every write to the league.
+  'data-management': 'rules',
+  'chat-retention': 'rules',
+  'chat-history': 'rules',
+  'recalculate-finalized-weeks': 'rules',
+  'obligation-corrections': 'rules',
   'scribe-training': 'admin',                 // app.js:16310 — roles.js id, scope:'commissioner', pilotGated
   'background-jobs': 'admin',                 // app.js:16944 — roles.js id, scope:'admin' (read-only)
   'feedback-bug-reports': 'admin',            // app.js:17222 — roles.js id, scope:'admin' (read half)

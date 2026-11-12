@@ -78,9 +78,17 @@
 import {
   arePicksPublic, getWeeks, getGames, getPicks, getPlayers, getWeeklyResults, getWeekProgress,
   getCurrentWeek, getActiveWeekId, getSession, getTimezone, getBackendMode, getPicksView, hasPlayerSubmitted,
+  getCompetitions, getCompetitionMembers, getStoredSettings,   // D2 DI-802: the mirror's OWN source (mirrorSource) reads exactly what the default readers and js/competition.js read
 } from './storage.js';
 import { getActiveLeagueId } from './auth.js';
-import { homeFeedContexts, playersForWeek } from './competition.js';   // D1 DI-528: who plays each sport (C4) and which sports the feed spans
+import { homeFeedContexts, playersForWeek, viewerMemberId } from './competition.js';   // D1 DI-528: who plays each sport (C4) and which sports the feed spans
+import { makeSource, isValidSource, currentWeekOfRows } from './league-source.js';   // D2 DI-802: one league's rows as a plain object (the mirror's, or a peeked league's)
+import { stampLeagueCards, capNewestKeeping, leagueLabels, chipText, chipAria, sportCodeOf, sportLabelOf, CHIP_MIN_LEAGUES, PER_LEAGUE_CARD_CAP } from './home-leagues.js';   // D2 DI-805/806: one Home across leagues (a pure leaf)
+import { crossLeagueGameDay, crossLeagueCardHTML, crossLeagueBodyHTML, crossLeagueTargets, MULTI_RAIL_HIDDEN_SCALE } from './gameday-leagues.js';   // D2 DI-817…827: Game Day across leagues (model + markup)
+import { fullGameDayModel, fullGameDayHTML } from './full-gameday.js';   // D2 DI-822: the Full Game Day screen (pure)
+import { peekFactsStub, rankExternal, applyMix, fromFeedCard, fromNewsItem, fromStoryline, fromContentCard, homeScore, isIncluded, buildSignals, noveltySubject, noteExposures, makeExposureLedger, EXPOSURE_VIEW_RATIO, followedContentFamily, insightQualityOk, admitInsights, holdExternalForWaiting, MIX, previewClusterKey } from './home-rank.js';
+import { followedTeamsFor, insightCardsFor, ownFinalPicksFor, insightReasonChip } from './analytics-adapter.js';   // D2 DI-1073: lane 4's followed-team set, read through the one adapter (computed on the device; never sent)   // D2 DI-824: the standings-consequence slot's typed stub (the analytics lane supplies the facts); DI-829…840: relevance decides inclusion
+import { isPilotOnlyAllowed } from './pilot-only.js';   // security F2 (2026-10-19): a peeked league's pilot content asks the registry's ONE predicate, with that league's membership record
 import { deriveFeedCards, cleanJoinOffers, placeJoinNudges } from './home-sports.js';
 import { buildRevealedView, deriveCards, cardCopy, requireEscHtml, isWagerReceipt, ordinal, cardsForGame, CAPTION_TYPES_THAT_ADD_A_FACT } from './feed-cards.js';
 import { timeLabels, tapLabel, makeDateFormatter } from './feed-time.js';   // W-92 (DI-W92-7/8/10): the one "when did this happen" vocabulary (a pure leaf)
@@ -89,6 +97,7 @@ import { computeCommissionerOpsPlan, LOCKING_SOON_MS } from './reminder-rules.js
 import { buildCopy } from './notify-copy.js';
 import { computeFirstKickoff, computeEffectiveLockAt, calculateAtsWinner, evaluatePick } from './scoring.js';
 import { atsMarginOf, sortWeeks, memberSeasonStats, viewerWeekLine } from './stats.js';
+import { lineText } from './formats.js';   // D2 lane 2 (DI-915): the one line formatter (pick the winner prints nothing, never "PK")
 import { formatGameTime, formatSpread, buildAbbrMap, weeksInGroup, getEffectiveGroupId, TIME_ZONES } from './data-model.js';
 import { icon } from './icons.js';
 import { weekLockState } from './week-lock.js';   // D1 / DI-510 row 7 (2026-10-07): the Now card asks the ONE week-lock state, not its own clock test
@@ -98,7 +107,7 @@ import { scrollWindow } from './section-drag.js';   // the house scroll helper (
 import { orderGames } from './game-order.js';
 import { gameStateOf, freshnessLine } from './game-state.js';
 import { hasDetail, buildCardDetail, cardDetailHTML, unavailableDetailHTML, detailTitle } from './card-detail.js';
-import { pauseNavHide, prefersReducedMotion } from './nav-gestures.js';
+import { pauseNavHide, prefersReducedMotion, bindPressState } from './nav-gestures.js';   // bindPressState: T-05 / FB-047, the Game Day card's touch press (a press, never a scroll)
 // D1 Lane B Game Day (2026-10-08, DI-603…606; Drew D-58/D-63): the model + collapsed card, the open card's body, and the DOM half (the in-place grow, the keyed patch). The pick lines of an open row come
 // ONLY from js/pick-groups.js's picksRowHTML (behind the gate, per row's own week) — home.js holds no other member's pick for them.
 import { gameDayModel, gameDayCardHTML, gameDaySkeletonHTML, gameDayAnnouncements, gameViewAnnouncements, RAIL_HIDDEN_SCALE } from './gameday.js';
@@ -109,6 +118,7 @@ import { picksRowHTML } from './pick-groups.js';
 import { nextOpportunity, nextLine, nextShort, nextAction } from './next-up.js';   // D1 Lane B fix round 2 (DI-599): "What's next" — a pure leaf
 import { validShareRef, shareLine } from './chat-share.js';   // D1 Lane B (DI-597): Share to chat — the reference's one gate and the headline (a pure leaf)
 import { joinClosedCaption } from './sport-status.js';   // DESIGN_D1_E (DI-E1.7): the closed Join's sentence, ONE string shared with the league overview (a pure leaf)
+import { slateName, startWordOfWeek, startVerbOfWeek } from './slate-name.js';   // int/v0.31.0 (D2 lane 2 x lane 3): a slate is named by its night label ("Thu, Oct 22") or "Week n", and its start by the sport's word ("Kickoff" / "Puck drop")
 import { teamLockupHTML } from './keyed-list.js';   // W-105 (DI-W105-5): a finished game's two team marks are the SHIPPED 48 pt lockup (DI-572), never a second logo component
 
 // ═══ constants (every number the screen's behaviour hangs on is named, exported and tested) ═══════════════════════
@@ -125,6 +135,8 @@ export const READER_TOP_PX = 120;
 export const PILL_COUNT_MAX = 99;
 /** DI-587 — a visit counts (and advances the "last seen" marker when it ends) only after Home has been visible this long. */
 export const SEEN_MIN_VISIT_MS = 2000;
+/** D2 DI-1071: an "insight card" — the analytics lane's cards and the AI-written callbacks (the six-a-day and 2-in-4 caps); a followed-team content card is League but not an insight. */
+const isInsightType = (t) => /^(insight\.|callback\b)/.test(String(t || ''));
 /** DI-604 — the pill rail counts as "still being scrolled" this long after its last scroll event. */
 export const RAIL_QUIET_MS = 150;
 /** DI-604 (fix round 1, B3) — a finger that has been "down" on the rail this long without a touchend is a LOST touch (the target was detached, the system took the gesture): it stops parking the feed. */
@@ -163,7 +175,11 @@ export const NOW_NEAR_KICKOFF_MS = LOCKING_SOON_MS;
 /** The only actions a Home button may carry, and the only tabs / commissioner tabs they may name (the DOM is untrusted input). */
 export const HOME_ACTIONS = Object.freeze(['go-tab', 'build-slate', 'retry-news', 'retry-load', 'open-card', 'new-posts',
   // D1 Lane B Game Day (DI-606): the header opens / closes the card in place; a pill or "All n ›" opens it (a pill focuses its game); a row opens that game's Game view; Collapse closes; the footer goes to the Dashboard.
-  'gd-toggle', 'gd-pill', 'gd-more', 'gd-row', 'gd-collapse', 'gd-dashboard']);
+  'gd-toggle', 'gd-pill', 'gd-more', 'gd-row', 'gd-collapse', 'gd-dashboard',
+  // D2 DI-804 (lane 3): a league that could not load says so in the feed, with Retry (a manual Peek read).
+  'retry-peek',
+  // D2 DI-818…822 (lane 3), a member of two or more leagues: the summary line, a body action that routes, and Full Game Day ("+n more", "All {n} games ›").
+  'gd-summary', 'gd-route', 'gd-full']);
 // 'leaderboard' (Standings): Game Day's Final card offers "Results" and sends it (reviewer B2, 2026-10-08: the allow-list used to drop it, so the button did nothing). The list is what the markup may NAME; every other tab is still refused.
 export const ACTION_TABS = Object.freeze(['picks', 'dashboard', 'commissioner', 'leaderboard']);
 export const ACTION_COMM_TABS = Object.freeze(['week', 'games']);
@@ -183,6 +199,12 @@ export const JOIN_NUDGE_COPY = Object.freeze({
 export const NEWS_COPY = Object.freeze({
   empty: 'No headlines yet for your sports.\nCheck back later.',
   error: 'News is temporarily unavailable.',
+  retry: 'Retry',
+});
+/** D2 DI-804 (lane 3): a league that has NEVER loaded this session says so once, calmly, at the top of the feed — never silently omitted. */
+export const PEEK_COPY = Object.freeze({
+  never: (name) => `Couldn't load ${name}.`,
+  partial: (name) => `${name} has too much this season to show on Home. Switch to it to see everything.`,   // reviewer R1: a league over the Peek caps is said, never silently omitted
   retry: 'Retry',
 });
 export const ERROR_COPY = Object.freeze({
@@ -414,6 +436,17 @@ function nowSportFacts(s, cur, viewer) {
   return { entered: false, offer, code: offer ? offer.code : comp.label };
 }
 
+/**
+ * D2 DI-811 — the snapshot's OWN league's reveal question. The active league's snapshot carries none and this is storage.js `arePicksPublic` (unchanged); a peeked league's
+ * snapshot carries that league's server-reported status as `isPublic` (js/peek-store.js), because arePicksPublic reads the ACTIVE league's confirmed status by week id
+ * and week ids are unique only within a league. A predicate that throws or answers anything but `true` is "not public".
+ */
+function pubOf(s) {
+  const f = s && typeof s.isPublic === 'function' ? s.isPublic : null;
+  if (!f) return arePicksPublic;
+  return (w) => { try { return f(w) === true; } catch { return false; } };
+}
+
 // ═══ the live scope (DI-577 / DI-582 / PF-443 / PF-447): every live game the summary and the peek speak for ═════════════════════════
 /**
  * "Every live game", not only the Now card's week: the Now card's week GROUP (both parts of a multi-part week) and, once Lane A supplies them, every other competition's current week group.
@@ -430,7 +463,7 @@ export function liveScope(s, cur, { now = Date.now(), isCommissioner = false } =
     for (const m of weeksInGroup(weeks, w)) {
       if (!m || seen.has(m.weekId)) continue;
       if (m.dataSourceMode === 'demo' && isCommissioner !== true) continue;
-      if (m.weekId !== cur.weekId && !arePicksPublic(m)) continue;
+      if (m.weekId !== cur.weekId && !pubOf(s)(m)) continue;
       seen.add(m.weekId); parts.push(m);
     }
   };
@@ -476,7 +509,7 @@ export function viewerStatsFor(s, { cur, state, viewer }) {
     const wc = comp.single ? cur : (weeks.find(w => w.weekId === comp.currentWeekId) || null);
     const season = wc ? wc.season : null;
     // — the week
-    if (wc && arePicksPublic(wc)) {
+    if (wc && pubOf(s)(wc)) {
       let value = '', sr = '';
       const finalWeek = comp.single ? state === 'final' : (typeof s.confirmedStatusFor === 'function' && s.confirmedStatusFor(wc) === 'final');
       const stored = finalWeek ? asArray(s.revealedWeeklyResults).find(r => r && r.weekId === wc.weekId && r.playerId === viewer) : null;
@@ -563,7 +596,7 @@ export function ownCoverOf(game, team, phase) {
 }
 
 /** "Favorite + margin", never a signed number (AD-03): the shipped formatter; '' while the line is unset. */
-const gameLineText = (g) => { const sv = g.lockedSpread !== null && g.lockedSpread !== undefined ? g.lockedSpread : g.spread; const t = sv === null || sv === undefined ? '' : formatSpread(sv, g.favorite, g); return t === 'TBD' ? '' : t; };
+const gameLineText = (g) => { const sv = g.lockedSpread !== null && g.lockedSpread !== undefined ? g.lockedSpread : g.spread; const t = sv === null || sv === undefined ? '' : lineText({ ...g, spread: sv }, undefined, { formatSpread }); return t === 'TBD' ? '' : t; };
 
 /**
  * EVERY game in scope, one entry each: { game, weekId, sport, sportLabel, entered, phase, ownTeam, lineText }. `ownTeam` is the VIEWER'S OWN pick (S-C3: explicit viewer id, matched on playerId, never "the first pick
@@ -667,6 +700,7 @@ export function gameDayInputFor(s, nowModel, { viewerId = null, isCommissioner =
   const staleLine = stale ? freshnessLine(stale, { now }) : '';
   const input = {
     state: nowModel.state, weekN: nowModel.weekN === '' ? null : Number(nowModel.weekN), weekId: nowModel.weekId, viewerId: viewer, entries, showSport,
+    ...(cur ? { slateName: slateName(cur), startWord: startWordOfWeek(cur, weekSport(s, cur) || null) } : {}),   // int/v0.31.0: Game Day names the slate and its start as the Now card does
     actionSport: isNonEmptyString(nowModel.sport) ? nowModel.sport : null,
     entered: nowFacts.entered, joinOffer: nowFacts.offer, sportCode: nowFacts.code,   // DESIGN_D1_E (DI-E1.5): is the viewer in the Now card's sport and week; the app's join offer for it
     weekScoped: new Set(entries.map(e => e.weekId)).size <= 1 && !showSport,
@@ -694,7 +728,7 @@ export function gameDayInputFor(s, nowModel, { viewerId = null, isCommissioner =
     const me = viewer ? rows.find(r => r.playerId === viewer) : null;
     // DI-603 / DI-599: "You went 7–3 · Next: …" — the next shared opportunity in its short form; nothing at all when nothing is published still to come (the card never says "Next: nothing")
     const next = viewer ? nextUpFor(s, { viewerId: viewer, isCommissioner, now }) : null;
-    input.finalLine = { winnerLine: !grouped && winner && nameOf(winner.playerId) ? `${nameOf(winner.playerId)} took Week ${numStr(cur.weekNumber)}, ${rec(winner)}` : `Week ${numStr(cur.weekNumber)} is final.`, mine: me ? rec(me) : '', next: next ? nextShort(next, fmt, { showSport }) : '' };
+    input.finalLine = { winnerLine: !grouped && winner && nameOf(winner.playerId) ? `${nameOf(winner.playerId)} took ${slateName(cur)}, ${rec(winner)}` : `${slateName(cur)} is final.`, mine: me ? rec(me) : '', next: next ? nextShort(next, fmt, { showSport }) : '' };
     // …and the OPEN Final card always says it in full (DI-599 (a): "What's next" under the stats), so the collapsed card's short form can fold away at the largest text without losing it
     if (next) input.stats = { lines: input.stats.lines, notes: [...input.stats.notes, `What's next: ${nextLine(next, fmt, { showSport })}`] };
   }
@@ -765,6 +799,9 @@ function readersFrom(read) {
   };
 }
 
+/** Test seam (D2 DI-802's differential): the readers a createHome() with no `read` override uses — the storage seam's, exactly. */
+export const _seamReadersForTest = () => readersFrom(null);
+
 function resolveDeps(deps) {
   const d = (deps && typeof deps === 'object') ? deps : {};
   for (const name of REQUIRED_DEPS) {
@@ -796,6 +833,18 @@ function resolveDeps(deps) {
     logoUrlFor: typeof d.logoUrlFor === 'function' ? d.logoUrlFor : null,                // (game, 'away'|'home') -> a vetted https logo URL or null (Team logos on AND logoOk): the Game view's lockups
     entrantsFor: typeof d.entrantsFor === 'function' ? d.entrantsFor : null,            // (week) -> the players IN THAT WEEK'S SPORT (Lane A's playersForCompetition(…, { weekId }), security C4); absent = NOBODY is an entrant: Home never invents a roster from the active players, so the card and the Game view draw no pick line (fail closed, C4/A3)
     observeSentinel: typeof d.observeSentinel === 'function' ? d.observeSentinel : null,   // (el, cb) -> unobserve: the windowing sentinel (DI-586); default = IntersectionObserver
+    observeExposure: typeof d.observeExposure === 'function' ? d.observeExposure : null,   // D2 DI-1057: (elements, cb([{ el, inView }])) -> unobserve: which cards are at least half in view; default = IntersectionObserver (threshold 0.5)
+    // D2 lane 3 (DI-801…816): one Home across the member's leagues. BOTH optional; absent (or one membership) = exactly today's one-league Home (gate J).
+    peek: d.peek && typeof d.peek === 'object' && typeof d.peek.leagueView === 'function' && typeof d.peek.targets === 'function' ? d.peek : null,   // js/peek-store.js createPeekStore()
+    memberships: typeof d.memberships === 'function' ? d.memberships : null,         // () -> the account's ACTIVE memberships [{ leagueId, leagueName, memberId, pilot }] | null (not resolved)
+    peekFacts: typeof d.peekFacts === 'function' ? d.peekFacts : peekFactsStub,       // DI-824: (source, { now, viewerMemberId }) -> standings-consequence facts; the stub answers [] until the analytics lane ships
+    activityCount: typeof d.activityCount === 'function' ? d.activityCount : null,    // DI-823: (leagueId) -> new Locker Room posts (a count) | null = unknown (omitted, "unknown beats wrong")
+    // D2 integration (2026-10-22): lane 4's three sources arrive INJECTED by the app and are read through the one adapter (js/analytics-adapter.js), which normalises and fails closed
+    followedTeams: typeof d.followedTeams === 'function' ? (input) => followedTeamsFor(input, d.followedTeams) : followedTeamsFor,
+    finalPicks: typeof d.finalPicks === 'function' ? d.finalPicks : null,               // (input) -> the member's own FINAL-week picks (lane 4's); absent = the adapter's stand-in derivation
+    insightCards: typeof d.insightCards === 'function' ? (input) => insightCardsFor(input, d.insightCards) : insightCardsFor,   // D2 DI-1071(e): ({ leagueId, viewerId, now }) -> the league's insight cards (lane 4's, via the adapter; none until re-pointed)   // D2 DI-1073: (input) -> { teamKeys, bySport } — lane 4's definition via js/analytics-adapter.js; tests inject a fixture stand-in
+    profileSignals: typeof d.profileSignals === 'function' ? d.profileSignals : null,   // D2 DI-835 / DI-1073: () -> { homeTeams: { [sport]: [names] }, schools: [names], sports: [codes] } — the member's OWN onboarding answers (as given, never inferred); absent = none. Home reads homeTeams and schools; `sports` has no reader yet
+    rankPrefs: typeof d.rankPrefs === 'function' ? d.rankPrefs : null,                // DI-835: () -> { teams: [names], sports: [codes] } — the viewer's News-settings teams and followed sports (the chosen-team signal); absent = none
   };
 }
 
@@ -926,7 +975,16 @@ export function makeChatCandidateSource({ getMessages, isPrivateRow, chatBoundTo
         // and `=== false` exactly: absent (the column has not landed yet), null, true, "false", 0 all FAIL CLOSED. Until 0045 and a server producer exist this admits nothing; the PICKS_LOCKED lifecycle path (the
         // allow-list above) is unchanged. HOME_SCRIBE_GAME_TRIGGERS therefore matches no row today — no SCRIBE game card should be claimed on Home.
         const gameTrigger = !!(context && context.gameId && typeof meta.trigger === 'string' && HOME_SCRIBE_GAME_TRIGGERS.includes(meta.trigger) && !isConversational(m));
-        if (!allowed && !(gameTrigger && m.relayed === false)) continue;
+        // P-10 / DI-935 (D2, 2026-10-19; coordinator ruling after review, same day): a client trust decision about a SCRIBE or system row keys ONLY on a fact the SERVER controls, never on `author`,
+        // `author_kind` or a meta claim alone. Two roles, both pinned (hometest [13]):
+        //   * trust-gate — a game-analysis post (and any future non-lifecycle allow-listed kind) is admitted only when the server minted it: `relayed === false` (0045: emitted_by is null),
+        //     read at the top level, `=== false` exactly.
+        //   * shape-gate ("shape reserved by the server, 0045") — a lifecycle lock notice is admitted by its server-RESERVED shape, whatever `relayed` says: 0045 refuses
+        //     `sys_lc_PICKS_LOCKED_<week>` for EVERY caller unless the server holds that week locked, live or final in this league (bad_state; pglite0045 S45.lifecycle-shape and
+        //     S45.p10-forged-lifecycle), and any lifecycle row under another id (reserved_lifecycle). `allowed` re-checks that shape against THIS league's weeks, and lifecycleHomeBody
+        //     below replaces the body with fixed copy — so a member's forged row can only produce the correct card at the correct time.
+        const serverShaped = allowed && meta.kind === 'lifecycle';   // shape reserved by the server, 0045
+        if (!(serverShaped || ((allowed || gameTrigger) && m.relayed === false))) continue;
         const { named, weeks: namedWeeks, unresolved } = scribePostWeek(m, { weeks, games });
         if (named && (unresolved || namedWeeks.some(w => !arePicksPublic(w)))) continue; // security C2 / S1 — the blind-gated path, conjunctive
         let c = projectCandidate(m, leagueId, strictProvenance, context || (allowed ? { leagueWide: true } : null));
@@ -987,7 +1045,7 @@ export function restrictTieContextsToRevealed(contexts, weeks, revealedWeeks) {
 }
 
 /** Counts only, per week: `{submittedCount,totalPlayers}`, or null = UNKNOWN (never zero — DI-T4.11: "absent beats wrong"). */
-function submissionCountsFor({ weeks, games, picks, players, viewerId, read, picksConfirmed, rosterFor = null }) {
+function submissionCountsFor({ weeks, games, picks, players, viewerId, read, picksConfirmed, rosterFor = null, isPublicOf = arePicksPublic }) {
   const out = {};
   const activeAll = players.filter(p => p && p.active);
   let progress = null;
@@ -1001,7 +1059,7 @@ function submissionCountsFor({ weeks, games, picks, players, viewerId, read, pic
     let active = activeAll;
     if (rosterFor) { try { active = asArray(rosterFor(w)).filter(p => p && p.active); } catch { active = []; } }
     if (!gameCount || !active.length) { out[w.weekId] = null; continue; }
-    const isPublic = arePicksPublic(w);
+    const isPublic = isPublicOf(w);
     let submitted = 0, unknown = false;
     for (const p of active) {
       const mine = isNonEmptyString(viewerId) && p.playerId === viewerId;
@@ -1038,9 +1096,12 @@ export function assembleHomeSnapshot(deps, { viewerId = null, isCommissioner = f
   const timezone = read.timezone();
   const supabase = !!read.isSupabase();
   const confirmedStatusFor = (week) => { try { return d.confirmedStatusFor(week) || null; } catch { return null; } };
+  // D2 DI-811: a peeked league's snapshot is handed ITS OWN reveal (`deps.isPublic`); the active league's never is, so every gate below is arePicksPublic exactly as before.
+  const ownReveal = typeof d.isPublic === 'function' ? d.isPublic : null;
+  const isPublicOf = pubOf({ isPublic: ownReveal });
 
   // S-C2 — the revealed view, once. A commissioner's demo weeks are the one UN-71 exception (deriveCards decides per card).
-  const view = buildRevealedView({ weeks, games, picks, weeklyResults, confirmedStatusFor, includeDemo: isCommissioner === true });
+  const view = buildRevealedView({ weeks, games, picks, weeklyResults, confirmedStatusFor, includeDemo: isCommissioner === true, ...(ownReveal ? { isPublic: ownReveal } : {}) });
 
   // S-C10 — in supabase mode a week can be public on THIS device before the others' rows have landed (RG-255). Local mode: always true.
   const picksReadConfirmed = {};
@@ -1088,10 +1149,58 @@ export function assembleHomeSnapshot(deps, { viewerId = null, isCommissioner = f
     tieContexts,
     confirmedStatusFor, picksReadConfirmed,
     // the week's entrants: Lane A's playersForWeek in a several-sport league; in a one-sport league every active player of THIS snapshot (the same answer playersForWeek gives there, read from the same readers)
-    submissionCounts: submissionCountsFor({ weeks, games, picks, players, viewerId, read, picksConfirmed: picksReadConfirmed, rosterFor: contexts ? read.rosterForWeek : null }),
+    submissionCounts: submissionCountsFor({ weeks, games, picks, players, viewerId, read, picksConfirmed: picksReadConfirmed, rosterFor: contexts ? read.rosterForWeek : null, isPublicOf }),
     contexts, joinOffers,
     chatCandidates: chat, currentWeekId, activeWeekId, todayKey: dayKeyInTz(now, timezone),
     isCommissioner: isCommissioner === true,
+    ...(ownReveal ? { isPublic: ownReveal } : {}),   // D2 DI-811: only a peeked league's snapshot has one (the active league's shape is unchanged)
+  };
+}
+
+// ═══ D2 DI-802: the `source` parameter — one league's rows through the SAME assembly ═════════════════════════════════════════════════════════════
+
+/**
+ * The ACTIVE league's own rows as a source (js/league-source.js's shape), read through the storage seam: the mirror, exactly what the default readers read. It exists for
+ * DI-802's acceptance (the differential: a snapshot built through this source deep-equals the one built through the seam) and is never handed to anything that writes.
+ * Null when there is no active league.
+ */
+export function mirrorSource() {
+  let leagueId = null;
+  try { leagueId = getActiveLeagueId() || null; } catch { leagueId = null; }
+  if (!isNonEmptyString(leagueId)) return null;
+  return Object.freeze({
+    leagueId,
+    competitions: () => getCompetitions(), weeks: () => getWeeks(), games: () => getGames(), picks: () => getPicks(), players: () => getPlayers(),
+    weeklyResults: () => getWeeklyResults(), settings: () => getStoredSettings(), competitionMembers: () => getCompetitionMembers(),
+    activeWeekId: () => getActiveWeekId(), viewerMemberId: () => viewerMemberId(),
+  });
+}
+
+/**
+ * The readers assembleHomeSnapshot takes, built from ONE source and from nothing else: every league datum (weeks, games, picks, players, results, the current week, the feed's
+ * sport contexts and each week's entrants) is that source's, through js/competition.js's `source` parameter. The viewer's own PREFERENCES are not league data and are
+ * passed in (`timezone`, `picksView`: the signed-in member's); `weekProgress` is the source league's counts when the caller has them (null = unknown, "absent beats wrong").
+ * `viewer` is the member's own row IN THAT LEAGUE (its member id; never a commissioner there — a peeked league's commissioner tools stay in that league). `isSupabase` is
+ * true for a peeked league (it can only come from the server); the mirror's own source passes the app's mode.
+ * An invalid source yields readers over an EMPTY league: never the seam.
+ * @returns {object} a complete `read` object (no reader falls back to a storage default)
+ */
+export function readersFromSource(source, { timezone = 'PT', picksView = 'team', weekProgress = null, isCommissioner = false, now = null, isSupabase = true } = {}) {
+  const src = isValidSource(source) ? source : makeSource({ leagueId: '__empty__' });
+  const rowsOf = (name) => { try { const v = src[name](); return Array.isArray(v) ? v : []; } catch { return []; } };
+  const tz = typeof timezone === 'function' ? timezone : () => timezone;
+  const pv = typeof picksView === 'function' ? picksView : () => picksView;
+  const wp = typeof weekProgress === 'function' ? weekProgress : () => weekProgress;
+  const viewerId = () => { try { const v = src.viewerMemberId(); return isNonEmptyString(v) ? v : null; } catch { return null; } };
+  return {
+    weeks: () => rowsOf('weeks'), games: () => rowsOf('games'), picks: () => rowsOf('picks'), players: () => rowsOf('players'), weeklyResults: () => rowsOf('weeklyResults'),
+    weekProgress: wp,
+    currentWeek: () => currentWeekOfRows(rowsOf('weeks'), (() => { try { return src.activeWeekId(); } catch { return null; } })()),
+    activeWeekId: () => { try { return src.activeWeekId() || null; } catch { return null; } },
+    viewer: () => ({ playerId: viewerId(), isAdmin: isCommissioner === true, playerVerified: !!viewerId() }),
+    timezone: tz, leagueId: () => src.leagueId, isSupabase: () => isSupabase !== false, picksView: pv,   // a peeked league is always supabase data (the default); the mirror's own source passes the app's mode
+    contexts: () => homeFeedContexts({ leagueId: src.leagueId, ...(Number.isFinite(now) ? { now } : {}), source: src }),
+    rosterForWeek: (w) => playersForWeek(w, { source: src }),
   };
 }
 
@@ -1167,30 +1276,34 @@ export function nowCardModel(snapshot, { viewerId = null, isCommissioner = false
   let confirmed = null;
   try { confirmed = typeof s.confirmedStatusFor === 'function' ? s.confirmedStatusFor(cur) : null; } catch { confirmed = null; }
   const st = confirmed || cur.status;
-  const isPublic = arePicksPublic(cur);                          // the ONE reveal question
+  const isPublic = pubOf(s)(cur);                                // the ONE reveal question (D2 DI-811: the snapshot's own league's)
   // The sport this card is about, from the feed contexts (the same list the per-sport slices come from): present only in a several-sport league.
   const curContext = asArray(s.contexts).find(c => c && isNonEmptyString(c.dbCode) && asArray(c.weekIds).includes(cur.weekId));
   const base = { weekId: cur.weekId, weekN, ...(curContext ? { sport: curContext.dbCode } : {}) };
   const facts = nowSportFacts(s, cur, viewer);                   // DESIGN_D1_E: is the viewer IN this week's sport? (first-person lines are for a player)
+  // int/v0.31.0 (D2 lane 2 x lane 3): the slate's name ("Week 6" for every football week, byte-identical; a night's label, "Thu, Oct 22", for the NHL) and its start word, from the week's own sport
+  const wkName = slateName(cur);
+  const startSport = (curContext && curContext.dbCode) || weekSport(s, cur) || null;   // W-174: a night slate (it carries a label) reads as the night sport even when its week stores no sport and the league has no competition rows
+  const startW = startWordOfWeek(cur, startSport), startV = startVerbOfWeek(cur, startSport);
 
   // ── Final / Between seasons ──
   if (st === 'final' && isPublic) {
     const lastGameMs = games.reduce((mx, g) => Math.max(mx, toMs(g.kickoff)), 0);
     const endedMs = toMs(cur.finalizedAt) || lastGameMs;
     if (cur.weekId === newest.weekId && endedMs && now - endedMs > BETWEEN_SEASONS_AFTER_MS) {
-      return nowModel({ ...base, state: 'between', eyebrow: `Week ${weekN} · Final`, headline: `Week ${weekN} was the last one.`, sub: 'Nothing new yet — check back once the next week opens.' });
+      return nowModel({ ...base, state: 'between', eyebrow: `${wkName} · Final`, headline: `${wkName} was the last one.`, sub: 'Nothing new yet — check back once the next week opens.' });
     }
     const rows = asArray(s.revealedWeeklyResults).filter(r => r && r.weekId === cur.weekId);   // S2: the REVEALED view only — never the unrestricted s.weeklyResults (a mirror that says final while the server does not has rows here, and they must name nobody)
     const nameOf = (id, fallback) => { const p = asArray(s.players).find(x => x && x.playerId === id); return (p && p.displayName) || fallback || ''; };
     const winner = rows.find(r => r.isWinner), loser = rows.find(r => r.isLoser);
     const wn = winner ? nameOf(winner.playerId, winner.displayName) : '', ln = loser ? nameOf(loser.playerId, loser.displayName) : '';
     const grouped = weeksInGroup(asArray(s.weeks), cur).length > 1;   // a pooled multi-part week has no single winner to name
-    let headline = `Week ${weekN} is final.`;
+    let headline = `${wkName} is final.`;
     if (!grouped && wn && ln && winner.playerId !== loser.playerId) {
       // RESULTS_FINALIZED, verbatim, picked deterministically per week (buildCopy hashes the dedup key — never Math.random).
       headline = buildCopy('RESULTS_FINALIZED', { weekN, weekWinnerName: wn, weekLoserName: ln }, `home-now:${cur.weekId}`).body;
     }
-    return nowModel({ ...base, state: 'final', eyebrow: `Week ${weekN} · Final`, headline, sub: 'See the results below.' });
+    return nowModel({ ...base, state: 'final', eyebrow: `${wkName} · Final`, headline, sub: 'See the results below.' });
   }
 
   // ── Live (picks are public, the week is not final) ──
@@ -1199,7 +1312,7 @@ export function nowCardModel(snapshot, { viewerId = null, isCommissioner = false
     const live = games.filter(g => g.status === 'live').sort(kickoffOrder);
     // FB-022 — "See the full slate" is the View All route, and it carries THIS card's week so the Dashboard opens on the same period
     // (state.viewingWeekId is shared with Picks and may hold another week; app.js onHomeAction applies it).
-    const model = { ...base, state: 'live', eyebrow: `Week ${weekN} · Live`, headline: `Week ${weekN} is live.`, sub: '', own: '', trend: null,
+    const model = { ...base, state: 'live', eyebrow: `${wkName} · Live`, headline: `${wkName} is live.`, sub: '', own: '', trend: null,
       primary: { label: 'See the full slate', action: 'go-tab', tab: 'dashboard', weekId: cur.weekId }, secondary: null };
     if (live.length) {
       const reads = live.map(g => { const team = ownPickTeam(picks, g.gameId, viewer); return { g, team, cover: liveCover(g, team) }; });   // S-C3 — own pick only, explicit viewer
@@ -1245,7 +1358,7 @@ export function nowCardModel(snapshot, { viewerId = null, isCommissioner = false
 
   // ── Locked (far / near / passed) ──
   if (st === 'locked' || (st === 'open' && lockPassed && games.length)) {
-    const eyebrow = `Week ${weekN} · Locked`;
+    const eyebrow = `${wkName} · Locked`;
     const msToKick = firstMs === null ? null : firstMs - now;
     if (msToKick !== null && msToKick > 0 && msToKick <= NOW_NEAR_KICKOFF_MS) {
       const first = games.slice().sort(kickoffOrder)[0];
@@ -1253,43 +1366,43 @@ export function nowCardModel(snapshot, { viewerId = null, isCommissioner = false
       if (viewer) {
         const team = ownPickTeam(picks, first.gameId, viewer);   // S-C3
         const sub = !facts.entered ? '' : (team ? `You have ${team}.` : "You didn't pick this game.");   // a viewer who is not in this sport did not "not pick" anything: no line (DESIGN_D1_E)
-        return nowModel({ ...base, state: 'locked-near', eyebrow, headline: `${first.awayTeam} at ${first.homeTeam} kicks off in ${mins} min.`, sub });
+        return nowModel({ ...base, state: 'locked-near', eyebrow, headline: `${first.awayTeam} at ${first.homeTeam} ${startV} in ${mins} min.`, sub });
       }
-      return nowModel({ ...base, state: 'locked-near', eyebrow, headline: `Kickoff in ${mins} min.` });   // no viewer: generic, no team name
+      return nowModel({ ...base, state: 'locked-near', eyebrow, headline: `${startW} in ${mins} min.` });   // no viewer: generic, no team name
     }
     const slate = { label: 'View the slate', action: 'go-tab', tab: 'picks' };
-    if (msToKick === null) return nowModel({ ...base, state: 'locked-far', eyebrow, headline: `Week ${weekN} is locked.`, sub: facts.entered ? 'Picks are in. Reveal comes at kickoff.' : 'Reveal comes at kickoff.', secondary: slate });
-    if (msToKick <= 0) return nowModel({ ...base, state: 'locked-far', eyebrow, headline: `Week ${weekN} is locked.`, sub: 'Reveal comes as the week goes live.', secondary: slate });
-    return nowModel({ ...base, state: 'locked-far', eyebrow, headline: `Week ${weekN} is locked.`, sub: `Reveal — and kickoff — in ${formatCountdown(msToKick)}.`, secondary: slate });
+    if (msToKick === null) return nowModel({ ...base, state: 'locked-far', eyebrow, headline: `${wkName} is locked.`, sub: facts.entered ? `Picks are in. Reveal comes at ${startW.toLowerCase()}.` : `Reveal comes at ${startW.toLowerCase()}.`, secondary: slate });
+    if (msToKick <= 0) return nowModel({ ...base, state: 'locked-far', eyebrow, headline: `${wkName} is locked.`, sub: 'Reveal comes as the week goes live.', secondary: slate });
+    return nowModel({ ...base, state: 'locked-far', eyebrow, headline: `${wkName} is locked.`, sub: `Reveal — and ${startW.toLowerCase()} — in ${formatCountdown(msToKick)}.`, secondary: slate });
   }
 
   // ── Open ──
   if (st === 'open' && games.length) {
-    const eyebrow = `Week ${weekN} · Open`;
+    const eyebrow = `${wkName} · Open`;
     const locks = lockMs !== null ? formatCountdown(lockMs - now) : '';
     const counts = s.submissionCounts && s.submissionCounts[cur.weekId];
     const inLine = counts && Number.isFinite(Number(counts.submittedCount)) && Number.isFinite(Number(counts.totalPlayers)) ? `${numStr(counts.submittedCount)}/${numStr(counts.totalPlayers)} in` : '';
     // D1 / DI-511 — a week the commissioner RE-OPENED says so (a visible exception, never a silent one): "Picks were re-opened · locks in 2h 10m".
     const lockLine = locks ? (lockState.reopened ? `Picks were re-opened · locks in ${locks}` : `Locks in ${locks}`) : '';
     if (!viewer) {
-      return nowModel({ ...base, state: 'open-pending', eyebrow, headline: `Week ${weekN} is open.`, sub: [lockLine, inLine].filter(Boolean).join(' · '), primary: { label: 'Make your picks', action: 'go-tab', tab: 'picks' } });
+      return nowModel({ ...base, state: 'open-pending', eyebrow, headline: `${wkName} is open.`, sub: [lockLine, inLine].filter(Boolean).join(' · '), primary: { label: 'Make your picks', action: 'go-tab', tab: 'picks' } });
     }
     if (!facts.entered) {                                              // DESIGN_D1_E (W-85): not in this sport - no "picks left", no "Make your picks"; the app's join offer, when there is one, is the button
       const join = facts.offer && facts.offer.joinable === true ? { label: JOIN_NUDGE_COPY.button(facts.offer.code), action: 'go-tab', tab: 'picks' } : null;
-      return nowModel({ ...base, state: 'open-pending', eyebrow, headline: `Week ${weekN} is open.`, sub: [lockLine, inLine].filter(Boolean).join(' · '), primary: join });
+      return nowModel({ ...base, state: 'open-pending', eyebrow, headline: `${wkName} is open.`, sub: [lockLine, inLine].filter(Boolean).join(' · '), primary: join });
     }
     const mine = new Set(picks.filter(p => p.playerId === viewer).map(p => p.gameId));
     const remaining = games.filter(g => !mine.has(g.gameId)).length;     // own picks only — counts, never anyone else's
     if (remaining > 0) {
-      return nowModel({ ...base, state: 'open-pending', eyebrow, headline: `Week ${weekN}: ${remaining} ${remaining === 1 ? 'pick' : 'picks'} left.`,
+      return nowModel({ ...base, state: 'open-pending', eyebrow, headline: `${wkName}: ${remaining} ${remaining === 1 ? 'pick' : 'picks'} left.`,
         sub: [lockLine, inLine].filter(Boolean).join(' · '), primary: { label: 'Make your picks', action: 'go-tab', tab: 'picks' } });
     }
-    return nowModel({ ...base, state: 'open-done', eyebrow, headline: `You're all in for Week ${weekN}.`, sub: lockLine ? `${lockLine}.` : '',
+    return nowModel({ ...base, state: 'open-done', eyebrow, headline: `You're all in for ${wkName}.`, sub: lockLine ? `${lockLine}.` : '',
       primary: { label: 'Edit My Picks', action: 'go-tab', tab: 'picks' } });
   }
 
   // ── Draft (no games yet, or not open) ──
-  return nowModel({ ...base, state: 'draft', eyebrow: `Week ${weekN}`, headline: `Week ${weekN} is being set up.`, sub: "Picks aren't open yet." });
+  return nowModel({ ...base, state: 'draft', eyebrow: `${wkName}`, headline: `${wkName} is being set up.`, sub: "Picks aren't open yet." });
 }
 
 /** DI-365 — the commissioner's operational nudge, straight from reminder-rules' already-shipped assembler (zero new detection, zero new copy). */
@@ -1390,14 +1503,20 @@ function publisherOf(item) { return String(item.publisher || item.source || '');
  * Whatever order `anchorTimes` arrives in, it is read newest first; a story offered twice (by id, or the same object) counts once. Pure: no clock, no random value, no DOM,
  * no storage (hometest pins the body; newspicturestest proves it).
  */
-export function selectNews(eligible, k, anchorTimes) {
+export function selectNews(eligible, k, anchorTimes, keep = null) {
   const seenIds = new Set();
   const pool = asArray(eligible).filter(it => { if (!it || typeof it !== 'object') return false; const id = it.id === undefined || it.id === null ? it : String(it.id); if (seenIds.has(id)) return false; seenIds.add(id); return true; });
   const slots = Math.max(0, Math.floor(Number(k) || 0));
   if (!slots || !pool.length) return [];
   const pictured = pool.filter(hasPicture);
   const wantP = Math.min(pictured.length, Math.ceil((2 * slots) / 3));
-  if (wantP === 0) return pool.slice(0, slots);                                  // the DI's edge: no pictured story -> today's selection, with the new count
+  if (wantP === 0) {                                                             // the DI's edge: no pictured story -> today's selection, with the new count
+    if (!(keep instanceof Set && keep.size)) return pool.slice(0, slots);
+    const kept = pool.filter(it => keep.has(String(it.id))).slice(0, slots);          // D2 DI-1056: the stories already included first, then today's selection fills the rest
+    const rest = pool.filter(it => !keep.has(String(it.id))).slice(0, Math.max(0, slots - kept.length));
+    const chosen = new Set([...kept, ...rest]);
+    return pool.filter(it => chosen.has(it));
+  }
   const cap = Math.max(2, Math.ceil(slots / 3));
   const used = new Set();
   const perPublisher = new Map();
@@ -1406,6 +1525,7 @@ export function selectNews(eligible, k, anchorTimes) {
   const anchors = asArray(anchorTimes).map(instantOf).filter(ms => Number.isFinite(ms)).sort((a, b) => b - a);
   const m = anchors.length;
   let placed = 0;
+  if (keep instanceof Set && keep.size) for (const it of pool) { if (used.size >= slots) break; if (keep.has(String(it.id))) { take(it); if (hasPicture(it)) placed++; } }   // D2 DI-1056: the stories already included come first
   if (m > 0) {
     const nearPool = pictured.slice(0, 3 * wantP);
     for (let j = 0; j < wantP; j++) {
@@ -1433,7 +1553,7 @@ function newsAnchorTimes(timed, now) {
 
 /** An entry's place in the one chronology: an ISO-8601 instant (card.sortKey is always isoAt() output; a news publishedAt is normalised the same way), so a plain string comparison is a time comparison. */
 function newsTime(it) { const ms = Date.parse(it.publishedAt); return Number.isFinite(ms) ? new Date(ms).toISOString() : ''; }
-const newestFirst = (a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0) || (a.tie - b.tie) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+const newestFirst = (a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0) || (a.tie - b.tie) || ((a.lo || 0) - (b.lo || 0)) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);   // D2 DI-805: …then league order (only a stamped card has one)
 
 /**
  * The ordered feed, as DESCRIPTORS (rendering is separate, so the order is provable without markup):
@@ -1450,7 +1570,7 @@ const newestFirst = (a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0) || (a.tie - b
  * (DI-587 reads it). Deterministic: the same inputs give the same array in the same order, whatever order `cards` arrives in.
  * `weeks` is accepted for the callers' sake and no longer read (the order is time, not week).
  */
-export function mergeFeed({ now = Date.now(), cards = [], nudge = null, news = null, feedError = false, emptyLeague = false } = {}) {
+export function mergeFeed({ now = Date.now(), cards = [], nudge = null, news = null, feedError = false, emptyLeague = false, leagueCapped = false, included = null } = {}) {
   const out = [{ kind: 'now', key: 'now' }];
   if (nudge) out.push({ kind: 'nudge', key: nudge.key, nudge });
 
@@ -1458,7 +1578,7 @@ export function mergeFeed({ now = Date.now(), cards = [], nudge = null, news = n
   const errorEntry = feedError ? [{ kind: 'error', key: 'home-error' }] : [];
   const seenKeys = new Set();
   const allCards = feedError ? [] : asArray(cards).filter(c => { if (!c || seenKeys.has(c.id)) return false; seenKeys.add(c.id); return true; });   // ids are unique by construction; this is the guard the test asserts
-  const timed = allCards.map(c => ({ kind: 'card', key: c.id, card: c, t: String(c.sortKey ?? ''), tie: 0 })).sort(newestFirst).slice(0, FEED_CARD_CAP);
+  const timed = allCards.map(c => ({ kind: 'card', key: c.id, card: c, t: String(c.sortKey ?? ''), tie: 0, ...(c.prov && Number.isFinite(c.prov.order) ? { lo: c.prov.order } : {}) })).sort(newestFirst).slice(0, FEED_CARD_CAP);
   const capped = allCards.length > FEED_CARD_CAP;
 
   const notes = [];
@@ -1467,7 +1587,10 @@ export function mergeFeed({ now = Date.now(), cards = [], nudge = null, news = n
     const newsFailed = asArray(news.items).some(it => it && it.cardKind === 'news-error');    // D1 Lane C (review B3): the headlines failed, the content cards stood
     const all = asArray(news.items).filter(it => !(it && it.cardKind === 'news-error'));
     const special = eligibleContent(all.filter(it => it && it.cardKind), now);                   // D1 Lane C: storylines and content, their own windows (see eligibleContent)
-    const items = selectNews(eligibleNews(all.filter(it => !(it && it.cardKind)), now), newsSlotCount(errorEntry.length + timed.length), newsAnchorTimes(timed, now));   // W-105 (DI-W105-2): how MANY is the count above; WHICH spreads the pictures
+    const eligible = eligibleNews(all.filter(it => !(it && it.cardKind)), now);
+    // D2 DI-1056: a story already included this session keeps its slot — the count is max(the shipped formula, the stories already included), and those stories are chosen first
+    const keep = included instanceof Set && included.size ? new Set(eligible.filter(it => it && included.has(`news:${String(it.id)}`)).map(it => String(it.id))) : null;
+    const items = selectNews(eligible, Math.max(newsSlotCount(errorEntry.length + timed.length), keep ? keep.size : 0), newsAnchorTimes(timed, now), keep);   // W-105 (DI-W105-2): how MANY is the count above; WHICH spreads the pictures
     if (items.length) items.forEach(it => timed.push({ kind: 'news', key: `news:${String(it.id)}`, item: it, t: newsTime(it), tie: 1 }));
     special.cards.forEach(it => timed.push({ kind: 'news', key: `news:${String(it.id)}`, item: it, tie: 1, t: newsTime(it) }));   // placed by its own event time, like every card (FB-010)
     special.notes.forEach(it => notes.push({ kind: 'news', key: `news:${String(it.id)}`, item: it }));
@@ -1479,8 +1602,8 @@ export function mergeFeed({ now = Date.now(), cards = [], nudge = null, news = n
     notes.push({ kind: 'news-error', key: 'news-error' });
   }                                                              // 'off' / 'idle' / anything else: the slot does not exist
   timed.sort(newestFirst);
-  out.push(...errorEntry, ...timed.map(({ tie, ...entry }) => entry), ...notes);
-  if (!feedError) out.push({ kind: 'caught-up', key: 'caught-up', variant: emptyLeague ? 'new-league' : capped ? 'capped' : 'caught-up' });   // never "You're all caught up." beside an error card
+  out.push(...errorEntry, ...timed.map(({ tie, lo, ...entry }) => entry), ...notes);
+  if (!feedError) out.push({ kind: 'caught-up', key: 'caught-up', variant: emptyLeague ? 'new-league' : capped ? 'capped' : leagueCapped ? 'league-capped' : 'caught-up' });   // D2 F5: the per-league cap dropped cards — say so, never "all caught up"   // never "You're all caught up." beside an error card
   return out;
 }
 
@@ -1492,6 +1615,37 @@ function actionButtonHTML(a, { escHtml, tone }) {
   // FB-022: a go-tab that names a week (the live Now card's View All) carries it as data-week-id; the dispatcher re-validates it against this league's weeks.
   const tabAttrs = a.action === 'go-tab' ? ` data-tab="${escHtml(a.tab)}"${a.commTab ? ` data-comm-target="${escHtml(a.commTab)}"` : ''}${isNonEmptyString(a.weekId) ? ` data-week-id="${escHtml(a.weekId)}"` : ''}${isNonEmptyString(a.sport) && SPORT_ACTION_TABS.includes(a.tab) ? ` data-sport="${escHtml(a.sport)}"` : ''}` : '';
   return `<button type="button" class="btn feed-action feed-action--${escHtml(tone)}" data-home-action="${escHtml(a.action)}"${tabAttrs} data-haptic="${hapticKind}">${escHtml(a.label)}</button>`;
+}
+
+/**
+ * D2 DI-1085 — an insight card in the League shell: the League edge, the eyebrow (the kind's glyph, lane 4's followed-team reason chip from the closed three — "Your alma mater",
+ * "Your home team", "A team you pick" — and the time), lane 4's headline (at most 80 characters) and line (140), and the sample caption. Every field through `escHtml`; a card with no
+ * headline is not drawn (no invented words).
+ * ONE TAP TARGET (reviewer BLOCK on bc6e65d7; mockup d2-analytics.html frame 9, DI-1085 "detail follows DI-964"): `data-home-action="open-card"` with the card's id (the dispatcher accepts
+ * only an id in this paint's `currentCardIds`; the app opens lane 4's insight detail), the chevron, a VoiceOver label (DI-W92-8's shape). A member of two or more leagues sees the
+ * provenance chip ("IRB · CFB") FIRST and lane 4's reason chip SECOND (mockup frame 9), and VoiceOver reads "{League}, {Sport}." then the reason (DI-806). One league: the reason chip alone.
+ * The glyph is DI-1085's per kind (`card.icon`, from the closed set below: trophy for results and form, rankUp for scoring and margins, scribeSpark for player and coach lines).
+ */
+const INSIGHT_ICON = Object.freeze({ 'insight.team': 'trophy', 'insight.pick': 'rankUp', 'insight.history': 'calendarWeek' });
+const INSIGHT_ICON_SET = Object.freeze(['trophy', 'rankUp', 'scribeSpark', 'calendarWeek', 'playersGroup']);
+function insightCardHTML(card, { escHtml, now = Date.now(), formatDate, chip = false } = {}) {
+  const head = typeof card.headline === 'string' ? card.headline.slice(0, 80) : '';
+  if (!head) return '';
+  const line = typeof card.line === 'string' ? card.line.slice(0, 140) : '';
+  const sample = typeof card.sample === 'string' ? card.sample.slice(0, 160) : '';
+  const prov = chip === true && card.prov && typeof card.prov === 'object' && card.prov.leagueLabel ? card.prov : null;
+  const reasonChip = insightReasonChip(card);
+  const t = timeLabels(card.sortKey, now, { formatDate });
+  const timeHtml = t ? `<time class="feed-card-time" datetime="${escHtml(t.iso)}" data-feed-time="${escHtml(t.iso)}" aria-label="${escHtml(t.spoken)}">${escHtml(t.written)}</time>` : '';
+  const iconName = typeof card.icon === 'string' && INSIGHT_ICON_SET.includes(card.icon) ? card.icon : (INSIGHT_ICON[card.type] || 'scribeSpark');
+  // mockup frame 9 (coordinator ruling at 7bc6f922): a member of two or more leagues sees BOTH chips, the provenance first ("IRB · CFB") and lane 4's reason second ("Your alma mater")
+  const pill = joinHtml([prov ? `<span class="feed-card-prov">${escHtml(chipText(prov))}</span>` : '', reasonChip ? `<span class="feed-card-reason">${escHtml(reasonChip)}</span>` : '']);
+  const trail = joinHtml(['<span class="feed-card-trail">', timeHtml, glyphSpan('feed-card-chev', 'chevronRight'), '</span>']);
+  const eyebrow = joinHtml(['<div class="feed-card-eyebrow">', glyphSpan('feed-card-icon', iconName), pill, trail, '</div>']);
+  const prefix = truncateLabel([prov ? asSentence(chipAria(prov)) : '', prov && reasonChip ? asSentence(reasonChip) : '', asSentence(head), asSentence(line)].filter(Boolean).join(' '), CARD_LABEL_MAX);   // "{League}, {Sport}." then the reason (two or more leagues)
+  const open = `<article class="card feed-card feed-card--tap fam-lg" role="button" tabindex="0" data-card-type="${escHtml(card.type)}" data-home-action="open-card" data-card-id="${escHtml(String(card.id))}" data-haptic="light" data-feed-label="${escHtml(prefix)}" aria-label="${escHtml(tapLabel(prefix, t ? t.spoken : ''))}">`;
+  return joinHtml([open, eyebrow, `<h3 class="feed-card-title">${escHtml(head)}</h3>`,
+    line ? `<p class="feed-card-body">${escHtml(line)}</p>` : '', sample ? `<p class="feed-card-caption">${escHtml(sample)}</p>` : '', '</article>']);
 }
 
 /** The Now card (always `.feed-card`). `compactHtml` is the injected callback's finished fragment, SPLICED — never interpolated. */
@@ -1593,8 +1747,9 @@ const asSentence = (x) => { const v = String(x ?? '').replace(/\s+/g, ' ').trim(
  * W-105 (DI-W105-5): `marksFor(card)` — optional, Home's own paint passes it, the Game view's Related list does not — draws a finished game's two team marks under the
  * eyebrow (gameMarksHTML); absent, or no usable logo, and the card is byte-for-byte what v0.30.1 drew.
  */
-export function cardHTML(card, { escHtml, formatKickoff, now = Date.now(), formatDate, marksFor } = {}) {
+export function cardHTML(card, { escHtml, formatKickoff, now = Date.now(), formatDate, marksFor, chip = false, routeTap = false } = {}) {
   requireEscHtml(escHtml, 'cardHTML');
+  if (card && isInsightType(card.type)) return insightCardHTML(card, { escHtml, now, formatDate, chip });   // D2 DI-1085: an analytics insight card (lane 4's words; this lane's shell)
   let copy;
   try { copy = cardCopy(card, { escHtml: plainText, formatKickoff, sportCode: typeof card.sportCode === 'string' ? card.sportCode : '' }); } catch (e) { console.error('[home] cardCopy failed', e); return ''; }
   if (!copy || (!copy.title && !copy.body)) return '';
@@ -1606,7 +1761,10 @@ export function cardHTML(card, { escHtml, formatKickoff, now = Date.now(), forma
   const sportAttrs = hasSport ? ` data-sport="${escHtml(card.sport)}" data-competition-id="${escHtml(card.competitionId || '')}"` : '';
   // DI-575 — a card that has a detail provider is ONE tap target (a pushed screen with the evidence behind it); one that has none renders exactly as before and is not tappable (never a dead end).
   // The action is allow-listed (`open-card`); the id in the markup is only a request — the dispatcher resolves it against the cards derived for the current paint (Std-9).
-  const tap = hasDetail(card.type);
+  // D2 DI-806 / DI-807 (lane 3): a member of two or more leagues sees the provenance chip ("IRB · CFB") FIRST in the eyebrow, in place of the reason pill and the sport chip (the approved mockup's eyebrow); a card from
+  // another league is one tap target that routes there (`routeTap`), whether or not it has a detail. A one-league member's card is byte-for-byte what it was (chip false, routeTap false).
+  const prov = chip === true && card.prov && typeof card.prov === 'object' ? card.prov : null;
+  const tap = hasDetail(card.type) || routeTap === true;
   // W-92 (DI-W92-5): a card shows ONE supporting line at most. A SCRIBE caption is shown only for the types whose caption ADDS a fact (the week-final
   // card: the loser and both records), and there it takes the plain body's place; every other caption reworded its own headline (the filler Drew named).
   // The two types whose body IS the content (a SCRIBE post, the Locker Room's quoted message) always keep it.
@@ -1623,12 +1781,12 @@ export function cardHTML(card, { escHtml, formatKickoff, now = Date.now(), forma
   // time refresh (DI-W92-10) can rebuild the label without a repaint.
   const head = copy.title || copy.body;
   const support = !copy.title ? '' : showCaption ? captionFor(card, { escHtml: plainText }) : showBody ? copy.body : '';
-  const prefix = truncateLabel([asSentence(head), asSentence(support)].filter(Boolean).join(' '), CARD_LABEL_MAX);
+  const prefix = truncateLabel([prov ? asSentence(chipAria(prov)) : '', asSentence(head), asSentence(support)].filter(Boolean).join(' '), CARD_LABEL_MAX);   // DI-806: the league is read FIRST (inside data-feed-label, so the time refresh keeps it)
   const open = tap
-    ? `<article class="card feed-card feed-card--tap" role="button" tabindex="0" data-card-type="${escHtml(card.type)}"${sportAttrs} data-home-action="open-card" data-card-id="${escHtml(card.id)}" data-haptic="light" data-feed-label="${escHtml(prefix)}" aria-label="${escHtml(tapLabel(prefix, timeParts ? timeParts.spoken : ''))}">`
-    : `<article class="card feed-card" data-card-type="${escHtml(card.type)}"${sportAttrs}>`;
-  const reason = card.reason ? `<span class="feed-card-reason">${escHtml(card.reason)}</span>` : '';
-  const sportChip = hasSport ? `<span class="sport-chip">${escHtml(card.sportCode)}</span>` : '';
+    ? `<article class="card feed-card feed-card--tap fam-lg" role="button" tabindex="0" data-card-type="${escHtml(card.type)}"${sportAttrs} data-home-action="open-card" data-card-id="${escHtml(card.id)}" data-haptic="light" data-feed-label="${escHtml(prefix)}" aria-label="${escHtml(tapLabel(prefix, timeParts ? timeParts.spoken : ''))}">`
+    : `<article class="card feed-card fam-lg" data-card-type="${escHtml(card.type)}"${sportAttrs}>`;   // D2 DI-852 / DI-856: every League card (event, callback, insight, SCRIBE, Locker Room) carries the League edge; action cards never pass through here
+  const reason = prov ? `<span class="feed-card-prov">${escHtml(chipText(prov))}</span>` : (card.reason ? `<span class="feed-card-reason">${escHtml(card.reason)}</span>` : '');
+  const sportChip = hasSport && !prov ? `<span class="sport-chip">${escHtml(card.sportCode)}</span>` : '';
   // The eyebrow: [icon][reason][sport chip][time][chevron]. The trailing three are ONE group pushed to the trailing edge, so at the largest text size
   // they drop to their own line together, right-aligned, and the chip and the time never split the row's free space between them.
   const trailParts = [sportChip, timeHtml, tap ? glyphSpan('feed-card-chev', 'chevronRight') : ''].filter(Boolean);
@@ -1687,6 +1845,13 @@ function newsNoteHTML(kind, { escHtml, emptyCopy = null }) {
   if (kind === 'news-empty') return `<article class="card feed-card feed-note" data-card-type="news-empty"><div class="feed-card-text"><p class="feed-card-body feed-card-body--scribe">${escHtml(emptyCopy || NEWS_COPY.empty)}</p></div></article>`;
   const retry = actionButtonHTML({ action: 'retry-news', label: NEWS_COPY.retry }, { escHtml, tone: 'neutral' });
   return joinHtml([`<article class="card feed-card feed-note" data-card-type="news-error"><div class="feed-card-text"><p class="feed-card-body">${escHtml(NEWS_COPY.error)}</p></div><div class="feed-actions">`, retry, '</div></article>']);
+}
+
+/** D2 DI-804: "Couldn't load Residency." with Retry (the shipped feed-note shape). The league id rides on the button only as a REQUEST: the dispatcher re-checks it against this paint's leagues. */
+function peekNoteHTML(note, { escHtml }) {
+  if (note.partial) return `<article class="card feed-card feed-note" data-card-type="peek-partial"><div class="feed-card-text"><p class="feed-card-body">${escHtml(PEEK_COPY.partial(note.leagueName || 'A league'))}</p></div></article>`;   // no Retry: reading it again cannot make it smaller
+  const retry = `<button type="button" class="btn feed-action feed-action--neutral" data-home-action="retry-peek" data-league-id="${escHtml(note.leagueId)}" data-haptic="light">${escHtml(PEEK_COPY.retry)}</button>`;
+  return joinHtml([`<article class="card feed-card feed-note" data-card-type="peek-error"><div class="feed-card-text"><p class="feed-card-body">${escHtml(PEEK_COPY.never(note.leagueName || 'a league'))}</p></div><div class="feed-actions">`, retry, '</div></article>']);
 }
 
 function errorCardHTML({ escHtml }) {
@@ -1757,6 +1922,8 @@ function pillHTML(count, { escHtml }) {
 function caughtUpHTML(variant) {
   if (variant === 'new-league') return '<p class="feed-caught-up">Nothing yet — this is where it starts.</p>';
   if (variant === 'capped') return '<p class="feed-caught-up">That\'s the whole season so far.</p>';     // DI-586: the window ended at the cap and more exist
+  if (variant === 'quiet') return '<p class="feed-caught-up">Nothing new for you right now. Picks, results and news show up here as they happen.</p>';   // DI-840: a quiet day is allowed — no filler
+  if (variant === 'league-capped') return '<p class="feed-caught-up">Showing the latest 12 from each league.</p>';   // the number IS PER_LEAGUE_CARD_CAP (a literal: no interpolation in an unescaped template; crossleaguetest 3f3 pins the two together)   // D2 F5 (reviewer, 2026-10-19): a member of two or more leagues sees each league's newest 12 — an honest end marker
   return "<p class=\"feed-caught-up\">You're all caught up.</p>";
 }
 
@@ -1781,6 +1948,13 @@ function defaultObserveSentinel(target, cb) {
   if (typeof IntersectionObserver !== 'function') { queueMicrotask(cb); return null; }
   const io = new IntersectionObserver((entries) => { if (entries.some(e => e.isIntersecting)) cb(); }, { rootMargin: SENTINEL_ROOT_MARGIN });
   io.observe(target);
+  return () => io.disconnect();
+}
+/** D2 DI-1057's default card watcher: one IntersectionObserver at the 0.5 threshold. An engine with none counts nothing (every story stays "fresh": the safe side). */
+function defaultObserveExposure(targets, cb) {
+  if (typeof IntersectionObserver !== 'function') return null;
+  const io = new IntersectionObserver((entries) => cb(entries.map(e => ({ el: e.target, inView: e.isIntersecting === true && e.intersectionRatio >= EXPOSURE_VIEW_RATIO }))), { threshold: [EXPOSURE_VIEW_RATIO] });
+  for (const t of targets) io.observe(t);
   return () => io.disconnect();
 }
 
@@ -1900,6 +2074,21 @@ export function createHome(deps) {
   let gdWatch = null;                                                        // DI-604: what the card said about each game at the last paint (the viewer's own coverage only), for the announcer
   let tickTimer = null;                                                      // W-92 (DI-W92-10): the ONE pending 60 s time refresh (null = not armed)
   let tickFormat = null;                                                     // …and the viewer's date formatter the last paint used
+  // ── D2 lane 3 (DI-805 / DI-807): one Home across leagues. Rebuilt on EVERY paint, never persisted. ──
+  let currentRoutes = new Map();                                             // cardId -> { leagueId, destination }: THIS paint's cards from another league (the only ids a route tap accepts, Std-9)
+  let currentLeagueIds = new Set();                                          // the leagues THIS paint spans (a Retry tap must name one of them)
+  let leagueSnaps = [];                                                      // this paint's per-league snapshots, the active league first (Game Day across leagues reads them)
+  let noveltyMemory = new Map();                                             // DI-836 / DI-1057: subject -> { times: [the counted exposures] } — session memory only (never persisted, never sent; a cold start makes everything novel)
+  let includedKeys = new Set();                                              // DI-1056: every feed entry key included this session (League card ids, `news:<id>`): no later score removes one
+  let insightFirstDay = new Map();                                            // DI-1071(e): insight id -> { day, league } — the member's day it first became ELIGIBLE (six a day, included or waiting); session memory
+  let insightIncludedAt = new Map();                                         // …and a shared-time insight's placement: the moment it was first included (fixed from then on)
+  let topState = { day: '', ids: [] };                                       // DI-1058: the top stories that skipped the floor today (the member's zone) — at most TOP_STORY_DAILY_CAP
+  const exposureLedger = makeExposureLedger({ minVisitMs: SEEN_MIN_VISIT_MS });   // DI-1057: this visit's in-view time per card (no clock inside: Home passes d.now())
+  let exposureSubjects = new Map();                                          // …each painted card's novelty subject, by entry key (for this visit)
+  let unobserveExposure = null;                                              // …and the observer watching the painted cards
+  let exposureEls = [];
+  let crossGd = null;                                                        // D2 DI-817: this paint's cross-league Game Day model (Full Game Day reads it), or null (the one-league card)
+  let crossTargets = null;                                                   // …and what its controls may do, by id (Std-9)
 
   const safeIdentity = () => { try { return d.currentIdentityKey(); } catch { return ''; } };
   const safeTab = () => { try { return d.getCurrentTab(); } catch { return ''; } };
@@ -1919,10 +2108,179 @@ export function createHome(deps) {
    * D1 DI-528: deriveFeedCards runs deriveCards once per sport in a several-sport league and exactly once, as before, in a one-sport league. Security O1's pilot-only year.ago filter then applies to
    * the merged list, so no sport's slice can route around it.
    */
-  function deriveHomeCards(snapshot, o) {
+  function deriveHomeCards(snapshot, o, { pilotLeague = null } = {}) {
     const all = deriveFeedCards(deriveCards, snapshot, o);
-    return pilotHistory() ? all : all.filter(c => !c || c.type !== 'year.ago');
+    // D2 / security F2: a peeked league passes ITS OWN league record (the membership row the server returned) to the registry's one predicate; the active league asks the app's wiring as before
+    const allowed = pilotLeague === null ? pilotHistory() : isPilotOnlyAllowed('season2025Record', pilotLeague);
+    return allowed ? all : all.filter(c => !c || c.type !== 'year.ago');
   }
+
+  /** DI-805 + DI-1056: a league's newest PER_LEAGUE_CARD_CAP cards, and any OLDER card already included this session (the cap bounds NEW inclusion only). */
+  const capKeep = (list) => capNewestKeeping(list, includedKeys, PER_LEAGUE_CARD_CAP);
+
+  // ── D2 lane 3: the leagues this Home spans (DI-801). Null = the one-league Home, exactly as before: no peek, no chip, no merge (gate J). ──
+  function leagueContext() {
+    if (!d.peek || !d.memberships) return null;
+    let list = null;
+    try { list = d.memberships(); } catch { list = null; }
+    if (!Array.isArray(list)) return null;                                     // not resolved: "could not ask" is one league, never a guessed second (DI-801)
+    const ms = list.filter(m => m && isNonEmptyString(m.leagueId));
+    if (ms.length < CHIP_MIN_LEAGUES) return null;
+    let activeId = null;
+    try { activeId = d.read.leagueId() || null; } catch { activeId = null; }
+    const active = ms.find(m => m.leagueId === activeId);
+    if (!active) return null;
+    let targets = [];
+    try { targets = asArray(d.peek.targets()); } catch { targets = []; }
+    const shown = [active, ...targets.filter(t => t && isNonEmptyString(t.leagueId) && t.leagueId !== activeId && ms.some(m => m.leagueId === t.leagueId))];
+    const labels = leagueLabels(shown.map(m => ({ leagueId: m.leagueId, leagueName: m.leagueName })));
+    let states = [];
+    try { states = asArray(d.peek.states()); } catch { states = []; }
+    return {
+      activeId,
+      leagues: shown.map((m, i) => ({ leagueId: m.leagueId, leagueName: String(m.leagueName || ''), leagueLabel: labels.get(m.leagueId), order: i, memberId: isNonEmptyString(m.memberId) ? m.memberId : null, record: m })),   // `record`: the membership row (its league's fields), for the registry's predicate (F2)
+      states,
+    };
+  }
+  /** A league's main sport, for a card that names none (a chat card): its current week's sport, else CFB. */
+  const leagueSport = (snap) => { const cw = asArray(snap && snap.weeks).find(w => w && w.weekId === snap.currentWeekId); return (cw && isNonEmptyString(cw.sport) && cw.sport) || 'cfb'; };
+  /** DI-807: where a card from another league lands. A card with a detail: that league's Home, its detail opened; any other: that league's Dashboard on the card's sport and week. */
+  const routeForCard = (c) => (hasDetail(c.type)
+    ? { tab: 'home', params: { cardId: c.id } }
+    : { tab: 'dashboard', params: { ...(c.prov && isNonEmptyString(c.prov.sport) ? { sport: c.prov.sport } : {}), ...(isNonEmptyString(c.weekId) ? { weekId: c.weekId } : {}) } });
+  /**
+   * DI-805 — one peeked league's snapshot, through the SAME assembly as the active league's (DI-802): its own readers (the source and nothing else), its own reveal (DI-811), its own member id as the
+   * viewer, no commissioner tools, no chat (chat is bound to the active league, S-C11), and a live score that is "live" only while its row was written in the last 3 minutes (DI-817).
+   */
+  function peekedSnapshot(view, now) {
+    const read = readersFromSource(view.source, { timezone: d.read.timezone, picksView: d.read.picksView, weekProgress: view.weekProgress, now });
+    let games = [];
+    try { games = asArray(view.source.games()); } catch { games = []; }
+    const byId = new Map(games.filter(Boolean).map(g => [g.gameId, g]));
+    const deps = {
+      ...d, read,
+      confirmedStatusFor: (w) => { try { return view.confirmedStatusFor(w) || (w && w.status) || null; } catch { return null; } },
+      picksReadConfirmed: (id) => { try { return view.picksReadConfirmed(id) === true; } catch { return false; } },
+      chatCandidates: () => ({ scribe: [], lockerRoom: [] }),
+      groupTieContexts: null, joinOffers: () => [], competitions: null, isPublic: view.isPublic,
+      liveEntryFor: (gameId) => { const g = byId.get(gameId); const t = g ? Date.parse(g.lastUpdated) : NaN; return Number.isFinite(t) ? { capturedAt: t } : null; },
+    };
+    return assembleHomeSnapshot(deps, { viewerId: view.memberId, isCommissioner: false, now });
+  }
+
+  /** DI-819 / DI-820: a league's open weeks, from the viewer's side — the one lock instant, the viewer's OWN picks left (never another member's). */
+  function dueOf(s, viewer, isComm) {
+    const out = [];
+    const comps = asArray(s.competitions);
+    for (const w of asArray(s.weeks)) {
+      if (!w || (w.dataSourceMode === 'demo' && isComm !== true)) continue;
+      let st = w.status;
+      try { st = (typeof s.confirmedStatusFor === 'function' ? s.confirmedStatusFor(w) : null) || w.status; } catch { st = w.status; }
+      if (st !== 'open') continue;
+      const games = asArray(s.games).filter(g => g && g.weekId === w.weekId);
+      const lock = computeEffectiveLockAt(w, games);
+      const lockMs = lock && Number.isFinite(lock.getTime()) ? lock.getTime() : null;
+      if (lockMs === null || !games.length) continue;
+      const mine = isNonEmptyString(viewer) ? new Set(asArray(s.picks).filter(p => p && p.weekId === w.weekId && p.playerId === viewer).map(p => p.gameId)).size : 0;
+      const sport = weekSport(s, w) || leagueSport(s);
+      out.push({ weekId: w.weekId, sport, sportCode: sportCodeOf(sport), lockMs, total: games.length, remaining: Math.max(0, games.length - mine), done: mine >= games.length, entered: enteredForWeek(competitionOfWeek(comps, w), w, viewer) });
+    }
+    return out;
+  }
+  function finalsOf(s) {
+    return asArray(s.weeks).filter(w => w && toMs(w.finalizedAt) > 0 && (() => { try { return ((typeof s.confirmedStatusFor === 'function' ? s.confirmedStatusFor(w) : null) || w.status) === 'final'; } catch { return false; } })())
+      .map(w => { const sport = weekSport(s, w) || leagueSport(s); return { weekId: w.weekId, sport, sportCode: sportCodeOf(sport), weekN: w.weekNumber, slate: slateName(w), finalizedMs: toMs(w.finalizedAt) }; });
+  }
+  /**
+   * D2 DI-817…827 — Game Day for a member of two or more leagues: every league's in-scope games (its OWN week's reveal, its OWN viewer's pick), its open weeks and its recent finals,
+   * ranked and summarised by js/gameday-leagues.js. Null when no league has anything for Game Day (the active league's own Now card then stands, as shipped).
+   */
+  function crossLeagueGameDayFor(lctx, activeR, { now, isCommissioner }) {
+    const tz = d.read.timezone();
+    const fmt = { time: (v) => shortWhen(v, tz), countdown: formatCountdown, clock: (ms) => { const w = shortWhen(ms, tz); return w.slice(w.indexOf(' ') + 1); } };
+    const leagues = [];
+    let any = !!(activeR && activeR.gameDay);
+    const facts = [];
+    for (const L of lctx.leagues) {
+      const snapRec = leagueSnaps.find(x => x.league.leagueId === L.leagueId) || null;
+      const st = L.order === 0 ? { status: 'ready', asOf: null } : (lctx.states.find(x => x && x.leagueId === L.leagueId) || { status: 'loading', asOf: null });
+      const rec = { league: L, active: L.order === 0, viewerId: snapRec ? snapRec.viewerId : null, status: st.status, asOf: st.asOf, entries: [], due: [], finals: [], myTeams: new Set(), personal: null, stats: null };
+      if (snapRec) {
+        const s = snapRec.snapshot, vid = snapRec.viewerId, isComm = rec.active ? isCommissioner : false;
+        let nm = null;
+        try { nm = nowCardModel(s, { viewerId: vid, isCommissioner: isComm, now }); } catch { nm = null; }
+        const cur = nm && GAME_DAY_STATES.includes(nm.state) ? asArray(s.weeks).find(w => w && w.weekId === nm.weekId) || null : null;
+        rec.state = cur ? nm.state : '';
+        if (cur) { try { rec.entries = gameDayEntries(s, cur, { now, isCommissioner: isComm, viewerId: vid }).map(e => ({ ...e, sportCode: sportCodeOf(e.sport || leagueSport(s)) })); } catch { rec.entries = []; } }
+        try { rec.due = dueOf(s, vid, isComm); rec.finals = finalsOf(s); } catch { rec.due = []; rec.finals = []; }
+        const me = asArray(s.players).find(p => p && p.playerId === vid);
+        if (me && isNonEmptyString(me.almaMater)) rec.myTeams.add(me.almaMater);
+        if (rec.active && activeR && activeR.gameDay && activeR.gameDay.model) { const gm = activeR.gameDay.model; rec.personal = gm.header && gm.header.me ? { text: gm.header.me, aria: gm.header.meAria || '' } : null; rec.stats = gm.stats || null; }
+        if (rec.entries.length || rec.due.length) any = true;
+        try {
+          const src = rec.active ? null : (snapRec.view && snapRec.view.source) || null;
+          for (const f of asArray(d.peekFacts(src, { now, viewerMemberId: vid }))) if (f && f.leagueId === L.leagueId) facts.push(f);
+        } catch { /* no fact, no line */ }
+      }
+      leagues.push(rec);
+    }
+    if (!any) return null;
+    const activity = d.activityCount ? (leagueId) => { try { return d.activityCount(leagueId); } catch { return null; } } : null;
+    return crossLeagueGameDay({ leagues, now, fmt, coverOf: ownCoverOf, facts, activity, sameDay: (ms) => dayKeyInTz(ms, tz) === dayKeyInTz(now, tz) });
+  }
+
+  /**
+   * D2 DI-835 — the viewer's ranking signals, from EVERY league this paint spans (each league's own snapshot and the member's own id there): the slates of the last and next seven days,
+   * the viewer's own picks in them, the viewer's alma mater in each league, the News-settings teams and followed sports, each in-window game for proximity, the teams of finished games
+   * (the league record) for historical resonance. Nothing of another member's pick is read.
+   */
+  function rankSignalsFor(snaps, now) {
+    const slate = [], picks = [], alma = [], sports = new Set(), games = [], history = [], finalSources = [];
+    for (const rec of snaps) {
+      const s = rec && rec.snapshot;
+      if (!s) continue;
+      const vid = rec.viewerId;
+      const weeks = new Map(asArray(s.weeks).map(w => [w && w.weekId, w]));
+      for (const w of weeks.values()) if (w) sports.add(isNonEmptyString(w.sport) ? w.sport : 'cfb');
+      for (const c of asArray(s.competitions)) if (c && isNonEmptyString(c.sport)) sports.add(c.sport);   // a league with no week yet still plays its sport
+      for (const g of asArray(s.games)) {
+        if (!g) continue;
+        const k = toMs(g.kickoff);
+        const w = weeks.get(g.weekId);
+        if (g.status === 'final') history.push(g.homeTeam, g.awayTeam);
+        if (!w || !k || Math.abs(k - now) > 7 * 24 * 3600e3) continue;
+        slate.push(g.homeTeam, g.awayTeam);
+        let lockMs = null;
+        try { const l = computeEffectiveLockAt(w, asArray(s.games).filter(x => x && x.weekId === w.weekId)); lockMs = l && Number.isFinite(l.getTime()) ? l.getTime() : null; } catch { lockMs = null; }
+        games.push({ teams: [g.homeTeam, g.awayTeam], kickoffMs: k, status: g.status, lockMs, finalMs: g.status === 'final' ? (toMs(g.lastUpdated) || k) : null });
+        if (isNonEmptyString(vid)) { const own = ownPickTeam(s.picks, g.gameId, vid); if (own) picks.push(own); }
+      }
+      const me = asArray(s.players).find(p => p && p.playerId === vid);
+      if (me && isNonEmptyString(me.almaMater)) alma.push(me.almaMater);
+      // DI-1073: the viewer's OWN picks in FINAL weeks only (the most-picked teams) — derived by lane 4's helper through the adapter; never this week's picks, never the slate
+      if (isNonEmptyString(vid)) finalSources.push({ weeks: s.weeks, games: s.games, picks: s.picks, viewerId: vid });
+    }
+    let finalPicks = [];
+    try { finalPicks = asArray(ownFinalPicksFor({ sources: finalSources }, d.finalPicks)); } catch { finalPicks = []; }
+    let profile = null;
+    if (d.profileSignals) { try { profile = d.profileSignals(); } catch { profile = null; } }
+    const homeBySport = profile && profile.homeTeams && typeof profile.homeTeams === 'object' && !Array.isArray(profile.homeTeams) ? profile.homeTeams : {};
+    // M-93 DI-1112: the followed set now files "Other teams you follow" in their own bucket (the card's chip says "A team you follow"), so the profile's home-team lists (where F-2 folds
+    // the other teams in) go to the ranker directly as `homeTeams`: every team the member named keeps the one "followed team" signal (+10, DI-1073), as before. Only when there are some.
+    const profileTeamNames = Object.values(homeBySport).flatMap((v) => asArray(v).filter(isNonEmptyString));
+    // F-2 (release review; DI-835, DI-1073): the member's OWN colleges attended count like an alma mater (the school's stories and games), used only as given. A missing or malformed list contributes nothing; nothing here is inferred, stored or sent.
+    // M-93 DI-1104: `profile.sports` (the member's own "Sports you follow") now leans the ranker: a card in a followed sport gets +5 (`profileSports`). Home's News fetch and its sport filter
+    // still belong to the member's News settings; this only orders what is already there.
+    const profSchools = profile && Array.isArray(profile.schools) ? profile.schools.filter(isNonEmptyString) : [];
+    let followed = null;
+    try { followed = d.followedTeams({ almaBySport: alma.length ? { cfb: alma } : {}, homeTeamsBySport: homeBySport, ownFinalPicks: finalPicks }); } catch { followed = null; }   // the input lane 4's definition reads: own data only
+    let prefs = null;
+    if (d.rankPrefs) { try { prefs = d.rankPrefs(); } catch { prefs = null; } }
+    return buildSignals({ now, slateTeams: slate, pickTeams: picks, almaTeams: alma.concat(profSchools), chosenTeams: prefs && Array.isArray(prefs.teams) ? prefs.teams : [], leagueSports: [...sports],
+      followedSports: prefs && Array.isArray(prefs.sports) ? prefs.sports : [...sports], games, historyTeams: history, novelty: noveltyMemory, included: includedKeys, followed, ...(profileTeamNames.length ? { homeTeams: profileTeamNames } : {}),
+      profileSports: profile && Array.isArray(profile.sports) ? profile.sports : [] });
+  }
+  const externalCandidate = (it) => (it && it.cardKind === 'storyline' ? fromStoryline(it) : it && it.cardKind ? fromContentCard(it) : fromNewsItem(it));
 
   function resetSession() {
     stopTimeTick();                                                          // W-92: the time refresh goes with the rest of the reader's session
@@ -1930,6 +2288,9 @@ export function createHome(deps) {
     heldCount = 0; cancelAnnounce(); pillAnnounced = false;
     gd = { expanded: false, focusedGameId: null }; gdCurrent = { expandable: false, ids: new Set(), pillIds: new Set(), kind: '', scopes: new Set(), footerScope: null }; parkedNow = false; railTouch = { down: false, downAt: 0, lastScrollAt: 0 };
     gdWatch = null; gdAnnouncer.cancel();                                    // the next reader never hears the last one's game
+    currentRoutes = new Map(); currentLeagueIds = new Set(); leagueSnaps = []; crossGd = null; crossTargets = null;   // D2: nothing of another reader's leagues survives
+    noveltyMemory = new Map(); includedKeys = new Set(); topState = { day: '', ids: [] }; insightFirstDay = new Map(); insightIncludedAt = new Map();   // D2 DI-836 / DI-1056 / DI-1058: a new reader starts with everything novel and nothing included
+    stopExposure(); exposureLedger.reset(); exposureSubjects = new Map();
     if (unobserveSentinel) { try { unobserveSentinel(); } catch { /* detached */ } unobserveSentinel = null; }
     if (scrollWatch) { try { scrollWatch(); } catch { /* detached */ } scrollWatch = null; }
   }
@@ -1945,8 +2306,10 @@ export function createHome(deps) {
     switch (e.kind) {
       case 'now': return ctx.nowEntry || '';
       case 'nudge': return nudgeHTML(e.nudge, { escHtml });
+      case 'getting-started': return typeof e.html === 'string' ? e.html : '';
       case 'join': return joinNudgeHTML(e.offer, { escHtml });          // DESIGN_D1_E: one per sport the viewer has not joined, placed by placeJoinNudges
-      case 'card': return cardHTML(e.card, { escHtml, formatKickoff: ctx.formatKickoff, now: ctx.now, formatDate: ctx.formatDate, marksFor: ctx.marksFor });   // W-105: marks on Home's game cards only
+      case 'card': return cardHTML(e.card, { escHtml, formatKickoff: ctx.formatKickoff, now: ctx.now, formatDate: ctx.formatDate, marksFor: currentRoutes.has(e.card.id) ? undefined : ctx.marksFor, ...(ctx.chip ? { chip: true, routeTap: currentRoutes.has(e.card.id) } : {}) });   // W-105: marks on Home's game cards only; D2: the chip and the route tap for a member of two or more leagues
+      case 'peek-note': return peekNoteHTML(e.note, { escHtml });
       case 'news': {
         let html = '';
         if (d.renderNewsCard) { try { const out = d.renderNewsCard(e.item); html = typeof out === 'string' ? out : ''; } catch { html = ''; } }
@@ -1977,20 +2340,171 @@ export function createHome(deps) {
     let cards = [], feedError = false;
     try {
       cards = deriveHomeCards(snapshot, { viewerId, now, viewerIsCommissioner: isCommissioner, isContentWithheld: d.isContentWithheld });   // ALWAYS handed the gate
+      // D2 DI-1071(e): the league's insight cards (lane 4's, through the adapter) — insight types only, stamped with THIS league; the quality gate and the pacing below decide the rest
+      let extra = [];
+      try { extra = asArray(d.insightCards({ leagueId: snapshot.leagueId, viewerId, now })); } catch { extra = []; }
+      const ownLeague = (c) => (c.leagueId !== undefined ? c.leagueId : c.prov && c.prov.leagueId) === snapshot.leagueId;   // fail closed: a card that names no league, or another league, is not this league's
+      for (const c of extra) if (c && isInsightType(c.type) && isNonEmptyString(String(c.id ?? '')) && ownLeague(c)) cards.push({ ...c, leagueId: snapshot.leagueId });
     } catch (e) { console.error('[home] deriveCards failed', e); feedError = true; }
-    currentCardIds = new Set(cards.filter(c => c && hasDetail(c.type)).map(c => c.id));
+    // ── D2 DI-805: a member of two or more leagues — every league its own snapshot, its own cards, each stamped with its provenance; at most PER_LEAGUE_CARD_CAP newest per league; one merge. ──
+    currentRoutes = new Map(); currentLeagueIds = new Set(); leagueSnaps = [];
+    const lctx = feedError ? null : leagueContext();
+    const peekNotes = [];
+    let leagueCapped = false;
+    if (lctx) {
+      const active = lctx.leagues[0];
+      currentLeagueIds.add(active.leagueId);
+      leagueSnaps.push({ league: active, snapshot, viewerId, active: true });
+      const merged = capKeep(stampLeagueCards(cards, active, { defaultSport: leagueSport(snapshot) }));
+      if (cards.length > merged.length) leagueCapped = true;
+      for (const league of lctx.leagues.slice(1)) {
+        currentLeagueIds.add(league.leagueId);
+        const st = lctx.states.find(x => x && x.leagueId === league.leagueId) || null;
+        if (st && st.status === 'never') peekNotes.push({ kind: 'peek-note', key: `peek-note:${league.leagueId}`, note: { leagueId: league.leagueId, leagueName: league.leagueName } });
+        if (st && st.status === 'partial') peekNotes.push({ kind: 'peek-note', key: `peek-partial:${league.leagueId}`, note: { leagueId: league.leagueId, leagueName: league.leagueName, partial: true } });   // reviewer R1: never silently omitted
+        let view = null;
+        try { view = d.peek.leagueView(league.leagueId); } catch { view = null; }
+        if (!view) continue;
+        try {
+          const ps = peekedSnapshot(view, now);
+          const pc = deriveHomeCards(ps, { viewerId: view.memberId, now, viewerIsCommissioner: false, isContentWithheld: d.isContentWithheld }, { pilotLeague: league.record || {} });   // security O1 / F2, per league: the registry decides
+          // M-93 DI-1113: THIS league's insight cards (its own wire, its own final-week rows, its member), appended the way the active league's are, BEFORE the stamp and the per-league cap,
+          // so they carry this league's provenance chip and count against its cap; the pacing below runs on the merged stream with a per-league day count
+          let pextra = [];
+          try { pextra = asArray(d.insightCards({ leagueId: league.leagueId, viewerId: view.memberId, now })); } catch { pextra = []; }
+          for (const c of pextra) if (c && isInsightType(c.type) && isNonEmptyString(String(c.id ?? '')) && (c.leagueId !== undefined ? c.leagueId : c.prov && c.prov.leagueId) === league.leagueId) pc.push({ ...c, leagueId: league.leagueId });
+          const stamped = capKeep(stampLeagueCards(pc, league, { defaultSport: leagueSport(ps) }));
+          if (pc.length > stamped.length) leagueCapped = true;
+          // an insight card routes to Home in that league (the shipped route-league: membership re-check, the switch), where its detail opens once that league's wire has built
+          for (const c of stamped) currentRoutes.set(c.id, { leagueId: league.leagueId, destination: isInsightType(c.type) ? { tab: 'home', params: { cardId: c.id } } : routeForCard(c) });
+          merged.push(...stamped);
+          leagueSnaps.push({ league, snapshot: ps, viewerId: view.memberId, active: false, view });
+        } catch (e) { console.error('[home] a league could not be assembled', e); }
+      }
+      cards = merged;
+    }
+    // ── D2 DI-829…840 (RPF-B1): relevance decides INCLUSION; time still decides order. A League EVENT card always stays; a discretionary one (the year-ago callback) needs the floor. ──
+    const rankSnaps = lctx ? leagueSnaps : [{ snapshot, viewerId }];
+    const viewerOf = new Map(rankSnaps.map(r => [r.snapshot && r.snapshot.leagueId, r.viewerId]));
+    const sig = rankSignalsFor(rankSnaps, now);
+    cards = cards.filter(c => { if (!c) return false; if (isInsightType(c.type) && !insightQualityOk(c)) return false; const cand = fromFeedCard(c, { viewerId: viewerOf.get((c.prov && c.prov.leagueId) || c.leagueId) || viewerId }); return cand.tier === 'event' || isIncluded(cand, homeScore(cand, sig), sig); });   // DI-1056: an included card stays; DI-1074: a thin or repeated insight never
+    currentCardIds = new Set(cards.filter(c => c && (hasDetail(c.type) || currentRoutes.has(c.id) || isInsightType(c.type))).map(c => c.id));   // an insight card opens lane 4's detail (the app routes its ins1: id)
 
     let nowEntry = null, nowState = '';
     try {
-      const r = renderNowCard(snapshot, { viewerId, isCommissioner, now, escHtml, gameDay: { expanded: gd.expanded, view: gdPicksView(), entrantsFor: d.entrantsFor || undefined, railHidden: rootTextScale() >= RAIL_HIDDEN_SCALE, logoUrlFor: d.logoUrlFor || undefined } });
+      const railHidden = rootTextScale() >= RAIL_HIDDEN_SCALE;
+      const r = renderNowCard(snapshot, { viewerId, isCommissioner, now, escHtml, gameDay: { expanded: gd.expanded, view: gdPicksView(), entrantsFor: d.entrantsFor || undefined, railHidden, logoUrlFor: d.logoUrlFor || undefined } });
       nowEntry = r.html; nowState = r.model.state;
-      noteGameDay(r.gameDay ? r.gameDay.model : null);
-      gdCurrent = r.gameDay ? { expandable: r.gameDay.expandable, ids: r.gameDay.ids, pillIds: r.gameDay.pillIds, kind: r.gameDay.kind, scopes: r.gameDay.scopes, footerScope: r.gameDay.footerScope } : { expandable: false, ids: new Set(), pillIds: new Set(), kind: '', scopes: new Set(), footerScope: null };
+      // D2 DI-817…827: a member of two or more leagues gets ONE Game Day across them (the active league's own card is its input, never drawn twice)
+      const cross = lctx ? crossLeagueGameDayFor(lctx, r, { now, isCommissioner }) : null;
+      if (cross) {
+        crossGd = cross; crossTargets = crossLeagueTargets(cross);
+        const expanded = gd.expanded === true && cross.expandable;
+        const weeksById = new Map(asArray(snapshot.weeks).map(w => [w && w.weekId, w]));
+        const gamesById = new Map(asArray(snapshot.games).map(g => [g && g.gameId, g]));
+        const entrantsFor = d.entrantsFor || (() => []);
+        let bodyHTML = '';
+        if (expanded) {
+          bodyHTML = crossLeagueBodyHTML(cross, {
+            escHtml, numHtml: numStr, viewerId, view: gdPicksView(), railHidden, rowChevHtml: glyphSpan('gd-row-chev-i', 'chevronRight'),
+            // line 4 (the league's picks) for the ACTIVE league's rows only, resolved from THIS snapshot by the row's real game id
+            resolve: (row) => { const it = crossTargets.items.get(row.gameId); const game = it && it.active ? gamesById.get(it.gameId) : null; const week = game ? weeksById.get(game.weekId) : null; return game && week ? { game, week, entrants: entrantsFor(week) } : null; },
+          });
+        }
+        nowEntry = crossLeagueCardHTML(cross, { escHtml, numHtml: numStr, expanded, bodyHTML, railHidden: rootTextScale() >= MULTI_RAIL_HIDDEN_SCALE, chevHtml: glyphSpan('gd-chev-i', 'chevronLeft'), sumChevHtml: glyphSpan('gd-sum-chev-i', 'chevronRight') });
+        nowState = r.model.state;
+        noteGameDay(cross);
+        gdCurrent = { expandable: cross.expandable, ids: new Set(cross.rows.map(x => x.gameId)), pillIds: new Set(cross.pills.map(p => p.itemId)), kind: cross.kind, scopes: new Set(), footerScope: null, multi: true };
+      } else {
+        noteGameDay(r.gameDay ? r.gameDay.model : null);
+        gdCurrent = r.gameDay ? { expandable: r.gameDay.expandable, ids: r.gameDay.ids, pillIds: r.gameDay.pillIds, kind: r.gameDay.kind, scopes: r.gameDay.scopes, footerScope: r.gameDay.footerScope } : { expandable: false, ids: new Set(), pillIds: new Set(), kind: '', scopes: new Set(), footerScope: null };
+      }
       if (!gdCurrent.expandable && gd.expanded) gd = { expanded: false, focusedGameId: null };       // the card is in a state that does not open (it was, a moment ago): it is closed, honestly
     } catch (e) { console.error('[home] Now card failed', e); feedError = true; }
 
     const nudge = (() => { try { return commissionerNudge(snapshot, { isCommissioner, now }); } catch { return null; } })();
-    const descriptors = mergeFeed({ now, cards, nudge, news, feedError, emptyLeague: nowState === 'no-weeks' });
+    let topChosen = [];
+    const today = dayKeyInTz(now, snapshot.timezone);                         // DI-1058: the member's calendar day (their zone preference): the top-story count resets at their midnight
+    const rankedNews = news && (news.status === 'ready' || news.status === 'empty')
+      ? (() => {
+        // DI-1072: a preview, player or spotlight about a FOLLOWED team is League Intelligence on this device (its private pill "Your alma mater" / "Your team"); never sent
+        const items = asArray(news.items).map(it => { const f = followedContentFamily(it, sig); return f ? { ...it, family: f.family, reason: f.reason } : it; });
+        const r = rankExternal(items, sig, { day: today, topStories: topState });
+        topState = r.topStories; topChosen = r.topChosen;
+        return { ...news, items: r.kept.map(it => (it.family !== 'league' && it.rank && it.rank.reason ? { ...it, reason: it.rank.reason } : it)) };   // DI-838: the strongest personal or league feature names the pill (the shipped closed set)
+      })()
+      : news;
+    // ── D2 DI-1071(e): insight pacing DEFERS, it never drops. An insight not yet included waits (it never enters the merge) until a pass can place it inside the 2-in-4 rule. ──
+    const insightNow = cards.filter(c => c && isInsightType(c.type));
+    const timeUse = new Map();
+    for (const c of insightNow) timeUse.set(String(c.sortKey ?? ''), (timeUse.get(String(c.sortKey ?? '')) || 0) + 1);
+    const sharedTime = (c) => (timeUse.get(String(c.sortKey ?? '')) || 0) > 1;          // a batch stamped with one time has no honest distinct time
+    const leagueOfCard = (c) => String((c.prov && c.prov.leagueId) || c.leagueId || '');
+    const usedToday = (lg) => { let n = 0; for (const v of insightFirstDay.values()) if (v.day === today && v.league === lg) n += 1; return n; };
+    const scoreOfCard = (c) => { try { return homeScore(fromFeedCard(c, { viewerId: viewerOf.get(leagueOfCard(c)) || viewerId }), sig).total; } catch { return 0; } };
+    const waiting = [];
+    for (const c of insightNow.filter(x => !includedKeys.has(x.id)).sort((a, b) => (scoreOfCard(b) - scoreOfCard(a)) || (String(a.id) < String(b.id) ? -1 : 1))) {
+      const exp = c.expiresAt === undefined || c.expiresAt === null || c.expiresAt === '' ? NaN : (typeof c.expiresAt === 'number' ? c.expiresAt : Date.parse(c.expiresAt));
+      if (Number.isFinite(exp) && exp <= now) continue;                                  // its own window ended: never shown (DI-1071(e) "expiry is the only exit")
+      const lg = leagueOfCard(c);
+      if (!insightFirstDay.has(c.id)) {                                                    // the six a day count every insight the day it first becomes eligible, included or waiting
+        if (usedToday(lg) >= MIX.insightsPerLeaguePerDay) continue;                        // a 7th is not a candidate today; the next local day it is
+        insightFirstDay.set(c.id, { day: today, league: lg });
+      }
+      waiting.push(c);
+    }
+    // DI-1090: a followed team's matchup preview and lane 4's team card for the SAME game share `team:{teamKey}|{weekId}`: Home shows the better one, never both — and never evicts
+    // one already included (DI-1056). The loser leaves this paint's candidates.
+    let newsIn = rankedNews;
+    {
+      const allGames = rankSnaps.flatMap(r => asArray(r.snapshot && r.snapshot.games));
+      const drop = new Set(), dropNews = new Set();
+      const items = newsIn && Array.isArray(newsIn.items) ? newsIn.items : [];
+      for (const it of items) {
+        const key = previewClusterKey(it, sig, allGames);
+        if (!key) continue;
+        const twin = insightNow.find(c => c && c.clusterKey === key && !drop.has(c.id));
+        if (!twin) continue;
+        const pKey = `news:${it.id}`;
+        const previewWins = includedKeys.has(pKey) ? true : includedKeys.has(twin.id) ? false : homeScore(fromContentCard(it), sig).total > scoreOfCard(twin);
+        if (previewWins) drop.add(twin.id); else dropNews.add(String(it.id));
+      }
+      if (drop.size) { cards = cards.filter(c => !(c && drop.has(c.id))); for (let i = waiting.length - 1; i >= 0; i--) if (drop.has(waiting[i].id)) waiting.splice(i, 1); }
+      if (dropNews.size) newsIn = { ...newsIn, items: items.filter(it => !dropNews.has(String(it.id))) };
+    }
+    cards = cards.filter(c => !(c && isInsightType(c.type) && !includedKeys.has(c.id)))
+      .map(c => (c && isInsightType(c.type) && insightIncludedAt.has(c.id) ? { ...c, sortKey: new Date(insightIncludedAt.get(c.id)).toISOString() } : c));   // an included shared-time insight stays where it was placed
+    const merged = mergeFeed({ now, cards, nudge, news: newsIn, feedError, emptyLeague: nowState === 'no-weeks', leagueCapped, included: includedKeys });
+    // DI-831's mix rule (inclusion only: an entry is dropped, never moved), then DI-840's quiet day: nothing above the floor and no event card -> one calm line, never filler
+    const leagueOfEntry = (e) => (e.card && ((e.card.prov && e.card.prov.leagueId) || e.card.leagueId)) || '';
+    const isInsightEntry = (e) => e.kind === 'card' && isInsightType(e.card && e.card.type);
+    const famOf = (e) => (e.kind === 'card' ? 'league' : e.kind === 'news' && e.item && !e.item.cardKind?.startsWith?.('news-') && e.item.cardKind !== 'content-error' ? (e.item.family === 'league' ? 'league' : 'external') : null);   // DI-1072: a followed-team content card counts as League
+    const stuck = (e) => includedKeys.has(e.key);                                // DI-1056: the caps bound NEW inclusion only
+    const mixed0 = applyMix(merged, { familyOf: famOf, isInsight: isInsightEntry, leagueOf: leagueOfEntry, dayOf: () => today, isSticky: stuck, pendingLeague: waiting.length });
+    // one inclusion pass over the waiting insights, best score first: a shared-time insight goes on top (the moment it is first included), a distinct-time one where its time says
+    const pinnedEnd = (list) => { const i = list.findIndex(e => e.kind !== 'now' && e.kind !== 'nudge'); return i < 0 ? list.length : i; };
+    const positionOf = (cand, list) => {
+      const start = pinnedEnd(list);
+      if (sharedTime(cand.card)) return start;
+      const t = String(cand.t || '');
+      for (let i = start; i < list.length; i++) { const e = list[i]; if (!famOf(e)) return i; if (String(e.t || '') < t) return i; }
+      return list.length;
+    };
+    const iso = (ms) => new Date(ms).toISOString();
+    const adm = admitInsights(mixed0, waiting.map(c => ({ kind: 'card', key: c.id, card: sharedTime(c) ? { ...c, sortKey: iso(now) } : c, t: sharedTime(c) ? iso(now) : String(c.sortKey ?? '') })),
+      { familyOf: famOf, isInsight: isInsightEntry, positionOf });
+    for (const a of adm.admitted) if (sharedTime(a.card) || insightNow.some(c => c.id === a.key && sharedTime(c))) insightIncludedAt.set(a.key, now);
+    const mixed = adm.deferred.length ? holdExternalForWaiting(adm.list, { familyOf: famOf, isSticky: stuck }) : adm.list;   // while insights wait, External does not take their room (shorter, never padded)
+    // DI-1056: what this paint includes stays included for the session; DI-1058: a top story counts against today's allowance once it is really in the feed
+    for (const e of mixed) {
+      if (e.kind === 'card' || (e.kind === 'news' && e.item && e.item.cardKind !== 'content-error')) includedKeys.add(e.key);
+      if (e.kind === 'news' && e.item && topChosen.includes(String(e.item.id)) && !topState.ids.includes(String(e.item.id))) topState = { day: topState.day, ids: [...topState.ids, String(e.item.id)] };
+    }
+    const anyOrdinary = mixed.some(e => e.kind === 'card' || (e.kind === 'news' && e.item && e.item.cardKind !== 'content-error'));
+    const descriptors = mixed.map(e => (e.kind === 'caught-up' && !anyOrdinary && !feedError && nowState !== 'no-weeks' ? { ...e, variant: 'quiet' } : e));
+    // D2 lane 1 (UN-507 / DI-735): the Getting started card is the FIRST ordinary feed card: right below the Now (Live Peek) card, and below the commissioner's nudge when there is one (a finalize reminder outranks onboarding), so Game Day's compact top is untouched. `renderGettingStarted` is the app's finished,
+    // escaped card ('' when there is none: tips off, the store unavailable, complete); Home never reads the account store.
+    try { const gs = d.renderGettingStarted ? d.renderGettingStarted() : ''; if (typeof gs === 'string' && gs) descriptors.splice(descriptors.some((e) => e.kind === 'nudge') ? 2 : 1, 0, { kind: 'getting-started', key: 'getting-started', html: gs }); } catch { /* a card never wedges Home */ }
     const tzKey = snapshot.timezone;
     const formatKickoff = (iso) => formatGameTime(iso, tzKey);
     const formatDate = dateFormatterFor(tzKey);                              // W-92: a card's date is the VIEWER's day
@@ -1998,7 +2512,7 @@ export function createHome(deps) {
     const marksFor = d.logoUrlFor ? gameMarksSource(snapshot, d.logoUrlFor) : null;   // W-105 (DI-W105-5): no logo gate injected, no marks
 
     const isOrdinary = (e) => e.kind === 'card' || e.kind === 'news' || e.kind === 'error';
-    const isPinned = (e) => e.kind === 'now' || e.kind === 'nudge';
+    const isPinned = (e) => e.kind === 'now' || e.kind === 'getting-started' || e.kind === 'nudge';
     const pinned = descriptors.filter(isPinned);
     const ordinary = descriptors.filter(isOrdinary);
     const tail = descriptors.filter(e => !isPinned(e) && !isOrdinary(e));        // the news slot's calm states and the end marker
@@ -2022,14 +2536,19 @@ export function createHome(deps) {
 
     const shown = withSeenDividers(visible, list, seen.baseline);
     const placed = placeJoinNudges(shown, snapshot.joinOffers);          // DESIGN_D1_E: the nudge goes in AFTER the windowing and the dividers - it is never counted, held, windowed or marked NEW
-    const entries = [...pinned, ...placed, ...(hasMore ? [{ kind: 'sentinel', key: 'sentinel' }] : tail)];
+    const entries = [...pinned, ...peekNotes, ...placed, ...(hasMore ? [{ kind: 'sentinel', key: 'sentinel' }] : tail)];
 
     const items = [];
     for (const e of entries) {
-      const html = orderedEntryHtml(e, { nowEntry, formatKickoff, now, formatDate, marksFor });
+      const html = orderedEntryHtml(e, { nowEntry, formatKickoff, now, formatDate, marksFor, chip: !!lctx });
       if (html) items.push({ key: e.key, html });
     }
-    return { items, state: nowState, ordinaryKeys: visible.map(e => e.key), heldCount: held.size, hasMore, now };
+    const exposure = new Map();                                              // DI-1057: each painted card's novelty subject (an exposure is counted only once the card has really been in view)
+    for (const e of visible) {
+      if (e.kind !== 'card' && !(e.kind === 'news' && e.item && e.item.cardKind !== 'content-error')) continue;
+      try { exposure.set(e.key, noveltySubject(e.kind === 'card' ? fromFeedCard(e.card) : externalCandidate(e.item))); } catch { /* a subject is a courtesy */ }
+    }
+    return { items, state: nowState, ordinaryKeys: visible.map(e => e.key), heldCount: held.size, hasMore, now, exposure };
   }
 
   function isPainted(el) { return !!(el && (el.firstElementChild || el.firstChild)); }
@@ -2084,7 +2603,7 @@ export function createHome(deps) {
   function bindVisibilityOnce() {
     if (visibilityBound || typeof document === 'undefined' || !document || typeof document.addEventListener !== 'function') return;
     visibilityBound = true;
-    document.addEventListener('visibilitychange', () => { if (document.hidden !== true) { releaseRail(); onForeground(); } else stopTimeTick(); });
+    document.addEventListener('visibilitychange', () => { if (document.hidden !== true) { releaseRail(); onForeground(); peekVisible(); } else stopTimeTick(); });   // D2 DI-804: back in the foreground on Home, the other leagues resume (hidden: the app's noteLeft stops them)
   }
   /**
    * D1 Lane B Game Day (DI-604 / DI-605), fix round 1 (reviewer B3): the card's NODE is kept across every paint that still has a Game Day on both sides, WHATEVER ELSE in the feed changed in the same paint.
@@ -2216,8 +2735,57 @@ export function createHome(deps) {
     }
     return setGameDayOpen(true, { focusId: isNonEmptyString(gameId) && gdCurrent.ids.has(gameId) ? gameId : null });
   }
+  /** D2 DI-807: a Game Day item of another league routes there (its sport, week and game); the destination is THIS paint's, by id. */
+  function routeItem(it) {
+    try { d.onAction('route-league', { leagueId: it.leagueId, destination: { tab: 'dashboard', params: { ...(isNonEmptyString(it.sport) ? { sport: it.sport } : {}), weekId: it.weekId, gameId: it.gameId } } }); } catch (err) { console.error('[home] action failed', err); }
+  }
   function handleGameDayAction(action, attr) {
     const tap = (kind) => { try { d.haptic(kind); } catch { /* a dropped haptic is invisible */ } };
+    // ── D2 lane 3: a member of two or more leagues — every id is resolved against THIS paint's cross-league model (crossTargets), never the DOM ──
+    if (gdCurrent.multi === true && crossTargets) {
+      if (action === 'gd-pill') {
+        const id = attr('data-game-id');
+        const it = isNonEmptyString(id) && gdCurrent.pillIds.has(id) ? crossTargets.items.get(id) : null;
+        if (!it) return;
+        tap('light');
+        if (!it.active) { routeItem(it); return; }                        // another league's pill: into that league, onto that game
+        setGameDayOpen(true, { focusId: id });                            // the active league's: the card opens in place, the row outlined (as shipped)
+        return;
+      }
+      if (action === 'gd-row') {
+        const id = attr('data-game-id');
+        const it = isNonEmptyString(id) && gdCurrent.ids.has(id) ? crossTargets.items.get(id) : null;
+        if (!it) return;
+        tap('medium');
+        if (!it.active) { routeItem(it); return; }
+        gd = { expanded: gd.expanded, focusedGameId: id };
+        try { d.onAction('open-game', { gameId: it.gameId, source: 'gameday' }); } catch (err) { console.error('[home] action failed', err); }
+        return;
+      }
+      if (action === 'gd-summary') {
+        const id = attr('data-sum-id');
+        const sm = isNonEmptyString(id) ? crossTargets.summary.get(id) : null;
+        if (!sm) return;
+        tap('light');
+        if (sm.kind === 'retry') { if (d.peek && currentLeagueIds.has(sm.leagueId)) void peekRefresh({ manual: true }); return; }
+        if (sm.route) { try { d.onAction('route-league', { leagueId: sm.route.leagueId, destination: { tab: sm.route.destination.tab, params: { ...sm.route.destination.params } } }); } catch (err) { console.error('[home] action failed', err); } }
+        return;
+      }
+      if (action === 'gd-route') {
+        const id = attr('data-route-id');
+        const a = isNonEmptyString(id) ? crossTargets.action.get(id) : null;
+        if (!a || !a.route) return;
+        tap('medium');
+        try { d.onAction('route-league', { leagueId: a.route.leagueId, destination: { tab: a.route.destination.tab, params: { ...a.route.destination.params } } }); } catch (err) { console.error('[home] action failed', err); }
+        return;
+      }
+      if (action === 'gd-full') {
+        tap('light');
+        try { d.onAction('open-full-gameday', {}); } catch (err) { console.error('[home] action failed', err); }
+        return;
+      }
+    }
+    if (action === 'gd-summary' || action === 'gd-route' || action === 'gd-full') return;   // a one-league card has none of these: a forged one does nothing
     if (action === 'gd-toggle') { if (!gdCurrent.expandable) return; if (!gd.expanded) tap('light'); setGameDayOpen(!gd.expanded); return; }       // light on open; none on close (Std-4)
     if (action === 'gd-more') { if (!gdCurrent.expandable) return; tap('light'); setGameDayOpen(true); return; }
     if (action === 'gd-pill') {
@@ -2333,6 +2901,40 @@ export function createHome(deps) {
     syncPill(el, heldCount);
     watchScroll(heldCount > 0);
     watchSentinel(el, model.hasMore);
+    watchExposure(el, model);
+  }
+
+  /**
+   * D2 DI-1057 — which painted cards are really being read. After every content paint the cards (`[data-card-key]` entries this paint built a subject for) are watched at a 0.5
+   * threshold; the visit's ledger accrues each one's in-view time. Nothing is counted on a skeleton, in the background, on another tab, or in a visit shorter than SEEN_MIN_VISIT_MS.
+   */
+  function watchExposure(el, model) {
+    if (!model || !(model.exposure instanceof Map)) return;
+    for (const [k, sub] of model.exposure) exposureSubjects.set(k, sub);
+    if (!el || typeof el.querySelectorAll !== 'function') return;
+    const els = asArray(el.querySelectorAll('[data-card-key]')).filter(n => n && typeof n.getAttribute === 'function' && model.exposure.has(n.getAttribute('data-card-key')));
+    if (unobserveExposure && els.length === exposureEls.length && els.every((n, i) => n === exposureEls[i])) return;   // the same nodes: the observer already watches them
+    const keep = new Set(els.map(n => n.getAttribute('data-card-key')));
+    for (const n of exposureEls) { const k = n && typeof n.getAttribute === 'function' ? n.getAttribute('data-card-key') : null; if (k && !keep.has(k)) exposureLedger.drop(k, d.now()); }   // a card that left the page stops accruing
+    stopExposure();
+    exposureEls = els;
+    if (!els.length) return;
+    const observe = d.observeExposure || defaultObserveExposure;
+    let un = null;
+    try {
+      un = observe(els, (entries) => {
+        const hidden = typeof document !== 'undefined' && document && document.hidden === true;
+        for (const en of asArray(entries)) {
+          const k = en && en.el && typeof en.el.getAttribute === 'function' ? en.el.getAttribute('data-card-key') : null;
+          if (k) exposureLedger.sight(k, en.inView === true && !hidden && !withheld() && safeTab() === HOME_TAB, d.now());
+        }
+      });
+    } catch { un = null; }
+    unobserveExposure = typeof un === 'function' ? un : null;
+  }
+  function stopExposure() {
+    if (unobserveExposure) { try { unobserveExposure(); } catch { /* detached */ } }
+    unobserveExposure = null; exposureEls = [];
   }
 
   /** DI-574 — the pill: one 44 pt button in a sticky zero-height slot at the top of Home's root. It lives outside the feed's markup (the identical-markup check never sees it), is created, updated
@@ -2492,6 +3094,7 @@ export function createHome(deps) {
       const items = [];
       for (let i = 0; i < SKELETON_CARD_COUNT; i++) items.push({ key: `skel:${i}`, html: i === 0 ? gameDaySkeletonHTML({ escHtml }) : skeletonCardHTML() });   // DI-603: the first skeleton is Game Day's own (a header and two pills, the card's height), so the feed does not shift
       if (withheld()) return false;
+      stopExposure();                                                        // DI-1057: a skeleton is never "shown"
       paint(el, items, 'skeleton');
       return true;
     }
@@ -2500,6 +3103,7 @@ export function createHome(deps) {
     const model = buildModel(el);
     if (withheld()) return false;                                            // belt: re-check right before the write
     paint(el, model.items, 'content', model);
+    peekVisible();
     return true;
   }
 
@@ -2508,11 +3112,26 @@ export function createHome(deps) {
     if (seen.visibleSince !== null) return;
     if (typeof document !== 'undefined' && document && document.hidden === true) return;
     seen = { marker: seen.marker, baseline: seen.marker, visibleSince: d.now() };
+    exposureLedger.start(seen.visibleSince);                                 // DI-1057: cards already in view start accruing with the visit
   }
   /** DI-587 — the reader left Home (another tab, the app backgrounded). A visit of at least SEEN_MIN_VISIT_MS advances the marker to now; a pull-to-refresh or opening a detail never calls this. */
+  /** D2 DI-804: Home is on screen — the Peek store starts its round and its poll (a no-op while it already is, and with one league there are no targets: zero requests). */
+  function peekVisible() {
+    if (!d.peek || typeof d.peek.setVisible !== 'function') return;
+    if (typeof document !== 'undefined' && document && document.hidden === true) return;
+    if (safeTab() !== HOME_TAB || !leagueContext()) return;
+    void peekCall(() => d.peek.setVisible(true));
+  }
+  /** One Peek store call, awaited and contained (CONVENTIONS #4: async / await, never a .then chain): the store's failures are its own states, never a thrown paint. */
+  async function peekCall(f) { try { return await f(); } catch { return false; } }
+  function peekRefresh(opts) { return peekCall(() => d.peek.refresh(opts)); }
   function noteLeft() {
+    if (d.peek && typeof d.peek.setVisible === 'function') void peekCall(() => d.peek.setVisible(false));   // D2 DI-804: never polled while hidden
     stopTimeTick();
     if (seen.visibleSince === null) return false;
+    // DI-1057: what this visit really SHOWED (a visit of at least SEEN_MIN_VISIT_MS, each card at least half in view for EXPOSURE_MIN_DWELL_MS) is one exposure per card, counted against its
+    // subject (session memory only) — so a NEW story about a subject seen twice today earns no novelty; an included card is never removed by it (DI-1056)
+    { const t = d.now(); const keys = exposureLedger.end(t); noveltyMemory = noteExposures(noveltyMemory, keys.map(k => exposureSubjects.get(k)).filter(Boolean), t); exposureSubjects = new Map(); }
     const advanced = d.now() - seen.visibleSince >= SEEN_MIN_VISIT_MS;
     seen = { marker: advanced ? d.now() : seen.marker, baseline: seen.baseline, visibleSince: null };
     return advanced;
@@ -2532,15 +3151,23 @@ export function createHome(deps) {
    */
   async function refresh() {
     const identityAtStart = safeIdentity();
+    // D2 DI-804: pull-to-refresh reads the other leagues too (in parallel with the news; a league's failure is its own calm line, never the league banner)
+    const peekRound = d.peek && leagueContext() ? peekRefresh({ manual: true }) : Promise.resolve(false);
     if (d.fetchNews) {
       try { await loadNews({ force: true }); } catch { /* loadNews already recorded its own failure as the slot's calm error */ }
     }
+    await peekRound;
     if (!mayPaintAfter(identityAtStart)) return false;
     userRefreshing = true;                                                   // DI-574: the reader asked for this — new cards go in at once, the place they were reading is kept
     try { renderHome(); } finally { userRefreshing = false; }
     return true;
   }
 
+  /** T-05 / FB-047 — every Home card and Game Day control that presses, through nav-gestures.js bindPressState() (css/styles.css scales them on [data-pressed]; :active only under a
+   *  hovering pointer). Drew, 2026-10-19: "Home screen- i dont like that the cards get smaller when you touch them and are just scrolling". A grouped news card does not press as a whole
+   *  (its main block and its "Also from" button do). int/v0.31.0 (lane 3 x bug A): lane 3's cross-league summary line (button.gd-sum) joins the selector, and app.js binds the
+   *  Full Game Day rows (.fgd-row) on that pushed screen the same way (lane 3's TODO for this merge). */
+  const HOME_PRESS_SELECTOR = 'button.gd-head, button.gd-sum, .gdp, .gd-row, .gd-btn, .feed-card--tap, .news-card:not(.news-card--grouped), .news-card__main, .news-card__also';
   /** Delegated, allow-listed, idempotent. The DOM is untrusted input: an unknown action or tab does nothing. */
   function bindActions(el) {
     if (!el || typeof el.addEventListener !== 'function') return () => {};
@@ -2581,6 +3208,20 @@ export function createHome(deps) {
         // Std-9 — the id in the markup is only a REQUEST: it must be one of the tappable cards derived for the CURRENT paint, or nothing happens (validated before any haptic, like every rejected tap).
         if (!isNonEmptyString(cardId) || !currentCardIds.has(cardId)) return;
         params = { cardId };
+        // D2 DI-807: a card from ANOTHER league routes there first (the app's routeToLeague: membership re-check, the switch, then the destination). Its route is THIS paint's, by id — never the DOM's.
+        const route = currentRoutes.get(cardId);
+        if (route) {
+          try { d.haptic('light'); } catch { /* a dropped haptic is invisible */ }
+          try { d.onAction('route-league', { leagueId: route.leagueId, destination: { tab: route.destination.tab, params: { ...route.destination.params } } }); } catch (err) { console.error('[home] action failed', err); }
+          return;
+        }
+      }
+      if (action === 'retry-peek') {
+        const leagueId = attr('data-league-id');
+        if (!isNonEmptyString(leagueId) || !currentLeagueIds.has(leagueId) || !d.peek) return;   // only a league THIS paint spans
+        try { d.haptic('light'); } catch { /* invisible */ }
+        void peekRefresh({ manual: true });                                  // the store says what happened on its next state (onChange repaints)
+        return;
       }
       const kind = attr('data-haptic');
       try { d.haptic(HAPTIC_KINDS.includes(kind) ? kind : 'light'); } catch { /* a dropped haptic is invisible */ }
@@ -2615,8 +3256,9 @@ export function createHome(deps) {
     el.addEventListener('touchend', onTouchEnd, { passive: true });
     el.addEventListener('touchcancel', onTouchEnd, { passive: true });
     el.addEventListener('scroll', onRailScroll, { capture: true, passive: true });
+    const unbindPress = bindPressState(el, HOME_PRESS_SELECTOR);
     bindVisibilityOnce();
-    const unbind = () => { try { el.removeEventListener('click', onClick); el.removeEventListener('keydown', onKey); el.removeEventListener('touchstart', onTouchStart); el.removeEventListener('touchend', onTouchEnd); el.removeEventListener('touchcancel', onTouchEnd); el.removeEventListener('scroll', onRailScroll, true); } catch { /* detached */ } bound.delete(el); };
+    const unbind = () => { unbindPress(); try { el.removeEventListener('click', onClick); el.removeEventListener('keydown', onKey); el.removeEventListener('touchstart', onTouchStart); el.removeEventListener('touchend', onTouchEnd); el.removeEventListener('touchcancel', onTouchEnd); el.removeEventListener('scroll', onRailScroll, true); } catch { /* detached */ } bound.delete(el); };
     bound.set(el, unbind);
     return unbind;
   }
@@ -2716,6 +3358,7 @@ export function createHome(deps) {
       return `${who} ${p === 'final' ? 'covered' : 'is covering'}${m === null ? '' : ` by ${String(Number(m.toFixed(1)))}`}`;
     }
     if (p === 'no-score' || p === 'awaiting') return 'Score not available yet.';
+    if (p === 'voided') return 'Voided — no decision.';   // D2 lane 2 (DI-896)
     return '';
   };
 
@@ -2798,7 +3441,7 @@ export function createHome(deps) {
       next = act ? { action: act.action, label: act.label, tone: act.tone, weekId: nx.weekId, sport: nx.sport } : null;
       const weekFinal = wstatus === 'final';
       const resultCard = weekFinal ? cards.find(c => c && c.type === 'week.result' && c.weekId === week.weekId) || null : null;
-      results = { final: weekFinal, weekN: numStr(week.weekNumber), cardId: resultCard ? resultCard.id : null };
+      results = { final: weekFinal, weekN: numStr(week.weekNumber), slate: slateName(week), cardId: resultCard ? resultCard.id : null };
       whatsNext = { line: nextLine(nx, { time: (v) => shortWhen(v, snapshot.timezone) }, { showSport }), action: next ? { action: next.action, label: next.label, tone: next.tone } : null, results };
     }
     const model = {
@@ -2814,6 +3457,8 @@ export function createHome(deps) {
     };
     // DI-597 — Share to chat: a signed-in member, with chat on (the thread card's own `enabled`), on a game this viewer may see (everything above has passed). The headline is public game facts only: the
     // sport (several sports), the phase, the matchup, and a live or final score with the neutral cover line ("Oregon covered by 4") — never anyone's pick.
+    // D2 DI-860 (lane 3): a member of two or more leagues reads WHICH league this game is in, above the matchup ("{League} · {Sport}"); one league: nothing new
+    { const lc = leagueContext(); if (lc) model.leagueLine = `${lc.leagues[0].leagueName} · ${sportLabelOf(comp ? comp.sport : sportOfWeek(week))}`; }
     const share = viewer && model.thread && model.thread.enabled !== false ? gameShareOf(game, phase, { sportLabel: comps.length > 1 && comp ? comp.label : '' }) : null;
     model.share = !!share;
     // what the announcer compares between repaints (DI-591 / DI-593): this game's phase, score, the neutral cover line and the VIEWER'S OWN coverage — nothing about another member
@@ -2873,10 +3518,40 @@ export function createHome(deps) {
   }
 
   /** Test/diagnostic seam: what the reader's session holds right now (never rendered, never persisted). */
-  const sessionForTest = () => ({ pages, heldCount, rendered: [...renderedOrdinary], marker: seen.marker, baseline: seen.baseline, visibleSince: seen.visibleSince, cardIds: [...currentCardIds], timeTick: tickTimer !== null });
+  /** D2 DI-822 — the Full Game Day screen, from the LAST paint's cross-league model (Home repaints on every data change; the pushed screen repaints with it). Null when there is none. */
+  let fgdOpts = { showAllUpcoming: false, showAllFinal: false };
+  function fullGameDay(opts = null) {
+    if (withheld() || !crossGd) return null;
+    if (opts && typeof opts === 'object') fgdOpts = { showAllUpcoming: opts.showAllUpcoming === true, showAllFinal: opts.showAllFinal === true };
+    let tz = 'PT';
+    try { tz = d.read.timezone(); } catch { tz = 'PT'; }
+    const now = d.now();
+    const model = fullGameDayModel(crossGd, { now, dayKeyOf: (ms) => dayKeyInTz(ms, tz), fmt: { time: (v) => shortWhen(v, tz), countdown: formatCountdown }, ...fgdOpts });
+    return { model, html: fullGameDayHTML(model, { escHtml, numHtml: numStr, chevHtml: glyphSpan('fgd-chev-i', 'chevronRight') }) };
+  }
+  /** A Full Game Day row tapped: resolved against the last paint's model by id (Std-9). Returns what happened: 'routed' | 'game' | 'more' | null. */
+  function fullGameDayTap({ item = null, due = null, more = null } = {}) {
+    if (withheld() || !crossGd || !crossTargets) return null;
+    if (more === 'upcoming' || more === 'final') { fgdOpts = { ...fgdOpts, [more === 'upcoming' ? 'showAllUpcoming' : 'showAllFinal']: true }; return 'more'; }
+    if (isNonEmptyString(due)) {
+      const dd = crossTargets.due.get(due);
+      if (!dd) return null;
+      try { d.onAction('route-league', { leagueId: dd.route.leagueId, destination: { tab: dd.route.destination.tab, params: { ...dd.route.destination.params } } }); } catch { return null; }
+      return 'routed';
+    }
+    const it = isNonEmptyString(item) ? crossTargets.items.get(item) : null;
+    if (!it) return null;
+    if (!it.active) { routeItem(it); return 'routed'; }
+    try { d.onAction('open-game', { gameId: it.gameId, source: 'full-gameday' }); } catch { return null; }
+    return 'game';
+  }
+  const sessionForTest = () => ({ pages, heldCount, rendered: [...renderedOrdinary], marker: seen.marker, baseline: seen.baseline, visibleSince: seen.visibleSince, cardIds: [...currentCardIds], timeTick: tickTimer !== null,
+    novelty: Object.fromEntries([...noveltyMemory].map(([k, v]) => [k, v && Array.isArray(v.times) ? v.times.length : 0])), included: [...includedKeys], topStories: { day: topState.day, ids: [...topState.ids] }, exposureWatched: exposureEls.length,
+    insightDays: Object.fromEntries([...insightFirstDay].map(([k, v]) => [k, v.day])), insightPlacedAt: Object.fromEntries(insightIncludedAt) });   // D2 DI-1056…1058
 
   return {
     renderHome, refresh, bindActions, resetNews, resolveCardDetail, unavailableDetail, noteLeft, loadMore, _sessionForTest: sessionForTest,
+    fullGameDay, fullGameDayTap, _crossGameDayForTest: () => crossGd,   // D2 DI-822
     resolveGameView, shareTargets, _freshSnapshotCountForTest: () => freshBuilds, gameUnavailable, patchGameView, gameViewAnnouncer, revealCard, openGameDay, closeGameDay: () => setGameDayOpen(false), gameDayState: () => ({ expanded: gd.expanded, focusedGameId: gd.focusedGameId, expandable: gdCurrent.expandable, kind: gdCurrent.kind }),
     assembleSnapshot: (o) => assembleHomeSnapshot(d, o),
     _newsStateForTest: () => ({ ...news }),

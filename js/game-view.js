@@ -64,6 +64,7 @@ function scoreCard(m, { escHtml, numHtml }) {
   const big = hasScore ? `${numHtml(g.awayScore)}<span class="gv-dash" aria-hidden="true">–</span>${numHtml(g.homeScore)}` : '<span aria-hidden="true">—</span>';
   const team = (name, abbr, rank, logo) => `<div class="gv-team">${teamLockupHTML({ name, abbr, rank, logoUrl: logo || null, escHtml })}<span class="gv-team-name">${escHtml(name)}</span></div>`;
   return `<article class="card gv-card gv-score" data-gv="score">`
+    + (isStr(m.leagueLine) ? `<p class="gv-league">${escHtml(m.leagueLine)}</p>` : '')   // D2 DI-860 (lane 3): "{League} · {Sport}" above the matchup for a member of two or more leagues; absent otherwise (unchanged)
     + `<div class="gv-teams">${team(g.away, g.awayAbbr, g.awayRank, g.awayLogo)}<div data-bind="score" class="gv-big" aria-label="${hasScore ? `${escHtml(g.away)} ${numHtml(g.awayScore)}, ${escHtml(g.home)} ${numHtml(g.homeScore)}` : 'No score yet'}">${big}</div>${team(g.home, g.homeAbbr, g.homeRank, g.homeLogo)}</div>`
     + `<div data-bind="status" class="gv-status">${statusChip(m, { escHtml })}</div>`
     + `<p data-bind="fresh" class="gv-fresh${(m.phase || {}).phase === 'live-stale' ? ' gv-fresh--stale' : ''}">${m.freshness ? escHtml(m.freshness) : ''}</p>`
@@ -104,7 +105,7 @@ function nextCard(m, { escHtml }) {
   if (!w) return '';
   const btn = (action, label, tone) => `<button type="button" class="btn ${tone === 'primary' ? 'btn-primary' : 'btn-secondary'} gv-btn" data-gv-action="${escHtml(action)}" data-haptic="${tone === 'primary' ? 'medium' : 'light'}">${escHtml(label)}</button>`;
   const buttons = [w.action ? btn(w.action.action, w.action.label, w.action.tone) : '', w.results && w.results.final ? btn('week-results', 'See week results', 'secondary') : ''].filter(Boolean).join('');
-  const wait = w.results && !w.results.final ? `<p data-bind="next-results" class="gv-cap">${escHtml(`Week ${w.results.weekN} results post when the last game is final.`)}</p>` : '';
+  const wait = w.results && !w.results.final ? `<p data-bind="next-results" class="gv-cap">${escHtml(`${isStr(w.results.slate) ? w.results.slate : `Week ${w.results.weekN}`} results post when the last game is final.`)}</p>` : '';
   return `<article class="card gv-card gv-next" data-gv="next"><h3 class="gv-h">What's next</h3><p data-bind="next-line" class="gv-note">${escHtml(w.line || '')}</p>${buttons ? `<div class="gv-actions">${buttons}</div>` : ''}${wait}</article>`;
 }
 

@@ -7,7 +7,7 @@
  *   listProfiles()       every registered profile, registration order, frozen
  *   normalizeSportKey(k) db code -> legacy ESPN path key (see below)
  *
- * KEYS ARE dbCodes (R1): cfb, nfl today; nba, cbb, mm, nhl, wjc land in later
+ * KEYS ARE dbCodes (R1): cfb, nfl, nhl today (nhl: D2 lane 2, DI-881); nba, cbb, mm, wjc land in later
  * phases. The legacy ESPN path key ('college-football') is NOT a dbCode and
  * `getProfile('college-football')` throws — callers holding an ESPN key must
  * translate first, they do not get a silent second spelling here.
@@ -24,14 +24,15 @@
  * does not exist yet. Importing a module that isn't there would break this one;
  * it lands with Phase 1.
  *
- * IMPORT RULES (R6): imports only `./cfb.js` and `./nfl.js`; NEVER app.js, so
+ * IMPORT RULES (R6): imports only `./cfb.js`, `./nfl.js` and `./nhl.js`; NEVER app.js, so
  * this module is importable by an Edge Function.
  */
 
 import { CFB_PROFILE } from './cfb.js';
 import { NFL_PROFILE } from './nfl.js';
+import { NHL_PROFILE } from './nhl.js';
 
-const PROFILES = Object.freeze([CFB_PROFILE, NFL_PROFILE]);
+const PROFILES = Object.freeze([CFB_PROFILE, NFL_PROFILE, NHL_PROFILE]);
 
 // A Map, not an object literal: `getProfile('constructor')` / '__proto__' /
 // 'toString' must be "unknown", not a hit on Object.prototype.
@@ -65,10 +66,25 @@ export function listProfiles() {
 // One deliberate difference: own-property lookup, so 'constructor' and
 // '__proto__' pass through as themselves instead of resolving to
 // Object.prototype members.
-const DB_SPORT_TO_ESPN_KEY = Object.freeze({ cfb: 'college-football', nfl: 'nfl' });
+const DB_SPORT_TO_ESPN_KEY = Object.freeze({ cfb: 'college-football', nfl: 'nfl', nhl: 'nhl' });
 
 export function normalizeSportKey(k) {
   const s = typeof k === 'string' ? k.trim() : '';
   if (!s) return '';
   return Object.prototype.hasOwnProperty.call(DB_SPORT_TO_ESPN_KEY, s) ? DB_SPORT_TO_ESPN_KEY[s] : s;
+}
+
+// ── sportCopy / teamCatalogOf (D2 lane 2, DI-881) ───────────────────────────────────────────────────────────────────────────────────────────────
+/** Today's football words: what a profile with `copy: null` (college football, the NFL) reads. Golden-pinned (profiletest [11]). */
+export const FOOTBALL_COPY = Object.freeze({ start: 'Kickoff', slate: 'week', slates: 'weeks', scoreOne: 'point', scoreMany: 'points', period: 'quarter' });
+
+/** The sport's words for the few places a shared screen names a football thing. A `null` copy slot is football. A profile that is not an object answers football (never throws). */
+export function sportCopy(profile) {
+  return profile && typeof profile === 'object' && profile.copy ? profile.copy : FOOTBALL_COPY;
+}
+
+/** The team catalog of a profile, `[{ name, abbr }]`, from its static `teamAbbr` (no runtime fetch, no network): the list lane A's onboarding and League > Sports read. */
+export function teamCatalogOf(profile) {
+  const t = profile && profile.teamAbbr && typeof profile.teamAbbr === 'object' ? profile.teamAbbr : {};
+  return Object.keys(t).map((name) => ({ name, abbr: t[name] }));
 }

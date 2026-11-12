@@ -15,6 +15,8 @@
  *   sportsNeedingPicks(items, now)                      played sports with picks due and a lock still ahead, earliest lock first
  *   glanceChips({ due, liveCount })                     the At-a-glance chips (0 to 2)
  */
+import { setupLabel, nextSlateName, startVerb } from './slate-name.js';
+
 
 export const SPORT_STATES = Object.freeze(['none', 'upcoming', 'draft', 'open', 'locked', 'live', 'final', 'error']);
 
@@ -155,7 +157,7 @@ export function sportCardView(status, text = {}) {
     case 'none':
       pills.push({ tone: 'draft', text: 'No week yet' });
       showWindow = false;
-      if (t.canSetupWeek) { line = 'Set up the first week to open picks'; setup = `Set up Week ${t.nextWeekN || 1}`; }
+      if (t.canSetupWeek) { line = 'Set up the first week to open picks'; setup = setupLabel({ weekN: t.nextWeekN || 1 }, t.code); }
       else line = t.isCommissioner ? 'Set up the first week to open picks' : "Picks aren't open yet";
       break;
     case 'upcoming':
@@ -180,7 +182,7 @@ export function sportCardView(status, text = {}) {
     case 'locked':
       pills.push({ tone: 'locked', text: 'Locked' });
       submitPill();
-      line = t.kickoffWhenText ? `Kicks off ${t.kickoffWhenText}` : '';
+      line = t.kickoffWhenText ? `${startVerb(t.code).replace(/^./, (c) => c.toUpperCase())} ${t.kickoffWhenText}` : '';
       if (line && inCount) line += ` · ${inCount}`;
       else if (!line && inCount) line = inCount;
       break;
@@ -245,7 +247,7 @@ export function joinCardView(status, text = {}) {
       break;
     case 'none': case 'upcoming': case 'draft':
       pills.push({ tone: 'draft', text: 'No week yet' });
-      line = `Picks open when the commissioner publishes Week ${t.nextWeekN || 1}.`;
+      line = `Picks open when the commissioner publishes ${nextSlateName(t.nextWeekN || 1, t.code)}.`;
       joinEnabled = true;
       showWindow = false;
       break;

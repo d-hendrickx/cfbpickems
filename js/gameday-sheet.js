@@ -57,7 +57,8 @@ export function gameRowHTML(row, ctx) {
   const head = hasScore
     ? `${escHtml(row.away)} ${numHtml(row.awayScore)} – ${numHtml(row.homeScore)} ${escHtml(row.home)}`
     : `${escHtml(row.away)} at ${escHtml(row.home)}`;
-  const tag = row.sportLabel && ctx.showSport ? `<span class="gd-st gd-st--sp">${escHtml(row.sportLabel)}</span>` : '';
+  // D2 DI-821 (lane 3): a member of two or more leagues sees each row's provenance chip ("Residency · NHL") where the sport tag sits; a one-league row has no `chip` and is unchanged.
+  const tag = row.chip ? `<span class="gd-st gd-st--prov">${escHtml(row.chip)}</span>` : (row.sportLabel && ctx.showSport ? `<span class="gd-st gd-st--sp">${escHtml(row.sportLabel)}</span>` : '');
   const line = row.line ? `<span>${escHtml(row.line)}</span>` : '';
   let league = '';
   if (row.entered) {

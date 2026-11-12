@@ -14,7 +14,6 @@
 import {
   DEFAULT_SETTINGS, DEMO_PLAYERS, DEMO_WEEK, DEMO_GAMES, DEMO_PICKS,
   REAL_WEEK_1_2026, REAL_WEEK_1_2026_KNOWN_GAMES,
-  SITE_PIN, SITE_PIN_KEY,
   isObligationActive,
   DEFAULT_TZ,
   CHAT_ACCENTS,
@@ -35,6 +34,7 @@ import { cacheGet, cacheSet, isBackendReady } from './backend.js';
 import * as sb from './supabase-backend.js';
 // D1 Lane B / DI-579: the game-order preference's pure shape, coercion and writes (a leaf module — no imports, so no cycle).
 import { coerceGameOrder, withManualOrder, withMode } from './game-order.js';
+import { sportKeyOfRecord, sportEventKey, requestEspnKey } from './request-game.js';   // D2 lane 2 (DI-923): a request, a game and a week each belong to a sport; a leaf with no imports
 // Phase III Step 3a (DI-180f) — see the getSession() comment below. This is
 // the only new import this file gains for the whole build.
 import { getAuthMode, getSupabaseSession, isSupabaseWriteWithheld, AuthModeMismatchError } from './auth.js';
@@ -49,7 +49,9 @@ const KEYS = {
   RESULTS:     'cfbp_results',
   OBLIGATIONS: 'cfbp_obligations',
   NICKNAMES:   'cfbp_nicknames',
-  SESSION:     'cfbp_session',
+  // D2 lane 6 (D-108): the credential-free LOCAL mode's device session, under its OWN key. The PIN-era `cfbp_session` is no longer read by any mode (a stale
+  // `{isAdmin:true}` there is inert), and is swept from every device on boot until TestFlight build 4 expires (~2027-01-15; build 4 still carries the PIN code).
+  SESSION:     'cfbp_local_session',
   LOCK_OVR:    'cfbp_lock_overrides',
   TB_GUESSES:  'cfbp_tiebreaker_guesses',
   EP_GUESSES:  'cfbp_extra_point_guesses', // v0.16.0 — Ischemic Extra Point (longest FG, blackjack rules)
@@ -60,7 +62,6 @@ const KEYS = {
   COMMENTS:    'cfbp_comments',                 // per-game + general chat messages (with PickEms Bot)
   ACTIVE_WEEK: 'cfbp_active_week',
   FETCH_PROOF: 'cfbp_fetch_proof',
-  SITE_UNLOCK: SITE_PIN_KEY,  // 'cfbp_site_unlocked'
   // Groups A/B notification workstream (UN-139…UN-148, 2026-09-10). ONE shared
   // list of provider-independent notification records — mirrors the
   // KEYS.COMMENTS single-key precedent (CLAUDE.md architecture bullet),
@@ -250,6 +251,13 @@ const KEYS = {
   // D1 / DI-520 rev 3 (D-59) — the Dashboard's own scope, `{ [userId]: { [leagueId]: 'all' | null } }`: "All sports" is a SCOPE of the Dashboard, never a sport, so choosing it changes
   // the Dashboard and nothing else (Picks and Standings never read it). Device-local and validated exactly as ACTIVE_SPORT is; a value other than 'all' reads as no scope.
   DASHBOARD_SCOPE: 'cfbp_dashboard_scope',
+  // D2 lane 4 batch 2 (SCRIBE Analytics, 2026-10-21; approved by the coordinator as a design input (the storage seam, device-local) on 2026-10-21: not a Drew approval, and not M-89) - WHAT THE INSIGHT SURFACES HAVE ALREADY TOLD THIS MEMBER, so "no repeats" survives a reload:
+  // `{ [identity]: { at, ledger, ask } }` where `identity` is app.js's currentIdentityKey() (account|league|player), `ledger` is analytics/ledger.js's own closed JSON text (its entries expire by the
+  // ledger's own rule: 90 days, newest 200) and `ask` is Ask SCRIBE's day counter `{ dayKey, dayCount, byInsight }` keyed by the member's LOCAL day. DEVICE-LOCAL (in DEVICE_LOCAL_KEYS) for the
+  // reason SESSION is: it records what THIS handset showed, and a shared write would let one phone silence another. Under the `cfbp_` prefix ON PURPOSE (the sign-out / handover sweep clears it).
+  // Read and written ONLY by getInsightState / setInsightState below, which validate every value on the way out. An identity can only read its own record (the key IS the identity); at most 8 identities
+  // are kept (the least recently written is dropped). DEFAULT-WHEN-MISSING (CONVENTIONS #10): absent / unparseable / wrong shape reads as { ledger: null, ask: null } = nothing shown yet.
+  INSIGHT_STATE: 'cfbp_insight_state',
 };
 
 // Keys that ALWAYS stay device-local even when a shared backend is active.
@@ -326,7 +334,6 @@ const KEYS = {
 //    without them.
 const DEVICE_LOCAL_KEYS = new Set([
   KEYS.SESSION,
-  KEYS.SITE_UNLOCK,
   KEYS.AVAIL_GAMES,
   // FEAT-3 / DI-200c — see the KEYS comment above. Device-local by design, and
   // for the same reason SESSION is: it records what THIS device did, not what
@@ -365,6 +372,7 @@ const DEVICE_LOCAL_KEYS = new Set([
   // D1 DI-520 (security A5) / rev 3 — see the KEYS comments above. A fact about what THIS handset was looking at, keyed by account and league, never league state.
   KEYS.ACTIVE_SPORT,
   KEYS.DASHBOARD_SCOPE,
+  KEYS.INSIGHT_STATE,                 // D2 lane 4: what this handset's insight surfaces already showed this identity (see the KEYS comment)
 ]);
 
 /**
@@ -681,7 +689,10 @@ export function resetToDemo() {
 
 // ─── SETTINGS ─────────────────────────────────────────────────────────────────
 
-export function getSettings() { return{...DEFAULT_SETTINGS,...(load(KEYS.SETTINGS)||{})}; }
+// D2 lane 6 (DI-766, D-108): the keys the PIN system left in old settings blobs. They load without error (unknown keys are ignored by every reader) and are
+// DROPPED here, so no read-modify-write ever carries them forward. The server never held them (the projection strips them on the way in, supabase-projection.js).
+const LEGACY_PIN_SETTING_KEYS = Object.freeze(['sitePin', 'adminPasswordHash', 'welcomeTitleTop', 'welcomeTitleMain', 'welcomeTitle', 'welcomeSubtitle']);
+export function getSettings() { const s={...DEFAULT_SETTINGS,...(load(KEYS.SETTINGS)||{})}; for (const k of LEGACY_PIN_SETTING_KEYS) delete s[k]; return s; }
 /** The league settings blob EXACTLY as stored — no DEFAULT_SETTINGS spread. Read-only. Exists so
  *  getEffectiveSetting() (js/competition.js, DI-225) can tell "the league set this" from "this is the
  *  built-in default": getSettings() merges the defaults in, which makes every defaulted key look
@@ -1190,37 +1201,35 @@ export function saveFetchProof(r){ save(KEYS.FETCH_PROOF,r); }
 export function getFetchProof(){ return load(KEYS.FETCH_PROOF)||null; }
 
 
-// ─── SITE ACCESS PIN ──────────────────────────────────────────────────────────
-
-export function isSiteUnlocked() {
-  try { return localStorage.getItem(SITE_PIN_KEY) === '1'; }
+// ─── LEGACY PIN-ERA DEVICE KEYS ──────────────────────────────────────────────
+// D2 lane 6 (D-108): the site PIN gate is deleted. What remains is the SWEEP of what it left on devices: `cfbp_session` (the PIN-era session record) and
+// `cfbp_site_unlocked` (the front-door flag). Both are dead in every mode; the sweep stays until TestFlight build 4 expires (~2027-01-15, build 4 still carries the PIN
+// code that would write them), then this function and its callers are deleted. A device that refuses the removal keeps the dead key; nothing reads it.
+const LEGACY_SESSION_KEY = 'cfbp_session';
+const LEGACY_SITE_UNLOCK_KEY = 'cfbp_site_unlocked';
+const LEGACY_PIN_DEVICE_KEYS = Object.freeze([LEGACY_SESSION_KEY, LEGACY_SITE_UNLOCK_KEY]);
+export function sweepLegacyPinDeviceKeys() {
+  for (const k of LEGACY_PIN_DEVICE_KEYS) { try { localStorage.removeItem(k); } catch { /* storage refusing writes: the dead key stays, unread */ } }
+}
+/** Read-back for the first-Supabase-boot wipe's verification (supabase-backend.js _runFirstBootWipe): true while a PIN-era front-door flag is still on the device. */
+export function hasLegacySiteUnlock() {
+  try { return localStorage.getItem(LEGACY_SITE_UNLOCK_KEY) === '1'; }
   catch { return false; }
 }
-export function setSiteUnlocked(val) {
-  try { if(val) localStorage.setItem(SITE_PIN_KEY,'1'); else localStorage.removeItem(SITE_PIN_KEY); }
-  catch {}
-}
-export function verifySitePin(pin) {
-  // Settings override takes precedence; falls back to the default constant.
-  const override = (getSettings().sitePin || '').trim();
-  const effective = override || SITE_PIN;
-  return String(pin) === String(effective);
-}
-export function getEffectiveSitePin() {
-  return (getSettings().sitePin || '').trim() || SITE_PIN;
-}
-export function setSitePin(newPin) {
-  saveSetting('sitePin', String(newPin || '').trim());
+/** The wipe's clearer for that flag (the adapter injects it by its old dep name). */
+export function clearLegacySiteUnlock() {
+  try { localStorage.removeItem(LEGACY_SITE_UNLOCK_KEY); } catch { /* see sweepLegacyPinDeviceKeys */ }
 }
 
-// ─── SESSION ──────────────────────────────────────────────────────────────────
+// ─── SESSION ─────────────────────────────────────────────────────
 
-// Phase III Step 3a (DI-180f) — the ONE seam edit this build makes to
-// storage.js, per its own explicit scope. getSession() delegates to
-// js/auth.js's synthesized {playerId,isAdmin,playerVerified} shape ONLY when
-// authMode:'supabase'; every other line in this file, and every other
-// function in this pair, is untouched. Still synchronous (CONVENTIONS #9) —
-// getSupabaseSession() is a plain in-memory read, never a fetch.
+// D2 lane 6 (D-108) — TWO modes, and ONLY two.
+//   'supabase'  the session is SYNTHESIZED by js/auth.js from the verified Google account and its `league_members.role` (getSupabaseSession()). Nothing on the
+//               device can raise it: `isAdmin` comes from a verified membership row, never from a stored record.
+//   'local'     the credential-free substrate for offline development and the offline suites. There is no shared data and no server role, so the session is a plain device
+//               record under `cfbp_local_session` that the local player picker (chooseLocalPlayer) writes. It is selected only EXPLICITLY (config.json authMode:'local');
+//               an unreadable config never reaches it (it holds, boot()'s hold branch). The PIN-era `cfbp_session` is read by NEITHER mode.
+// Still synchronous (CONVENTIONS #9) — getSupabaseSession() is a plain in-memory read, never a fetch.
 export function getSession(){
   if (getAuthMode() === 'supabase') {
     try { return getSupabaseSession(); }
@@ -1229,95 +1238,32 @@ export function getSession(){
   return load(KEYS.SESSION)||{playerId:null,isAdmin:false,playerVerified:false};
 }
 /**
- * ══ DI §6.7 — A GUARDED NO-OP IN authMode:'supabase' ═════════════════════════
- * (Coordinator ruling 2026-09-18, gap 3.)
- *
- * getSession() already delegates to js/auth.js in this mode (just above), so
- * `cfbp_session` is UNREADABLE here — which is precisely what makes writing it
- * dangerous rather than merely pointless. A stray call would lay down a
- * PIN-era `{playerId, isAdmin}` record that nothing in this mode can see, and
- * that a ROLLBACK to `pins` would read straight back as a live session. That is
- * the SEC F1-R1 hazard (js/backend.js:339-357) arriving by a different door: a
- * device that was a commissioner before cutover becoming one again, silently,
- * on a config change nobody connected to it.
- *
- * The PIN login paths are retired in this mode (DI-180g), so no production
- * caller should reach this at all — which is why it WARNS rather than returning
- * quietly. A no-op that says nothing is how the next such caller gets written.
- *
- * clearSession() below is deliberately NOT guarded: removing that record is
- * always safe and app.js's boot does it on purpose on a supabase config read.
+ * Writes the LOCAL-mode device session. A GUARDED NO-OP IN authMode:'supabase' (coordinator ruling 2026-09-18, gap 3; kept by D2 lane 6): in that mode the session lives in the
+ * Supabase auth session, so a device record written here is invisible to it. No production code calls this any more (the local player picker uses chooseLocalPlayer()); it is
+ * the offline suites' fixture seam, and it WARNS rather than returning quietly so the next stray caller is found.
  */
 export function setSession(playerId,isAdmin=false,playerVerified=false){
   if (getAuthMode() === 'supabase') {
-    console.warn('[Storage] REFUSING to write cfbp_session in supabase auth mode:',
-      'the session lives in the Supabase auth session and the adapter\'s owner tuple.',
-      'A PIN-era record written here is invisible to this mode and would be read back as a live session by a rollback to pins.');
+    console.warn('[Storage] REFUSING to write the local session in supabase auth mode:',
+      'the session lives in the Supabase auth session and the adapter\'s owner tuple.');
     return;
   }
   save(KEYS.SESSION,{playerId,isAdmin,playerVerified,setAt:new Date().toISOString()});
 }
+/**
+ * The credential-free local mode's player picker (D2 lane 6, D-108): choosing a player IS the whole login. Local mode has no shared data, so the person who picks a name is
+ * the commissioner of their own device. Refused in supabase mode.
+ */
+export function chooseLocalPlayer(playerId){
+  if (getAuthMode() === 'supabase') {
+    console.warn('[Storage] REFUSING chooseLocalPlayer() in supabase auth mode: identity there is the verified Google membership.');
+    return;
+  }
+  save(KEYS.SESSION,{playerId,isAdmin:true,playerVerified:true,setAt:new Date().toISOString()});
+}
 export function clearSession(){ localStorage.removeItem(KEYS.SESSION); }
 
-// ─── PLAYER AUTH ──────────────────────────────────────────────────────────────
-
-/**
- * Does this player have a USABLE PIN on file?
- *
- * One definition, used by both verifyPlayerPin() below and the login-failure
- * copy in app.js, so "has a PIN" cannot mean two different things in the gate
- * and in the message explaining the gate.
- *
- * A hash is usable only if it is a non-empty string. `btoa()` never returns
- * whitespace and never returns '', so anything else — a number a Sheets cell
- * deserialised to, a null, a mangled object, a cleared cell — is not a hash.
- */
-export function hasPlayerPin(playerId){
-  const p=getPlayer(playerId);
-  return !!p && typeof p.pinHash==='string' && p.pinHash.trim()!=='';
-}
-/**
- * RG-40, 2026-08-26 — THIS FAILED OPEN. The shipped line was:
- *
- *     if(!p.pinHash)return true;      // ANY pin passes
- *
- * A missing hash was read as "this player hasn't set a PIN yet, so don't gate
- * them." That is an authentication bypass wearing a convenience default, and it
- * was harmless only for as long as no real account ever lost its hash.
- *
- * RG-39 made it live-exploitable: a stale mirror re-applied over the Sheet
- * stripped `email` and `pinHash` from every player and pushed the result
- * league-wide. Those accounts did not have their PINs "reset" — they stopped
- * having a PIN check at all, and anyone past the shared site PIN could sign in
- * as anybody and edit their picks.
- *
- * Drew's ruling: FAIL CLOSED. No hash, no login. The recovery path is the
- * commissioner, who authenticates against `settings.adminPasswordHash` — a
- * different mechanism that touches no player record — and re-issues the PIN
- * from Commissioner → Players → Reset PIN. Deliberately NO self-service
- * recovery: a backdoor that restores access without a credential is the same
- * defect with a friendlier name.
- *
- * The player is told which of the two failures happened; see
- * loginFailureMessage() in app.js. Asserted in loadtest [56].
- */
-export function verifyPlayerPin(playerId,pin){
-  if(!hasPlayerPin(playerId))return false;
-  return getPlayer(playerId).pinHash===btoa(String(pin));
-}
-export function setPlayerPin(playerId,pin){
-  const p=getPlayer(playerId); if(!p)return;
-  savePlayer({...p,pinHash:btoa(String(pin))});
-}
-/**
- * Decode the stored PIN. Commissioner-only convenience used by the
- * "Show PIN" / "Email PIN" features. Never call this on the main page.
- */
-export function getPlayerPin(playerId){
-  const p=getPlayer(playerId);
-  if(!p||!p.pinHash) return '';
-  try { return atob(p.pinHash); } catch { return ''; }
-}
+// ─── PLAYER AUTH ─── RETIRED (D2 lane 6, D-108): player PINs (hasPlayerPin / verifyPlayerPin / setPlayerPin / getPlayerPin) are removed. Identity is the verified Google membership.
 
 // ─── PLAYERS ──────────────────────────────────────────────────────────────────
 
@@ -1448,6 +1394,47 @@ export function removeCompetitionMember({ competitionId, memberId } = {}){
 function _plainMap(v){ return v&&typeof v==='object'&&!Array.isArray(v)?v:{}; }
 export function getActiveSportMap(){ return _plainMap(load(KEYS.ACTIVE_SPORT)); }
 export function setActiveSportMap(map){ save(KEYS.ACTIVE_SPORT,_plainMap(map)); }
+
+// ═══ D2 lane 4 batch 2 — INSIGHT_STATE (see the KEYS comment) ═══════════════════════════════════════════════════════════════════════════════════════
+const INSIGHT_IDENTITY_MAX = 8, INSIGHT_LEDGER_MAX_CHARS = 120000, INSIGHT_ASK_KEYS_MAX = 200;
+const _insightIdentityOk = (id) => typeof id === 'string' && id.length >= 3 && id.length <= 300;       // the caller (app.js insightIdentity()) refuses an identity with no league or no member
+function _cleanAsk(a){
+  if(!a||typeof a!=='object'||Array.isArray(a)) return null;
+  if(typeof a.dayKey!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(a.dayKey)) return null;
+  const by={};
+  if(a.byInsight&&typeof a.byInsight==='object'&&!Array.isArray(a.byInsight)){
+    for(const k of Object.keys(a.byInsight).slice(0,INSIGHT_ASK_KEYS_MAX)){
+      const n=a.byInsight[k];
+      if(typeof k==='string'&&k.length<=400&&Number.isInteger(n)&&n>=0&&n<=1000) by[k]=n;
+    }
+  }
+  const c=a.dayCount;
+  return { dayKey:a.dayKey, dayCount:Number.isInteger(c)&&c>=0&&c<=1000?c:0, byInsight:by };
+}
+/** What the insight surfaces already showed THIS identity: `{ ledger: <ledger JSON text>|null, ask: { dayKey, dayCount, byInsight }|null }`. An identity that is not a plausible key reads nothing. Never throws. */
+export function getInsightState(identity){
+  const none={ ledger:null, ask:null };
+  if(!_insightIdentityOk(identity)) return none;
+  const rec=_plainMap(load(KEYS.INSIGHT_STATE))[identity];
+  if(!rec||typeof rec!=='object'||Array.isArray(rec)) return none;
+  return { ledger: typeof rec.ledger==='string'&&rec.ledger.length<=INSIGHT_LEDGER_MAX_CHARS?rec.ledger:null, ask:_cleanAsk(rec.ask) };
+}
+/** Merge `patch` ({ ledger?, ask? }) into THIS identity's record; the other identities' records are untouched except that only the 8 most recently written are kept. False when the identity is not a plausible key. */
+export function setInsightState(identity, patch){
+  if(!_insightIdentityOk(identity)||!patch||typeof patch!=='object') return false;
+  const all={ ..._plainMap(load(KEYS.INSIGHT_STATE)) };
+  const cur=getInsightState(identity);
+  const newest=Object.values(all).reduce((m,r)=>Math.max(m,r&&typeof r==='object'&&Number.isFinite(r.at)?r.at:0),0);
+  const next={ at:Math.max(Date.now(),newest+1), ledger:cur.ledger, ask:cur.ask };       // strictly newer than any record, so "least recently written" is never a tie
+  if(Object.prototype.hasOwnProperty.call(patch,'ledger')) next.ledger=typeof patch.ledger==='string'&&patch.ledger.length<=INSIGHT_LEDGER_MAX_CHARS?patch.ledger:null;
+  if(Object.prototype.hasOwnProperty.call(patch,'ask')) next.ask=_cleanAsk(patch.ask);
+  all[identity]=next;
+  const keep=Object.keys(all).filter((k)=>_insightIdentityOk(k)&&all[k]&&typeof all[k]==='object').sort((a,b)=>(Number(all[b].at)||0)-(Number(all[a].at)||0)).slice(0,INSIGHT_IDENTITY_MAX);
+  const out={};
+  for(const k of keep) out[k]=all[k];
+  save(KEYS.INSIGHT_STATE,out);
+  return true;
+}
 export function getDashboardScopeMap(){ return _plainMap(load(KEYS.DASHBOARD_SCOPE)); }
 export function setDashboardScopeMap(map){ save(KEYS.DASHBOARD_SCOPE,_plainMap(map)); }
 
@@ -2012,15 +1999,25 @@ function _appendGameRequestRow(row) {
  * when the player asked, possibly months earlier, and rule 1 alone would drop a
  * moved game out of the very week being built.
  */
-export function gameRequestMatchesWeek(req, week, availPool = []) {
+export function gameRequestMatchesWeek(req, week, availPool = [], weekSport = null) {
   if (!req || !week) return false;
+  // D2 lane 2 (DI-923): when the caller names the week's sport, a request for another sport never belongs to it (an NHL game on Oct 22 never shows on the college week built for that date); a request
+  // for a sport this build does not know belongs to no week. `weekSport` omitted = today's behaviour, byte for byte.
+  if (weekSport) { const rk = sportKeyOfRecord(req); if (rk === null || rk !== weekSport) return false; }
   const d = String(req.gameDate || '');
   const s = String(week.startDate || ''), e = String(week.endDate || '');
   if (d && s && e && d >= s && d <= e) return true;
   const id = req.espnEventId != null ? String(req.espnEventId) : '';
   if (!id) return false;
   return (Array.isArray(availPool) ? availPool : []).some(
-    g => g?.espnEventId != null && String(g.espnEventId) === id);
+    g => g?.espnEventId != null && String(g.espnEventId) === id && (!weekSport || sportKeyOfRecord(g) === weekSport));
+}
+
+/** D2 lane 2 (DI-923): the ESPN sport key of a WEEK, from its competition. A week with no competition is a legacy college week; a week whose competition is not in the mirror is unknown (null, matches nothing). */
+function _weekSportKeyOf(w) {
+  if (!w || !w.competitionId) return 'college-football';
+  const comp = getCompetitions().find(c => c && c.id === w.competitionId);
+  return comp ? requestEspnKey(comp.sport) : null;
 }
 
 /**
@@ -2056,8 +2053,8 @@ export function foldGameRequests({ rows = null, games = null, weeks = null, toda
     if (target && target.playerId === r.playerId) withdrawn.add(target.id);
   }
 
-  const onSlateIds = new Set(
-    (slate || []).map(g => g?.espnEventId).filter(v => v != null).map(String));
+  // D2 lane 2 (DI-923): "already on the slate" compares sport AND event id together (an NHL id that equals a college id never collides).
+  const onSlateIds = new Set((slate || []).map(g => sportEventKey(g)).filter(Boolean));
 
   const out = [];
   for (const row of all) {
@@ -2066,18 +2063,19 @@ export function foldGameRequests({ rows = null, games = null, weeks = null, toda
     const age = _dayDelta(gameDate, todayKey);
     if (!Number.isNaN(age) && age > GAME_REQUEST_RETENTION_DAYS) continue;   // hidden, not deleted
     let status;
+    const rowKey = sportEventKey(row), rowSport = sportKeyOfRecord(row);
     if (withdrawn.has(row.id)) status = 'withdrawn';
-    else if (row.espnEventId != null && onSlateIds.has(String(row.espnEventId))) status = 'onSlate';
+    else if (rowKey && onSlateIds.has(rowKey)) status = 'onSlate';
     else if (!gameDate || gameDate >= todayKey) status = 'pending';
     else {
       const wk = wks.find(w => {
         const s = String(w?.startDate || ''), e = String(w?.endDate || '');
-        return s && e && gameDate >= s && gameDate <= e;
+        return s && e && gameDate >= s && gameDate <= e && rowSport !== null && _weekSportKeyOf(w) === rowSport;   // D2 lane 2: only a week of the request's own sport can have missed it
       });
       const st = wk ? String(getEffectiveWeekStatus(wk) || wk.status || '') : '';
       status = (st === 'locked' || st === 'live' || st === 'final') ? 'missed' : 'passed';
     }
-    out.push({ ...row, status });
+    out.push(rowSport === null ? { ...row, status, unrecognizedSport: true } : { ...row, status });   // D2 lane 2 (DI-923): a row whose sport this build does not know says so (never drawn as college football)
   }
   return out;
 }
@@ -2093,8 +2091,10 @@ export function groupGameRequests(list) {
     String(a?.createdAt || '').localeCompare(String(b?.createdAt || '')));
   const groups = new Map();
   for (const r of sorted) {
+    // D2 lane 2 (DI-923): a college request keeps its key ('e:<id>', byte-identical); another sport's is keyed with its sport so two sports' equal ids stay two games.
+    const sk = sportKeyOfRecord(r);
     const key = r?.espnEventId != null && r.espnEventId !== ''
-      ? 'e:' + String(r.espnEventId)
+      ? (sk === 'college-football' ? 'e:' : 's:' + String(sk) + ':e:') + String(r.espnEventId)
       : 'm:' + String(r?.awayTeam || '') + '@' + String(r?.homeTeam || '');
     if (!groups.has(key)) groups.set(key, { key, espnEventId: r?.espnEventId ?? null, sample: r, requests: [], names: [], playerIds: [] });
     const g = groups.get(key);
@@ -2123,19 +2123,23 @@ export function countOpenGameRequests(playerId, folded = null) {
 export function submitGameRequest(fields = {}) {
   const { playerId, playerName = '', espnEventId, homeTeam = '', awayTeam = '',
           homeMascot = '', awayMascot = '', homeRank = null, awayRank = null,
-          kickoff = null, gameDate = null, season = null, appVersion = '' } = fields;
+          kickoff = null, gameDate = null, season = null, appVersion = '', espnSport = 'college-football' } = fields;
   if (!playerId) return { ok: false, reason: 'signedOut', request: null };
   if (espnEventId == null || espnEventId === '') return { ok: false, reason: 'noEvent', request: null };
   const eid = String(espnEventId);
+  // D2 lane 2 (DI-923): a request stores the sport it searched; a sport this build does not know is refused by name, never stored as college football. Omitted = college football (every v1 caller).
+  const reqSport = sportKeyOfRecord({ espnSport });
+  if (reqSport === null) return { ok: false, reason: 'unknownSport', request: null };
+  const reqKey = sportEventKey({ espnSport: reqSport, espnEventId: eid });
 
   // Already on a slate → blocked by construction. This is also the one place
   // the blind rule could have been pressured (announcing interest in a game
   // that is live on an OPEN slate), and it is removed rather than mitigated.
-  if (getGames().some(g => g?.espnEventId != null && String(g.espnEventId) === eid)) {
+  if (getGames().some(g => sportEventKey(g) === reqKey)) {
     return { ok: false, reason: 'onSlate', request: null };
   }
   const folded = foldGameRequests();
-  if (folded.some(r => r.playerId === playerId && r.status === 'pending' && String(r.espnEventId) === eid)) {
+  if (folded.some(r => r.playerId === playerId && r.status === 'pending' && sportEventKey(r) === reqKey)) {
     return { ok: false, reason: 'duplicate', request: null };
   }
   if (countOpenGameRequests(playerId, folded) >= GAME_REQUEST_CAP) {
@@ -2147,7 +2151,7 @@ export function submitGameRequest(fields = {}) {
     kind: 'request',
     playerId, playerName,
     espnEventId: eid,
-    espnSport: 'college-football',   // forward-compat; v1 only ever writes this
+    espnSport: reqSport,             // D2 lane 2 (DI-923): the sport that was searched ('college-football' for every v1 request); a field of the jsonb payload, so no migration
     homeTeam, awayTeam, homeMascot, awayMascot, homeRank, awayRank,
     kickoff,
     gameDate: gameDate || centralDateKey(kickoff || new Date()),

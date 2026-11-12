@@ -29,7 +29,7 @@ export const SORT_COPY = Object.freeze({
   button: 'Sort', sheetTitle: 'Sort games', sheetSub: 'Applies to your Dashboard', groupLabel: 'Sort by',
   customAllSports: 'Set per sport. Choose CFB or NFL to arrange.',
   arrange: 'Arrange games', reset: 'Reset to kickoff time', done: 'Done', close: 'Close',
-  arranging: 'Arranging', arrangeHelp: (weekN) => `Hold a game and drag it, or use the arrows. Saved for Week ${weekN}.`,
+  arranging: 'Arranging', arrangeHelp: (weekN, slate = '') => `Hold a game and drag it, or use the arrows. Saved for ${slate || `Week ${weekN}`}.`,   // D2 lane 2: a game night is named by its label
   saved: 'Arrangement saved.', resetToast: 'Reset to kickoff time.', standardNote: 'Switch to Compact to rearrange.',
   moveUp: 'Move up', moveDown: 'Move down',
 });
@@ -60,10 +60,10 @@ export function finalMovedManyAnnouncement(n) { return `${n} games are final and
 /**
  * @param {{n:number, caption:string, mode:string, arranging:boolean, weekN?:(string|number), escHtml:Function, numHtml:Function}} o
  */
-export function listControlHTML({ n, caption = '', mode, arranging = false, weekN = '', escHtml, numHtml } = {}) {
+export function listControlHTML({ n, caption = '', mode, arranging = false, weekN = '', slate = '', escHtml, numHtml } = {}) {
   requireFn(escHtml, 'escHtml', 'listControlHTML'); requireFn(numHtml, 'numHtml', 'listControlHTML');
   if (arranging) {
-    return `<div class="dc-listctl dc-listctl--arranging" data-dc-listctl><div class="dc-listctl-text"><b class="dc-listctl-title">${escHtml(SORT_COPY.arranging)}</b><span class="dc-listctl-cap">${escHtml(SORT_COPY.arrangeHelp(weekN))}</span></div>`
+    return `<div class="dc-listctl dc-listctl--arranging" data-dc-listctl><div class="dc-listctl-text"><b class="dc-listctl-title">${escHtml(SORT_COPY.arranging)}</b><span class="dc-listctl-cap">${escHtml(SORT_COPY.arrangeHelp(weekN, slate))}</span></div>`
       + `<button type="button" class="btn btn-primary dc-sort-done" data-dc-action="arrange-done" data-haptic="success">${escHtml(SORT_COPY.done)}</button></div>`;
   }
   const label = MODE_LABEL[mode] || MODE_LABEL.kickoff;

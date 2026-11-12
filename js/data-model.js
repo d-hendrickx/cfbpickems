@@ -9,7 +9,6 @@
  * v9 carried over:
  *  - ALMA_MATER_EXACT_PATTERNS / ALMA_MATER_EXCLUDE_PATTERNS for precise matching
  *  - DEMO_PLAYERS: alma maters + 2-letter initials
- *  - SITE_PIN: site-level access control
  *  - showInHistory flag on weeks
  */
 
@@ -468,12 +467,6 @@ export const CHAT_ACCENTS = Object.freeze([
   '#B91C1C', '#C2410C', '#A16207', '#15803D', '#0E7490', '#1D4ED8', '#7C3AED', '#BE185D',
 ]);
 
-// Site-level access PIN — DEFAULT only. Commissioner can override this via
-// settings.sitePin (Commissioner → Security panel). verifySitePin() in storage.js
-// checks settings first, then falls back to this constant.
-export const SITE_PIN = '6969';
-export const SITE_PIN_KEY = 'cfbp_site_unlocked';
-
 /**
  * Per-player theme catalog.
  *  - Default theme is 'neutral' as of v0.17.0; school palettes are opt-in.
@@ -526,8 +519,13 @@ export const RULES_LOCK_SENTENCE = 'Picks lock before the first kickoff of the w
  * locked). This table maps the EXACT old default sentence to the corrected one **at render time only** (the Rules page and the Comm rules editor): stored text is never rewritten by the
  * app, and any other text — including a custom rule that merely contains the same words — is left alone.
  */
+// D2 lane 2 (DI-905 R-4, RPF-C4): 10 is a target, not a rule - college football has no ceiling and alma-mater games are always added (js/slate-add.js; the open gate needs one game).
+export const RULES_SLATE_SENTENCE = 'Each week, the Commissioner selects the college football games for the slate, usually 10.';
+export const RULES_ALMA_SENTENCE = 'Alma mater games — the schools claimed by active players — are always added to the slate.';
 export const RULES_LEGACY_REPLACEMENTS = Object.freeze([
   Object.freeze({ from: 'Games lock at kickoff. If the week is locked, no picks are accepted even for future games.', to: RULES_LOCK_SENTENCE }),
+  Object.freeze({ from: 'Each week, the Commissioner selects 10 college football games for the slate.', to: RULES_SLATE_SENTENCE }),
+  Object.freeze({ from: 'Alma mater games — the schools claimed by active players — are always prioritized.', to: RULES_ALMA_SENTENCE }),
 ]);
 /** @returns {{ rules: Array, replaced: number }} the rules with every exact legacy sentence swapped (the input is never mutated; untouched sections keep their identity). */
 export function applyRulesLegacyReplacements(rules) {
@@ -571,8 +569,8 @@ export function applyRulesLegacyReplacements(rules) {
 // are prioritized) without naming a location for the roster at all.
 export const DEFAULT_RULES = [
   { id:'r1', section:'The Basics', items:[
-    'Each week, the Commissioner selects 10 college football games for the slate.',
-    'Alma mater games — the schools claimed by active players — are always prioritized.',
+    RULES_SLATE_SENTENCE,
+    RULES_ALMA_SENTENCE,
     'You pick which team you think will win against the spread.',
     'Picks are blind — you cannot see others\' picks until you submit your own.',
     // PF-1 (2026-10-01, Drew: "ok to change wording"; DI finding 1) — the week locks at its first kickoff MINUS the commissioner's offset (30 minutes by default), never at "kickoff", which
@@ -612,7 +610,10 @@ export const DEFAULT_SETTINGS = {
   candidateGameCount: 25,
   weeklyPrize: 'Loser buys winner a consolation prize',
   seasonPrize: 'Season loser owes season winner a grand prize',
-  adminPasswordHash: btoa('admin123'),
+  // D2 lane 1 (UN-541 / PF-541, DI-1015) — OBLIGATIONS on or off. Default TRUE: every league that exists, and every new one, owes and pays exactly as before. The default-when-missing story
+  // (CONVENTIONS #10): ONLY an explicit `false` is off - a settings blob written before this field existed, a stray string, null: ON. This is the LEAGUE default; a competition may override it
+  // (`competitions.settings.obligationsEnabled`, allow-listed in competition.js). Read ONLY through competition.js's `obligationsOn(competitionId)`.
+  obligationsEnabled: true,
   storageMode: STORAGE_MODE.LOCAL,
   season: '2026',
   customRules: null,
@@ -1154,12 +1155,12 @@ export const SCRIBE_FEEDBACK_CHIP_FAMILIES = Object.freeze(['annoying', 'mean', 
 // ─── DEMO PLAYERS — correct alma maters and 2-letter initials ─────────────────
 
 export const DEMO_PLAYERS = [
-  { playerId:'p1', displayName:'Drew',    initials:'DH', email:'', active:true, pinHash:btoa('1111'), almaMater:'Texas A&M',  createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
-  { playerId:'p2', displayName:'Brayden', initials:'BR', email:'', active:true, pinHash:btoa('2222'), almaMater:'Oklahoma',   createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
-  { playerId:'p3', displayName:'Kevin',   initials:'KC', email:'', active:true, pinHash:btoa('3333'), almaMater:'Notre Dame', createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
-  { playerId:'p4', displayName:'Koby',    initials:'KR', email:'', active:true, pinHash:btoa('4444'), almaMater:'USC',        createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
-  { playerId:'p5', displayName:'Jacob',   initials:'JP', email:'', active:true, pinHash:btoa('5555'), almaMater:'Arkansas',   createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
-  { playerId:'p6', displayName:'Kihoon',  initials:'KB', email:'', active:true, pinHash:btoa('6666'), almaMater:'Texas A&M',  createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
+  { playerId:'p1', displayName:'Drew',    initials:'DH', email:'', active:true, almaMater:'Texas A&M',  createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
+  { playerId:'p2', displayName:'Brayden', initials:'BR', email:'', active:true, almaMater:'Oklahoma',   createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
+  { playerId:'p3', displayName:'Kevin',   initials:'KC', email:'', active:true, almaMater:'Notre Dame', createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
+  { playerId:'p4', displayName:'Koby',    initials:'KR', email:'', active:true, almaMater:'USC',        createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
+  { playerId:'p5', displayName:'Jacob',   initials:'JP', email:'', active:true, almaMater:'Arkansas',   createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
+  { playerId:'p6', displayName:'Kihoon',  initials:'KB', email:'', active:true, almaMater:'Texas A&M',  createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
 ];
 
 // ─── REAL WEEK 1 2026 ─────────────────────────────────────────────────────────
@@ -1282,11 +1283,12 @@ export const DEMO_PICKS = [];
 
 // ─── FACTORY FUNCTIONS ────────────────────────────────────────────────────────
 
-export function createPlayer(displayName, email='', pin='0000', almaMater='', initials='') {
+// D2 lane 6 (D-108): the PIN system is removed. The third positional slot (it carried the player's PIN) is RETIRED and ignored, and a player record no longer
+// carries a credential. The slot is kept so the ~35 positional callers (tests, the Drew-run projection script) need not change in the same commit.
+export function createPlayer(displayName, email='', _retiredPinSlot='', almaMater='', initials='') {
   return {
     playerId:`p_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
     displayName, initials, email, active:true, almaMater,
-    pinHash:btoa(pin),
     // ── Notification fields (Phase III prep — SMS/email pick updates) ──
     // Populated later; safe defaults now so existing code and exports are stable.
     phone:'',                 // E.164 format, e.g. "+15125550123"
@@ -1317,7 +1319,7 @@ export function tiebreakerQuestionFor(profile, game = null) {
  * function has always returned. A week of a NON-default competition carries `competitionId`; the caller passes null for the default competition and the key is
  * then not written at all (absent, never an explicit null: a CFB week's record and its row stay exactly as they were).
  */
-export function createWeek(season, weekNumber, startDate='', endDate='', { competitionId = null, profile = null } = {}) {
+export function createWeek(season, weekNumber, startDate='', endDate='', { competitionId = null, profile = null, format = null, rules = null, slateLabel = null, designatedTiebreaker = false } = {}) {
   // v0.16.0 — weeks carry Ischemic Extra Point fields (enabled/actual/detect)
   // v0.17.1 — weeks carry auto-transition config (auto-lock/auto-live/auto-final)
   // v0.17.7 (UN-118/UN-125) — weeks carry multi-part GROUP fields. A week
@@ -1379,6 +1381,20 @@ export function createWeek(season, weekNumber, startDate='', endDate='', { compe
       tiebreakerQuestion: tiebreakerQuestionFor(profile),
     } : {}),
     ...(profile && profile.sideContest && profile.sideContest.optional ? { extraPointEnabled: false } : {}),
+    // D2 lane 2 (DI-927 #2): a sport with NO side contest and NO alma-mater rule (the NHL) has no Extra Point either: the week's contest is OFF, so Picks and Finalize never ask for a field goal.
+    ...(profile && !profile.sideContest && !profile.affinity ? { extraPointEnabled: false } : {}),
+    // D2 lane 2 (DI-905 R-5, RPF-C4 b): a COLLEGE week in a league with NO claimed alma maters defaults its tiebreaker to the total of the designated game (the last start), like the NFL, instead of
+    // an alma-mater total with no games to total. The caller decides (it reads the claims); IRB's weeks never pass it, so they stay byte-identical.
+    ...(designatedTiebreaker === true && !(profile && profile.tiebreakerDefault && profile.tiebreakerDefault.type !== TIEBREAKER_TYPE.ALMA_MATER_TOTAL) ? {
+      tiebreakerType: TIEBREAKER_TYPE.CUSTOM,
+      tiebreakerCalculationMode: TIEBREAKER_CALC_MODE.MANUAL,
+      tiebreakerQuestion: 'What is the total combined points scored in the tiebreaker game?',
+    } : {}),
+    // D2 lane 2 (DI-886 / DI-903 / DI-911): the slate's label (a hockey game night, "Thu, Oct 22"), its pick format and its rule-set stamp ride `extra`; absent when not passed (a football week built
+    // the old way is byte-identical). A week with no stamp is derived from its competition's sport and format (js/rules-model.js `ruleSetKeyForWeek`).
+    ...(typeof slateLabel === 'string' && slateLabel.trim() ? { slateLabel: slateLabel.trim().slice(0, 24) } : {}),
+    ...(typeof format === 'string' && format ? { format } : {}),
+    ...(rules && typeof rules === 'object' && typeof rules.key === 'string' ? { rules: { key: rules.key, v: Number(rules.v) || 1 } } : {}),
   };
 }
 
@@ -1474,13 +1490,31 @@ export const ESPN_SPORT_ENDPOINTS = {
     code: 'NFL',
     path: 'football/nfl',
   },
+  // D2 lane 2 (DI-881, UN-513): the NHL. The ESPN key equals the dbCode ('nhl'); `hockey/nhl` is ESPN's scoreboard path (probed 2026-10-18).
+  'nhl': {
+    label: 'NHL',
+    code: 'NHL',
+    path: 'hockey/nhl',
+  },
   // Extend by adding more entries as needed — the fetcher is generic.
 };
 
-/** Resolve the ESPN base path for a game's sport, defaulting to CFB. */
+/** W-77 (T-36, 2026-10-18) - the error for a sport the registry does not hold: named, carrying the value (clipped to 40) on `.sport`. Never a default. */
+export function unknownSportError(value) {
+  let shown = '';
+  try { shown = String(value).slice(0, 40); } catch { shown = typeof value; }
+  const err = new Error(`Unknown sport "${shown}" - there is no scoreboard for it (known: ${Object.keys(ESPN_SPORT_ENDPOINTS).join(', ')}).`);
+  err.name = 'UnknownSportError';
+  err.sport = shown;
+  return err;
+}
+
+/** An ABSENT key is college football (the pre-multi-sport callers); any other value must be an own key of ESPN_SPORT_ENDPOINTS, or this THROWS (W-77: it used to
+ *  return the college football path for an unknown key, so a game tagged with a sport we do not support was polled against college football scores). */
 export function espnSportPath(sportKey) {
-  const s = ESPN_SPORT_ENDPOINTS[sportKey || 'college-football'];
-  return s ? s.path : ESPN_SPORT_ENDPOINTS['college-football'].path;
+  if (sportKey === undefined || sportKey === null || sportKey === '') return ESPN_SPORT_ENDPOINTS['college-football'].path;
+  if (typeof sportKey === 'string' && Object.prototype.hasOwnProperty.call(ESPN_SPORT_ENDPOINTS, sportKey)) return ESPN_SPORT_ENDPOINTS[sportKey].path;
+  throw unknownSportError(sportKey);
 }
 
 export function createGame(weekId, overrides={}) {
@@ -1603,12 +1637,34 @@ function resolveWeekDisplayNumber(week) {
   return overrideRaw !== '' ? overrideRaw : week?.weekNumber;
 }
 
+const NIGHT_WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const NIGHT_MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/**
+ * D2 lane 2 (DI-886): "Thu, Oct 22" from a calendar date 'YYYY-MM-DD' (the weekday and date of the calendar date itself: no clock, no zone). '' for anything that is not a real date. The default
+ * label of a game-night slate (a hockey slate is a night, not a "Week n"); js/night-slate.js re-exports it.
+ */
+export function nightLabel(date) {
+  const m = typeof date === 'string' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(date) : null;
+  if (!m) return '';
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  const t = new Date(Date.UTC(y, mo - 1, d, 12));
+  if (t.getUTCFullYear() !== y || t.getUTCMonth() !== mo - 1 || t.getUTCDate() !== d) return '';
+  return `${NIGHT_WEEKDAY[t.getUTCDay()]}, ${NIGHT_MONTH[mo - 1]} ${d}`;
+}
+
 function composeWeekNamePart(week) {
   if (week.label?.startsWith('📋') || week.label?.startsWith('Historical')) return week.label;
+  // D2 lane 2 (DI-886): a slate with a label (a hockey game night) is named by it, never "Week n"; a week with no slateLabel (every football week) reads exactly as before.
+  if (typeof week.slateLabel === 'string' && week.slateLabel.trim()) return week.slateLabel.trim();
   const displayNumber = resolveWeekDisplayNumber(week);
   return week.roundLabel
     ? `Week ${displayNumber}, ${week.roundLabel}`
     : `Week ${displayNumber}`;
+}
+
+/** D2 lane 2 (DI-886): true when a slate's label IS its (single) date, so a surface must not print the date a second time ("Thu, Oct 22 — Oct 22, 2026"). */
+function labelIsTheDate(week) {
+  return typeof week.slateLabel === 'string' && !!week.startDate && week.startDate === (week.endDate || week.startDate) && week.slateLabel.trim() === nightLabel(week.startDate);
 }
 
 export function formatWeekLabel(week) {
@@ -1616,6 +1672,7 @@ export function formatWeekLabel(week) {
   const weekPart = composeWeekNamePart(week);
 
   if (week.dataSourceMode === 'demo') return weekPart;
+  if (labelIsTheDate(week)) return weekPart;
   if (week.startDate && week.endDate && week.startDate !== week.endDate) {
     return `${weekPart} — ${fmtDate(week.startDate)}–${fmtDate(week.endDate)}`;
   }
@@ -1666,6 +1723,7 @@ export function formatWeekLabelParts(week, { collapseYear = false, compact = fal
   const name = composeWeekNamePart(week);
 
   if (week.dataSourceMode === 'demo') return { name, dates: '' };
+  if (labelIsTheDate(week)) return { name, dates: '' };
   if (compact) return { name, dates: compactWeekDates(week.startDate, week.endDate) };
   if (week.startDate && week.endDate && week.startDate !== week.endDate) {
     if (collapseYear) {
@@ -1835,6 +1893,19 @@ export const NFL_TEAM_ABBR = Object.freeze({
   'Tennessee Titans':'TEN', 'Washington Commanders':'WSH',
 });
 
+/**
+ * D2 lane 2 (DI-881, UN-513) - the 32 NHL teams keyed by ESPN's `displayName`, verified against ESPN's teams endpoint on 2026-10-18 (32 teams). The stored team name is `displayName`,
+ * never `location`: "New York" is two teams (the Islanders and the Rangers), and a pick is stored as the team NAME. Values are ESPN's own abbreviations (ANA, BOS ... WPG).
+ */
+export const NHL_TEAM_ABBR = Object.freeze({
+  'Anaheim Ducks':'ANA', 'Boston Bruins':'BOS', 'Buffalo Sabres':'BUF', 'Calgary Flames':'CGY', 'Carolina Hurricanes':'CAR', 'Chicago Blackhawks':'CHI',
+  'Colorado Avalanche':'COL', 'Columbus Blue Jackets':'CBJ', 'Dallas Stars':'DAL', 'Detroit Red Wings':'DET', 'Edmonton Oilers':'EDM', 'Florida Panthers':'FLA',
+  'Los Angeles Kings':'LA', 'Minnesota Wild':'MIN', 'Montreal Canadiens':'MTL', 'Nashville Predators':'NSH', 'New Jersey Devils':'NJ', 'New York Islanders':'NYI',
+  'New York Rangers':'NYR', 'Ottawa Senators':'OTT', 'Philadelphia Flyers':'PHI', 'Pittsburgh Penguins':'PIT', 'San Jose Sharks':'SJ', 'Seattle Kraken':'SEA',
+  'St. Louis Blues':'STL', 'Tampa Bay Lightning':'TB', 'Toronto Maple Leafs':'TOR', 'Utah Mammoth':'UTAH', 'Vancouver Canucks':'VAN', 'Vegas Golden Knights':'VGK',
+  'Washington Capitals':'WSH', 'Winnipeg Jets':'WPG',
+});
+
 export const TEAM_ABBR = {
   // SEC
   'Alabama':'BAMA','Arkansas':'ARK','Auburn':'AUB','Florida':'FLA','Georgia':'UGA',
@@ -1969,6 +2040,7 @@ function singleTeamAbbr(name) {
   if (!name) return '';
   const n = String(name);
   if (Object.prototype.hasOwnProperty.call(NFL_TEAM_ABBR, n)) return NFL_TEAM_ABBR[n];        // D1 (DI-536): an NFL team reads its ESPN abbreviation
+  if (Object.prototype.hasOwnProperty.call(NHL_TEAM_ABBR, n)) return NHL_TEAM_ABBR[n];        // D2 lane 2 (DI-881): an NHL team reads its ESPN abbreviation (NYR and NYI never collide)
   if (Object.prototype.hasOwnProperty.call(TEAM_ABBR, n) && TEAM_ABBR[n]) return TEAM_ABBR[n];
   const words = n.split(/\s+/).filter(Boolean);
   if (words.length === 1) return words[0].slice(0, 4).toUpperCase();

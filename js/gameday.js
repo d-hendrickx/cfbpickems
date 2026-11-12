@@ -145,6 +145,9 @@ export function gameDayModel(input = {}) {
   const stale = live.some(e => e.phase.phase === 'live-stale');
   const state = String(i.state || '');
   const weekN = num(i.weekN);
+  // int/v0.31.0 (D2 lane 2 x lane 3): the slate's name and start word come from Home (js/slate-name.js: "Week 6" for football, byte-identical; a night's label for the NHL); a caller that passes neither reads as before
+  const wk = isStr(i.slateName) ? i.slateName : `Week ${weekN ?? ''}`.trim();
+  const startLower = (isStr(i.startWord) ? i.startWord : 'Kickoff').toLowerCase();
   // DESIGN_D1_E (W-85): first-person lines ("you have not picked yet", "your picks are in", "Make picks") are for a viewer who PLAYS the Now card's sport and week. Default: every caller that predates the flag
   // is an entrant. The final winner line and the Results button are NOT personal (R-2: they are the tease), so they are left alone.
   const entered = i.entered !== false;
@@ -163,7 +166,7 @@ export function gameDayModel(input = {}) {
     const asPending = state === 'open-pending' || (state === 'open-done' && !entered);
     kind = asPending ? 'open-due' : 'open-in';
     expandable = false;
-    header.tail = `· Week ${weekN ?? ''}`.trim();
+    header.tail = `· ${wk}`.trim();
     if (asPending) {
       const left = num(i.lockMs) !== null ? num(i.lockMs) - (num(i.now) ?? 0) : null;
       body.type = 'action';
@@ -180,16 +183,16 @@ export function gameDayModel(input = {}) {
     } else {
       const c = i.counts && num(i.counts.submittedCount) !== null && num(i.counts.totalPlayers) !== null ? i.counts : null;
       body.type = 'action';
-      body.title = `You're in for Week ${weekN ?? ''}`.trim();
+      body.title = `You're in for ${wk}`.trim();
       body.line = [c ? `${c.submittedCount} of ${c.totalPlayers} picked` : '', num(i.lockMs) !== null ? `locks ${fmt.time(i.lockMs)}` : ''].filter(Boolean).join(' · ');
       body.action = { label: 'Edit picks', tab: 'picks', tone: 'outline' };
     }
   } else if (state === 'final') {
     kind = 'final';
-    header.tail = `· Week ${weekN ?? ''} final`.trim();
+    header.tail = `· ${wk} final`.trim();
     const f = i.finalLine || {};
     body.type = 'action';
-    body.title = isStr(f.winnerLine) ? f.winnerLine : `Week ${weekN ?? ''} is final.`.replace('  ', ' ');
+    body.title = isStr(f.winnerLine) ? f.winnerLine : `${wk} is final.`.replace('  ', ' ');
     body.line = isStr(f.mine) ? `You went ${f.mine}` : '';
     body.next = isStr(f.next) ? f.next : '';                           // DI-599: "· Next: NFL Week 6 picks lock Sun 12:30 PM" — drawn after the line, and folded into the open card when it cannot fit (css)
     body.action = { label: 'Results', tab: 'leaderboard', tone: 'solid', ...(isStr(i.weekId) ? { weekId: i.weekId } : {}) };   // D1 Lane B History: names its week so the app can open that week's detail (DI-596)
@@ -199,7 +202,7 @@ export function gameDayModel(input = {}) {
     const first = num(i.firstKickoffMs);
     const left = first !== null ? first - (num(i.now) ?? 0) : null;
     body.type = 'message';
-    body.title = first !== null ? `First kickoff ${fmt.time(first)}` : 'Picks are locked';
+    body.title = first !== null ? `First ${startLower} ${fmt.time(first)}` : 'Picks are locked';
     body.line = left !== null && left > 0
       ? [`In ${fmt.countdown(left)}`, asPlayer ? 'your picks are in' : ''].filter(Boolean).join(' · ')
       : 'Reveal comes as the week goes live';
@@ -213,7 +216,7 @@ export function gameDayModel(input = {}) {
     header.tail = '· All games final';
     body.type = 'message';
     body.title = isStr(i.mineLine) ? i.mineLine : 'Every game is final';
-    body.line = `Results post when Week ${weekN ?? ''} is finalized.`.replace('  ', ' ');
+    body.line = `Results post when ${wk} is finalized.`.replace('  ', ' ');
   } else {
     kind = 'quiet';
     header.tail = '· Nothing live right now';
@@ -270,7 +273,7 @@ export function gameDayModel(input = {}) {
     body, pills, morePill: capped.rest > 0 ? { count: live.length } : null,
     showSport: i.showSport === true, weekScoped: i.weekScoped === true,
     rows, rowsRest: rowsCap.rest,
-    sub: `${i.weekScoped === true && weekN !== null ? `Week ${weekN} · ` : ''}${live.length} live · ${upcoming.length} upcoming · ${finals.length} final`,
+    sub: `${i.weekScoped === true && weekN !== null ? `${wk} · ` : ''}${live.length} live · ${upcoming.length} upcoming · ${finals.length} final`,
     freshness: live.length || kind === 'quiet' ? (stale ? { text: isStr(i.staleText) ? i.staleText : 'Scores may be behind.', stale: true } : { text: isStr(i.freshText) ? i.freshText : '', stale: false }) : null,
     stats: i.stats && typeof i.stats === 'object' ? { lines: asArray(i.stats.lines).filter(isStr), notes: asArray(i.stats.notes).filter(isStr) } : null,
     footer: { label: rowsCap.rest > 0 ? `All ${ordered.length} games on Dashboard ›` : 'Open Dashboard', scope: sports.size > 1 && i.multiEntered === true ? 'all' : (ordered[0] ? ordered[0].sport : null) },
@@ -297,7 +300,7 @@ export function gameDayAnnouncements(prevWatch, nextWatch) {
     const score = `${w.away} ${w.awayScore ?? ''}, ${w.home} ${w.homeScore ?? ''}`;
     if (LIVE_PHASES.has(p.phase) && w.phase === 'final' && (p.shown || w.shown)) {
       const own = w.entered ? sentence({ kind: w.coverage, margin: w.margin }) : '';
-      out.push(`Final: ${score}.${own ? ` ${own}` : ''}`);
+      out.push(`Final${typeof w.lead === 'string' && w.lead ? ` in ${w.lead}` : ''}: ${score}.${own ? ` ${own}` : ''}`);   // D2 DI-825: across leagues the line leads with its league ("Final in IRB, CFB: …"); one league has no lead
     } else if (LIVE_PHASES.has(p.phase) && LIVE_PHASES.has(w.phase) && w.entered && w.shown && FLIP_KINDS.has(p.coverage) && FLIP_KINDS.has(w.coverage) && p.coverage !== w.coverage) {
       out.push(`${score}. ${sentence({ kind: w.coverage, margin: w.margin })}`);
     }

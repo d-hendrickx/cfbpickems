@@ -15,6 +15,7 @@
  *   live-stale   status live, no capture or one older than 3 minutes     "Score may be behind" (the last known score stays visible)
  *   final        status final, with a score                              "Final"
  *   no-score     live or final, but no score on the record               "Score not available yet"
+ *   voided       a game the commissioner VOIDED (D2 lane 2, DI-896)      "Voided — no decision" (returned before no-score: a voided game has no score on purpose)
  *
  * THE DECIDED-LANGUAGE RULE (Std-8). Nothing is called "won", "lost", "clinched" or "locked in" before the game is final. `isDecided(phase)` is
  * true for `final` and for nothing else; `coverWord()` is the one place the covering / trailing / covered / did-not-cover words live, so a template
@@ -37,13 +38,14 @@ export const LIVE_STATUS_STALE_MS = 3 * 60 * 1000;
 /** js/app.js's LIVE_STATUS_SHORT_BUDGET: a compact chip never wraps. */
 export const LIVE_STATUS_SHORT_BUDGET = 14;
 
-export const GAME_PHASES = Object.freeze(['upcoming', 'awaiting', 'live', 'live-stale', 'final', 'no-score']);
+export const GAME_PHASES = Object.freeze(['upcoming', 'awaiting', 'live', 'live-stale', 'final', 'no-score', 'voided']);
 
 export const PHASE_LABELS = Object.freeze({
   awaiting: 'Waiting for a score update',
   'live-stale': 'Score may be behind',
   final: 'Final',
   'no-score': 'Score not available yet',
+  voided: 'Voided — no decision',
 });
 
 /** Words no template may use for a game that is not final. */
@@ -83,6 +85,9 @@ export function gameStateOf(game, { liveEntry = null, now = Date.now(), staleMs 
   const hasScore = isNum(g.homeScore) && isNum(g.awayScore);
   const score = hasScore ? { home: Number(g.homeScore), away: Number(g.awayScore) } : null;
   const base = { score, fresh: null, capturedAt: null, ageMs: null, pulse: false };
+
+  // D2 lane 2 (DI-896): a voided game is `final` with no score ON PURPOSE (picks kept, nobody scores). It reads "Voided — no decision", never "Score not available yet".
+  if (g.status === 'final' && g.voided === true) return { ...base, phase: 'voided', label: PHASE_LABELS.voided };
 
   if (g.status === 'final') {
     return hasScore ? { ...base, phase: 'final', label: PHASE_LABELS.final } : { ...base, phase: 'no-score', label: PHASE_LABELS['no-score'] };
@@ -157,4 +162,40 @@ export function freshnessLine(state, { game = null, now = Date.now(), formatKick
     default:
       return '';
   }
+}
+
+// ─── D2 sweep, DI-1091 / W-102 (BUG, RG-372): the time of the FINAL SCORE, not of the last edit ─────────────────────────────────────────────────────
+// `lastUpdated` moves on every edit, so a commissioner's correction after the game ended made the Home game card read "Just now" and jump to the top.
+// A game now carries `finalAt`, stamped ONCE at the first observed change to `final` and never rewritten (a correction, a re-poll or a score edit leave it
+// alone); it is cleared when the status leaves `final`, so the next `final` stamps anew. No column: a legacy field with no column rides in `games.extra`
+// (the projection's own rule). Finals stored before this shipped have no `finalAt` and keep reading `lastUpdated` until their next real transition.
+
+/** The `finalAt` a game should carry after a write, from the state before it. Pure. `undefined` means "carry none" (clear it). */
+export function finalAtFor({ prevStatus = null, prevFinalAt = null, nextStatus = null, now = null } = {}) {
+  if (nextStatus !== 'final') return undefined;                                  // not final: never carries one (a re-opened game is cleared)
+  if (prevStatus === 'final') return prevFinalAt ? prevFinalAt : undefined;      // already final: keep the stamp as it was (a legacy final stays unstamped)
+  return now || new Date().toISOString();                                        // the first observed change to final
+}
+
+/** `next` (a game about to be saved) with its `finalAt` set by the rule above, judged against `prev` (the stored game, or null for a new one).
+ *  Returns a NEW object; `prev` and `next` are untouched. */
+export function stampFinalAt(prev, next, now = null) {
+  const out = { ...(next || {}) };
+  const f = finalAtFor({ prevStatus: prev ? prev.status : null, prevFinalAt: prev ? prev.finalAt : null, nextStatus: out.status, now });
+  if (f === undefined) delete out.finalAt; else out.finalAt = f;
+  return out;
+}
+
+/** The `finalAt` change a score refresh adds to the game it saves, as a spread: `{ finalAt }` to stamp (first change to final), `{ finalAt: undefined }` to clear (the status left final),
+ *  `{}` for nothing (already stamped and still final, a legacy final, or never final). Judged against `prev`, the stored game. */
+export function finalAtPatch(prev, nextStatus, now = null) {
+  const f = finalAtFor({ prevStatus: prev ? prev.status : null, prevFinalAt: prev ? prev.finalAt : null, nextStatus, now });
+  if (f !== undefined) return prev && prev.finalAt === f ? {} : { finalAt: f };
+  return prev && prev.finalAt !== undefined && prev.finalAt !== null ? { finalAt: undefined } : {};
+}
+
+/** The instant a game's result belongs to, in ms: its `finalAt`, else `lastUpdated`, else `updatedAt`, else the kickoff, else 0. */
+export function gameFinalMs(game) {
+  const g = game || {};
+  return toMs(g.finalAt) || toMs(g.lastUpdated) || toMs(g.updatedAt) || toMs(g.kickoff) || 0;
 }

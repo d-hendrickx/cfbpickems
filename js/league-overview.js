@@ -166,6 +166,9 @@ export function leagueOverviewBodyHTML(m, deps = {}) {
   const comm = arr(model.commissioner);
   if (model.isCommissioner && comm.length) html += groupHTML('lo-lbl-comm', 'Commissioner', `<div class="lo-list">${comm.map((r) => rowHTML(r, d)).join('')}</div>`);
   const leagueRows = [
+    // D2 DI-876 (lane 3, 2026-10-19): "Archived sports · n" — every member reaches an archived sport's read-only history here (the commissioner has it in his own group, beside Archive a sport…).
+    // Present only when at least one exists (never a dead stub); the caller builds the row.
+    ...(model.isCommissioner ? [] : arr(model.leagueArchivedRows)),
     { action: 'league-page', title: 'League page', subtitle: 'Settings, standings and members' },
     { action: 'switch-league', title: 'Switch or join a league', right: Number(model.leagueCount) > 0 ? `${Math.floor(Number(model.leagueCount))} ${Number(model.leagueCount) === 1 ? 'league' : 'leagues'}` : '' },
   ];

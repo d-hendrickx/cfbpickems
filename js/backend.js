@@ -49,18 +49,14 @@
  * the live ones; keeping them would have implied a protection that was no
  * longer running.
  *
- * ── PIN MODE IS LOCAL-ONLY NOW, AND THAT IS A REAL BEHAVIOUR CHANGE ─────────
- * CLAUDE.md's locked decision is that the PIN model STAYS IN THE CODE, and it
- * does: js/auth.js's site PIN, player PINs and the commissioner-password
- * re-prompts are all untouched. What a PIN-mode device no longer has is a
- * SHARED backend, because the only one it ever had was the Sheet:
+ * ── LOCAL MODE IS CREDENTIAL-FREE AND LOCAL-ONLY (D2 lane 6, D-108) ────────
+ * The PIN system is REMOVED (Drew, 2026-10-18: "Remove the PIN system entirely"). What survives is `authMode:'local'`, selected only EXPLICITLY by config.json: no PINs,
+ * no passwords, no site gate, and no shared backend, because the only one the PIN era ever had was the Sheet:
  *   - `isBackendConfigured()` answers false, so js/chat.js does not poll or
  *     append and the three lifecycle emitters in js/app.js stay quiet;
  *   - `isBackendReady()` answers false, so js/storage.js's `useBackend()` is
  *     false for 'googleSheets' and every read and write lands in localStorage.
- * That is a working single-device app, which is what a fork of this repo with
- * no Supabase project gets — and it is honest, where a PIN device pointed at a
- * dead /exec URL would have been six players silently out of sync.
+ * That is a working single-device app for offline development and the offline test suites. It is NOT a fallback: an unreadable config.json HOLDS (boot()), it never lands here.
  */
 
 const MIRROR_KEY = 'cfbp_sheet_mirror';
@@ -68,12 +64,9 @@ const MIRROR_KEY = 'cfbp_sheet_mirror';
 // ── Config ────────────────────────────────────────────────────────────────────
 
 /**
- * `authMode` — 'supabase' | 'prelink' | 'pins'. CONVENTIONS #10: anything the
- * file does not say is 'pins', the safe default, never 'supabase'.
+ * `authMode` — 'supabase' | 'local' (D2 lane 6, D-108: the PIN modes are removed). A config.json whose `authMode` is anything else, or absent, is NOT a read that answered the
+ * question: loadDeployedConfig() reports it as unknown (`authModeKnown:false`) and boot() HOLDS on the "cannot reach Munera" screen. It never becomes a local app.
  */
-function _normalizeAuthMode(raw) {
-  return (raw === 'supabase' || raw === 'prelink') ? raw : 'pins';
-}
 
 /**
  * `dataMode` — 'supabase' or 'sheets'. The name is `dataMode` and not
@@ -138,13 +131,26 @@ export function setDataMode(mode) { _dataMode = _normalizeDataMode(mode); return
  * `authModeKnown:true` on the success branch so the flag is explicit in both
  * directions rather than inferred from the absence of a key.
  */
+/** localhost, 127.0.0.1, [::1] or a file: page. No location at all (a Node test) is treated as a developer context: there is no origin to judge. */
+function _isDevOrigin() {
+  try {
+    if (typeof location === 'undefined' || !location) return true;
+    if (location.protocol === 'file:') return true;
+    const host = String(location.hostname || (() => { try { return new URL(String(location.origin || '')).hostname; } catch { return ''; } })()).toLowerCase();
+    if (!host) return String(location.origin || '') === '' || /^file:/.test(String(location.origin));
+    return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
+  } catch { return false; }
+}
 export async function loadDeployedConfig() {
   try {
     // Cache-bust on every load so a fresh deploy is picked up immediately.
     const res = await fetch('config.json?t=' + Date.now(), { cache: 'no-store' });
     if (!res.ok) return { ok: false, reason: 'missing', authModeKnown: false };
     const data = await res.json();
-    const authMode = _normalizeAuthMode(data?.authMode);
+    // D2 lane 6 (D-108) — only the two named modes are an answer. Anything else (a missing key, the retired 'pins'/'prelink', a typo) is an UNKNOWN read: fail closed, never a guess.
+    // Security hardening (D2 lane 6): 'local' is a developer value. A served config.json that says it on a real origin is refused as an unrecognised read (hold), never honoured.
+    if ((data?.authMode !== 'supabase' && data?.authMode !== 'local') || (data.authMode === 'local' && !_isDevOrigin())) return { ok: false, reason: 'unrecognized', authModeKnown: false };
+    const authMode = data.authMode;
     const dataMode = _normalizeDataMode(data?.dataMode);
     const supabaseUrl = (data?.supabaseUrl || '').trim();
     const supabaseAnonKey = (data?.supabaseAnonKey || '').trim();

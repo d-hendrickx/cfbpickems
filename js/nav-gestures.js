@@ -148,7 +148,7 @@ const DRAWER_YIELD_SELECTOR = '.chat-msg, input, textarea, [contenteditable]';
 // Control Center) and `.gr-sat-chips` (Rules: the Request-a-Game Saturday chips, the same class of defect). Exported so navgesturestest can prove EVERY horizontal scroller in the stylesheet is listed here
 // or carries a written exemption (5n-struct) — a new scroller that nobody lists is this defect again. `.chat-sport-pills` (the Locker Room's sport row, W-57) joined at the merge of int, 2026-10-08: it sits
 // beside `.chat-pills-scroll` on Chat, another "anywhere" tab, and the struct scan named it.
-export const DRAWER_HSCROLL_SELECTOR = '.chat-pills-scroll, .dashboard-scroll, .comm-tabbar, .batch-grid-scroll, .gd-rail, .gr-sat-chips, .chat-sport-pills';
+export const DRAWER_HSCROLL_SELECTOR = '.chat-pills-scroll, .dashboard-scroll, .comm-tabbar, .batch-grid-scroll, .gd-rail, .gr-sat-chips';   // D2 sweep W-128: `.chat-sport-pills` (the Locker Room's sport row) left with the row it named — the scope menu holds the sport choice
 
 /**
  * W-70 / DI-W70.4 (2026-10-14) — the tabs whose in-tab pager shares the left quarter of the screen with the Control Center: a left-to-right swipe that STARTS in the left
@@ -219,8 +219,14 @@ export function isPagerYieldTarget(target, stopAt = null) {
  * Drew's own "every other tab... from anywhere"); on 'picks'/'dashboard' it
  * is true only inside the left DRAWER_ZONE_FRACTION of the viewport.
  */
+// D2 lane 6 (DI-764): while a PUSHED page is open inside a tab (the Commissioner League tab's pages), a left-to-right swipe from anywhere, the left quarter included, goes BACK (the native
+// convention); the drawer stands down. app.js sets this flag when a page opens or closes; it is read ONLY for the commissioner tab.
+let _swipeBackSurface = false;
+export function setSwipeBackSurface(on) { _swipeBackSurface = on === true; }
+export function isSwipeBackSurface() { return _swipeBackSurface; }
 export function isInDrawerOpenZone({ tab, clientX, viewportWidthPx, target } = {}) {
   if (_isDrawerYieldTarget(target)) return false;
+  if (tab === 'commissioner' && _swipeBackSurface) return false;
   if (!DRAWER_ZONE_TABS.includes(tab)) return true;
   // W-70 / DI-W70.4 — on Comm the tab strip keeps its OWN touch (it scrolls on a narrow phone), at rest as well as scrolled: the pager and the drawer
   // both stand down for it. Picks and Dashboard have no such strip, so their answer is unchanged.
@@ -257,7 +263,7 @@ export const RUBBER_BAND_SPRING_MS = 200; // release snap, Navigation range roun
  * as an always-HIDDEN input (see `isKeyboardUp()` and the `'keyboard'` event
  * branch of `stepNavShowHide()` below), never through this function.
  */
-export function gesturesSuspended({ ignoreLayoutBar = false } = {}) {
+export function gesturesSuspended({ ignoreLayoutBar = false, insidePushed = false } = {}) {
   if (typeof document === 'undefined') return false;
   if (document.getElementById?.('site-gate-overlay')) return true;
   if (document.querySelector?.('.modal-overlay')) return true;
@@ -332,7 +338,9 @@ export function gesturesSuspended({ ignoreLayoutBar = false } = {}) {
   if (!ignoreLayoutBar && document.getElementById?.('layout-edit-bar')) return true;
   // D1 Lane B / DI-571 (2026-10-07) — the pushed-screen shell (`#pushed-root`, js/pushed-screen.js): a card detail, and later GameDay / a comparison / a week detail. A SIXTH body-appended
   // full-screen surface of the League overlay's shape; a week swipe, a drawer swipe or a pull-to-refresh on the page beneath must not arm while it is up.
-  if (document.getElementById?.('pushed-root')) return true;
+  // D2 DI-822 (lane 3, 2026-10-19): `insidePushed` is for a binder that lives INSIDE a pushed level (Full Game Day's pull-to-refresh): the shell does not suspend its own content. Every
+  // other entry above still does (a sheet, a modal, the drawer, the gate over the level), and the caller's isActive() limits it to its own level being the top one.
+  if (!insidePushed && document.getElementById?.('pushed-root')) return true;
   return false;
 }
 
@@ -1103,7 +1111,7 @@ export function _pullToRefreshStateMachine(events) {
 const pullToRefreshStates = new WeakMap();
 
 export function bindPullToRefresh(getScrollEl, refreshFn, opts = {}) {
-  const { onPhaseChange, onFail, isActive } = opts;
+  const { onPhaseChange, onFail, isActive, insidePushed = false } = opts;   // insidePushed: D2 DI-822 (see gesturesSuspended)
   if (typeof refreshFn !== 'function' || typeof onFail !== 'function') return () => {};
   const scrollEl = getScrollElFrom(getScrollEl);
   if (!scrollEl || typeof scrollEl.addEventListener !== 'function') return () => {};
@@ -1139,7 +1147,7 @@ export function bindPullToRefresh(getScrollEl, refreshFn, opts = {}) {
   }
 
   function onTouchStart(e) {
-    const suspended = gesturesSuspended();
+    const suspended = gesturesSuspended(insidePushed === true ? { insidePushed: true } : undefined);
     setState(stepPullToRefresh(state, suspended ? { type: 'suspend' } : { type: 'resume' }));
     if (suspended) return;
     const t = e.touches?.[0];
@@ -2615,3 +2623,135 @@ export function bindSwipeToDismiss(el, opts = {}) {
   swipeToDismissStates.set(el, unbind);
   return unbind;
 }
+
+// ═════════════════════════════════════════════════════════════════════════
+// T-05 / FB-047 (Drew, 2026-10-17, TestFlight build 4: "When scrolling on the gameday cards, pressing the game cards without engaging shouldnt make it smaller w the feedback";
+// 2026-10-19: "Home screen- i dont like that the cards get smaller when you touch them and are just scrolling, they should stay the same unless you're engaging into them").
+//
+// THE TOUCH PRESS STATE FOR A CONTROL THAT SITS IN SCROLLING CONTENT. The Game Day card's rows, pills and header used to press with CSS `:active`, and on a phone the engine,
+// not the app, decides when `:active` starts and ends: WebKit gives it to the element under the finger at touch-down whenever the page has touch listeners (this app always
+// does) and keeps it until the finger lifts, so a thumb that lands on a card to scroll the feed shrank that card for the whole scroll. Nothing can cancel `:active` on
+// movement. bindPressState() owns the state instead, the way a UIKit control in a scroll view behaves (`delaysContentTouches`):
+//   - a finger that lands on a matching control is not a press yet; if it is still at rest after PRESS_DELAY_MS the control is pressed (`data-pressed="true"`);
+//   - moving more than PRESS_SLOP_PX, any scroll (the page, or a rail inside the root), a second finger or a cancelled touch ends it, with no press shown;
+//   - a tap shorter than the delay still shows its press at release, for PRESS_FLASH_MS, so a quick tap is acknowledged the way a held one is;
+//   - a new touch ends any press or flash still showing, so a flash timer can never take away a newer press (P-3).
+// css/styles.css scales a control on `[data-pressed="true"]`; its `:active` scale applies only where the primary pointer hovers (a mouse button down is a press). Every
+// listener is passive: nothing here can delay or cancel a scroll (weekswipetest [D]). The timers and the window are injectable for the tests. Measured in the real app in
+// iosgesturetest.mjs [T05]; every branch of the machine in presstest.mjs. It lives here, in the gesture leaf home.js already imports, so it needs no new boot module.
+// ═════════════════════════════════════════════════════════════════════════
+
+export const PRESS_DELAY_MS = 150;   // a finger still at rest this long after touch-down is pressing (UIScrollView holds content touches about this long before a scroll can no longer claim them)
+export const PRESS_SLOP_PX = 8;      // the app's one touch slop (AXIS_DEAD_ZONE_PX in nav-gestures.js, SECTION_PRESS_SLOP_PX in section-drag.js)
+export const PRESS_FLASH_MS = 150;   // how long a tap shorter than the delay shows its press, from release: --motion-fast, so the 97% is actually reached before it lets go
+export const PRESSED_ATTR = 'data-pressed';
+
+const pressStates = new WeakMap();
+
+/**
+ * Bind the press state to every control matching `selector` inside `root` (delegated: controls painted later are covered). Idempotent per root.
+ * opts: { doc (the document whose scroll, the page's or any scroller's, ends a press: a capture listener; default the global one), setTimer, clearTimer }. Returns an unbind function.
+ */
+export function bindPressState(root, selector, opts = {}) {
+  if (!root || typeof root.addEventListener !== 'function' || typeof selector !== 'string' || !selector) return () => {};
+  if (pressStates.has(root)) return pressStates.get(root);
+  const doc = opts.doc !== undefined ? opts.doc : (typeof document !== 'undefined' ? document : null);
+  const setTimer = typeof opts.setTimer === 'function' ? opts.setTimer : (fn, ms) => setTimeout(fn, ms);
+  const clearTimer = typeof opts.clearTimer === 'function' ? opts.clearTimer : (t) => clearTimeout(t);
+
+  let el = null, x0 = 0, y0 = 0, delay = null, flash = null, flashEl = null, r0 = null;
+
+  function show(target) { try { target.setAttribute(PRESSED_ATTR, 'true'); } catch { /* detached */ } }
+  function hide(target) { try { if (target) target.removeAttribute(PRESSED_ATTR); } catch { /* detached */ } }
+  /** End the touch's press, if any: no press is shown (a flash already showing finishes on its own timer). */
+  function cancel() {
+    if (delay !== null) { clearTimer(delay); delay = null; }
+    if (el) hide(el);
+    el = null;
+  }
+
+  /** A tap's flash still showing ends now: a new touch starts from rest (and a flash timer can never clear a press that a newer touch has shown). */
+  function endFlash() {
+    if (flash !== null) { clearTimer(flash); flash = null; }
+    if (flashEl) hide(flashEl);
+    flashEl = null;
+  }
+
+  function onTouchStart(e) {
+    cancel();
+    endFlash();
+    const touches = e && e.touches;
+    if (!touches || touches.length !== 1) return;                       // a second finger is a pinch or a gesture, never a press
+    const t = touches[0];
+    const hit = e.target && typeof e.target.closest === 'function' ? e.target.closest(selector) : null;
+    if (!hit || (typeof root.contains === 'function' && !root.contains(hit)) || hit.disabled === true) return;
+    el = hit; x0 = t.clientX; y0 = t.clientY;
+    r0 = rectOf(hit);
+    delay = setTimer(() => { delay = null; if (el) show(el); }, PRESS_DELAY_MS);
+  }
+  function onTouchMove(e) {
+    if (!el) return;
+    const t = e && e.touches && e.touches[0];
+    if (!t || (e.touches.length !== 1) || Math.abs(t.clientX - x0) > PRESS_SLOP_PX || Math.abs(t.clientY - y0) > PRESS_SLOP_PX) cancel();
+  }
+  function onTouchEnd() {
+    if (!el) return;
+    const target = el;
+    const quickTap = delay !== null;
+    if (delay !== null) { clearTimer(delay); delay = null; }
+    el = null;
+    if (!quickTap) { hide(target); return; }
+    endFlash();                                                          // a tap shorter than the delay: show its press now, briefly
+    show(target);
+    flashEl = target;
+    flash = setTimer(() => { flash = null; flashEl = null; hide(target); }, PRESS_FLASH_MS);
+  }
+  function rectOf(target) { try { return typeof target.getBoundingClientRect === 'function' ? target.getBoundingClientRect() : null; } catch { return null; } }
+  /** A scroll ends the press when it moved the control out from under the finger (more than the slop). A scroll of a pixel or two with the finger at rest (a snap settling, a
+   *  layout nudge) is not the reader scrolling. Without a measurable box, any scroll ends it. */
+  function onScroll() {
+    if (!el) return;
+    const r = r0 ? rectOf(el) : null;
+    if (!r || Math.abs(r.left - r0.left) > PRESS_SLOP_PX || Math.abs(r.top - r0.top) > PRESS_SLOP_PX) cancel();
+  }
+
+  root.addEventListener('touchstart', onTouchStart, { passive: true });
+  root.addEventListener('touchmove', onTouchMove, { passive: true });
+  root.addEventListener('touchend', onTouchEnd, { passive: true });
+  root.addEventListener('touchcancel', cancel, { passive: true });
+  root.addEventListener('scroll', onScroll, { capture: true, passive: true });     // a rail (or any scroller) inside the root
+  if (doc && typeof doc.addEventListener === 'function') doc.addEventListener('scroll', onScroll, { capture: true, passive: true });   // the page itself, and a scroller outside the root
+
+  const unbind = () => {
+    cancel();
+    endFlash();
+    try {
+      root.removeEventListener('touchstart', onTouchStart);
+      root.removeEventListener('touchmove', onTouchMove);
+      root.removeEventListener('touchend', onTouchEnd);
+      root.removeEventListener('touchcancel', cancel);
+      root.removeEventListener('scroll', onScroll, true);
+      if (doc && typeof doc.removeEventListener === 'function') doc.removeEventListener('scroll', onScroll, true);
+    } catch { /* detached */ }
+    pressStates.delete(root);
+  };
+  pressStates.set(root, unbind);
+  return unbind;
+}
+
+/**
+ * D2 sweep, DI-1095 (W-163; Drew 2026-10-17 and 2026-10-19, T-05 / FB-047): the controls OUTSIDE Home that sit inside scrolling content, on the same press rule. T-05 covered
+ * Home only; a thumb that landed on a pick button, a chat pill or a league row and scrolled still left it shrunk under WebKit's touch-down :active. Each of these presses on
+ * [data-pressed] (css/styles.css) and keeps :active only under a hovering pointer. ONE combined selector, bound ONCE on the document body (app.js boot): the body contains every
+ * page root, sheet and pushed screen these classes render in, and bindPressState() is idempotent per root, so a second selector on the same root would be ignored. Home keeps its own
+ * selector on its own root (home.js HOME_PRESS_SELECTOR, unchanged); nothing here overlaps it, so a Home control is never pressed twice.
+ *   pick buttons     .pick-btn, .spread-card-btn, .spread-find-btn, .spread-find-note .spread-try-btn
+ *   chat             .chat-pill, .chat-scope-btn, .chat-scope-opt, .sport-seg-btn, .chat-quick-react-btn, .chat-share-attach, .chat-source-chip
+ *   league rows      .league-card, .sport-card, .league-standings-row, button.lo-card, .lo-chip
+ * NOT here on purpose: chrome that is never under a scrolling thumb (tab bar, header and Control Center controls, sheet close buttons, the send button, wizard and form buttons).
+ */
+export const CONTENT_PRESS_SELECTOR = [
+  '.pick-btn', '.spread-card-btn', '.spread-find-btn', '.spread-find-note .spread-try-btn',
+  '.chat-pill', '.chat-scope-btn', '.chat-scope-opt', '.sport-seg-btn', '.chat-quick-react-btn', '.chat-share-attach', '.chat-source-chip',   // W-128: the Locker Room's scope button and its menu rows press the same way
+  '.league-card', '.sport-card', '.league-standings-row', 'button.lo-card', '.lo-chip',
+].join(', ');

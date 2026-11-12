@@ -25,6 +25,7 @@
  *   `picks` are already narrowed to each week's entrants by the caller (security A3: a non-entrant's pick ROW counts for nothing).
  */
 
+import { slateName } from './slate-name.js';
 import { headToHeadRecord, memberSeasonStats, sortWeeks } from './stats.js';
 import { buildRevealedView, ordinal, requireEscHtml } from './feed-cards.js';
 import { icon } from './icons.js';
@@ -83,7 +84,7 @@ function countsInHistory(w) {
 function weekWord(w) {
   if (!w) return '';
   const n = Number(w.weekNumber);
-  return Number.isFinite(n) && n > 0 ? `Week ${n}` : String(w.label || 'Week');
+  return Number.isFinite(n) && n > 0 ? slateName(w) : String(w.label || 'Week');   // D2 lane 2: a game night is named by its label
 }
 
 const RESULT_MARK = Object.freeze({

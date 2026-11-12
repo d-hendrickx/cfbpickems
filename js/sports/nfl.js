@@ -64,11 +64,24 @@ export const NFL_PROFILE = deepFreeze({
   // (football: Q3). An in-game period, not the excluded competition-level `period`.
   secondHalfFromPeriod: 3,
 
+  // D2 lane 2 (DI-910, RPF-C1): the NFL grades on the spread (default) or on the winner outright (moneyline = pick the winner). `display` is what "Lines shown on Picks" may show.
   markets: {
-    allowed: ['spread'],
+    allowed: ['spread', 'moneyline'],
     default: 'spread',
     rotate:  null,
+    display: ['spread', 'total', 'moneyline'],
+    lineMax: null,
   },
+
+  formats: { offered: ['ats', 'moneyline'], default: 'ats' },
+
+  // D2 lane 2 (DI-885 / DI-925): explicit, pinned equal to the shipped values; football ties are real.
+  stall:        { windowHours: 6, failures: 3 },
+  reminders:    { thresholds: ['24h', '1h', '15m'] },
+  scoreMax:     255,
+  tiesPossible: true,
+  seasonLabel:  'start',
+  requestDays:  { kind: 'sundays' },
 
   affinity:          null,   // D-31: NO alma-mater rule; Alma Mater Watch does not render for the NFL
   groupings:         null,   // R6

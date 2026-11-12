@@ -42,6 +42,7 @@
  * picked. `namedNonSubmitters` (an array of display NAMES) is therefore an
  * allowed fact; it is not, and can never become, a forbidden key.
  */
+import { slateName } from './slate-name.js';
 
 // ── Deny-by-default: facts that would leak the blind rule, ever ───────────────
 export const FORBIDDEN_META_KEYS = Object.freeze([
@@ -53,23 +54,23 @@ export const FORBIDDEN_META_KEYS = Object.freeze([
 // ── Per-event allowed fact keys (§6's "no fact may appear that isn't supplied,
 //    and no forbidden fact may EVER be offered" contract) ────────────────────
 export const ALLOWED_META_KEYS = Object.freeze({
-  PICKS_OPENED:                ['weekN'],
-  PICKS_REMINDER:              ['weekN', 'remainingPicks', 'timeUntilLock'],
+  PICKS_OPENED:                ['weekN', 'slate'],
+  PICKS_REMINDER:              ['weekN', 'slate', 'remainingPicks', 'timeUntilLock'],
   // PICKS_LOCKING_SOON carries the one named-laggard exception (namedNonSubmitters).
-  PICKS_LOCKING_SOON:          ['weekN', 'timeUntilLock', 'namedNonSubmitters', 'submittedCount', 'totalPlayers'],
+  PICKS_LOCKING_SOON:          ['weekN', 'slate', 'timeUntilLock', 'namedNonSubmitters', 'submittedCount', 'totalPlayers'],
   // F7 remediation (2026-09-10) — the refreshed ALL_IN pool's 2nd line uses
   // {totalPlayers} twice ("{totalPlayers}/{totalPlayers} in...") — widened
-  // from ['weekN'] to admit it.
+  // from ['weekN', 'slate'] to admit it.
   // 2026-09-10 (Drew's option 2 — NOTIFY_NAME_NON_SUBMITTERS) — the count-only
   // twin of PICKS_LOCKING_SOON. `namedNonSubmitters` is deliberately ABSENT
   // from this allow-list: buildCopy() drops every fact outside the event's own
   // list before substitution, so even a caller that wrongly passes names in
   // count-only mode cannot get one into the body. That makes the no-names
   // guarantee structural here, not merely a convention the caller must keep.
-  PICKS_LOCKING_SOON_COUNT_ONLY: ['weekN', 'timeUntilLock', 'submittedCount', 'totalPlayers'],
-  PICKS_LOCKING_SOON_ALL_IN:   ['weekN', 'totalPlayers'],
-  PICKS_LOCKED:                ['weekN', 'submittedCount', 'totalPlayers'],
-  RESULTS_FINALIZED:           ['weekN', 'weekWinnerName', 'weekLoserName'],
+  PICKS_LOCKING_SOON_COUNT_ONLY: ['weekN', 'slate', 'timeUntilLock', 'submittedCount', 'totalPlayers'],
+  PICKS_LOCKING_SOON_ALL_IN:   ['weekN', 'slate', 'totalPlayers'],
+  PICKS_LOCKED:                ['weekN', 'slate', 'submittedCount', 'totalPlayers'],
+  RESULTS_FINALIZED:           ['weekN', 'slate', 'weekWinnerName', 'weekLoserName'],
   // N1 / UN-204 (2026-09-12) — RESULTS_FINALIZED_YOU_WON IS RETIRED, not
   // replaced (coordinator ruling O3). Its three lines were second person ("you
   // took it") and a league-wide room cannot carry a second-person line: five of
@@ -104,8 +105,8 @@ export const ALLOWED_META_KEYS = Object.freeze({
   // consolation prize." reads; "Kevin owes Drew Loser buys winner..." does not.
   // The obligations table already solves it the same way. Do NOT "improve" a
   // template by making {obligationLabel} grammatical: it breaks on the default.
-  OBLIGATION_CREATED:          ['weekN', 'debtorName', 'creditorName', 'obligationLabel'],
-  OBLIGATION_SETTLED:          ['weekN', 'debtorName', 'creditorName', 'obligationLabel'],
+  OBLIGATION_CREATED:          ['weekN', 'slate', 'debtorName', 'creditorName', 'obligationLabel'],
+  OBLIGATION_SETTLED:          ['weekN', 'slate', 'debtorName', 'creditorName', 'obligationLabel'],
 
   // ── DI-342/DI-C2 §3.1/§3.2 (2026-09-25, UX Revamp group C) — the four
   // commissioner-operational reminder categories. Notification-Center +
@@ -115,10 +116,10 @@ export const ALLOWED_META_KEYS = Object.freeze({
   // the FALLBACK block below), matching CLAUDE.md's "Beyond the visual"
   // citation this DI makes: the copy names the actual gap, not a generic
   // "check your week."
-  SLATE_NOT_BUILT:             ['weekN', 'n'],
-  DRAFT_PAST_OPEN:             ['weekN'],
-  OPEN_NO_LOCK_TIME:           ['weekN'],
-  LIVE_NOT_FINALIZED:          ['weekN'],
+  SLATE_NOT_BUILT:             ['weekN', 'slate', 'n'],
+  DRAFT_PAST_OPEN:             ['weekN', 'slate'],
+  OPEN_NO_LOCK_TIME:           ['weekN', 'slate'],
+  LIVE_NOT_FINALIZED:          ['weekN', 'slate'],
 
   // ── DI-342/DI-C3 §4.5/§4.6 — the manual "SCRIBE: remind the stragglers"
   // CHAT post (the push/Notification-Center side reuses PICKS_REMINDER
@@ -132,8 +133,8 @@ export const ALLOWED_META_KEYS = Object.freeze({
   // POOLS block below for the two six-line pools. buildCopy() still falls
   // through to the flat, non-SCRIBE FALLBACK when a required fact is missing
   // (e.g. no weekN), which remains the SAFE floor — see FALLBACK's comment.
-  PICKS_REMINDER_MANUAL:            ['weekN', 'namedNonSubmitters', 'submittedCount', 'totalPlayers'],
-  PICKS_REMINDER_MANUAL_COUNT_ONLY: ['weekN', 'submittedCount', 'totalPlayers'],
+  PICKS_REMINDER_MANUAL:            ['weekN', 'slate', 'namedNonSubmitters', 'submittedCount', 'totalPlayers'],
+  PICKS_REMINDER_MANUAL_COUNT_ONLY: ['weekN', 'slate', 'submittedCount', 'totalPlayers'],
 });
 
 // Module-load-time deny-by-default structural scan — fails the day a future
@@ -312,24 +313,24 @@ const POOLS = {
 // the fallback path exists for when facts are missing or SCRIBE copy fails,
 // so it only ever promises what a minimal fact set (weekN, counts) can support.
 const FALLBACK = {
-  PICKS_OPENED:               (m) => m.weekN != null ? `Week ${m.weekN} is open.` : 'Picks are open.',
-  PICKS_REMINDER:             (m) => m.remainingPicks != null ? `You have ${m.remainingPicks} picks left${m.weekN != null ? ` for Week ${m.weekN}` : ''}.` : 'You have picks outstanding.',
-  PICKS_LOCKING_SOON:         (m) => m.weekN != null ? `Week ${m.weekN} locks in ${m.timeUntilLock || 'soon'}.` : 'Picks are locking soon.',
+  PICKS_OPENED:               (m) => m.weekN != null ? `${slateName(m)} is open.` : 'Picks are open.',
+  PICKS_REMINDER:             (m) => m.remainingPicks != null ? `You have ${m.remainingPicks} picks left${m.weekN != null ? ` for ${slateName(m)}` : ''}.` : 'You have picks outstanding.',
+  PICKS_LOCKING_SOON:         (m) => m.weekN != null ? `${slateName(m)} locks in ${m.timeUntilLock || 'soon'}.` : 'Picks are locking soon.',
   // Shared, already name-free flat fallback — identical text to the named
   // pool's, so the fallback path is safe in count-only mode too.
-  PICKS_LOCKING_SOON_COUNT_ONLY: (m) => m.weekN != null ? `Week ${m.weekN} locks in ${m.timeUntilLock || 'soon'}.` : 'Picks are locking soon.',
-  PICKS_LOCKING_SOON_ALL_IN:  (m) => m.weekN != null ? `Week ${m.weekN} is set.` : 'This week is set.',
-  PICKS_LOCKED:                (m) => m.weekN != null ? `Week ${m.weekN} picks are locked.` : 'Picks are locked.',
-  RESULTS_FINALIZED:           (m) => m.weekN != null ? `Week ${m.weekN} results are final.` : 'The week is final.',
+  PICKS_LOCKING_SOON_COUNT_ONLY: (m) => m.weekN != null ? `${slateName(m)} locks in ${m.timeUntilLock || 'soon'}.` : 'Picks are locking soon.',
+  PICKS_LOCKING_SOON_ALL_IN:  (m) => m.weekN != null ? `${slateName(m)} is set.` : 'This week is set.',
+  PICKS_LOCKED:                (m) => m.weekN != null ? `${slateName(m)} picks are locked.` : 'Picks are locked.',
+  RESULTS_FINALIZED:           (m) => m.weekN != null ? `${slateName(m)} results are final.` : 'The week is final.',
   // N1 — both sides are named here too. DI-N6 specified "<Name> owes for Week
   // <N>."; a league-wide room needs to know who is OWED, or the flat fallback
   // says less than the table two taps away already does.
   OBLIGATION_CREATED: (m) => m.debtorName && m.creditorName
-    ? `${m.debtorName} owes ${m.creditorName}${m.weekN != null ? ` for Week ${m.weekN}` : ''}.`
-    : (m.weekN != null ? `A new obligation was created for Week ${m.weekN}.` : 'A new obligation was created.'),
+    ? `${m.debtorName} owes ${m.creditorName}${m.weekN != null ? ` for ${slateName(m)}` : ''}.`
+    : (m.weekN != null ? `A new obligation was created for ${slateName(m)}.` : 'A new obligation was created.'),
   OBLIGATION_SETTLED: (m) => m.debtorName && m.creditorName
-    ? `${m.debtorName} settled with ${m.creditorName}${m.weekN != null ? ` for Week ${m.weekN}` : ''}.`
-    : (m.weekN != null ? `The Week ${m.weekN} obligation was settled.` : 'A balance was settled.'),
+    ? `${m.debtorName} settled with ${m.creditorName}${m.weekN != null ? ` for ${slateName(m)}` : ''}.`
+    : (m.weekN != null ? `The ${slateName(m)} obligation was settled.` : 'A balance was settled.'),
 
   // ── DI-342/DI-C2 §3.2 — exact copy, quoted verbatim from the design
   // input. These are the ONLY text for their events (no POOLS entry above),
@@ -347,16 +348,16 @@ const FALLBACK = {
   // any league whose median create→open gap rounds to a single day.
   // Singularised here, at the one place the number becomes words.
   SLATE_NOT_BUILT: (m) => (m.weekN != null && m.n != null)
-    ? `Week ${m.weekN} has no games yet and usually opens in about ${m.n} ${Number(m.n) === 1 ? 'day' : 'days'}. Build the slate when you get a chance.`
-    : (m.weekN != null ? `Week ${m.weekN} has no games yet. Build the slate when you get a chance.` : 'A week has no games yet. Build the slate when you get a chance.'),
+    ? `${slateName(m)} has no games yet and usually opens in about ${m.n} ${Number(m.n) === 1 ? 'day' : 'days'}. Build the slate when you get a chance.`
+    : (m.weekN != null ? `${slateName(m)} has no games yet. Build the slate when you get a chance.` : 'A week has no games yet. Build the slate when you get a chance.'),
   DRAFT_PAST_OPEN: (m) => m.weekN != null
-    ? `Week ${m.weekN} is still in Draft and past when it usually opens. Players can't pick until you open it.`
+    ? `${slateName(m)} is still in Draft and past when it usually opens. Players can't pick until you open it.`
     : 'A week is still in Draft and past when it usually opens. Players can\'t pick until you open it.',
   OPEN_NO_LOCK_TIME: (m) => m.weekN != null
-    ? `Week ${m.weekN} is open but has no lock time and no games with kickoffs yet — picks won't auto-lock. Set an Auto-Lock time or add games.`
+    ? `${slateName(m)} is open but has no lock time and no games with kickoffs yet — picks won't auto-lock. Set an Auto-Lock time or add games.`
     : 'A week is open but has no lock time and no games with kickoffs yet — picks won\'t auto-lock. Set an Auto-Lock time or add games.',
   LIVE_NOT_FINALIZED: (m) => m.weekN != null
-    ? `Every game in Week ${m.weekN} is final. Finalize the week to close out standings and obligations.`
+    ? `Every game in ${slateName(m)} is final. Finalize the week to close out standings and obligations.`
     : 'Every game in a live week is final. Finalize the week to close out standings and obligations.',
 
   // ── DI-342/DI-C3 §4.5/§4.6 — non-SCRIBE fallback for the manual
@@ -366,10 +367,10 @@ const FALLBACK = {
   // never names anyone even in the "named" event — a missing-fact fallback
   // should promise only what a minimal fact set (weekN, counts) can support.
   PICKS_REMINDER_MANUAL: (m) => m.weekN != null
-    ? `Week ${m.weekN}: ${m.submittedCount ?? '?'}/${m.totalPlayers ?? '?'} picks in. Get yours in before lock.`
+    ? `${slateName(m)}: ${m.submittedCount ?? '?'}/${m.totalPlayers ?? '?'} picks in. Get yours in before lock.`
     : 'Reminder: picks are still open.',
   PICKS_REMINDER_MANUAL_COUNT_ONLY: (m) => m.weekN != null
-    ? `Week ${m.weekN}: ${m.submittedCount ?? '?'}/${m.totalPlayers ?? '?'} picks in. Get yours in before lock.`
+    ? `${slateName(m)}: ${m.submittedCount ?? '?'}/${m.totalPlayers ?? '?'} picks in. Get yours in before lock.`
     : 'Reminder: picks are still open.',
 };
 
@@ -470,7 +471,9 @@ export function buildCopy(event, meta = {}, dedupKey = '') {
     return { title, body: fb ? fb(safeMeta) : 'Something happened.', scribeVoiced: false };
   }
   const tpl = usable[stableIndex(dedupKey, usable.length)];
-  return { title, body: substitute(tpl, safeMeta), scribeVoiced: true };
+  // D2 lane 2 (item 7): a game night is named by its label: "Week {weekN}" in a pool line becomes the slate ({slate}) when the facts carry one; football facts have none, so every football line is byte-identical.
+  const named = isPresentFact(safeMeta.slate) ? tpl.replace(/\bWeek \{weekN\}/g, '{slate}') : tpl;
+  return { title, body: substitute(named, safeMeta), scribeVoiced: true };
 }
 
 /** Test/debug seam — every event this module knows how to voice. */

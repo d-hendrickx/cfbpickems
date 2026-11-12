@@ -21,6 +21,7 @@
 
 import { actionSheetHTML } from './league-create.js';
 import { slateMatchFor } from './games-list.js';
+import { applyFormatToGame, isPickTheWinner } from './formats.js';
 
 // ── the copy: exact, from docs/DESIGN_D1_D.md DI-W68.2 / .3 / .4 / .6 and DI-W69.3 / .6 ──────────────────────────────────────────────────────────────────────────────
 const plural = (n, one, many) => (Number(n) === 1 ? one : many);
@@ -240,7 +241,11 @@ function keepTiebreakerValid({ weekId, goneGameId, deps }) {
 
 /** The one plain add: a new slate game from `data`. Every add path ends here (the list, Player Requests, Add a game, the wizard's manual add). */
 export function addGameToSlate({ weekId, data, deps } = {}) {
-  const game = deps.createGame(weekId, { ...data, weekId });
+  // D2 lane 2 (DI-912): a pick-the-winner week's games carry the graded line 0 (applyFormatToGame is the ONE writer): ESPN's published numbers live in `game.markets` and are never copied into `spread`.
+  // A week with no `format` stamp (every football week that exists) adds exactly as before.
+  const wk = deps.getWeek ? deps.getWeek(weekId) : null;
+  const fmtPatch = wk && isPickTheWinner(wk.format) ? applyFormatToGame(data || {}, wk.format) : {};
+  const game = deps.createGame(weekId, { ...data, ...fmtPatch, weekId });
   deps.saveGame(game);
   return game;
 }

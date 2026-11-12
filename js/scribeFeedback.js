@@ -49,6 +49,21 @@ export function isScribeFeedbackEnabled() {
   return getSettings().scribeFeedbackEnabled !== false;
 }
 
+// ── Write notifications (D2 lane 1, DI-783) ────────────────────────────────
+// Every feedback write that LEAVES this module (a rating, a chip set, a note, a rewrite) announces the event id it queued, so the popover's one inline save-state line can follow whatever
+// the player just did without every call site in chat-ui.js having to remember to report it. A listener that throws never disturbs the write.
+const _writeListeners = new Set();
+export function onFeedbackWrite(fn) {
+  if (typeof fn !== 'function') return () => {};
+  _writeListeners.add(fn);
+  return () => _writeListeners.delete(fn);
+}
+function _announceWrite(id) {
+  if (typeof id !== 'string') return id;
+  for (const fn of [..._writeListeners]) { try { fn(id); } catch { /* a status painter never breaks a write */ } }
+  return id;
+}
+
 // ── Write ──────────────────────────────────────────────────────────────────
 /**
  * Per-category string ceiling (DI-269). Everything that isn't listed keeps the
@@ -102,7 +117,7 @@ export function recordFeedback({ targetId, category, value, author }) {
   // unbounded string into the append-only chat log.
   const maxLen = FEEDBACK_MAX_LEN[category] ?? FEEDBACK_MAX_LEN_DEFAULT;
   const clamped = typeof value === 'string' ? value.slice(0, maxLen) : value;
-  return sendEvent({ type: 'feedback', targetId, author, notify: false, meta: { category, value: clamped } });
+  return _announceWrite(sendEvent({ type: 'feedback', targetId, author, notify: false, meta: { category, value: clamped } }));
 }
 
 // ── DI-268 — reason chips (UN-245) ──────────────────────────────────────────
@@ -144,7 +159,7 @@ export function recordFeedbackReasons({ targetId, chips, author }) {
   const clean = Array.from(new Set(
     (Array.isArray(chips) ? chips : []).filter(c => SCRIBE_FEEDBACK_REASON_CHIPS.includes(c)),
   ));
-  return sendEvent({ type: 'feedback', targetId, author, notify: false, meta: { category: 'reason', value: clean } });
+  return _announceWrite(sendEvent({ type: 'feedback', targetId, author, notify: false, meta: { category: 'reason', value: clean } }));
 }
 
 // ── DI-271 — talk-to-train (UN-248) ─────────────────────────────────────────

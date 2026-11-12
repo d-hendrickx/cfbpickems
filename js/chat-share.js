@@ -15,7 +15,9 @@
  * refused by 0045 and never produced here), or any text a reader would render from the reference — a reader rebuilds the attachment from ITS OWN data and fixed copy (SHARE_COPY).
  */
 
-export const SHARE_REF_TYPES = Object.freeze(['card', 'game', 'week', 'compare']);
+// D2 lane 4 (PF-520 / DI-963; coordinator ruling 2026-10-21): `insight` - an analytics insight's own id (`ins1:{league}:{sport}.{season}:{metric}:{subject}[:{id2}]:{asOf}`), offered only for a shareable,
+// non-private insight (js/analytics/insight.js insightShareIdOk) and rebuilt by the reader from its own data (insightFromId, final weeks only). Migration 0062 rule (e) is the server twin.
+export const SHARE_REF_TYPES = Object.freeze(['card', 'game', 'week', 'compare', 'insight']);
 // A card id is `${type}:${leagueId}:${weekId}:${memberId}:${suffix}` (feed-cards.js buildCardId): three uuids and a type reach ~160 characters, so the bound is 200.
 export const SHARE_ID_MAX = 200;
 const SHARE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/;
@@ -54,6 +56,22 @@ export function validShareRef(ref) {
   if (!isStr(id) || id.length > SHARE_ID_MAX || !SHARE_ID_RE.test(id)) return null;
   if (/^(?:__proto__|constructor|prototype)$/.test(id)) return null;
   return { type, id };
+}
+
+/**
+ * D2 DI-808 / DI-862 (lane 3, 2026-10-19) — the client twin of 0062's rule (b): a CARD reference embeds its league as the second colon-separated segment (js/feed-cards.js
+ * buildCardId: `${type}:${leagueId}:…`), so it may be shared only into THAT league. A member of several leagues sees other leagues' cards on Home; this keeps one from being
+ * offered into the active league's chat (the server would refuse it, bad_share_ref). game / week / compare references are resolved against the active league's own rows by
+ * their own gates. Pure: no league is read here; the caller passes the active one.
+ * @returns {boolean}
+ */
+export function shareRefLeagueOk(ref, activeLeagueId) {
+  const r = validShareRef(ref);
+  if (!r) return false;
+  if (r.type !== 'card') return true;
+  const active = typeof activeLeagueId === 'string' ? activeLeagueId.toLowerCase() : '';
+  const embedded = (r.id.split(':')[1] || '').toLowerCase();
+  return active !== '' && embedded === active;
 }
 
 /** Plain text: no control characters, whitespace runs folded to one space, trimmed, at most SHARE_COMMENT_MAX characters (counted by code point, never splitting a pair). */

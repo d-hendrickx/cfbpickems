@@ -103,11 +103,25 @@ export const CFB_PROFILE = deepFreeze({
   // ── markets ─────────────────────────────────────────────────────────────
   // Implicit spread today: a game with NO `market` field IS a spread game
   // (createGame() never sets one). `rotate` is Phase 3 (markets).
+  // D2 lane 2 (DI-910 / DI-918): `display` is what "Lines shown on Picks" may show; `lineMax` null keeps football's shipped line behaviour (DI-883).
   markets: {
     allowed: ['spread'],
     default: 'spread',
     rotate:  null,
+    display: ['spread', 'total', 'moneyline'],
+    lineMax: null,
   },
+
+  // D2 lane 2 (DI-910, RPF-C1): college football offers against the spread ONLY (pick the winner collides with the alma-mater "did your school cover?" step and the 2K25 history).
+  formats: { offered: ['ats'], default: 'ats' },
+
+  // D2 lane 2 (DI-885 / DI-925): explicit, pinned equal to the shipped values (js/sport-stall.js STALL_*, job-rules.mjs GAMES_SCORE_MAX); football ties are real.
+  stall:        { windowHours: 6, failures: 3 },
+  reminders:    { thresholds: ['24h', '1h', '15m'] },
+  scoreMax:     255,
+  tiesPossible: true,
+  seasonLabel:  'start',
+  requestDays:  { kind: 'saturdays' },
 
   // ── affinity ────────────────────────────────────────────────────────────
   // Alma mater. Watch is ALWAYS straight-up (locked ruling: never ATS).

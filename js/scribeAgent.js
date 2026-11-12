@@ -150,9 +150,9 @@ export function getActiveContext() {
  *  deleted trigger can." Drew deletes the triggers and archives the deployment
  *  in the retirement ceremony (SUPABASE_LIVE_RUNBOOK §RETIREMENT), which is
  *  what actually shuts that door for every client, cached or not. */
-export async function runTrainerRemote(/* { adminPasswordHash } */) {
+export async function runTrainerRemote() {
   return { ok: true, skipped: 'disabled',
-    error: 'The Apps Script Trainer was retired on 2026-09-23. Run it from Comm \u2192 Data, which calls the trainer Edge Function.' };
+    error: "The Trainer's server job is switched off. Turn it on in Background Jobs to run it." };
 }
 
 /**

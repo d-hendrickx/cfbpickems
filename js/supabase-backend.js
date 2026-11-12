@@ -1396,6 +1396,66 @@ async function _refreshWeekProgress(client, leagueId, op) {
   _mirror.set(DERIVED_PROGRESS_KEY, { at: new Date().toISOString(), weeks: out });
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// D2 DI-803 (thread 101826-D2, lane 3 "Personal Home") — THE READ-ONLY PEEK
+// ══════════════════════════════════════════════════════════════════════════
+/**
+ * One OTHER league the signed-in member belongs to, read for Home under the member's OWN sign-in and returned as a DETACHED plain object. Row-level security is the
+ * boundary: every select is the hydrate's own `_select` (the same paging, the same `.eq('league_id', …)`), so a league the member is not in answers no rows, and an open
+ * week's other-member picks are refused by `picks_select` exactly as they are for the active league. The projection is the hydrate's own `fromRows`, over a context built
+ * from the PEEKED league's members (never from `_mirror`), and with no contact rows (a peeked league's contact details are never read).
+ *
+ * WHAT IT NEVER TOUCHES (peektest [1] pins the identifiers its body may name, P-11): the mirror, the dirty set, the base rows and values, the picks-read set, the overlay,
+ * the switch and hydrate sequences, the outbox, Realtime, the state machine, the listeners. It writes nothing, emits nothing, and changes no state: its result is the
+ * caller's (js/peek-store.js), which applies it only if the identity epoch and the membership set are unchanged (I6).
+ *
+ * Reads: the tables Home's snapshot needs (PEEK_TABLES, a subset of the hydrate's) and, for the first OPEN or LOCKED week (PEEK_PROGRESS_WEEKS), the counts-only
+ * `week_submission_status` (who has submitted how many — never which side), the same call the hydrate makes for the active league.
+ * @returns {Promise<{leagueId, epoch, values, weekStatus, progress, readAt}>}  throws on any refused or unprovable read (the caller backs off; nothing is half-applied)
+ */
+export const PEEK_TABLES = Object.freeze(['league_kv', 'league_members', 'weeks', 'games', 'picks', 'results', 'competitions', 'competition_members']);
+const PEEK_KEYS = Object.freeze(['cfbp_settings', 'cfbp_active_week', 'cfbp_players', 'cfbp_weeks', 'cfbp_games', 'cfbp_picks', 'cfbp_results', 'cfbp_competitions', 'cfbp_competition_members']);
+export const PEEK_PROGRESS_WEEKS = 1;   // the first open / locked week's counts: with the eight table reads, nine requests per peek (js/peek-store.js counts them against the device guard)
+
+export async function peekLeague(leagueId, { epoch = null } = {}) {
+  if (typeof leagueId !== 'string' || !leagueId) throw new TypeError('peekLeague: a league id is required');
+  const raw = _safe('getClient');
+  if (!raw) throw new Error('peekLeague: Supabase client unavailable');
+  // Security F1 (2026-10-19): every request this read makes is COUNTED — a table read is one request per page, and a table that moved is read again — so the store's device guard charges what was
+  // really sent, not an estimate. The count rides on the result (`requests`) and, on a throw, on the error.
+  let requests = 0;
+  const client = { from: (t) => { requests += 1; return raw.from(t); }, rpc: (n, a) => { requests += 1; return raw.rpc(n, a); } };
+  let results;
+  try { results = await Promise.all(PEEK_TABLES.map((t) => _select(client, t, leagueId))); }
+  catch (err) { if (err && typeof err === 'object') err.requests = requests; throw err; }
+  const rowsByTable = {};
+  PEEK_TABLES.forEach((t, i) => { rowsByTable[t] = results[i]; });
+  const values = _peekProject(rowsByTable, leagueId);
+  const weekStatus = {};
+  for (const w of rowsByTable.weeks || []) if (w && w.id != null) weekStatus[w.id] = typeof w.status === 'string' ? w.status : null;
+  const progress = {};
+  const pending = (rowsByTable.weeks || []).filter((w) => w && w.id != null && (w.status === 'open' || w.status === 'locked')).slice(0, PEEK_PROGRESS_WEEKS);
+  for (const w of pending) {
+    try {
+      const res = await client.rpc('week_submission_status', { p_league: leagueId, p_week: w.id });
+      if (!res || res.error) continue;                                       // counts are informational: a refusal is "unknown", never a failed peek
+      const byMember = {};
+      for (const r of res.data || []) if (r && r.member_id != null) byMember[r.member_id] = { pickCount: Number(r.pick_count) || 0 };
+      progress[w.id] = byMember;
+    } catch { /* unknown, as above */ }
+  }
+  return { leagueId, epoch, values, weekStatus, progress, requests, readAt: new Date().toISOString() };
+}
+
+/** The hydrate's projection over a peek's rows, with a DETACHED context: the peeked league's own member ids, no contacts. */
+function _peekProject(rowsByTable, leagueId) {
+  const members = fromRows.cfbp_players(rowsByTable, { leagueId, memberIds: new Set() });
+  const ctx = { leagueId, memberIds: new Set((Array.isArray(members) ? members : []).map((p) => p && p.playerId).filter(Boolean)) };
+  const values = { cfbp_players: members };
+  for (const key of PEEK_KEYS) if (key !== 'cfbp_players') values[key] = fromRows[key](rowsByTable, ctx);
+  return values;
+}
+
 /**
  * ══ UN-412 / DI-502e — "WHO'S IN" FRESHNESS: THE PROGRESS ANSWER, RE-ASKED BETWEEN HYDRATES ═══════════════
  *
@@ -2407,6 +2467,16 @@ export function flush() {
     return _flushQueued;
   }
   return _startFlushRun();
+}
+
+/**
+ * D2 DI-872 (lane 3, 2026-10-19) — THE SERVER'S OWN WORD FOR A REFUSED KEY, so a caller that maps a NAMED refusal (0070's main_sport / sport_in_progress / sport_archived) to its sentence can
+ * read it after `flushAndConfirm()` answered 'refused'. `{ code, serverMessage }` (the SQLSTATE and the exception text, bounded) or null when the key is not refused. Read-only; it releases
+ * nothing (the latch is the run's to release) and never returns a row or a value of the key.
+ */
+export function refusalOf(key) {
+  const r = _refusedKeys.get(key);
+  return r ? { code: String(r.code || '').slice(0, 16), serverMessage: String(r.serverMessage || '').slice(0, 200) } : null;
 }
 
 /**

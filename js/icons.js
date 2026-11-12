@@ -80,6 +80,10 @@ export const ICONS = {
   // Replaces literal '›' on the new league cards.
   chevronRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>',
 
+  // D2 DI-852 (lane 3, 2026-10-19): the outbound arrow — a card that LEAVES Munera (publisher news, Reddit) ends in it; a card that opens inside the app ends in chevronRight.
+  // The glyph follows the destination, not the family. 24 pt grid, 2 pt round stroke, currentColor: one diagonal and its corner.
+  arrowUpRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="8 7 17 7 17 16"/></svg>',
+
   // Replaces literal '‹' on the new league cards.
   chevronLeft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 6 9 12 15 18"/></svg>',
 
@@ -155,6 +159,8 @@ export const ICONS = {
   // added because `renderSourceBadge()`'s `partial` data-quality state had
   // no glyph in the F8 inventory above. Replaces ⚠️ (Partial data-quality
   // badge) — the one BLOCK 4 named explicitly as possibly needed.
+  // D2 lane 1 (UN-506, 2026-10-19): `info`, the info banner's glyph (a ring, a dot, a stem) in the approved invite and join mockup's "You're in 2 leagues already" banner.
+  info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16.5"/><line x1="12" y1="7.6" x2="12" y2="7.7"/></svg>',
   warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 21.5 20h-19L12 3.5Z"/><line x1="12" y1="9.5" x2="12" y2="13.5"/><line x1="12" y1="16.6" x2="12" y2="16.7"/></svg>',
 
   // ── STEP B(14) (3c fix window, third pass) — the week wizard's status
@@ -215,12 +221,14 @@ export const ICONS = {
   share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><polyline points="8 7 12 3 16 7"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg>',
   // Two overlapping sheets. Copy Code.
   copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>',
+  // A magnifying glass (a ring and a short handle). The school picker's search field (D2 lane 1, DI-779).
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><line x1="16" y1="16" x2="20.5" y2="20.5"/></svg>',
   // A circle with a cross: the text field's clear control (the standard iOS "clear text" affordance).
   clear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>',
   // A ball with seams. NBA and College Basketball rows of the New League sports picker.
   sportBasketball: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3v18"/><path d="M5.5 5.5c4 3 4 10 0 13M18.5 5.5c-4 3-4 10 0 13"/></svg>',
-  // A puck seen at an angle (two ellipse arcs and the side wall). The NHL row.
-  sportHockey: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="9" rx="8" ry="3.5"/><path d="M4 9v5c0 2 3.6 3.5 8 3.5s8-1.5 8-3.5V9"/></svg>',
+  // A hockey stick and puck (D2 lane 2, DI-881: drawn in the family - fill none, stroke currentColor, 2 wide, round caps): a shaft, its blade, and a puck on the ice. The NHL row, the NHL sport pill and the NHL header glyph.
+  sportHockey: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5 12.5 14"/><path d="M12.5 14h6"/><ellipse cx="16" cy="19" rx="4" ry="1.6"/><path d="M12 19v2c0 .9 1.8 1.6 4 1.6s4-.7 4-1.6v-2"/></svg>',
   // A cup with two handles. March Madness and World Juniors (the picker's Tournaments group).
   trophy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4h8v5a4 4 0 0 1-8 0z"/><path d="M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4"/><line x1="12" y1="13" x2="12" y2="17"/><line x1="8" y1="20" x2="16" y2="20"/></svg>',
   // Three horizontal strokes (y = 8, 12, 16, x = 5 to 19): the iOS reorder grip. SP-57 (2026-10-01, DI-387): the

@@ -101,7 +101,7 @@ function statusRank(game, phaseOf) {
   if (typeof phaseOf === 'function') { try { phase = phaseOf(game); } catch { phase = null; } }
   if (phase === null) phase = game && game.status === 'live' ? 'live' : game && game.status === 'final' ? 'final' : 'upcoming';
   if (phase === 'live' || phase === 'live-stale') return 0;
-  if (phase === 'final') return 2;
+  if (phase === 'final' || phase === 'voided') return 2;                // D2 lane 2 (DI-896): a voided game sorts with the finals
   return 1;                                                              // upcoming, awaiting, no-score
 }
 

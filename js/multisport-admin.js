@@ -14,7 +14,9 @@
  * caller from the same `submissionStateFor()` the Who's-in strip uses; a member's "has picks in a week in progress" is one boolean from the same reader.
  */
 
-import { actionSheetHTML } from './league-create.js';   // the ONE action-sheet builder (scrim, destructive action, bold Cancel) every confirmation here uses
+import { setupLabel, startVerb } from './slate-name.js';
+import { actionSheetHTML } from './league-create.js';
+import { rankNightCandidates } from './night-slate.js';   // the ONE action-sheet builder (scrim, destructive action, bold Cancel) every confirmation here uses
 
 // ── SHA-256, synchronously ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // The competition id is derived (DI-532: "a retry or double tap writes the same row and can never create a duplicate sport"), and the storage seam is
@@ -145,7 +147,9 @@ export function addSportOptions({ offeredSports = [], profiles = [], competition
     if (!p || !p.key || !offered.has(p.key)) continue;
     const mine = comps.filter((c) => c.sport === p.key);
     if (mine.some((c) => !c.archivedAt)) continue;                    // already running in this league
-    const archived = mine.find((c) => c.archivedAt) || null;
+    // D2 DI-875 (lane 3, 2026-10-19): an ARCHIVED sport is not offered here — it has its own Restore (which keeps who plays); one path, never an add that re-asks and rewrites enrollment
+    if (mine.some((c) => c.archivedAt)) continue;
+    const archived = null;
     const label = p.label || p.key;
     out.push({
       dbCode: p.key, label, code: p.code || label, state: archived ? 'archived' : 'new', competitionId: archived ? archived.id : null,
@@ -201,8 +205,8 @@ export function archiveBlocker({ weeks = [], label = 'This sport' } = {}) {
  *   locked or live            -> Finalize once every game is final (or finalization is pending), else no button (the clock does the rest)
  * `n` is the next week NUMBER within THIS sport (never the other sport's).
  */
-export function nextActionFor({ week, games = [], nextWeekNumber = 1 } = {}) {
-  if (!week || week.status === 'final') return { kind: 'setup', label: `Set up Week ${nextWeekNumber}` };
+export function nextActionFor({ week, games = [], nextWeekNumber = 1, sport = null } = {}) {
+  if (!week || week.status === 'final') return { kind: 'setup', label: setupLabel({ weekN: nextWeekNumber }, sport) };   // D2 lane 2: "Set up Week 7" for football, "Set up the next slate" for a night sport
   if (week.status === 'draft') return { kind: 'open', label: 'Open for picks' };
   if (week.status === 'open') return { kind: 'lock', label: 'Lock' };
   if (week.status === 'locked' || week.status === 'live') {
@@ -271,7 +275,7 @@ export function allSportsRows({ competitions = [], profiles = [], readers, lensD
     const firstKick = (games || []).map((g) => Date.parse(g && g.kickoff)).filter(Number.isFinite).sort((a, b) => a - b)[0];
     let timeLabel = '';
     if (isOpen && lockAtMs !== null && r.formatTime) timeLabel = `Locks ${r.formatTime(lockAtMs)}`;
-    else if (week && (week.status === 'locked' || week.status === 'live') && Number.isFinite(firstKick) && r.formatTime) timeLabel = `Kicks off ${r.formatTime(firstKick)}`;
+    else if (week && (week.status === 'locked' || week.status === 'live') && Number.isFinite(firstKick) && r.formatTime) timeLabel = `${startVerb(c.sport).replace(/^./, (x) => x.toUpperCase())} ${r.formatTime(firstKick)}`;
     rows.push({
       competitionId: c.id, dbCode: c.sport, code, label,
       weekId: week ? week.weekId : null, weekNumber: week ? week.weekNumber : nextNum,
@@ -280,7 +284,7 @@ export function allSportsRows({ competitions = [], profiles = [], readers, lensD
       badgeKind: week ? (ls && ls.phase ? ls.phase : week.status) : 'none',
       inCount, entrantCount: isOpen ? entrants.length : null, showCounts: !!isOpen && inCount !== null,
       timeLabel, lockAtMs: isOpen ? lockAtMs : null,
-      action: nextActionFor({ week, games, nextWeekNumber: nextNum }),
+      action: nextActionFor({ week, games, nextWeekNumber: nextNum, sport: c.sport }),
       isLens: !!lensDbCode && c.sport === lensDbCode,
     });
   }
@@ -387,7 +391,9 @@ export function weekdayKeyET(iso) {
  * does not name). Candidates without a kickoff are left out (a game with no time cannot be ordered or locked). `shortlist` is the remaining candidates, kickoff order.
  * Returns the same shape `buildSuggestedSlate` does where the wizard reads it (`slate`, `shortlist`).
  */
-export function suggestSlateFor({ profile, candidates = [], size = null, dayOf = weekdayKeyET } = {}) {
+export function suggestSlateFor({ profile, candidates = [], size = null, dayOf = weekdayKeyET, favoriteTeams = [] } = {}) {
+  // D2 lane 2 (DI-887): a sport whose slate is a game NIGHT (the NHL) ranks by national TV, then a member's favourite team, then the earliest puck drop (js/night-slate.js).
+  if (profile && profile.slate && profile.slate.unit === 'night') return rankNightCandidates({ games: candidates, profile, favoriteTeams });
   const want = slateSizeFor(profile, size);
   const days = profile && profile.slate && Array.isArray(profile.slate.anchorDays) && profile.slate.anchorDays.length ? profile.slate.anchorDays : null;
   const t = (g) => { const n = Date.parse(g && g.kickoff); return Number.isFinite(n) ? n : Infinity; };
@@ -451,4 +457,192 @@ export function archiveSportSheetHTML({ label = '' } = {}, { escHtml } = {}) {
     escHtml, titleId: 'ms-archive-title', title: MS_COPY.archiveSheetTitle(label), message: MS_COPY.archiveSheetMessage, scrimAction: 'cancel', actionAttr: 'data-ls-action',
     danger: { label: MS_COPY.archiveAction(label), action: 'confirm-archive-sport' }, cancel: { label: MS_COPY.cancel, action: 'cancel' },
   });
+}
+
+
+// ── archive and restore (Deployment 2, thread 101826-D2, lane 3; UN/PF-518, DI-867…880) ─────────────────────────────────────────────────
+/**
+ * The words of the feature (DI-867): Archive, Archived, Restore, "history kept". "Delete" never appears beside it. Every sentence a surface shows comes from here.
+ * `code` is the sport's short code ("NFL"), `league` the league's name.
+ */
+export const ARCHIVE_COPY = Object.freeze({
+  archiveRow: 'Archive a sport…',
+  archiveRowSub: (codes) => `${codes} · stops reminders and weekly setup, keeps history`,
+  archivedRow: 'Archived sports',
+  archivedRowSubComm: (n) => `${n} archived · restore or view history`,
+  archivedRowSubMember: (n) => `${n} archived · view history`,
+  pickTitle: 'Archive which sport?',
+  // D2 DI-869's blocked state (review fix 5): the shipped sentence is joined by ONE button that opens that sport's week in Comm
+  openBlockedWeek: (code, n) => (Number.isFinite(Number(n)) && Number(n) > 0 ? `Open ${code} Week ${Number(n)}` : `Open the ${code} week`),
+  sheetSubtitle: (league, code) => (league ? `${league} · ${code}` : code),
+  stopsTitle: 'Stops',
+  stops: (code) => `${code} pick reminders and notifications · weekly setup in Comm · ${code} in the sport switcher, Game Day and the join offer`,
+  keepsTitle: 'Keeps',
+  keeps: 'Picks, results, standings, game threads, history, analytics and league memories. Nothing is deleted.',
+  restorableTitle: 'You can restore it any time',
+  restorable: (code) => `Members who played ${code} are still in.`,
+  announceLabel: 'Tell the league in the Locker Room',
+  archiveAnnounce: (name, code) => `${name} archived ${code}. Its history is kept and can be restored.`,
+  archiveAction: (code) => `Archive ${code}`,
+  archiving: (code) => `Archiving ${code}…`,
+  archiveFailed: (code) => `Couldn't archive ${code}. Nothing was changed. Try again.`,
+  archived: (code) => `${code} archived.`,
+  restoreTitle: (code) => `Restore ${code}?`,
+  comesBackTitle: 'Comes back',
+  comesBack: (code) => `${code} in the switcher, Game Day, reminders and Comm. Picks open when you set up the next week.`,
+  unchangedTitle: 'Unchanged',
+  unchanged: 'Who played, past picks, results and standings.',
+  restoreAnnounce: (name, code) => `${name} restored ${code}.`,
+  restoreAction: (code) => `Restore ${code}`,
+  restoring: (code) => `Restoring ${code}…`,
+  restoreFailed: (code) => `Couldn't restore ${code}. Nothing was changed. Try again.`,
+  restored: (code) => `${code} restored.`,
+  mainSportBadge: 'Main sport',
+  mainSportReason: "This is the league's main sport. To archive it, make another sport the main one first.",
+  archivedBadge: 'Archived',
+  activeBadge: 'Active',
+  listTitle: 'Archived sports',
+  listIntro: 'Archived sports are read-only. Their picks, results and history are kept.',
+  listRowSub: (date, n) => `Archived ${date} · ${n} ${n === 1 ? 'week' : 'weeks'} played · history kept`,
+  listFootnote: 'Only the commissioner sees Restore. Members can open the history.',
+  historyBanner: (code, n) => `${code} is archived. This is a read-only record of ${n} ${n === 1 ? 'week' : 'weeks'}.`,
+  historyStandingsTitle: 'Standings',
+  historyWeeksTitle: 'Weeks',
+  historyEmpty: 'No weeks were played.',
+  threadReadOnly: 'This sport is archived. Threads are read-only.',
+  linkArchived: (code) => `${code} is archived. History is in the league overview.`,
+  sportArchived: (code) => `${code} is archived. Restore it to set up a week.`,
+  offlineArchive: "Not connected — a sport can't be archived right now.",
+  offlineRestore: "Not connected — a sport can't be restored right now.",
+});
+
+/**
+ * DI-872: the server's named refusals (migration 0070) to the sentences the member reads — never a code. `serverMessage` is what the adapter kept for the refused write.
+ * @returns {string}
+ */
+export function archiveRefusalCopy(serverMessage, code, { restoring = false } = {}) {
+  const m = String(serverMessage || '');
+  if (/\bmain_sport\b/.test(m)) return ARCHIVE_COPY.mainSportReason;
+  if (/\bsport_in_progress\b/.test(m)) return MS_COPY.archiveBlocked(code);
+  if (/\bsport_archived\b/.test(m)) return ARCHIVE_COPY.sportArchived(code);
+  return restoring ? ARCHIVE_COPY.restoreFailed(code) : ARCHIVE_COPY.archiveFailed(code);
+}
+
+/**
+ * DI-875: Restore writes `archivedAt = null` and NOTHING else — enrollment, who plays (competition_members), the settings, the season label are the row's own, untouched; no week moves.
+ * The writer is the caller's (the storage seam); it is handed a COPY of the row with the one field changed.
+ * @returns {{ok:true} | {ok:false, error:string}}
+ */
+export function restoreSportAction({ competition, label = 'This sport', deps = {} } = {}) {
+  if (!competition || !competition.archivedAt) return { ok: false, error: ARCHIVE_COPY.restoreFailed(label) };
+  try { deps.saveCompetition({ ...competition, archivedAt: null }); } catch { return { ok: false, error: ARCHIVE_COPY.restoreFailed(label) }; }
+  return { ok: true };
+}
+
+/**
+ * DI-876: the Archived sports list — one row per archived sport of this league, newest archive first: its code, the archive date and how many weeks were played. Pure: the caller hands the
+ * league's competitions, weeks (every week, with its competitionId), `playedWeekIds` (the weeks that were finalized AND are revealed — the caller asks its own reveal predicate; this module
+ * reads no week status), the sport profiles, and a date formatter in the viewer's zone.
+ */
+export function archivedSportsRows({ competitions = [], weeks = [], playedWeekIds = null, profiles = [], formatDate = (iso) => String(iso).slice(0, 10) } = {}) {
+  const comps = (Array.isArray(competitions) ? competitions : []).filter((c) => c && c.id && c.archivedAt);
+  const prof = (k) => (Array.isArray(profiles) ? profiles : []).find((p) => p && p.key === k) || null;
+  return comps.map((c) => {
+    const p = prof(c.sport);
+    const code = (p && (p.code || p.label)) || String(c.sport || '').toUpperCase();
+    const played = playedWeekIds instanceof Set ? (Array.isArray(weeks) ? weeks : []).filter((w) => w && w.competitionId === c.id && playedWeekIds.has(w.weekId)).length : 0;
+    let date = '';
+    try { date = formatDate(c.archivedAt) || ''; } catch { date = ''; }
+    return { competitionId: c.id, sport: c.sport, code, label: (p && p.label) || code, archivedAt: c.archivedAt, weeksPlayed: played, subtitle: ARCHIVE_COPY.listRowSub(date, played) };
+  }).sort((a, b) => String(b.archivedAt).localeCompare(String(a.archivedAt)));
+}
+
+const groupRow = (escHtml, title, body) => `<div class="ms-ar-row"><span class="ms-ar-ttl">${escHtml(title)}</span><span class="ms-ar-body">${escHtml(body)}</span></div>`;
+
+/**
+ * DI-869: the Archive confirmation, on the shared action sheet (scrim, Esc, inert background, focus return, warning haptic). Title "Archive NFL?", the "IRB · NFL" line, the three plain groups
+ * (Stops, Keeps, You can restore it any time), the announcement toggle (on), the destructive "Archive NFL" and the bold Cancel. `switchHTML` is the app's own switch row builder (one markup).
+ */
+export function archiveSportConfirmHTML({ code = '', league = '', announce = true } = {}, { escHtml, switchHTML } = {}) {
+  if (typeof escHtml !== 'function') throw new TypeError('archiveSportConfirmHTML() requires the real escHtml');
+  if (typeof switchHTML !== 'function') throw new TypeError('archiveSportConfirmHTML() requires the app switch row builder');
+  const fieldHTML = `<div class="ms-ar-groups">${groupRow(escHtml, ARCHIVE_COPY.stopsTitle, ARCHIVE_COPY.stops(code))}${groupRow(escHtml, ARCHIVE_COPY.keepsTitle, ARCHIVE_COPY.keeps)}`
+    + `${groupRow(escHtml, ARCHIVE_COPY.restorableTitle, ARCHIVE_COPY.restorable(code))}</div>`
+    + switchHTML({ id: 'ms-archive-announce', label: ARCHIVE_COPY.announceLabel, on: announce !== false })
+    + `<p class="ms-ar-error" id="ms-archive-error" role="alert"></p>`;
+  return actionSheetHTML({
+    escHtml, titleId: 'ms-archive-title', title: MS_COPY.archiveSheetTitle(code), message: ARCHIVE_COPY.sheetSubtitle(league, code), fieldHTML, scrimAction: 'cancel', actionAttr: 'data-ls-action',
+    danger: { label: ARCHIVE_COPY.archiveAction(code), action: 'confirm-archive-sport' }, cancel: { label: MS_COPY.cancel, action: 'cancel' },
+  });
+}
+
+/** DI-875: the Restore confirmation — the same shared sheet: "Restore CFB?", the "Residency · CFB" line, Comes back / Unchanged, the announcement toggle (on), "Restore CFB" (not destructive) and the bold Cancel. */
+export function restoreSportConfirmHTML({ code = '', league = '', announce = true } = {}, { escHtml, switchHTML } = {}) {
+  if (typeof escHtml !== 'function') throw new TypeError('restoreSportConfirmHTML() requires the real escHtml');
+  if (typeof switchHTML !== 'function') throw new TypeError('restoreSportConfirmHTML() requires the app switch row builder');
+  const fieldHTML = `<div class="ms-ar-groups">${groupRow(escHtml, ARCHIVE_COPY.comesBackTitle, ARCHIVE_COPY.comesBack(code))}${groupRow(escHtml, ARCHIVE_COPY.unchangedTitle, ARCHIVE_COPY.unchanged)}</div>`
+    + switchHTML({ id: 'ms-restore-announce', label: ARCHIVE_COPY.announceLabel, on: announce !== false })
+    + `<p class="ms-ar-error" id="ms-restore-error" role="alert"></p>`;
+  return actionSheetHTML({
+    escHtml, titleId: 'ms-restore-title', title: ARCHIVE_COPY.restoreTitle(code), message: ARCHIVE_COPY.sheetSubtitle(league, code), fieldHTML, scrimAction: 'cancel', actionAttr: 'data-ls-action',
+    actions: [{ label: ARCHIVE_COPY.restoreAction(code), action: 'confirm-restore-sport' }], cancel: { label: MS_COPY.cancel, action: 'cancel' },
+  });
+}
+
+/** DI-868: "Archive a sport…" with more than one sport that can be archived — a CHOICE on the shared sheet (one row per sport, bold Cancel); the confirmation follows. Ids are the caller's own competitions. */
+/**
+ * D2 DI-869's blocked state, in place (review fix 5): no confirmation sheet — the shipped sentence and ONE button that opens that sport's week in Comm. The caller puts it directly
+ * under the control that was tapped (the league overview's "Archive a sport…", or the chosen row of the choice sheet). Every dynamic part through the injected `escHtml`.
+ */
+export function archiveBlockedHTML({ competitionId = '', message = '', code = '', weekNumber = null } = {}, { escHtml } = {}) {
+  if (typeof escHtml !== 'function') throw new TypeError('archiveBlockedHTML() requires the real escHtml');
+  if (!competitionId || !message || !code) return '';
+  return `<div class="ms-archive-blocked" role="status" data-archive-blocked="${escHtml(competitionId)}"><p class="ms-archive-blocked-text">${escHtml(message)}</p>`
+    + `<button type="button" class="btn btn-secondary btn-sm ms-archive-blocked-go" data-archive-open-week="${escHtml(competitionId)}">${escHtml(ARCHIVE_COPY.openBlockedWeek(code, weekNumber))}</button></div>`;
+}
+
+export function archivePickHTML({ sports = [] } = {}, { escHtml } = {}) {
+  if (typeof escHtml !== 'function') throw new TypeError('archivePickHTML() requires the real escHtml');
+  const list = (Array.isArray(sports) ? sports : []).filter((s) => s && s.competitionId && s.code);
+  if (!list.length) return '';
+  return actionSheetHTML({
+    escHtml, titleId: 'ms-archive-pick-title', title: ARCHIVE_COPY.pickTitle, scrimAction: 'cancel', actionAttr: 'data-ls-action',
+    actions: list.map((s) => ({ label: s.code, action: `archive-pick:${s.competitionId}` })), cancel: { label: MS_COPY.cancel, action: 'cancel' },
+  });
+}
+
+/** DI-875: after a restore, the shipped offer — "Set up the first CFB week" — on the shared sheet as a choice, with "Not now". */
+export function restoreSetupOfferHTML({ code = '' } = {}, { escHtml } = {}) {
+  if (typeof escHtml !== 'function') throw new TypeError('restoreSetupOfferHTML() requires the real escHtml');
+  return actionSheetHTML({
+    escHtml, titleId: 'ms-restore-setup-title', title: ARCHIVE_COPY.restored(code), scrimAction: 'cancel', actionAttr: 'data-ls-action',
+    actions: [{ label: MS_COPY.setUpFirstWeek(code), action: 'restore-setup-week' }], cancel: { label: MS_COPY.notNow, action: 'cancel' },
+  });
+}
+
+/**
+ * DI-868: Comm's Sports rows, from the caller's row model (the app reads the competitions and the blockers; this builds the markup, every dynamic part through the injected `escHtml`).
+ * rows: [{ competitionId, code, badge, line?, note?, noteId?, action?: { kind: 'archive' | 'restore', label, disabled? } }]. '' with no rows.
+ */
+export function sportsStateCardHTML(rows, { escHtml } = {}) {
+  if (typeof escHtml !== 'function') throw new TypeError('sportsStateCardHTML() requires the real escHtml');
+  const list = (Array.isArray(rows) ? rows : []).filter((r) => r && r.competitionId && r.code);
+  if (!list.length) return '';
+  const rowHTML = (r) => {
+    const a = r.action && (r.action.kind === 'archive' || r.action.kind === 'restore') ? r.action : null;
+    const noteId = r.note ? String(r.noteId || `comm-sport-note-${r.competitionId}`) : '';
+    const btn = a
+      ? `<button type="button" class="btn ${a.kind === 'restore' ? 'btn-secondary' : 'btn-ghost'} btn-sm comm-sport-state-btn" data-action="comm-sport-${a.kind}" data-competition="${escHtml(r.competitionId)}"`
+        + (a.disabled ? ` disabled aria-describedby="${escHtml(noteId)}"` : '') + `>${escHtml(a.label)}</button>`
+      : '';
+    return `<div class="comm-sport-state-row" data-competition="${escHtml(r.competitionId)}">`
+      + `<div class="comm-sport-state-head"><strong>${escHtml(r.code)}</strong><span class="badge comm-sport-state-badge">${escHtml(r.badge)}</span></div>`
+      + (r.line ? `<div class="text-muted text-xs">${escHtml(r.line)}</div>` : '')
+      + btn
+      + (r.note ? `<p class="text-muted text-xs" id="${escHtml(noteId)}" style="margin:0">${escHtml(r.note)}</p>` : '')
+      + (r.go && r.go.label ? `<button type="button" class="btn btn-secondary btn-sm comm-sport-state-btn" data-action="comm-sport-open-week" data-competition="${escHtml(r.competitionId)}">${escHtml(r.go.label)}</button>` : '')   // DI-869: the blocked row's way forward
+      + '</div>';
+  };
+  return '<div class="admin-section" data-comm-tab="week"><div class="admin-section-title">Sports</div><div class="card" id="comm-sports-state-card">'
+    + list.map(rowHTML).join('') + '</div></div>';
 }

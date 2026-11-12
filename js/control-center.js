@@ -316,8 +316,10 @@
  */
 
 import { haptic } from './haptics.js';
+import { attachSubmit, confirmSeamKey, submitControlHTML } from './submit-state.js';
+import { avatarHTML, AVATAR_COPY } from './avatar.js';   // D2 lane 1 (DI-773 / DI-776): the one avatar renderer and the photo words
+import { readCfbTeamsControl } from './cfb-teams.js';   // D2 lane 1 (DI-1012): the Profile Save reads the teams control back   // D2 lane 1 (DI-781..783): the Profile Save's one submission-state language
 import { prefersReducedMotion, AXIS_DEAD_ZONE_PX, isInDrawerOpenZone, touchClaimedBy, clearStaleTouchClaim, claimTouch, releaseTouchAndFlush, DRAWER_TOUCH_OWNER } from './nav-gestures.js';
-import { comingSoonCopy } from './leagues-home.js';
 import { getShellBrandName } from './brand.js';
 import { TIME_ZONES, DEFAULT_TZ, THEMES, THEME_GROUP_LABELS } from './data-model.js';
 import { captureDirtyFields, restoreDirtyFields, stampFieldOwner } from './field-preserve.js';
@@ -464,6 +466,11 @@ function stepControlCenter(state, event) {
       if (state.phase === 'closing') return { ...state, phase: 'closed', pane: 'main' };
       return state;
     }
+    // D2 lane 4 (DI-1086): the drawer opens straight onto the Profile pane (Your teams' "Open Profile"): the same open (slide unless Reduce Motion) with the pane already pushed.
+    case 'open-profile': {
+      if (state.phase === 'open' || state.phase === 'opening') return { ...state, pane: 'profile' };
+      return { ...state, phase: event.reducedMotion ? 'open' : 'opening', dragProgress: 1, pane: 'profile' };
+    }
     case 'push-profile':
       if (state.phase !== 'open') return state;
       if (state.pane === 'profile') return state;
@@ -480,6 +487,14 @@ function stepControlCenter(state, event) {
       if (state.pane !== 'news') return state;
       return { ...state, pane: 'main' };
     // === SOCIAL PLATFORM NEWS -- END ===
+    // D2 lane 1 (UN-507 / DI-738): the fourth pane, Tips & Help, mirroring push-news / pop-news (only main -> tips, only tips -> main).
+    case 'push-tips':
+      if (state.phase !== 'open') return state;
+      if (state.pane !== 'main') return state;
+      return { ...state, pane: 'tips' };
+    case 'pop-tips':
+      if (state.pane !== 'tips') return state;
+      return { ...state, pane: 'main' };
     case 'drag-start':
       if (state.dragging) return state;
       // v0.27.1 round 2 (reviewer finding 7) — keep the SETTLED progress
@@ -506,6 +521,15 @@ function stepControlCenter(state, event) {
         return { ...state, feedbackGroupOpenRow: _toggleAccordionRow(state.feedbackGroupOpenRow, event.rowId) };
       }
       return state;
+    }
+    // T-03 / FB-043 (2026-10-18) — OPEN a row from outside the drawer (the Locker Room's "See everything that changed" opens
+    // Version history). Never a toggle: a second link, or a drawer already open at that row, must leave it open. The row lives on
+    // the main pane, so a pushed pane gives way to it.
+    case 'open-row': {
+      const field = event.group === 'settings' ? 'settingsOpenRow' : event.group === 'feedback' ? 'feedbackGroupOpenRow' : null;
+      if (!field || !event.rowId) return state;
+      if (state[field] === event.rowId && state.pane === 'main') return state;
+      return { ...state, pane: 'main', [field]: event.rowId };
     }
     default:
       return state;
@@ -871,7 +895,6 @@ export function renderIdentityHeader(ctx) {
   const name = ctx.escHtml(player.displayName || '');
   // N1 (DI-432 §7) — the fallback league name is the pilot league's own name ONLY for the pilot; any other league whose name has not loaded reads a neutral "Your league".
   const leagueName = ctx.escHtml(ctx.league?.name || (isPilotOnlyAllowed('irbCopy', ctx.league) ? "IRB Pick'Ems" : 'Your league'));
-  const initials = ctx.escHtml(initialsOf(ctx));
   const versionLine = ctx.escHtml(`${getShellBrandName()} ${ctx.version?.APP_VERSION || ''} · ${ctx.version?.APP_VERSION_DATE || ''}`.trim());
 
   // SECURITY GATE FINDING 3 (916bdb7 review, 2026-09-25) — the league name
@@ -886,7 +909,7 @@ export function renderIdentityHeader(ctx) {
   // profile-tap button, not a click target buried inside it.
   return `<div class="control-center-identity">
       <button type="button" class="control-center-identity-tap" data-action="cc-push-profile" aria-label="Open profile settings">
-        <span class="cc-avatar" aria-hidden="true">${initials}</span>
+        ${avatarHTML(player, 'lg', { cls: 'cc-avatar', initials: initialsOf(ctx), ariaHidden: true })}
         <span class="cc-identity-text">
           <span class="cc-identity-name">${name}${roleChipsHTML(ctx)}</span>
         </span>
@@ -894,6 +917,23 @@ export function renderIdentityHeader(ctx) {
       <button type="button" class="cc-identity-league-tap text-muted" data-action="cc-open-league-page" aria-label="Open League Page">${leagueName}</button>
       <div class="cc-version-stamp text-muted">${versionLine}</div>
     </div>`;
+}
+
+/**
+ * D2 lane 1 (UN-530 / DI-773, DI-778) — the Profile pane's photo: the 72 pt avatar IS the button (Edit), opening a standard action sheet (Choose Photo, Remove Photo when one exists, Cancel). Rendered
+ * only where `ctx.avatar.available` is true: the web app always; the iPhone shell only on a build that carries the camera and photo-library usage strings (an unknown build hides it, never guesses).
+ * The picture itself comes from the ONE renderer (avatarHTML), so it shows the photo when there is one and the initials otherwise. The note under it is the one place a result is spoken.
+ */
+export function profilePhotoHTML(ctx, player) {
+  if (!ctx || !ctx.avatar || ctx.avatar.available !== true) return '';
+  const esc = ctx.escHtml;
+  return `<div class="cc-photo-row">
+        <button type="button" class="cc-photo-btn" data-action="cc-avatar-edit" aria-label="${esc(AVATAR_COPY.avatarButton)}">
+          ${avatarHTML(player, 72, { cls: 'cc-photo-av', initials: initialsOf(ctx), ariaHidden: true })}
+          <span class="cc-photo-edit">${esc(AVATAR_COPY.editLabel)}</span>
+        </button>
+        <div class="cc-photo-note text-muted" id="cc-photo-note" role="status" aria-live="polite"></div>
+      </div>`;
 }
 
 /** DI-302 (amended) + DI-303's Profile fields, pushed. Fix round 1, finding
@@ -946,21 +986,33 @@ export function almaCatalogNoteText(status, { count = 0, got = 0 } = {}) {
   }
 }
 
+/**
+ * D2 lane 1 (DI-779 / DI-1011) - the Profile pane's college football teams: a "College football" heading carrying the crossed swords (DI-443) and the control app.js built (a Home team and an Alma mater,
+ * each a row that pushes the searchable school picker, and - only with both set - the "Counts for Alma Mater Watch" segment). '' when the league plays no college sport (no control was built).
+ * The control's markup is app.js's (cfbTeamsControlHTML escapes everything); the heading is literal text and the injected icon.
+ */
+function cfbTeamsBlockHTML(ctx) {
+  const body = ctx.bodies?.cfbTeamsHTML || '';
+  if (!body) return '';
+  const icon = iconOrNothing(ctx, 'almaMater');
+  // DI-1014: alma mater is per league seat, so a person in more than one league is told WHICH league this edit applies to ("This applies to {league}."). One league: nothing to disambiguate.
+  const league = ctx.league && typeof ctx.league.name === 'string' ? ctx.league.name.trim() : '';
+  const scope = league && Array.isArray(ctx.memberships) && ctx.memberships.length > 1 ? `<p class="cc-teams-scope" id="cc-teams-scope">This applies to ${ctx.escHtml(league)}.</p>` : '';
+  return `<div class="form-label cc-teams-heading">${icon ? `<span class="cc-row-icon">${icon}</span>` : ''}College football</div>${scope}${body}`;
+}
+
 export function renderProfileScreen(ctx) {
   requireFn(ctx.escHtml, 'escHtml', 'renderProfileScreen');
   const player = ctx.session?.player || {};
-  const almaIcon = iconOrNothing(ctx, 'almaMater');
   const backIcon = iconOrNothing(ctx, 'chevronLeft');
-  // RG-TBD-B3 (2026-09-29) — the picker's one-line caption (almaCatalogNoteText()
-  // below, chosen by app.js; patched in place when the fetch settles). Its
-  // line box is RESERVED (.alma-catalog-note, css/styles.css) so the Save
-  // button never moves when the caption arrives or changes.
-  const almaNote = ctx.bodies?.almaMaterNoteText || '';
+  // D2 lane 1 (DI-779 / DI-1011): the teams are the shared college football teams control (ctx.bodies.cfbTeamsHTML, built by app.js: a Home team and an Alma mater, each a row that pushes the
+  // searchable school picker, and the "Counts for Alma Mater Watch" segment only when both are set). The old caption under a <select> is the picker's own loading and error states now.
   return `<div class="control-center-profile">
       <button type="button" class="control-center-back" data-action="cc-pop-profile">
         <span class="cc-row-icon" aria-hidden="true">${backIcon}</span> Control Center
       </button>
       <div class="admin-section-title">Profile</div>
+      ${profilePhotoHTML(ctx, player)}
       <div class="form-group">
         <label class="form-label" for="cc-field-display-name">Display name</label>
         <input class="form-input" id="cc-field-display-name" data-field="display-name"
@@ -971,21 +1023,28 @@ export function renderProfileScreen(ctx) {
         <input class="form-input" id="cc-field-initials" data-field="initials" maxlength="3"
           value="${ctx.escHtml(player.initials || '')}" />
       </div>
-      <div class="form-group">
-        <label class="form-label" for="cc-field-alma-mater">${almaIcon ? `<span class="cc-row-icon">${almaIcon}</span>` : ''}Alma mater &amp; home teams</label>
-        <select class="form-input" id="cc-field-alma-mater" data-field="alma-mater">${ctx.bodies?.almaMaterOptionsHTML || ''}</select>
-        <p class="text-muted text-xs mt-sm alma-catalog-note" id="cc-field-alma-note" role="status">${ctx.escHtml(almaNote)}</p>
-      </div>
-      <button type="button" class="btn btn-primary btn-block" data-action="cc-save-profile">Save</button>
+      ${cfbTeamsBlockHTML(ctx)}
+      ${submitControlHTML({ idleLabel: 'Save', action: 'cc-save-profile' })}
+      ${ctx.bodies?.aboutYouHTML || ''}
       <!-- UX Revamp Group F (DI-335/DI-340, 2026-09-25) — account-identity
            rows, below the Save button, per DI-335's own placement note.
            See this function's own JSDoc header for the "Password" label's
            reasoning (a JS comment, not an HTML one — this whole function
            body is one template literal, and a stray backtick in an inline
            HTML comment here previously broke the module's own parse). -->
+      ${ctx.yourNumbers === true ? yourNumbersRowHTML(ctx) : ''}
       ${ctx.accountRows === true && ctx.membershipsResolved !== false ? profileAccountActionsHTML(ctx) : ''}
       ${ctx.accountRows === true ? accountRowsHTML(ctx) : ''}
     </div>`;
+}
+
+/** D2 lane 4 (DI-964, UN-520) - Profile's "Your numbers" row: a drill-in to the pushed Your numbers screen (insight-ui.js). Offered only when `ctx.yourNumbers === true` (a signed-in member in a league, content not withheld). */
+function yourNumbersRowHTML(ctx) {
+  const chevron = iconOrNothing(ctx, 'chevronRight');
+  return `<button type="button" class="control-center-row control-center-row--action" data-action="cc-open-your-numbers">
+        <span class="cc-row-label">Your numbers</span>
+        <span class="cc-row-chevron" aria-hidden="true">${chevron}</span>
+      </button>`;
 }
 
 /**
@@ -1310,7 +1369,6 @@ export function renderFeedbackRulesGroup(ctx, state) {
   // MOVED from that function (DI-422), same variable name, same XSS-sweep
   // pin (xsstest.mjs's NEW_SWEPT_BACKLOG "ctx.escHtml(copy)" entry) rather
   // than a renamed one requiring a second, independently-reviewed pin.
-  const copy = comingSoonCopy('The Help Center');
   return `<div class="control-center-group">
       <div class="control-center-group-label">Help &amp; Feedback</div>
       ${accordionRow(ctx, state, {
@@ -1329,8 +1387,8 @@ export function renderFeedbackRulesGroup(ctx, state) {
         group: 'feedback', rowId: 'version-history', label: 'Version history', openRowValue: openRow,
         bodyHTML: ctx.bodies?.releaseNotesHTML || '',
       })}
-      <button type="button" class="control-center-row control-center-row--nav" data-action="coming-soon" data-coming-soon-copy="${ctx.escHtml(copy)}">
-        <span class="cc-row-label">Help Center</span>
+      <button type="button" class="control-center-row control-center-row--nav" data-action="cc-push-tips">
+        <span class="cc-row-label">Tips &amp; Help</span>
         <span class="cc-row-chevron" aria-hidden="true">${chevron}</span>
       </button>
     </div>`;
@@ -1484,6 +1542,9 @@ export function renderControlCenter(ctx, state) {
       <div class="control-center-pane" data-pane="news" data-active="${state.pane === 'news'}">
         <div class="control-center-pane-content" data-pane-content="news">${renderNewsSettingsScreen(ctx)}</div>
       </div>
+      <div class="control-center-pane" data-pane="tips" data-active="${state.pane === 'tips'}">
+        <div class="control-center-pane-content" data-pane-content="tips">${ctx.bodies?.tipsPaneHTML || ''}</div>
+      </div>
     </div>`;
 }
 
@@ -1493,7 +1554,7 @@ export function renderControlCenter(ctx, state) {
 
 export function mountControlCenter(rootEl, ctx, options = {}) {
   if (!rootEl || typeof rootEl.querySelector !== 'function') {
-    return { open() {}, close() {}, destroy() {}, update() {}, getState: () => initialControlCenterState() };
+    return { open() {}, openToRow() {}, close() {}, destroy() {}, update() {}, getState: () => initialControlCenterState() };
   }
   const onAfterPaint = typeof options.onAfterPaint === 'function' ? options.onAfterPaint : null;
   // DI-419 (2026-09-28) — threaded straight through to bindControlCenterEdgeSwipe()'s
@@ -1518,6 +1579,8 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
   // === SOCIAL PLATFORM NEWS -- BEGIN === the third pane's stable nodes, built exactly like the profile pane's.
   const newsPaneWrapEl = drawerEl?.querySelector('[data-pane="news"]') || null;
   const newsContentEl = drawerEl?.querySelector('[data-pane-content="news"]') || null;
+  const tipsPaneWrapEl = drawerEl?.querySelector('[data-pane="tips"]') || null;                 // D2 lane 1 (DI-738): the fourth pane
+  const tipsContentEl = drawerEl?.querySelector('[data-pane-content="tips"]') || null;
   // === SOCIAL PLATFORM NEWS -- END ===
 
   function ownerKey() { return ctx.session?.player?.id ?? null; }
@@ -1531,7 +1594,7 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
   // update()/toggle-row after mount silently unable to preserve anything).
   {
     const key = ownerKey();
-    if (key) { stampFieldOwner(mainContentEl, key); stampFieldOwner(profileContentEl, key); stampFieldOwner(newsContentEl, key); }
+    if (key) { stampFieldOwner(mainContentEl, key); stampFieldOwner(profileContentEl, key); stampFieldOwner(newsContentEl, key); stampFieldOwner(tipsContentEl, key); }
   }
 
   // W-66 (2026-10-14; review N2) — every main-pane repaint (opening a row, or update()) rebuilds every open row's body, and a rebuilt
@@ -1558,6 +1621,32 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
     const snap = key ? captureDirtyFields(profileContentEl, key) : null;
     profileContentEl.innerHTML = renderProfileScreen(ctx);
     if (key) { restoreDirtyFields(snap, profileContentEl, key); stampFieldOwner(profileContentEl, key); }
+    bindProfileSubmit();
+  }
+  // D2 lane 1 (UN-531 / DI-781..785) — the Profile Save is the shared submission-state control. The machine is keyed by id, so the repaint that follows a save (the pane rebuilds its
+  // markup) re-binds the NEW button to the LIVE machine: a save in flight stays "Saving…", it never silently returns to an enabled Save. Saved means the server said so (DI-782):
+  // the three writes land on the seam, then the adapter is asked about `cfbp_players`. A refused write is Try Again; an offline one is "Saved on this device. Waiting to reach the server."
+  let profileSubmit = null;
+  async function runProfileSave() {
+    const val = (field) => profileContentEl?.querySelector(`[data-field="${field}"]`)?.value ?? '';
+    const wrote = [
+      ctx.callbacks?.onSaveDisplayName?.(val('display-name')),
+      ctx.callbacks?.onSaveInitials?.(val('initials')),
+      ctx.callbacks?.onSaveCfbTeams?.(readCfbTeamsControl(profileContentEl)),
+    ];
+    if (wrote.some((w) => w === false)) return 'refused';                      // a callback said it wrote nothing (no player record): never "Saved"
+    return confirmSeamKey('cfbp_players');
+  }
+  function bindProfileSubmit() {
+    if (profileSubmit) { profileSubmit.destroy(); profileSubmit = null; }
+    const btn = profileContentEl?.querySelector?.('[data-action="cc-save-profile"]');
+    if (!btn) return;
+    profileSubmit = attachSubmit({ button: btn, statusEl: profileContentEl.querySelector('.ss-status') || null, idleLabel: 'Save', id: 'cc-save-profile', listen: false, run: runProfileSave });
+  }
+  // D2 lane 1 (DI-738): the Tips & Help pane's content is app.js's finished markup (ctx.bodies.tipsPaneHTML); its taps (the switch, Read a tip again, Show Getting started again, Reset) are app.js's delegate.
+  function paintTipsContent() {
+    if (!tipsContentEl) return;
+    tipsContentEl.innerHTML = ctx.bodies?.tipsPaneHTML || '';
   }
   // === SOCIAL PLATFORM NEWS -- BEGIN ===
   function paintNewsContent() {
@@ -1637,6 +1726,7 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
     mainPaneWrapEl?.setAttribute('data-active', String(next.pane === 'main'));
     profilePaneWrapEl?.setAttribute('data-active', String(next.pane === 'profile'));
     newsPaneWrapEl?.setAttribute('data-active', String(next.pane === 'news'));    // SOCIAL PLATFORM NEWS
+    tipsPaneWrapEl?.setAttribute('data-active', String(next.pane === 'tips'));    // D2 lane 1: Tips & Help
   }
 
   function clearFallback() { if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; } }
@@ -1686,7 +1776,7 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
 
     // Content repaint ONLY for events that actually change what's rendered
     // (fix round 1, finding 8: never on drag-move — attribute-only above).
-    if (event.type === 'toggle-row' && (event.group === 'settings' || event.group === 'feedback')) {
+    if ((event.type === 'toggle-row' || event.type === 'open-row') && (event.group === 'settings' || event.group === 'feedback')) {
       paintMainContent();
     }
 
@@ -1727,6 +1817,16 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
         break;
       case 'cc-pop-news':
         dispatch({ type: 'pop-news' });
+        haptic('selection');
+        break;
+      // D2 lane 1 (DI-738): Tips & Help, the fourth pane (push / pop with the selection haptic, like Profile and News).
+      case 'cc-push-tips':
+        paintTipsContent();
+        dispatch({ type: 'push-tips' });
+        haptic('selection');
+        break;
+      case 'cc-pop-tips':
+        dispatch({ type: 'pop-tips' });
         haptic('selection');
         break;
       case 'cc-news-toggle-on':
@@ -1781,6 +1881,12 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
       // screen Leagues Home overlay — same "close the drawer first" shape as
       // 'cc-navigate'/'cc-open-league-page' (S2-2's own reasoning: a
       // full-screen surface must never open UNDER the still-open drawer).
+      // D2 lane 4 (DI-964) - Profile's "Your numbers" row: the drawer closes first (a full-screen pushed screen must never open UNDER the open drawer), then app.js pushes the screen.
+      case 'cc-open-your-numbers':
+        dispatch({ type: 'close', reducedMotion: rm() });
+        haptic('selection');
+        ctx.callbacks?.onOpenYourNumbers?.();
+        break;
       case 'cc-open-leagues-home':
         dispatch({ type: 'close', reducedMotion: rm() });
         haptic('selection');
@@ -1842,12 +1948,14 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
         break;
       }
       // ══ end SP-52 / DI-452 ═══════════════════════════════════════════════════════════════════════════════
+      case 'cc-avatar-edit': {
+        // D2 lane 1 (DI-773): the photo action sheet. The sheet layer, the file chooser and the upload are app.js's; this only says the avatar was tapped.
+        ctx.callbacks?.onAvatarEdit?.();
+        break;
+      }
       case 'cc-save-profile': {
-        const val = (field) => profileContentEl?.querySelector(`[data-field="${field}"]`)?.value ?? '';
-        ctx.callbacks?.onSaveDisplayName?.(val('display-name'));
-        ctx.callbacks?.onSaveInitials?.(val('initials'));
-        ctx.callbacks?.onSaveAlmaMater?.(val('alma-mater'));
-        haptic('success');
+        // D2 lane 1 (DI-785): ONE press path. The lock is taken in this tick, so a second tap while "Saving…" does nothing; the success haptic fires on the server's answer, not on the tap.
+        profileSubmit?.press();
         break;
       }
       // 'coming-soon' is intentionally NOT handled here — app.js must CREATE
@@ -1860,7 +1968,12 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
     }
   }
 
+  // D2 lane 1 (DI-781): a changed Profile field takes "Saved" back to the idle Save (it persists only until a field changes again).
+  function onProfileEdited(e) {
+    if (e.target?.closest?.('.control-center-profile')) profileSubmit?.dirty();
+  }
   function onChange(e) {
+    onProfileEdited(e);
     const el = e.target.closest?.('[data-field]');
     if (!el) return;
     if (el.dataset.field === 'timezone') ctx.callbacks?.onSetTimeZone?.(el.value);
@@ -1892,7 +2005,7 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
       return;
     }
     if (e.key === 'Tab') {
-      const pane = state.pane === 'profile' ? profilePaneWrapEl : state.pane === 'news' ? newsPaneWrapEl : mainPaneWrapEl;   // SOCIAL PLATFORM NEWS: the third pane
+      const pane = state.pane === 'profile' ? profilePaneWrapEl : state.pane === 'news' ? newsPaneWrapEl : state.pane === 'tips' ? tipsPaneWrapEl : mainPaneWrapEl;   // SOCIAL PLATFORM NEWS: the third pane
       if (!pane) return;
       const els = focusableEls(pane);
       if (els.length === 0) return;
@@ -1929,6 +2042,7 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
 
   rootEl.addEventListener('click', onClick);
   rootEl.addEventListener('change', onChange);
+  rootEl.addEventListener('input', onProfileEdited);
   rootEl.addEventListener('keydown', onQuickKeydown);
   rootEl.addEventListener('transitionend', onTransitionEnd);
   if (typeof document !== 'undefined') document.addEventListener('keydown', onKeydown);
@@ -1939,12 +2053,26 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
     { getWidthPx: () => drawerEl?.getBoundingClientRect?.().width || DRAWER_MAX_WIDTH_PX, getTab },
   );
 
+  bindProfileSubmit();   // D2 lane 1: the first build's Save button
   // Initial paint hook — the coordinator's bind functions need a first call
   // too, not only after a later dispatch.
   firePaintHook();
 
   return {
-    open: () => { haptic('light'); dispatch({ type: 'open', reducedMotion: prefersReducedMotion() }); },
+    open: () => {
+      haptic('light');
+      if (profileSubmit && !profileSubmit.machine.locked) profileSubmit.machine.reset();   // a "Saved" from an earlier visit is not this visit's news
+      dispatch({ type: 'open', reducedMotion: prefersReducedMotion() });
+    },
+    /** T-03 / FB-043 — open the drawer with one row already expanded (painted before the slide starts, so it opens settled). */
+    openToRow: (group, rowId) => { dispatch({ type: 'open-row', group, rowId }); haptic('light'); dispatch({ type: 'open', reducedMotion: prefersReducedMotion() }); },
+    /** D2 lane 1 (UN-506 / DI-727) and lane 4 (DI-1086), one function at int/v0.31.0: the drawer straight onto the Profile pane. Lane 4's Your teams row slides it in (unless Reduce Motion);
+     *  lane 1's "Set Up My Profile" passes { instant: true } (the sheet that asked has just closed, so no slide). A "Saved" from an earlier visit is reset either way. */
+    openProfile: ({ instant = false } = {}) => {
+      haptic('light');
+      if (profileSubmit && !profileSubmit.machine.locked) profileSubmit.machine.reset();
+      dispatch({ type: 'open-profile', reducedMotion: instant === true || prefersReducedMotion() });
+    },
     // `{ immediate: true }` (S2-3, 2026-09-26) — teardown callers (sign-out,
     // the hold sweep) close without the slide: a gate is painting over it.
     close: ({ immediate = false } = {}) => dispatch({ type: 'close', reducedMotion: immediate || prefersReducedMotion() }),
@@ -1956,13 +2084,16 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
       paintMainContent();
       paintProfileContent();
       paintNewsContent();                                                       // SOCIAL PLATFORM NEWS
+      paintTipsContent();                                                       // D2 lane 1
       firePaintHook();
     },
     destroy: () => {
       clearFallback();
       rootEl.removeEventListener('click', onClick);
       rootEl.removeEventListener('change', onChange);
+      rootEl.removeEventListener('input', onProfileEdited);
       rootEl.removeEventListener('keydown', onQuickKeydown);
+      if (profileSubmit) { profileSubmit.destroy(); profileSubmit = null; }
       rootEl.removeEventListener('transitionend', onTransitionEnd);
       if (typeof document !== 'undefined') document.removeEventListener('keydown', onKeydown);
       unbindSwipe();
