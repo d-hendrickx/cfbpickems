@@ -1,0 +1,122 @@
+/* teaser/teaser.css — PROMO-ONLY. The stage, the phone frame, the captions and the two title cards.
+   The app's own css/styles.css styles everything inside the phone; this file restyles no app class except the
+   frame overrides marked below, and adds the promo-only pieces (tap ring, typing dots, row lift). */
+:root{ --tz-gold:#C9A24B; --tz-gold-hi:#F1DFA6; --tz-bone:#E8E4DC; --tz-muted:#8C8072; --tz-ink:#14110E;
+  --tz-display:Georgia,'Times New Roman',Baskerville,serif; color-scheme:dark }
+html,body{height:100%}
+body.teaser{margin:0;background:#000;color:var(--tz-bone);overflow:hidden;font-family:var(--tz-display);-webkit-user-select:none;user-select:none}
+#tz-wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#000;
+  padding-left:max(0px,env(safe-area-inset-left,0px));padding-right:max(0px,env(safe-area-inset-right,0px))}
+/* 9:16 in a wide window; on a phone (taller than 9:16) the stage fills the screen, so nothing is letterboxed */
+#tz-stage{position:relative;flex:none;width:min(100%,calc(100dvh*9/16));height:100%;overflow:hidden;background:#000;container-type:size;cursor:pointer}
+#tz-atmos{position:absolute;inset:0;width:100%;height:100%;display:block}
+
+/* phone frame: 390x844 logical, scaled by JS to fit the stage; .tz-pose carries the film's moves */
+#tz-phone-wrap{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+.tz-pose{transform-origin:center center}
+.tz-phone{position:relative;width:414px;height:868px;border-radius:60px;background:#0B0A09;
+  box-shadow:0 0 0 1.5px #3a332c,0 30px 90px rgba(0,0,0,.75),inset 0 0 0 2px #1a1714;transform-origin:center center}
+.tz-screen{position:absolute;left:12px;top:12px;width:390px;height:844px;border-radius:48px;overflow:hidden;background:var(--bg,#14110E)}
+.tz-status{position:absolute;left:0;right:0;top:0;height:47px;background:var(--chrome-bg);color:var(--chrome-fg,#fff);
+  display:flex;align-items:flex-end;justify-content:space-between;padding:0 30px 8px 34px;font:600 15px/1 'Inter',system-ui,sans-serif;letter-spacing:-.01em;z-index:3}
+.tz-status svg{height:12px;width:auto;display:block}
+.tz-status .tz-sr{display:flex;align-items:center;gap:6px}
+.tz-island{position:absolute;left:50%;top:11px;transform:translateX(-50%);width:120px;height:35px;border-radius:20px;background:#000;z-index:4}
+.tz-scroll{position:absolute;left:0;right:0;top:47px;bottom:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;background:var(--bg)}
+.tz-scroll::-webkit-scrollbar{display:none}
+.tz-home{position:absolute;left:50%;bottom:8px;transform:translateX(-50%);width:134px;height:5px;border-radius:3px;background:rgba(255,255,255,.85);z-index:120;pointer-events:none}
+/* frame overrides: the real header and chat page pad for the notch themselves; the tab bar clears a home indicator */
+.tz-phone .app-header{padding-top:0;position:sticky;top:0}
+.tz-phone #page-chat.active{padding-top:0}
+.tz-phone{--nav-pill-bottom:max(calc(var(--nav-pill-gap) + 34px),calc(var(--nav-disc-reach) + 8px));--nav-bar-clearance:calc(var(--nav-pill-h) + var(--nav-pill-bottom))}
+.tz-phone .gd-rail{scroll-snap-type:none}
+/* promo-only motion on the app's own elements */
+.tz-phone .is-pressed{transform:scale(.97)}
+.tz-tap{position:absolute;width:44px;height:44px;margin:-22px 0 0 -22px;border-radius:50%;background:rgba(255,255,255,.32);
+  box-shadow:0 0 0 1px rgba(255,255,255,.35);transform:scale(.4);opacity:0;pointer-events:none;z-index:130}
+.tz-tap.go{animation:tz-tap .38s cubic-bezier(.16,1,.3,1) forwards}
+@keyframes tz-tap{0%{transform:scale(.4);opacity:.7}100%{transform:scale(1.25);opacity:0}}
+.tz-tick{animation:tz-tick .18s ease-out}
+#pick-count,.gd-me,[data-bind="score"],[data-tz-w],[data-tz-l]{display:inline-block}
+@keyframes tz-tick{0%{opacity:0;transform:translateY(4px)}100%{opacity:1;transform:none}}
+.tz-page-in{animation:tz-page-in .24s cubic-bezier(.16,1,.3,1)}
+@keyframes tz-page-in{0%{opacity:0;transform:translateY(10px)}100%{opacity:1;transform:none}}
+.tz-pop{animation:tz-pop .2s cubic-bezier(.16,1,.3,1)}
+@keyframes tz-pop{0%{transform:scale(.6);opacity:.3}100%{transform:scale(1);opacity:1}}
+.tz-flash{animation:tz-flash .5s ease-out}
+@keyframes tz-flash{0%{filter:brightness(1.7)}100%{filter:none}}
+.tz-phone td.tz-lift{position:relative;z-index:3;background:color-mix(in srgb,var(--gold) 20%,var(--bg-card))}
+.tz-phone .stand-table td{transition:background-color .2s ease}
+/* promo-only: a typing indicator in the SCRIBE bubble (the app has none) */
+.tz-typing{display:inline-flex;gap:5px;align-items:center;height:1.1em;padding:0 2px}
+.tz-typing i{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.35;animation:tz-dot .9s ease-in-out infinite}
+.tz-typing i:nth-child(2){animation-delay:.15s}.tz-typing i:nth-child(3){animation-delay:.3s}
+@keyframes tz-dot{0%,60%,100%{transform:none;opacity:.35}30%{transform:translateY(-3px);opacity:.9}}
+
+/* captions */
+/* trailer lettering: steady, no shimmer. Opacity and tracking are set from the film clock (teaser.js). */
+.tz-cap{position:absolute;left:6%;right:6%;text-align:center;text-transform:uppercase;text-wrap:balance;
+  font:400 4.6cqw/1.4 var(--tz-display);letter-spacing:.2em;color:var(--tz-gold);opacity:0;visibility:hidden;pointer-events:none;z-index:20;
+  text-shadow:0 1px 14px rgba(0,0,0,.9),0 0 40px rgba(0,0,0,.7)}
+.tz-cap--low{top:86.5%}
+.tz-cap--cin{top:68%;font-size:4.9cqw;color:var(--tz-bone)}
+.tz-cap--mid{top:42%;color:var(--tz-bone)}
+.tz-cap--lg{font-size:7.6cqw;line-height:1.25}
+#tz-scrim{position:absolute;left:0;right:0;top:57%;height:28%;background:radial-gradient(75% 60% at 50% 50%,rgba(0,0,0,.82),rgba(0,0,0,0) 78%);opacity:0;transition:opacity .5s ease;pointer-events:none;z-index:19}
+#tz-scrim.on{opacity:1}
+
+/* the SCRIBE title card */
+#tz-ident{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3.2cqw;z-index:22;pointer-events:none;visibility:hidden;
+  background:radial-gradient(70% 38% at 50% 50%,rgba(0,0,0,.72),rgba(0,0,0,0) 75%)}
+.tz-ident-title{font:400 13cqw/1 var(--tz-display);letter-spacing:.3em;margin-left:.3em;text-transform:uppercase;color:var(--tz-gold);opacity:0}
+.tz-ident-rule{width:22cqw;height:1px;background:var(--tz-gold);opacity:.7;transform:scaleX(0)}
+.tz-ident-lines{position:relative;width:86%;height:13cqw}
+.tz-ident-line{position:absolute;left:0;right:0;top:0;text-align:center;text-transform:uppercase;text-wrap:balance;font:400 4.5cqw/1.35 var(--tz-display);letter-spacing:.18em;color:var(--tz-bone);opacity:0}
+
+/* the brand reveal */
+/* the Munera mark that names the app before the phone arrives (dubstep cut) */
+#tz-intro{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:21;pointer-events:none;visibility:hidden}
+.tz-intro-in{display:flex;flex-direction:column;align-items:center;transform-origin:center 45%;margin-top:-8cqw;filter:drop-shadow(0 0 6cqw rgba(0,0,0,.8))}
+#tz-intro svg{width:23cqw;height:auto;overflow:visible;fill:var(--tz-gold)}
+.tz-intro-word{margin-top:5.5cqw;font:400 8.6cqw/1 var(--tz-display);letter-spacing:.32em;margin-left:.32em;text-transform:uppercase;color:var(--tz-gold);opacity:0;white-space:nowrap}
+#tz-brand{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:24;pointer-events:none;visibility:hidden;background:#000}
+.tz-brand-in{display:flex;flex-direction:column;align-items:center;transform-origin:center 45%}
+#tz-brand svg{width:27cqw;height:auto;overflow:visible;fill:var(--tz-gold)}
+#tz-brand .b-col{transform-box:fill-box;transform-origin:center;opacity:0}
+#tz-brand .b-ped,#tz-brand .b-base{opacity:0}
+.tz-brand-word{margin-top:6.5cqw;font:400 10cqw/1 var(--tz-display);letter-spacing:.32em;margin-left:.32em;text-transform:uppercase;color:var(--tz-gold);opacity:0;white-space:nowrap}
+.tz-brand-tag{margin-top:5cqw;font:400 4.2cqw/1 var(--tz-display);letter-spacing:.3em;margin-left:.3em;text-transform:uppercase;color:var(--tz-gold);opacity:0}
+/* the one control on the page: a primary button, at least 44 px tall, with a pressed state */
+#tz-brand .tz-cta{position:absolute;left:50%;bottom:12.5%;transform:translateX(-50%);display:flex;align-items:center;justify-content:center;min-height:44px;height:12.5cqw;padding:0 8cqw;
+  border-radius:3cqw;background:var(--tz-gold);color:var(--tz-ink);font:400 3.7cqw/1 var(--tz-display);letter-spacing:.2em;text-indent:.2em;text-transform:uppercase;text-decoration:none;
+  white-space:nowrap;opacity:0;pointer-events:none;-webkit-tap-highlight-color:transparent;transition:filter .12s ease}
+#tz-brand .tz-cta:active{filter:brightness(.8)}
+#tz-brand .tz-cta-note{position:absolute;left:6%;right:6%;bottom:8%;text-align:center;font:400 2.9cqw/1.4 var(--tz-display);letter-spacing:.2em;text-transform:uppercase;color:var(--tz-muted);opacity:0}
+#tz-brand .tz-cta:focus-visible{outline:2px solid var(--tz-gold-hi);outline-offset:3px}
+.tz-brand-soon{margin-top:11cqw;font:400 3cqw/1 var(--tz-display);letter-spacing:.34em;margin-left:.34em;text-transform:uppercase;color:var(--tz-muted);opacity:0}
+
+/* start gate */
+#tz-gate{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3.4cqw;
+  background:radial-gradient(60% 40% at 50% 52%,rgba(201,162,75,.08),transparent 70%),#000;z-index:40;transition:opacity .6s ease}
+#tz-gate.off{opacity:0;pointer-events:none}
+#tz-gate.loading .tz-g-tap{animation:none;opacity:.35}
+#tz-gate svg{width:18cqw;height:auto;color:var(--tz-gold)}
+#tz-gate .tz-g-word{font:400 7cqw/1 var(--tz-display);letter-spacing:.32em;margin-left:.32em;color:var(--tz-gold)}
+#tz-gate .tz-g-tap{font:400 3.4cqw/1.5 var(--tz-display);letter-spacing:.24em;color:var(--tz-bone);margin-top:7cqw;animation:tz-pulse 1.8s ease-in-out infinite}
+#tz-gate .tz-g-tiny{font:400 2.8cqw/1.6 var(--tz-display);letter-spacing:.14em;color:var(--tz-muted)}
+@keyframes tz-pulse{0%,100%{opacity:.55}50%{opacity:1}}
+
+/* review hud */
+#tz-hud{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between;align-items:center;gap:8px;
+  padding:0 4cqw calc(2.2cqw + env(safe-area-inset-bottom,0px));font:400 2.5cqw/1 var(--tz-display);letter-spacing:.12em;color:var(--tz-muted);z-index:45;pointer-events:none}
+#tz-hud button{pointer-events:auto;background:rgba(0,0,0,.4);border:1px solid rgba(232,228,220,.25);color:var(--tz-bone);border-radius:999px;
+  padding:1.4cqw 3cqw;font:inherit;letter-spacing:.14em;cursor:pointer}
+#tz-hud button:focus-visible{outline:2px solid var(--tz-gold);outline-offset:2px}
+#tz-bar{position:absolute;left:0;right:0;bottom:0;height:4px;z-index:46;cursor:pointer}
+#tz-bar i{display:block;height:100%;width:0;background:var(--tz-gold);opacity:.7}
+.tz-clean #tz-hud,.tz-clean #tz-bar{display:none}
+.tz-err{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;color:var(--tz-bone);font:400 16px/1.5 var(--tz-display);z-index:50}
+@media (prefers-reduced-motion:reduce){#tz-gate .tz-g-tap{animation:none}}
+
+/* ?still=1: no CSS transitions or keyframes, so any paused frame is exact (used for checks and frame export) */
+.tz-still *,.tz-still *::before,.tz-still *::after{transition:none!important;animation:none!important}

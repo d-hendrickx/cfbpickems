@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="robots" content="noindex">
+<title>Munera: Enter the Arena</title>
+<meta name="description" content="Make your picks. Challenge your friends. One arena. The games begin soon.">
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta property="og:title" content="Munera — Enter the Arena">
+<meta property="og:description" content="Make your picks. Challenge your friends. One arena. The games begin soon.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://irbfootball.com/teaser/">
+<meta property="og:image" content="https://irbfootball.com/teaser/poster.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="apple-touch-icon" href="../icons/icon-180.png">
+<link rel="stylesheet" href="teaser.css">
+</head>
+<body class="teaser theme-neutral" data-color-scheme="dark">
+<div id="tz-wrap">
+  <div id="tz-stage">
+    <canvas id="tz-atmos"></canvas>
+    <div id="tz-phone-wrap"></div>
+    <div id="tz-scrim"></div>
+    <div id="tz-caps"></div>
+    <div id="tz-hud"><span id="tz-clock">LOADING</span><button id="tz-mute" type="button" hidden>SOUND ON</button></div>
+    <div id="tz-bar"><i></i></div>
+    <div id="tz-gate" class="off">
+      <svg viewBox="205 250 614 495" fill="currentColor" aria-hidden="true"><path d="M 212 393 L 499.25 262.78 Q 512 257 524.75 262.78 L 812 393 L 812 401 Q 812 417 796 417 L 228 417 Q 212 417 212 401 L 212 393 Z"/><rect x="296" y="445.57" width="78" height="154.29"/><rect x="473" y="445.57" width="78" height="154.29"/><rect x="650" y="445.57" width="78" height="154.29"/><rect x="260" y="599.86" width="504" height="51.43" rx="7.71"/><rect x="212" y="679.86" width="600" height="57.14" rx="22.86"/></svg>
+      <div class="tz-g-word">MUNERA</div>
+      <div class="tz-g-tap">TAP TO ENTER</div>
+      <div class="tz-g-tiny">sound on</div>
+    </div>
+  </div>
+</div>
+<script src="data.js"></script>
+<script src="teaser.js"></script>
+<script src="atmos.js"></script>
+<script src="audio.js"></script>
+<script src="scenes/ui.js"></script>
+<script src="scenes/picks.js"></script>
+<script src="scenes/home.js"></script>
+<script src="scenes/standings.js"></script>
+<script src="scenes/chat.js"></script>
+<script src="film.js"></script>
+<script>
+(function () {
+  /* the artifact publish wraps this file in its own body, so the classes are set here too */
+  document.body.classList.add('teaser', 'theme-neutral'); document.body.dataset.colorScheme = 'dark';
+  /* ?scene=picks|lock|friends|gameday|standings|chat|scribe previews one scene on a loop; default is the full film.
+     The page is clean by default (tap to pause); review=1 adds the clock, the scrub bar and the sound toggle. */
+  /* options come from the query (?scene=picks&review=1&mute=1&still=1&t=12.3) or, where only a hash survives
+     (a published artifact), from dot-separated hash tokens: #review, #picks.review, #mute */
+  var q = new URLSearchParams(location.search), tokens = (location.hash || '').replace('#', '').split('.').filter(Boolean);
+  var has = function (k) { return q.get(k) === '1' || tokens.indexOf(k) >= 0; };
+  var id = q.get('scene') || tokens.filter(function (k) { return TEASER.scenes[k]; })[0] || window.TEASER_SCENE || 'dubstep';   /* the approved cut (the owner, 2026-11-15: "Yes, it works"); ?scene=film is the earlier score */
+  var opts = { review: has('review'), mute: has('mute'), still: has('still'), dpr: parseFloat(q.get('dpr')) || 0, q: parseFloat(q.get('q')) || 0 };
+  var stage = document.getElementById('tz-stage');
+  var ready = document.getElementById('tz-appcss') ? Promise.resolve('inline') : TEASER.loadAppCSS(['../css/styles.css', 'css/styles.css']);
+  ready.then(function () {
+    TEASER.pinPhoneCSS(390, 844);   /* the phone's screen size in teaser.css: the app's layout follows the phone, not the window */
+    var scene = TEASER.scenes[id] || TEASER.scenes.dubstep;
+    var player = TEASER.run({
+      scene: scene, stage: stage, opts: opts,
+      canvas: document.getElementById('tz-atmos'),
+      phoneHost: document.getElementById('tz-phone-wrap'),
+      capHost: document.getElementById('tz-caps'),
+      hud: document.getElementById('tz-clock'),
+      bar: document.getElementById('tz-bar'),
+      scrim: document.getElementById('tz-scrim'),
+      gate: document.getElementById('tz-gate'),
+      muteBtn: document.getElementById('tz-mute')
+    });
+    window.TEASER_PLAYER = player;
+    if (q.get('t')) { player.start(); player.seek(parseFloat(q.get('t')) || 0); }
+  }).catch(function (e) {
+    var d = document.createElement('div'); d.className = 'tz-err';
+    d.textContent = 'This page could not load. Check your connection and try again.';   /* the cause goes to the console */
+    stage.appendChild(d); console.error(e);
+  });
+})();
+</script>
+</body>
+</html>
